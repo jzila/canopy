@@ -1,0 +1,98 @@
+package canopy
+
+import (
+	"fmt"
+
+	"github.com/spf13/cobra"
+)
+
+var agentMode bool
+
+var helpCmd = &cobra.Command{
+	Use:   "help [command]",
+	Short: "Help about any command",
+	Long: `Help provides help for any command in the application.
+Simply type canopy help [path to command] for full details.
+
+Use --agent for detailed workflow explanation for AI agents.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		if agentMode {
+			printAgentHelp()
+			return
+		}
+		// Default help behavior
+		if len(args) == 0 {
+			rootCmd.Help()
+			return
+		}
+		// Find and show help for subcommand
+		c, _, err := rootCmd.Find(args)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		c.Help()
+	},
+}
+
+func init() {
+	helpCmd.Flags().BoolVar(&agentMode, "agent", false, "Show detailed workflow explanation for AI agents")
+	rootCmd.SetHelpCommand(helpCmd)
+}
+
+func printAgentHelp() {
+	fmt.Print(`CANOPY: PARALLEL AGENT ORCHESTRATION
+
+ARCHITECTURE
+  Human -> Root Claude (you) -> canopy run -> [Worker Claude 1, Worker Claude 2, ...N]
+
+  You are the orchestrator. You decompose tasks, create beads issues, run canopy.
+  Workers run in isolated OverlayFS sandboxes (CoW clones of working directory).
+
+EXECUTION LOOP
+  bd ready -> spawn N workers in parallel -> wait -> bd done -> merge changes -> repeat
+
+SANDBOX ISOLATION
+  Each worker sees: lowerdir (read-only base) + upperdir (private writes) = merged view
+  Workers can't see each other's changes. Merge happens after completion (last-writer-wins).
+
+WORKER INVOCATION
+  claude --print --output-format json --dangerously-skip-permissions "<task prompt>"
+
+ORCHESTRATOR WORKFLOW
+  1. Analyze task -> identify subtasks and dependencies
+  2. bd create "subtask" -p <priority> -> for each subtask
+  3. bd dep add <child> <parent> -> set dependencies
+  4. canopy run [-c N] -> execute (N=concurrency, default 4)
+  5. Review results -> handle failures -> iterate
+
+EXAMPLE
+  Task: "Add auth with login, signup, tests, docs"
+
+  bd create "Design auth API" -p 0        -> bd-a1b2
+  bd create "Implement login" -p 1        -> bd-c3d4
+  bd create "Implement signup" -p 1       -> bd-e5f6
+  bd create "Write tests" -p 2            -> bd-g7h8
+  bd create "Write docs" -p 2             -> bd-i9j0
+
+  bd dep add bd-c3d4 bd-a1b2   # login depends on design
+  bd dep add bd-e5f6 bd-a1b2   # signup depends on design
+  bd dep add bd-g7h8 bd-c3d4   # tests depend on login
+  bd dep add bd-i9j0 bd-c3d4   # docs depend on login
+
+  canopy run -v
+
+  Execution: design -> [login, signup] (parallel) -> [tests, docs] (parallel)
+
+WHEN TO USE
+  - 3+ independent subtasks
+  - Work that can be parallelized
+  - You want isolated sandboxes
+
+WHEN NOT TO USE
+  - Simple tasks (<3 subtasks)
+  - Fully sequential work
+  - Need human review between steps
+
+`)
+}

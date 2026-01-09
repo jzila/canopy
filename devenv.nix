@@ -8,11 +8,12 @@
   packages = [
     pkgs.git
     pkgs.claude-code
+    pkgs.fuse-overlayfs  # Rootless OverlayFS fallback
     inputs.beads.packages.${pkgs.stdenv.hostPlatform.system}.default
   ];
 
   # https://devenv.sh/languages/
-  # languages.rust.enable = true;
+  languages.go.enable = true;
 
   # https://devenv.sh/processes/
   # processes.dev.exec = "${lib.getExe pkgs.watchexec} -n -- ls -la";

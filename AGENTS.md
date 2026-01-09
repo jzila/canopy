@@ -1,15 +1,26 @@
 # Agent Instructions
 
-This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
+This project uses **bd** (beads) for issue tracking and **canopy** for parallel agent orchestration.
+
+Run `bd onboard` to learn beads, and `canopy help` to learn the orchestrator.
 
 ## Quick Reference
 
 ```bash
+# Beads (task tracking)
 bd ready              # Find available work
 bd show <id>          # View issue details
 bd update <id> --status in_progress  # Claim work
 bd close <id>         # Complete work
 bd sync               # Sync with git
+
+# Canopy (parallel orchestration)
+canopy help           # Show all commands
+canopy run --help     # Show run options
+canopy run            # Execute ready tasks in parallel (4 agents)
+canopy run -c 8       # Run with 8 concurrent agents
+canopy run --dry-run  # Preview what would execute
+canopy help --agent   # Detailed workflow explanation for AI agents
 ```
 
 ## Landing the Plane (Session Completion)
@@ -38,4 +49,4 @@ bd sync               # Sync with git
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
 
-Use 'bd' for task tracking
+Use `bd` for task tracking and `canopy` for parallel execution.
