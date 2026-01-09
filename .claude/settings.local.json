@@ -2,7 +2,17 @@
   "permissions": {
     "allow": [
       "WebFetch(domain:github.com)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(sysctl:*)",
+      "WebSearch",
+      "Bash(go mod tidy:*)",
+      "Bash(bd ready:*)",
+      "Bash(bd help:*)",
+      "Bash(bd q:*)",
+      "Bash(bd graph:*)",
+      "Bash(canopy run:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ]
   }
 }

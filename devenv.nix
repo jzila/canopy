@@ -28,6 +28,7 @@
 
   # https://devenv.sh/basics/
   enterShell = ''
+    export PATH="$DEVENV_ROOT:$PATH"
     hello         # Run scripts directly
     git --version # Use packages
   '';
