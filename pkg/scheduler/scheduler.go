@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
@@ -21,6 +22,14 @@ type Scheduler struct {
 	executor    *agent.Executor
 	config      *Config
 	results     sync.Map // map[string]*agent.Result
+
+	// Pause/resume support
+	paused       atomic.Bool
+	pauseCh      chan struct{}
+	resumeCh     chan struct{}
+
+	// Per-agent kill support
+	agentContexts sync.Map // map[string]context.CancelFunc
 }
 
 // Config holds scheduler configuration
@@ -44,6 +53,8 @@ func NewScheduler(beadsClient *beads.Client, executor *agent.Executor, config *C
 		beadsClient: beadsClient,
 		executor:    executor,
 		config:      config,
+		pauseCh:     make(chan struct{}),
+		resumeCh:    make(chan struct{}),
 	}
 }
 
@@ -64,14 +75,32 @@ func (s *Scheduler) ExecuteBatch(ctx context.Context, tasks []beads.Task) ([]*ag
 		task := task // capture for goroutine
 
 		g.Go(func() error {
+			// Check if scheduler is paused before acquiring semaphore
+			for s.paused.Load() {
+				select {
+				case <-s.resumeCh:
+					// Scheduler was resumed, continue
+				case <-gctx.Done():
+					return gctx.Err()
+				}
+			}
+
 			// Acquire semaphore slot
 			if err := sem.Acquire(gctx, 1); err != nil {
 				return err
 			}
 			defer sem.Release(1)
 
+			// Create cancellable context for this agent
+			agentCtx, cancel := context.WithCancel(gctx)
+			s.agentContexts.Store(task.ID, cancel)
+			defer func() {
+				s.agentContexts.Delete(task.ID)
+				cancel()
+			}()
+
 			// Execute the task
-			result := s.executeTask(gctx, &task)
+			result := s.executeTask(agentCtx, &task)
 
 			// Store result
 			mu.Lock()
@@ -213,4 +242,35 @@ func (s *Scheduler) AllResults() map[string]*agent.Result {
 		return true
 	})
 	return results
+}
+
+// Pause pauses the scheduler, preventing new agents from starting
+func (s *Scheduler) Pause() {
+	if s.paused.CompareAndSwap(false, true) {
+		close(s.pauseCh)
+		s.pauseCh = make(chan struct{})
+	}
+}
+
+// Resume resumes the scheduler, allowing new agents to start
+func (s *Scheduler) Resume() {
+	if s.paused.CompareAndSwap(true, false) {
+		close(s.resumeCh)
+		s.resumeCh = make(chan struct{})
+	}
+}
+
+// IsPaused returns whether the scheduler is currently paused
+func (s *Scheduler) IsPaused() bool {
+	return s.paused.Load()
+}
+
+// Kill terminates a specific agent by its task ID
+func (s *Scheduler) Kill(agentID string) error {
+	if cancelFunc, ok := s.agentContexts.Load(agentID); ok {
+		cancelFunc.(context.CancelFunc)()
+		s.agentContexts.Delete(agentID)
+		return nil
+	}
+	return fmt.Errorf("agent %s not found", agentID)
 }
