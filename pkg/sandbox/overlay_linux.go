@@ -4,7 +4,9 @@ package sandbox
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 )
 
@@ -25,7 +27,7 @@ func (o *Overlay) Mount() error {
 	if err == nil {
 		o.mounted = true
 		o.useFuse = false
-		return nil
+		return o.mountPassthroughs()
 	}
 
 	// Try with userxattr for rootless (kernel >= 5.11)
@@ -34,11 +36,49 @@ func (o *Overlay) Mount() error {
 	if err == nil {
 		o.mounted = true
 		o.useFuse = false
-		return nil
+		return o.mountPassthroughs()
 	}
 
 	// Fall back to fuse-overlayfs
-	return o.mountFuse()
+	if err := o.mountFuse(); err != nil {
+		return err
+	}
+	return o.mountPassthroughs()
+}
+
+// mountPassthroughs bind-mounts directories that should bypass the overlay
+func (o *Overlay) mountPassthroughs() error {
+	for _, relPath := range DefaultPassthroughPaths {
+		srcPath := filepath.Join(o.LowerDir, relPath)
+		dstPath := filepath.Join(o.MergedDir, relPath)
+
+		// Only mount if source exists
+		if _, err := os.Stat(srcPath); os.IsNotExist(err) {
+			continue
+		}
+
+		// Ensure destination exists
+		if err := os.MkdirAll(dstPath, 0755); err != nil {
+			return fmt.Errorf("failed to create passthrough mount point %s: %w", dstPath, err)
+		}
+
+		// Bind mount
+		if err := syscall.Mount(srcPath, dstPath, "", syscall.MS_BIND, ""); err != nil {
+			return fmt.Errorf("failed to bind mount %s: %w", relPath, err)
+		}
+
+		o.bindMounts = append(o.bindMounts, dstPath)
+	}
+	return nil
+}
+
+// unmountPassthroughs unmounts all bind-mounted directories
+func (o *Overlay) unmountPassthroughs() {
+	// Unmount in reverse order
+	for i := len(o.bindMounts) - 1; i >= 0; i-- {
+		syscall.Unmount(o.bindMounts[i], syscall.MNT_DETACH)
+	}
+	o.bindMounts = nil
 }
 
 // mountFuse uses fuse-overlayfs for rootless operation
@@ -69,6 +109,9 @@ func (o *Overlay) Unmount() error {
 	if !o.mounted {
 		return nil
 	}
+
+	// Unmount bind mounts first
+	o.unmountPassthroughs()
 
 	var err error
 	if o.useFuse {

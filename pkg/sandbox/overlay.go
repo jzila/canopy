@@ -30,13 +30,20 @@ const (
 
 // Overlay represents an OverlayFS mount for agent isolation
 type Overlay struct {
-	ID        string
-	LowerDir  string // Read-only base (original working directory)
-	UpperDir  string // Writable layer (per-agent changes)
-	WorkDir   string // OverlayFS internal workdir
-	MergedDir string // Combined view where agent operates
-	mounted   bool
-	useFuse   bool
+	ID         string
+	LowerDir   string   // Read-only base (original working directory)
+	UpperDir   string   // Writable layer (per-agent changes)
+	WorkDir    string   // OverlayFS internal workdir
+	MergedDir  string   // Combined view where agent operates
+	mounted    bool
+	useFuse    bool
+	bindMounts []string // Paths that are bind-mounted through the overlay
+}
+
+// DefaultPassthroughPaths are directories that should bypass the overlay
+// and write directly to the original filesystem
+var DefaultPassthroughPaths = []string{
+	".beads",
 }
 
 // NewOverlay creates a new overlay filesystem structure
@@ -85,6 +92,16 @@ func (o *Overlay) GetChanges() ([]FileChange, error) {
 
 		// Get relative path
 		relPath, _ := filepath.Rel(o.UpperDir, path)
+
+		// Skip passthrough paths (they're bind-mounted, not overlayed)
+		for _, passthrough := range DefaultPassthroughPaths {
+			if relPath == passthrough || strings.HasPrefix(relPath, passthrough+string(filepath.Separator)) {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+		}
 
 		// Check for whiteout files (deleted files in overlay)
 		// Whiteout files have names prefixed with .wh.
