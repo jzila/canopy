@@ -111,6 +111,9 @@ func (s *Scheduler) executeTask(ctx context.Context, task *beads.Task) *agent.Re
 		fmt.Printf("Starting task %s: %s\n", task.ID, task.Title)
 	}
 
+	// Gather dependency context from completed tasks
+	deps := s.gatherDependencyContext(task)
+
 	// Create overlay sandbox
 	overlay, err := sandbox.NewOverlay(s.config.TempDir, s.config.WorkDir)
 	if err != nil {
@@ -132,19 +135,66 @@ func (s *Scheduler) executeTask(ctx context.Context, task *beads.Task) *agent.Re
 	}
 	defer overlay.Unmount()
 
-	// Execute the agent
-	result := s.executor.Execute(ctx, task, overlay)
+	// Execute the agent with dependency context
+	result := s.executor.Execute(ctx, task, overlay, deps)
 
 	if s.config.Verbose {
 		status := "completed"
 		if !result.Success {
 			status = fmt.Sprintf("failed: %s", result.Error)
 		}
-		fmt.Printf("Task %s %s (%.1fs, %d files changed)\n",
-			task.ID, status, result.Duration.Seconds(), len(result.Changes))
+		commitInfo := ""
+		if result.GitState != nil && len(result.GitState.NewCommits) > 0 {
+			commitInfo = fmt.Sprintf(", %d commits", len(result.GitState.NewCommits))
+		}
+		fmt.Printf("Task %s %s (%.1fs, %d files changed%s)\n",
+			task.ID, status, result.Duration.Seconds(), len(result.Changes), commitInfo)
 	}
 
 	return result
+}
+
+// gatherDependencyContext collects outputs from tasks this task depends on
+func (s *Scheduler) gatherDependencyContext(task *beads.Task) []agent.DependencyContext {
+	var deps []agent.DependencyContext
+
+	// Get dependency task IDs
+	depIDs := task.GetDependencies()
+	if len(depIDs) == 0 {
+		// Try fetching from beads if not in task struct
+		depIDs, _ = s.beadsClient.GetDeps(task.ID)
+	}
+
+	for _, depID := range depIDs {
+		// Look up the result from our completed tasks
+		if result := s.GetResult(depID); result != nil && result.Success {
+			dep := agent.DependencyContext{
+				TaskID: depID,
+			}
+
+			// Extract summary from Claude output if available
+			if result.Output != nil && len(result.Output.Messages) > 0 {
+				// Get the last assistant message as summary
+				for i := len(result.Output.Messages) - 1; i >= 0; i-- {
+					if result.Output.Messages[i].Role == "assistant" {
+						content := result.Output.Messages[i].Content
+						// Truncate for summary (first 500 chars)
+						if len(content) > 500 {
+							dep.Summary = content[:500] + "..."
+						} else {
+							dep.Summary = content
+						}
+						dep.Output = content
+						break
+					}
+				}
+			}
+
+			deps = append(deps, dep)
+		}
+	}
+
+	return deps
 }
 
 // GetResult returns the result for a specific task

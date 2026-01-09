@@ -1,0 +1,147 @@
+package sandbox
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+)
+
+// GitState captures the git state before/after worker execution
+type GitState struct {
+	BaseCommit string   // HEAD before worker started
+	NewCommits []string // Commits made by worker (oldest first)
+	Patches    []string // Patch content for each new commit
+}
+
+// GetBaseCommit returns the current HEAD commit in the overlay
+func (o *Overlay) GetBaseCommit() (string, error) {
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = o.MergedDir
+
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse HEAD failed: %w", err)
+	}
+
+	return strings.TrimSpace(string(out)), nil
+}
+
+// ExtractNewCommits extracts commits made since baseCommit as patches
+func (o *Overlay) ExtractNewCommits(baseCommit string) (*GitState, error) {
+	state := &GitState{
+		BaseCommit: baseCommit,
+	}
+
+	// Get list of new commits (oldest first)
+	cmd := exec.Command("git", "rev-list", "--reverse", baseCommit+"..HEAD")
+	cmd.Dir = o.MergedDir
+
+	out, err := cmd.Output()
+	if err != nil {
+		// No new commits is not an error
+		return state, nil
+	}
+
+	commits := strings.Fields(string(out))
+	if len(commits) == 0 {
+		return state, nil
+	}
+
+	state.NewCommits = commits
+
+	// Extract each commit as a patch
+	for _, commit := range commits {
+		patch, err := o.formatPatch(commit)
+		if err != nil {
+			return state, fmt.Errorf("failed to format patch for %s: %w", commit, err)
+		}
+		state.Patches = append(state.Patches, patch)
+	}
+
+	return state, nil
+}
+
+// formatPatch extracts a single commit as a patch
+func (o *Overlay) formatPatch(commit string) (string, error) {
+	cmd := exec.Command("git", "format-patch", "-1", "--stdout", commit)
+	cmd.Dir = o.MergedDir
+
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+
+	return string(out), nil
+}
+
+// ApplyPatches applies patches to a target directory
+func ApplyPatches(targetDir string, patches []string) error {
+	for i, patch := range patches {
+		if err := applyPatch(targetDir, patch); err != nil {
+			return fmt.Errorf("failed to apply patch %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+func applyPatch(targetDir, patch string) error {
+	cmd := exec.Command("git", "am", "--3way")
+	cmd.Dir = targetDir
+	cmd.Stdin = strings.NewReader(patch)
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		// Try to abort the failed am
+		abortCmd := exec.Command("git", "am", "--abort")
+		abortCmd.Dir = targetDir
+		abortCmd.Run()
+
+		return fmt.Errorf("%w: %s", err, stderr.String())
+	}
+
+	return nil
+}
+
+// WriteContextFile writes dependency context to a file in the sandbox
+func (o *Overlay) WriteContextFile(context map[string]string) error {
+	if len(context) == 0 {
+		return nil
+	}
+
+	contextDir := filepath.Join(o.MergedDir, ".canopy")
+	if err := os.MkdirAll(contextDir, 0755); err != nil {
+		return err
+	}
+
+	// Write each dependency's output to a separate file
+	for taskID, content := range context {
+		filename := filepath.Join(contextDir, fmt.Sprintf("dep-%s.txt", taskID))
+		if err := os.WriteFile(filename, []byte(content), 0644); err != nil {
+			return err
+		}
+	}
+
+	// Write a summary file
+	summaryPath := filepath.Join(contextDir, "context.txt")
+	var summary strings.Builder
+	summary.WriteString("# Dependency Context\n\n")
+	summary.WriteString("This directory contains outputs from upstream tasks.\n\n")
+
+	for taskID := range context {
+		summary.WriteString(fmt.Sprintf("- dep-%s.txt: Output from task %s\n", taskID, taskID))
+	}
+
+	return os.WriteFile(summaryPath, []byte(summary.String()), 0644)
+}
+
+// HasGitRepo checks if the overlay contains a git repository
+func (o *Overlay) HasGitRepo() bool {
+	gitDir := filepath.Join(o.MergedDir, ".git")
+	info, err := os.Stat(gitDir)
+	return err == nil && info.IsDir()
+}

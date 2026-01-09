@@ -25,9 +25,10 @@ type Conflict struct {
 
 // Result holds the outcome of a merge operation
 type Result struct {
-	Applied   []AppliedChange
-	Conflicts []Conflict
-	Errors    []string
+	Applied       []AppliedChange
+	Conflicts     []Conflict
+	Errors        []string
+	CommitsApplied int // Number of git commits applied
 }
 
 // SequentialMerger applies changes in order, later overwrites earlier
@@ -48,18 +49,46 @@ func NewSequentialMerger(outputDir, tempDir string, verbose bool) *SequentialMer
 
 // Merge applies changes from multiple agent results to the output directory
 // Results should be provided in completion order; later results take precedence
+//
+// Strategy:
+// - If a worker made git commits, apply them via git am (preserves commit history)
+// - If a worker only made file changes, apply them directly
 func (m *SequentialMerger) Merge(results []*agent.Result) (*Result, error) {
 	mergeResult := &Result{}
 
-	// Track which files have been modified and by whom (for conflict detection within same batch)
+	// Separate results into those with commits and those with only file changes
+	var withCommits, withoutCommits []*agent.Result
+	for _, r := range results {
+		if !r.Success {
+			continue
+		}
+		if r.GitState != nil && len(r.GitState.Patches) > 0 {
+			withCommits = append(withCommits, r)
+		} else if len(r.Changes) > 0 {
+			withoutCommits = append(withoutCommits, r)
+		}
+	}
+
+	// Apply git patches first (these are the "proper" changes with commit history)
+	for _, r := range withCommits {
+		if err := sandbox.ApplyPatches(m.outputDir, r.GitState.Patches); err != nil {
+			mergeResult.Errors = append(mergeResult.Errors,
+				fmt.Sprintf("failed to apply commits from %s: %v", r.TaskID, err))
+			// Fall back to file-based merge for this result
+			withoutCommits = append(withoutCommits, r)
+		} else {
+			mergeResult.CommitsApplied += len(r.GitState.Patches)
+			if m.verbose {
+				fmt.Printf("Applied %d commits from task %s\n", len(r.GitState.Patches), r.TaskID)
+			}
+		}
+	}
+
+	// Track which files have been modified and by whom (for conflict detection)
 	fileModifiers := make(map[string][]string) // path -> list of task IDs
 
 	// First pass: detect conflicts (same file modified by multiple tasks in this batch)
-	for _, r := range results {
-		if !r.Success || len(r.Changes) == 0 {
-			continue
-		}
-
+	for _, r := range withoutCommits {
 		for _, change := range r.Changes {
 			if change.Type == sandbox.ChangeDeleted {
 				continue
@@ -81,12 +110,8 @@ func (m *SequentialMerger) Merge(results []*agent.Result) (*Result, error) {
 		}
 	}
 
-	// Second pass: apply changes (later results overwrite earlier)
-	for _, r := range results {
-		if !r.Success || len(r.Changes) == 0 {
-			continue
-		}
-
+	// Second pass: apply file changes (later results overwrite earlier)
+	for _, r := range withoutCommits {
 		for _, change := range r.Changes {
 			applied, err := m.applyChange(r.TaskID, change)
 			if err != nil {

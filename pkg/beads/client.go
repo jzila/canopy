@@ -10,11 +10,13 @@ import (
 
 // Task represents a beads task returned from bd ready
 type Task struct {
-	ID          string `json:"id"`
-	Title       string `json:"title"`
-	Description string `json:"description,omitempty"`
-	Priority    int    `json:"priority,omitempty"`
-	Status      string `json:"status,omitempty"`
+	ID          string   `json:"id"`
+	Title       string   `json:"title"`
+	Description string   `json:"description,omitempty"`
+	Priority    int      `json:"priority,omitempty"`
+	Status      string   `json:"status,omitempty"`
+	Blockers    []string `json:"blockers,omitempty"`    // Tasks this task depends on
+	BlockedBy   []string `json:"blocked_by,omitempty"`  // Alias for blockers
 }
 
 // Client wraps the bd CLI for programmatic access
@@ -71,19 +73,19 @@ func (c *Client) Ready() ([]Task, error) {
 
 // Start marks a task as in-progress
 func (c *Client) Start(taskID string) error {
-	_, err := c.run("start", taskID)
+	_, err := c.run("update", taskID, "--status", "in_progress")
 	return err
 }
 
 // Done marks a task as completed
 func (c *Client) Done(taskID string) error {
-	_, err := c.run("done", taskID)
+	_, err := c.run("close", taskID)
 	return err
 }
 
 // Fail marks a task as failed
 func (c *Client) Fail(taskID string, reason string) error {
-	_, err := c.run("fail", taskID, "-m", reason)
+	_, err := c.run("update", taskID, "--status", "failed", "--notes", reason)
 	return err
 }
 
@@ -129,6 +131,29 @@ func (c *Client) Create(title string, priority int) (string, error) {
 func (c *Client) AddDep(child, parent string) error {
 	_, err := c.run("dep", "add", child, parent)
 	return err
+}
+
+// GetDeps returns the task IDs that the given task depends on (its blockers)
+func (c *Client) GetDeps(taskID string) ([]string, error) {
+	task, err := c.Show(taskID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Try both field names since beads might use either
+	deps := task.Blockers
+	if len(deps) == 0 {
+		deps = task.BlockedBy
+	}
+	return deps, nil
+}
+
+// GetDependencies returns the dependency task IDs for a task
+func (t *Task) GetDependencies() []string {
+	if len(t.Blockers) > 0 {
+		return t.Blockers
+	}
+	return t.BlockedBy
 }
 
 // run executes a bd command and returns stdout

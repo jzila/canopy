@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/john/canopy/pkg/beads"
@@ -25,8 +26,16 @@ type Result struct {
 	Stderr   string
 	ExitCode int
 	Changes  []sandbox.FileChange
+	GitState *sandbox.GitState // Git commits made by worker
 	Duration time.Duration
 	Error    string
+}
+
+// DependencyContext holds outputs from upstream tasks
+type DependencyContext struct {
+	TaskID  string
+	Summary string // Brief summary for prompt
+	Output  string // Full output content
 }
 
 // ClaudeOutput represents the JSON output from claude --print --output-format json
@@ -74,22 +83,48 @@ func NewExecutor(config *Config) *Executor {
 	if config == nil {
 		config = NewConfig()
 	}
+	// Ensure ClaudePath is set
+	if config.ClaudePath == "" {
+		claudePath, _ := exec.LookPath("claude")
+		if claudePath != "" {
+			config.ClaudePath = claudePath
+		} else {
+			config.ClaudePath = "claude"
+		}
+	}
+	if config.Timeout <= 0 {
+		config.Timeout = DefaultTimeout
+	}
 	return &Executor{config: config}
 }
 
 // Execute runs an agent for the given task in the provided sandbox
-func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandbox.Overlay) *Result {
+func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandbox.Overlay, deps []DependencyContext) *Result {
 	start := time.Now()
 
 	result := &Result{
 		TaskID: task.ID,
 	}
 
-	// Build the prompt from task title and description
-	prompt := task.Title
-	if task.Description != "" {
-		prompt = fmt.Sprintf("%s\n\n%s", task.Title, task.Description)
+	// Record base commit if this is a git repo
+	var baseCommit string
+	if overlay.HasGitRepo() {
+		baseCommit, _ = overlay.GetBaseCommit()
 	}
+
+	// Write dependency context to sandbox
+	if len(deps) > 0 {
+		contextMap := make(map[string]string)
+		for _, dep := range deps {
+			contextMap[dep.TaskID] = dep.Output
+		}
+		if err := overlay.WriteContextFile(contextMap); err != nil && e.config.Verbose {
+			fmt.Fprintf(os.Stderr, "warning: failed to write context file: %v\n", err)
+		}
+	}
+
+	// Build the prompt from task title, description, and dependency context
+	prompt := e.buildPrompt(task, deps)
 
 	// Build command arguments
 	args := []string{
@@ -141,6 +176,15 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 	changes, _ := overlay.GetChanges()
 	result.Changes = changes
 
+	// Extract git commits if this is a git repo
+	if baseCommit != "" {
+		gitState, err := overlay.ExtractNewCommits(baseCommit)
+		if err != nil && e.config.Verbose {
+			fmt.Fprintf(os.Stderr, "warning: failed to extract git commits: %v\n", err)
+		}
+		result.GitState = gitState
+	}
+
 	// Determine success
 	if err != nil {
 		result.Success = false
@@ -157,4 +201,31 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 	}
 
 	return result
+}
+
+// buildPrompt constructs the prompt with task info and dependency context
+func (e *Executor) buildPrompt(task *beads.Task, deps []DependencyContext) string {
+	var parts []string
+
+	// Add dependency context if present
+	if len(deps) > 0 {
+		parts = append(parts, "## Context from upstream tasks\n")
+		for _, dep := range deps {
+			if dep.Summary != "" {
+				parts = append(parts, fmt.Sprintf("### Task %s\n%s\n", dep.TaskID, dep.Summary))
+			}
+		}
+		parts = append(parts, "Full outputs are available in .canopy/dep-<task-id>.txt files.\n")
+		parts = append(parts, "---\n")
+	}
+
+	// Add task title
+	parts = append(parts, fmt.Sprintf("## Task: %s\n", task.Title))
+
+	// Add description if present
+	if task.Description != "" {
+		parts = append(parts, task.Description)
+	}
+
+	return strings.Join(parts, "\n")
 }
