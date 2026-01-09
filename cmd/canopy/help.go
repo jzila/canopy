@@ -56,6 +56,19 @@ SANDBOX ISOLATION
   Each worker sees: lowerdir (read-only base) + upperdir (private writes) = merged view
   Workers can't see each other's changes. Merge happens after completion (last-writer-wins).
 
+SECURITY
+  Default protections (always on):
+  - Env filtering: only ANTHROPIC_*, PATH, LANG, LC_*, TERM, TMPDIR, TZ passed
+  - .claude/ hidden: parent session settings/approvals not visible to workers
+  - Process groups: Pdeathsig ensures workers die if orchestrator dies
+
+  With --sandbox flag (requires bwrap installed):
+  - Namespace isolation: user, PID, IPC, UTS namespaces
+  - Capability drop: all capabilities removed
+  - Resource limits: 4GB memory, 100 processes, 1024 file descriptors
+  - Filesystem: read-only /nix, /usr, /lib, /bin, /etc/ssl; only /workspace writable
+  - No network filtering (workers can still reach Anthropic API)
+
 WORKER INVOCATION
   claude --print --output-format json --dangerously-skip-permissions "<task prompt>"
 
@@ -63,7 +76,7 @@ ORCHESTRATOR WORKFLOW
   1. Analyze task -> identify subtasks and dependencies
   2. bd create "subtask" -p <priority> -> for each subtask
   3. bd dep add <child> <parent> -> set dependencies
-  4. canopy run [-c N] -> execute (N=concurrency, default 4)
+  4. canopy run [-c N] [--sandbox] -> execute (N=concurrency, default 4)
   5. Review results -> handle failures -> iterate
 
 EXAMPLE
@@ -80,7 +93,7 @@ EXAMPLE
   bd dep add bd-g7h8 bd-c3d4   # tests depend on login
   bd dep add bd-i9j0 bd-c3d4   # docs depend on login
 
-  canopy run -v
+  canopy run -v --sandbox      # full isolation
 
   Execution: design -> [login, signup] (parallel) -> [tests, docs] (parallel)
 

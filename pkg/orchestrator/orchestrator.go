@@ -19,6 +19,7 @@ type Config struct {
 	Concurrency int
 	Verbose     bool
 	DryRun      bool
+	UseBwrap    bool // Use bubblewrap sandbox for agent isolation
 }
 
 // Orchestrator coordinates the execution of tasks from beads
@@ -46,7 +47,8 @@ func New(config *Config) (*Orchestrator, error) {
 
 	// Create agent executor
 	executor := agent.NewExecutor(&agent.Config{
-		Verbose: config.Verbose,
+		Verbose:  config.Verbose,
+		UseBwrap: config.UseBwrap,
 	})
 
 	// Create scheduler

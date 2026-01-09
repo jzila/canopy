@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/john/canopy/pkg/beads"
@@ -58,6 +60,7 @@ type Config struct {
 	ClaudePath string
 	Timeout    time.Duration
 	Verbose    bool
+	UseBwrap   bool // Use bubblewrap sandbox for isolation (auto-detected if not set)
 }
 
 // NewConfig creates a default agent config
@@ -142,12 +145,45 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, e.config.ClaudePath, args...)
-	cmd.Dir = overlay.MergedDir
+	// Set up filtered environment
+	env := filterEnvironment(os.Environ())
+	env = append(env, "HOME="+overlay.MergedDir)
 
-	// Set up environment
-	cmd.Env = os.Environ()
-	cmd.Env = append(cmd.Env, "HOME="+overlay.MergedDir)
+	// Build command - use bwrap sandbox if available and enabled
+	var cmd *exec.Cmd
+	useBwrap := e.config.UseBwrap && sandbox.BwrapAvailable()
+
+	if useBwrap {
+		bwrapCmd, err := sandbox.BuildBwrapCommand(&sandbox.BwrapConfig{
+			MergedDir:      overlay.MergedDir,
+			Command:        e.config.ClaudePath,
+			Args:           args,
+			Env:            env,
+			MaxMemoryBytes: 4 << 30, // 4GB
+			MaxProcesses:   100,
+			MaxOpenFiles:   1024,
+		})
+		if err != nil {
+			result.Error = fmt.Sprintf("failed to build bwrap command: %v", err)
+			return result
+		}
+		// Wrap with context for timeout support
+		cmd = exec.CommandContext(ctx, bwrapCmd.Path, bwrapCmd.Args[1:]...)
+		cmd.Dir = bwrapCmd.Dir
+		cmd.Env = bwrapCmd.Env
+	} else {
+		cmd = exec.CommandContext(ctx, e.config.ClaudePath, args...)
+		cmd.Dir = overlay.MergedDir
+		cmd.Env = env
+	}
+
+	// Apply resource limits on Linux (when not using bwrap)
+	if runtime.GOOS == "linux" && !useBwrap {
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			Pdeathsig: syscall.SIGKILL, // Kill agent if parent dies
+		}
+		setResourceLimits(cmd)
+	}
 
 	// Capture output
 	var stdout, stderr bytes.Buffer
@@ -228,4 +264,29 @@ func (e *Executor) buildPrompt(task *beads.Task, deps []DependencyContext) strin
 	}
 
 	return strings.Join(parts, "\n")
+}
+
+// allowedEnvPrefixes defines environment variable prefixes that are safe to pass to agents
+var allowedEnvPrefixes = []string{
+	"ANTHROPIC_", // API key and settings
+	"PATH=",      // Required for finding executables
+	"LANG=",      // Locale
+	"LC_",        // Locale variants
+	"TERM=",      // Terminal type
+	"TMPDIR=",    // Temp directory
+	"TZ=",        // Timezone
+}
+
+// filterEnvironment returns only safe environment variables for agent execution
+func filterEnvironment(env []string) []string {
+	var filtered []string
+	for _, e := range env {
+		for _, prefix := range allowedEnvPrefixes {
+			if strings.HasPrefix(e, prefix) {
+				filtered = append(filtered, e)
+				break
+			}
+		}
+	}
+	return filtered
 }

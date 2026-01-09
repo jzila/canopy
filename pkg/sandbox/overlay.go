@@ -46,6 +46,12 @@ var DefaultPassthroughPaths = []string{
 	".beads",
 }
 
+// DefaultHiddenPaths are paths that should be hidden from agents via whiteout
+// These won't be visible in the merged view even if they exist in lowerdir
+var DefaultHiddenPaths = []string{
+	".claude", // Hide parent session settings and approved commands
+}
+
 // NewOverlay creates a new overlay filesystem structure
 func NewOverlay(baseDir, lowerDir string) (*Overlay, error) {
 	id := generateID()
@@ -66,7 +72,55 @@ func NewOverlay(baseDir, lowerDir string) (*Overlay, error) {
 		}
 	}
 
+	// Create whiteouts for hidden paths
+	if err := overlay.createWhiteouts(); err != nil {
+		overlay.Cleanup()
+		return nil, fmt.Errorf("failed to create whiteouts: %w", err)
+	}
+
 	return overlay, nil
+}
+
+// createWhiteouts creates whiteout entries in the upper directory to hide
+// sensitive paths from agents. Uses OverlayFS whiteout convention.
+func (o *Overlay) createWhiteouts() error {
+	for _, hiddenPath := range DefaultHiddenPaths {
+		lowerPath := filepath.Join(o.LowerDir, hiddenPath)
+
+		// Only create whiteout if path exists in lower
+		info, err := os.Stat(lowerPath)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("stat %s: %w", hiddenPath, err)
+		}
+
+		if info.IsDir() {
+			// For directories: create opaque directory with .wh..wh..opq marker
+			upperDir := filepath.Join(o.UpperDir, hiddenPath)
+			if err := os.MkdirAll(upperDir, 0755); err != nil {
+				return fmt.Errorf("create upper dir %s: %w", hiddenPath, err)
+			}
+			opaquePath := filepath.Join(upperDir, ".wh..wh..opq")
+			if err := os.WriteFile(opaquePath, nil, 0644); err != nil {
+				return fmt.Errorf("create opaque marker for %s: %w", hiddenPath, err)
+			}
+		} else {
+			// For files: create .wh.<filename> whiteout
+			dir := filepath.Dir(hiddenPath)
+			if dir != "." {
+				if err := os.MkdirAll(filepath.Join(o.UpperDir, dir), 0755); err != nil {
+					return fmt.Errorf("create parent dir for whiteout: %w", err)
+				}
+			}
+			whiteoutPath := filepath.Join(o.UpperDir, dir, ".wh."+filepath.Base(hiddenPath))
+			if err := os.WriteFile(whiteoutPath, nil, 0644); err != nil {
+				return fmt.Errorf("create whiteout for %s: %w", hiddenPath, err)
+			}
+		}
+	}
+	return nil
 }
 
 // generateID creates a random hex ID
@@ -96,6 +150,16 @@ func (o *Overlay) GetChanges() ([]FileChange, error) {
 		// Skip passthrough paths (they're bind-mounted, not overlayed)
 		for _, passthrough := range DefaultPassthroughPaths {
 			if relPath == passthrough || strings.HasPrefix(relPath, passthrough+string(filepath.Separator)) {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+		}
+
+		// Skip hidden paths (they're whiteouts we created, not real changes)
+		for _, hidden := range DefaultHiddenPaths {
+			if relPath == hidden || strings.HasPrefix(relPath, hidden+string(filepath.Separator)) {
 				if d.IsDir() {
 					return filepath.SkipDir
 				}
