@@ -12,7 +12,14 @@
       "Bash(bd graph:*)",
       "Bash(canopy run:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(bd list:*)",
+      "Bash(./canopy run:*)",
+      "Bash(bd create:*)",
+      "Bash(bd update:*)",
+      "Bash(bd dep add:*)",
+      "Bash(go build:*)",
+      "Bash(bd close:*)"
     ]
   }
 }
