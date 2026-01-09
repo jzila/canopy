@@ -19,7 +19,16 @@
       "Bash(bd update:*)",
       "Bash(bd dep add:*)",
       "Bash(go build:*)",
-      "Bash(bd close:*)"
+      "Bash(bd close:*)",
+      "Bash(bd show:*)",
+      "Bash(bd dep rm:*)",
+      "Bash(bd sync:*)",
+      "Bash(mkdir:*)",
+      "Bash(go fmt:*)",
+      "Bash(go vet:*)",
+      "Bash(gofmt:*)",
+      "Bash(go test:*)",
+      "Bash(go get:*)"
     ]
   }
 }
