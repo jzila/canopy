@@ -12,6 +12,49 @@ import (
 	"github.com/john/canopy/pkg/scheduler"
 )
 
+// EventCallbacks defines lifecycle callbacks for agent execution events
+type EventCallbacks struct {
+	// OnAgentStartFn is called when an agent begins execution
+	OnAgentStartFn func(taskID string, task *beads.Task)
+
+	// OnOutputFn is called when an agent produces output (stdout/stderr)
+	OnOutputFn func(taskID string, output string, isError bool)
+
+	// OnDoneFn is called when an agent completes successfully
+	OnDoneFn func(taskID string, result *agent.Result)
+
+	// OnFailFn is called when an agent fails
+	OnFailFn func(taskID string, result *agent.Result)
+}
+
+// OnAgentStart implements scheduler.CallbackHandler
+func (e *EventCallbacks) OnAgentStart(taskID string, task *beads.Task) {
+	if e != nil && e.OnAgentStartFn != nil {
+		e.OnAgentStartFn(taskID, task)
+	}
+}
+
+// OnOutput implements scheduler.CallbackHandler
+func (e *EventCallbacks) OnOutput(taskID string, output string, isError bool) {
+	if e != nil && e.OnOutputFn != nil {
+		e.OnOutputFn(taskID, output, isError)
+	}
+}
+
+// OnDone implements scheduler.CallbackHandler
+func (e *EventCallbacks) OnDone(taskID string, result *agent.Result) {
+	if e != nil && e.OnDoneFn != nil {
+		e.OnDoneFn(taskID, result)
+	}
+}
+
+// OnFail implements scheduler.CallbackHandler
+func (e *EventCallbacks) OnFail(taskID string, result *agent.Result) {
+	if e != nil && e.OnFailFn != nil {
+		e.OnFailFn(taskID, result)
+	}
+}
+
 // Config holds orchestrator configuration
 type Config struct {
 	WorkDir     string
@@ -29,6 +72,7 @@ type Orchestrator struct {
 	scheduler   *scheduler.Scheduler
 	merger      *merge.SequentialMerger
 	tempDir     string
+	callbacks   *EventCallbacks
 }
 
 // New creates a new orchestrator
@@ -68,7 +112,23 @@ func New(config *Config) (*Orchestrator, error) {
 		scheduler:   sched,
 		merger:      merger,
 		tempDir:     tempDir,
+		callbacks:   nil, // Set via SetCallbacks
 	}, nil
+}
+
+// SetCallbacks configures event callbacks for the orchestrator
+func (o *Orchestrator) SetCallbacks(callbacks *EventCallbacks) {
+	o.callbacks = callbacks
+	// Pass callbacks through to scheduler
+	if o.scheduler != nil {
+		o.scheduler.SetCallbacks(callbacks)
+	}
+}
+
+// WithCallbacks is a builder-style method to set callbacks
+func (o *Orchestrator) WithCallbacks(callbacks *EventCallbacks) *Orchestrator {
+	o.SetCallbacks(callbacks)
+	return o
 }
 
 // Run executes the orchestration loop until no ready tasks remain

@@ -16,12 +16,22 @@ import (
 	"github.com/john/canopy/pkg/sandbox"
 )
 
+// CallbackHandler defines lifecycle callbacks for agent execution events.
+// This allows the scheduler to be decoupled from orchestrator package.
+type CallbackHandler interface {
+	OnAgentStart(taskID string, task *beads.Task)
+	OnOutput(taskID string, output string, isError bool)
+	OnDone(taskID string, result *agent.Result)
+	OnFail(taskID string, result *agent.Result)
+}
+
 // Scheduler executes tasks from beads in parallel with bounded concurrency
 type Scheduler struct {
 	beadsClient *beads.Client
 	executor    *agent.Executor
 	config      *Config
 	results     sync.Map // map[string]*agent.Result
+	callbacks   CallbackHandler
 
 	// Pause/resume support
 	paused       atomic.Bool
@@ -53,9 +63,15 @@ func NewScheduler(beadsClient *beads.Client, executor *agent.Executor, config *C
 		beadsClient: beadsClient,
 		executor:    executor,
 		config:      config,
+		callbacks:   nil, // Set via SetCallbacks
 		pauseCh:     make(chan struct{}),
 		resumeCh:    make(chan struct{}),
 	}
+}
+
+// SetCallbacks configures event callbacks for the scheduler
+func (s *Scheduler) SetCallbacks(callbacks CallbackHandler) {
+	s.callbacks = callbacks
 }
 
 // ExecuteBatch runs a batch of tasks in parallel
@@ -108,6 +124,15 @@ func (s *Scheduler) ExecuteBatch(ctx context.Context, tasks []beads.Task) ([]*ag
 			s.results.Store(task.ID, result)
 			mu.Unlock()
 
+			// Invoke completion callbacks
+			if s.callbacks != nil {
+				if result.Success {
+					s.callbacks.OnDone(task.ID, result)
+				} else {
+					s.callbacks.OnFail(task.ID, result)
+				}
+			}
+
 			// Update beads status
 			if result.Success {
 				if err := s.beadsClient.Done(task.ID); err != nil && s.config.Verbose {
@@ -131,6 +156,11 @@ func (s *Scheduler) ExecuteBatch(ctx context.Context, tasks []beads.Task) ([]*ag
 }
 
 func (s *Scheduler) executeTask(ctx context.Context, task *beads.Task) *agent.Result {
+	// Invoke OnAgentStart callback
+	if s.callbacks != nil {
+		s.callbacks.OnAgentStart(task.ID, task)
+	}
+
 	// Mark task as started
 	if err := s.beadsClient.Start(task.ID); err != nil && s.config.Verbose {
 		fmt.Fprintf(os.Stderr, "warning: failed to mark task %s started: %v\n", task.ID, err)
@@ -166,6 +196,16 @@ func (s *Scheduler) executeTask(ctx context.Context, task *beads.Task) *agent.Re
 
 	// Execute the agent with dependency context
 	result := s.executor.Execute(ctx, task, overlay, deps)
+
+	// Invoke OnOutput callback for captured output
+	if s.callbacks != nil {
+		if result.Stdout != "" {
+			s.callbacks.OnOutput(task.ID, result.Stdout, false)
+		}
+		if result.Stderr != "" {
+			s.callbacks.OnOutput(task.ID, result.Stderr, true)
+		}
+	}
 
 	if s.config.Verbose {
 		status := "completed"
