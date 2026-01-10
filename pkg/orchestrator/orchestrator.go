@@ -63,16 +63,18 @@ type Config struct {
 	Verbose     bool
 	DryRun      bool
 	UseBwrap    bool // Use bubblewrap sandbox for agent isolation
+	MaxRetries  int  // Maximum number of times to retry failed tasks (0 = no retries, -1 = infinite)
 }
 
 // Orchestrator coordinates the execution of tasks from beads
 type Orchestrator struct {
-	config      *Config
-	beadsClient *beads.Client
-	scheduler   *scheduler.Scheduler
-	merger      *merge.SequentialMerger
-	tempDir     string
-	callbacks   *EventCallbacks
+	config       *Config
+	beadsClient  *beads.Client
+	scheduler    *scheduler.Scheduler
+	merger       *merge.SequentialMerger
+	tempDir      string
+	callbacks    *EventCallbacks
+	failureCounts map[string]int // Tracks how many times each task has failed
 }
 
 // New creates a new orchestrator
@@ -106,13 +108,19 @@ func New(config *Config) (*Orchestrator, error) {
 	// Create merger
 	merger := merge.NewSequentialMerger(config.OutputDir, tempDir, config.Verbose)
 
+	// Set default MaxRetries if not specified (default: 3 retries)
+	if config.MaxRetries == 0 {
+		config.MaxRetries = 3
+	}
+
 	return &Orchestrator{
-		config:      config,
-		beadsClient: beadsClient,
-		scheduler:   sched,
-		merger:      merger,
-		tempDir:     tempDir,
-		callbacks:   nil, // Set via SetCallbacks
+		config:        config,
+		beadsClient:   beadsClient,
+		scheduler:     sched,
+		merger:        merger,
+		tempDir:       tempDir,
+		callbacks:     nil, // Set via SetCallbacks
+		failureCounts: make(map[string]int),
 	}, nil
 }
 
@@ -204,16 +212,41 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		// Summary of this iteration
 		succeeded := 0
 		failed := 0
+		retriesExhausted := []string{}
+
 		for _, r := range results {
 			if r.Success {
 				succeeded++
+				// Clear failure count on success
+				delete(o.failureCounts, r.TaskID)
 			} else {
 				failed++
+				// Track failure count
+				o.failureCounts[r.TaskID]++
+
+				// Check if we've exceeded max retries (unless MaxRetries is -1 for infinite)
+				if o.config.MaxRetries != -1 && o.failureCounts[r.TaskID] > o.config.MaxRetries {
+					retriesExhausted = append(retriesExhausted, r.TaskID)
+				}
 			}
 		}
 
 		if o.config.Verbose {
 			fmt.Printf("Iteration %d complete: %d succeeded, %d failed\n", iteration, succeeded, failed)
+		}
+
+		// If tasks have exhausted retries, stop retrying them
+		if len(retriesExhausted) > 0 {
+			fmt.Fprintf(os.Stderr, "\nERROR: The following tasks have failed %d times and will not be retried:\n", o.config.MaxRetries)
+			for _, taskID := range retriesExhausted {
+				fmt.Fprintf(os.Stderr, "  - %s\n", taskID)
+				// Try to mark as failed one more time
+				if err := o.beadsClient.Fail(taskID, fmt.Sprintf("Task failed after %d attempts", o.failureCounts[taskID])); err != nil {
+					fmt.Fprintf(os.Stderr, "    warning: could not mark task as failed in beads: %v\n", err)
+				}
+			}
+			fmt.Fprintf(os.Stderr, "\nStopping orchestration due to exhausted retries.\n")
+			return fmt.Errorf("%d task(s) failed after %d retry attempts", len(retriesExhausted), o.config.MaxRetries)
 		}
 	}
 }

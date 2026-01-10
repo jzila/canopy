@@ -135,12 +135,17 @@ func (s *Scheduler) ExecuteBatch(ctx context.Context, tasks []beads.Task) ([]*ag
 
 			// Update beads status
 			if result.Success {
-				if err := s.beadsClient.Done(task.ID); err != nil && s.config.Verbose {
+				if err := s.beadsClient.Done(task.ID); err != nil {
+					// Always log failures to update beads, not just in verbose mode
 					fmt.Fprintf(os.Stderr, "warning: failed to mark task %s done: %v\n", task.ID, err)
 				}
 			} else {
-				if err := s.beadsClient.Fail(task.ID, result.Error); err != nil && s.config.Verbose {
-					fmt.Fprintf(os.Stderr, "warning: failed to mark task %s failed: %v\n", task.ID, err)
+				if err := s.beadsClient.Fail(task.ID, result.Error); err != nil {
+					// Always log failures to update beads, not just in verbose mode
+					// This is critical because if we can't mark tasks as failed,
+					// they will be retried indefinitely
+					fmt.Fprintf(os.Stderr, "ERROR: failed to mark task %s as failed: %v\n", task.ID, err)
+					fmt.Fprintf(os.Stderr, "       This task will be retried in the next iteration.\n")
 				}
 			}
 
@@ -226,6 +231,19 @@ func (s *Scheduler) executeTask(ctx context.Context, task *beads.Task) *agent.Re
 		}
 		fmt.Printf("Task %s %s (%.1fs, %d files changed%s)\n",
 			task.ID, status, result.Duration.Seconds(), len(result.Changes), commitInfo)
+
+		// Print output when task fails to help debug issues
+		if !result.Success {
+			if result.Stdout != "" {
+				fmt.Fprintf(os.Stderr, "Task %s stdout:\n%s\n", task.ID, result.Stdout)
+			}
+			if result.Stderr != "" {
+				fmt.Fprintf(os.Stderr, "Task %s stderr:\n%s\n", task.ID, result.Stderr)
+			}
+			if result.Stdout == "" && result.Stderr == "" {
+				fmt.Fprintf(os.Stderr, "Task %s produced no output on stdout or stderr\n", task.ID)
+			}
+		}
 	}
 
 	return result

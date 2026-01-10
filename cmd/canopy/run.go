@@ -24,6 +24,7 @@ var (
 	dryRun      bool
 	sandbox     bool
 	daemonAddr  string
+	maxRetries  int
 )
 
 var runCmd = &cobra.Command{
@@ -33,6 +34,15 @@ var runCmd = &cobra.Command{
 
 Each task runs in an isolated OverlayFS sandbox with its own copy
 of the working directory. Changes are merged back after completion.
+
+RETRY BEHAVIOR
+  By default, failed tasks are retried up to 3 times. This prevents
+  infinite retry loops when tasks consistently fail.
+
+  Use --max-retries to customize:
+  - --max-retries 0: No retries, fail immediately
+  - --max-retries 3: Default, retry up to 3 times
+  - --max-retries -1: Infinite retries (original behavior)
 
 SECURITY
   By default, agents run with:
@@ -48,7 +58,7 @@ SECURITY
   - Only /workspace writable
 
 Example:
-  # Run with default settings
+  # Run with default settings (3 retries)
   canopy run
 
   # Run with 8 concurrent agents
@@ -56,6 +66,9 @@ Example:
 
   # Run with full sandbox isolation
   canopy run --sandbox
+
+  # Run with no retries (fail immediately)
+  canopy run --max-retries 0
 
   # Dry run to see what would execute
   canopy run --dry-run`,
@@ -68,6 +81,7 @@ func init() {
 	runCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show execution plan without running")
 	runCmd.Flags().BoolVar(&sandbox, "sandbox", false, "Use bubblewrap (bwrap) for full process/filesystem isolation")
 	runCmd.Flags().StringVar(&daemonAddr, "daemon", "", "Connect to canopyd at this address (e.g., /tmp/canopyd.sock)")
+	runCmd.Flags().IntVar(&maxRetries, "max-retries", 3, "Maximum retry attempts for failed tasks (0=no retries, -1=infinite)")
 
 	rootCmd.AddCommand(runCmd)
 }
@@ -118,6 +132,7 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		Verbose:     verbose,
 		DryRun:      dryRun,
 		UseBwrap:    sandbox,
+		MaxRetries:  maxRetries,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create orchestrator: %w", err)
