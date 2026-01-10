@@ -385,10 +385,24 @@ func hashFile(path string) (string, error) {
 
 // Cleanup removes all overlay directories
 func (o *Overlay) Cleanup() error {
-	if o.mounted {
+	// Always try to unmount defensively - the o.mounted flag might be stale
+	// (e.g., if process crashed and was restarted, or state is inconsistent)
+	// Check actual mount status and attempt unmount if needed
+	if o.isMounted() {
+		// Force the mounted flag to true so Unmount() will actually run
+		o.mounted = true
 		if err := o.Unmount(); err != nil {
-			return err
+			return fmt.Errorf("failed to unmount before cleanup: %w", err)
 		}
+	} else if o.mounted {
+		// Flag says mounted but it's not - just clear the flag
+		o.mounted = false
+	}
+
+	// Final verification: ensure it's really unmounted before RemoveAll
+	// RemoveAll() will fail if FUSE is still mounted
+	if o.isMounted() {
+		return fmt.Errorf("cannot cleanup: %s is still mounted after unmount attempt", o.MergedDir)
 	}
 
 	// Remove the overlay directory tree
