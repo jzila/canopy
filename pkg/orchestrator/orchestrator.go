@@ -1,10 +1,13 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
@@ -216,6 +219,12 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			fmt.Println()
 		}
 
+		// Commit merged changes
+		if err := o.commitMergedChanges(results); err != nil {
+			// Log but don't fail - the changes are already merged
+			fmt.Fprintf(os.Stderr, "warning: failed to commit merged changes: %v\n", err)
+		}
+
 		// Report errors
 		for _, errMsg := range mergeResult.Errors {
 			fmt.Fprintf(os.Stderr, "merge error: %s\n", errMsg)
@@ -271,4 +280,53 @@ func (o *Orchestrator) Cleanup() error {
 // GetScheduler returns the underlying scheduler for advanced operations like signal cleanup
 func (o *Orchestrator) GetScheduler() *scheduler.Scheduler {
 	return o.scheduler
+}
+
+// commitMergedChanges creates a git commit for merged changes from completed tasks
+func (o *Orchestrator) commitMergedChanges(results []*agent.Result) error {
+	// Check if there are any uncommitted changes
+	statusCmd := exec.Command("git", "status", "--porcelain")
+	statusCmd.Dir = o.config.OutputDir
+	statusOut, err := statusCmd.Output()
+	if err != nil {
+		return fmt.Errorf("git status failed: %w", err)
+	}
+
+	// If no changes, don't create an empty commit
+	if len(bytes.TrimSpace(statusOut)) == 0 {
+		if o.config.Verbose {
+			fmt.Println("No uncommitted changes to commit")
+		}
+		return nil
+	}
+
+	// Stage all changes
+	addCmd := exec.Command("git", "add", ".")
+	addCmd.Dir = o.config.OutputDir
+	if err := addCmd.Run(); err != nil {
+		return fmt.Errorf("git add failed: %w", err)
+	}
+
+	// Build commit message with task IDs
+	var taskIDs []string
+	for _, r := range results {
+		if r.Success {
+			taskIDs = append(taskIDs, r.TaskID)
+		}
+	}
+
+	commitMsg := fmt.Sprintf("canopy: merge results from %s", strings.Join(taskIDs, ", "))
+
+	// Create commit
+	commitCmd := exec.Command("git", "commit", "-m", commitMsg)
+	commitCmd.Dir = o.config.OutputDir
+	if err := commitCmd.Run(); err != nil {
+		return fmt.Errorf("git commit failed: %w", err)
+	}
+
+	if o.config.Verbose {
+		fmt.Printf("Created commit for merged changes from %d tasks\n", len(taskIDs))
+	}
+
+	return nil
 }
