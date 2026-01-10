@@ -210,6 +210,9 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			if len(mergeResult.Conflicts) > 0 {
 				fmt.Printf(" (%d conflicts resolved by last-writer-wins)", len(mergeResult.Conflicts))
 			}
+			if mergeResult.BeadsSynced {
+				fmt.Printf(" (beads state synced)")
+			}
 			fmt.Println()
 		}
 
