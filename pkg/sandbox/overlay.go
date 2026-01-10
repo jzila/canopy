@@ -78,6 +78,13 @@ func NewOverlay(baseDir, lowerDir string) (*Overlay, error) {
 		return nil, fmt.Errorf("failed to create whiteouts: %w", err)
 	}
 
+	// Copy Claude credentials to upper dir so agents can authenticate
+	if err := overlay.copyClaudeCredentials(); err != nil {
+		// Non-fatal - agent might work with env vars
+		// Just log the error if verbose mode is enabled elsewhere
+		_ = err
+	}
+
 	return overlay, nil
 }
 
@@ -121,6 +128,109 @@ func (o *Overlay) createWhiteouts() error {
 		}
 	}
 	return nil
+}
+
+// copyClaudeCredentials copies Claude CLI credentials from the user's home
+// directory to the overlay's upper directory so agents can authenticate.
+// This is necessary because .claude is whiteout'd from the lowerdir.
+func (o *Overlay) copyClaudeCredentials() error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("get user home dir: %w", err)
+	}
+
+	// Claude credentials can be in multiple locations
+	credentialPaths := []string{
+		".claude.json",
+		".claude/.credentials.json",
+		".claude/settings.json",
+	}
+
+	claudeDir := filepath.Join(o.UpperDir, ".claude")
+	if err := os.MkdirAll(claudeDir, 0755); err != nil {
+		return fmt.Errorf("create .claude dir in upper: %w", err)
+	}
+
+	// Copy each credential file if it exists
+	for _, credPath := range credentialPaths {
+		srcPath := filepath.Join(homeDir, credPath)
+		dstPath := filepath.Join(o.UpperDir, credPath)
+
+		// Check if source file exists
+		if _, err := os.Stat(srcPath); os.IsNotExist(err) {
+			continue
+		}
+
+		// Create parent directory in upper if needed
+		dstDir := filepath.Dir(dstPath)
+		if err := os.MkdirAll(dstDir, 0755); err != nil {
+			return fmt.Errorf("create parent dir for %s: %w", credPath, err)
+		}
+
+		// Copy the file
+		if err := copyFile(srcPath, dstPath); err != nil {
+			return fmt.Errorf("copy %s: %w", credPath, err)
+		}
+	}
+
+	// Also copy the entire statsig directory if it exists
+	statsigSrc := filepath.Join(homeDir, ".claude", "statsig")
+	statsigDst := filepath.Join(claudeDir, "statsig")
+	if _, err := os.Stat(statsigSrc); err == nil {
+		if err := copyDir(statsigSrc, statsigDst); err != nil {
+			// Non-fatal, statsig is just for telemetry
+			_ = err
+		}
+	}
+
+	return nil
+}
+
+// copyFile copies a file from src to dst
+func copyFile(src, dst string) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	// Get source file mode
+	srcInfo, err := srcFile.Stat()
+	if err != nil {
+		return err
+	}
+
+	dstFile, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, srcInfo.Mode())
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	_, err = io.Copy(dstFile, srcFile)
+	return err
+}
+
+// copyDir recursively copies a directory
+func copyDir(src, dst string) error {
+	return filepath.Walk(src, func(path string, info fs.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Get relative path from src
+		relPath, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+
+		dstPath := filepath.Join(dst, relPath)
+
+		if info.IsDir() {
+			return os.MkdirAll(dstPath, info.Mode())
+		}
+
+		return copyFile(path, dstPath)
+	})
 }
 
 // generateID creates a random hex ID
