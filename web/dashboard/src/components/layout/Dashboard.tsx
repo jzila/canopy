@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Play, Pause, Activity, Clock, DollarSign, Zap, GitCommit, FileEdit } from 'lucide-react';
+import { Play, Pause, Activity, Clock, DollarSign, Zap, GitCommit, FileEdit, Sun, Moon } from 'lucide-react';
 import { useStateStore } from '../../stores/stateStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { pauseOrch, resumeOrch, getState } from '../../api/client';
@@ -11,6 +11,21 @@ export const Dashboard: React.FC = () => {
   const { connected } = useWebSocket();
   const [isPauseLoading, setIsPauseLoading] = useState(false);
   const [isResumeLoading, setIsResumeLoading] = useState(false);
+  const [isDark, setIsDark] = useState(() => {
+    const saved = localStorage.getItem('darkMode');
+    if (saved !== null) return saved === 'true';
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  });
+
+  // Apply dark mode class to document
+  useEffect(() => {
+    if (isDark) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+    localStorage.setItem('darkMode', String(isDark));
+  }, [isDark]);
 
   // State from store
   const agents = useStateStore((state) => state.agents);
@@ -127,6 +142,13 @@ export const Dashboard: React.FC = () => {
                 {connected ? 'Connected' : 'Disconnected'}
               </span>
             </div>
+            <button
+              onClick={() => setIsDark(!isDark)}
+              className="p-2 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+              title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+            >
+              {isDark ? <Sun className="w-5 h-5 text-yellow-500" /> : <Moon className="w-5 h-5 text-gray-600" />}
+            </button>
           </div>
 
           {/* Pause/Resume and Stats Summary */}
