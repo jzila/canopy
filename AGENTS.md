@@ -4,6 +4,18 @@ This project uses **bd** (beads) for issue tracking and **canopy** for parallel 
 
 Run `bd onboard` to learn beads, and `canopy help` to learn the orchestrator.
 
+## Git Setup
+Before any git operations, load your identity:
+```bash
+git config user.name && git config user.email  # Verify config exists
+```
+
+## Commit Standards
+- Format: `type: concise description` (feat, fix, refactor, test, docs, chore)
+- Reference bead ID when relevant: `fix(canopy-abc): description`
+- Run `go test ./...` before committing code changes
+- Run `go build ./...` to verify compilation
+
 ## Quick Reference
 
 ```bash
