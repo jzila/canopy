@@ -82,7 +82,7 @@ interface StateStore {
   setConnected: (connected: boolean) => void;
   updateAgent: (id: string, update: Partial<AgentState>) => void;
   syncState: (state: RuntimeState) => void;
-  appendOutput: (agentId: string, output: string) => void;
+  appendOutput: (agentId: string, output: string, isError?: boolean) => void;
   setSelectedAgent: (id: string | null) => void;
   setIsPaused: (paused: boolean) => void;
 }
@@ -115,14 +115,26 @@ export const useStateStore = create<StateStore>((set) => ({
 
   updateAgent: (id, update) =>
     set((state) => {
-      const agent = state.agents[id];
-      if (!agent) return state;
+      const existingAgent = state.agents[id];
+
+      // If agent doesn't exist, create it with the update data
+      if (!existingAgent) {
+        // Only create if we have the required id field
+        if (!update.id) return state;
+
+        return {
+          agents: {
+            ...state.agents,
+            [id]: update as AgentState,
+          },
+        };
+      }
 
       return {
         agents: {
           ...state.agents,
           [id]: {
-            ...agent,
+            ...existingAgent,
             ...update,
           },
         },
@@ -137,7 +149,7 @@ export const useStateStore = create<StateStore>((set) => ({
       isPaused: runtimeState.is_paused,
     }),
 
-  appendOutput: (agentId, output) =>
+  appendOutput: (agentId, output, isError = false) =>
     set((state) => {
       const agent = state.agents[agentId];
       if (!agent) return state;
@@ -148,8 +160,8 @@ export const useStateStore = create<StateStore>((set) => ({
           [agentId]: {
             ...agent,
             output: {
-              ...agent.output,
-              stdout: agent.output.stdout + output,
+              stdout: isError ? agent.output.stdout : agent.output.stdout + output,
+              stderr: isError ? agent.output.stderr + output : agent.output.stderr,
             },
           },
         },

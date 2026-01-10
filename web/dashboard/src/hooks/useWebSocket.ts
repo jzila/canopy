@@ -1,48 +1,54 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useStateStore } from '../stores/stateStore';
 
-// Event types that match the Go backend
+// Event types that match the Go backend (wire_events.go)
+// Backend sends: { type, timestamp, payload }
 interface WebSocketEvent {
   type: string;
-  data: unknown;
+  timestamp: string;
+  payload: unknown;
 }
 
 interface AgentStartedEvent {
   type: 'agent:started';
-  data: {
-    id: string;
+  timestamp: string;
+  payload: {
+    agent_id: string;
     task_id: string;
     task_title: string;
-    status: string;
-    start_time: string;
   };
 }
 
 interface AgentOutputEvent {
   type: 'agent:output';
-  data: {
+  timestamp: string;
+  payload: {
     agent_id: string;
     output: string;
+    is_error: boolean;
   };
 }
 
 interface AgentCompletedEvent {
   type: 'agent:completed';
-  data: {
-    id: string;
-    status: string;
-    end_time: string;
-    duration: number;
+  timestamp: string;
+  payload: {
+    agent_id: string;
+    error?: string;
     exit_code: number;
-    error: string;
-    changes: number;
-    commits: number;
+    duration: number;
+    input_tokens: number;
+    output_tokens: number;
+    cost_usd: number;
+    files_changed: number;
+    commits_created: number;
   };
 }
 
 interface TaskUpdatedEvent {
   type: 'task:updated';
-  data: {
+  timestamp: string;
+  payload: {
     id: string;
     title?: string;
     status?: string;
@@ -53,7 +59,8 @@ interface TaskUpdatedEvent {
 
 interface StatsUpdatedEvent {
   type: 'stats:updated';
-  data: unknown;
+  timestamp: string;
+  payload: unknown;
 }
 
 type EventType =
@@ -119,16 +126,18 @@ export function useWebSocket() {
       ws.onmessage = (event) => {
         try {
           const message: EventType = JSON.parse(event.data);
+          console.log('[WebSocket] Received:', message.type, message);
 
           switch (message.type) {
             case 'agent:started': {
-              const { id, task_id, task_title, status, start_time } = message.data;
-              updateAgent(id, {
-                id,
+              const { agent_id, task_id, task_title } = message.payload;
+              // Create new agent entry
+              updateAgent(agent_id, {
+                id: agent_id,
                 task_id,
                 task_title,
-                status: status as any,
-                start_time,
+                status: 'running',
+                start_time: message.timestamp,
                 end_time: null,
                 duration: 0,
                 output: { stdout: '', stderr: '' },
@@ -147,35 +156,38 @@ export function useWebSocket() {
             }
 
             case 'agent:output': {
-              const { agent_id, output } = message.data;
-              appendOutput(agent_id, output);
+              const { agent_id, output, is_error } = message.payload;
+              appendOutput(agent_id, output, is_error);
               break;
             }
 
             case 'agent:completed': {
-              const { id, status, end_time, duration, exit_code, error, changes, commits } = message.data;
-              updateAgent(id, {
-                status: status as any,
-                end_time,
+              const { agent_id, error, exit_code, duration, input_tokens, output_tokens, cost_usd, files_changed, commits_created } = message.payload;
+              updateAgent(agent_id, {
+                status: error ? 'failed' : 'completed',
+                end_time: message.timestamp,
                 duration,
                 exit_code,
-                error,
-                changes,
-                commits,
+                error: error || '',
+                changes: files_changed,
+                commits: commits_created,
+                token_usage: {
+                  input_tokens,
+                  output_tokens,
+                  total_tokens: input_tokens + output_tokens,
+                  cost_usd,
+                },
               });
               break;
             }
 
             case 'task:updated': {
-              // For now, we could do a partial update or just sync full state
-              // The backend might send full state updates, so syncState would handle it
-              console.log('[WebSocket] Task updated:', message.data);
+              console.log('[WebSocket] Task updated:', message.payload);
               break;
             }
 
             case 'stats:updated': {
-              // Trigger a full state sync since stats affect everything
-              console.log('[WebSocket] Stats updated:', message.data);
+              console.log('[WebSocket] Stats updated:', message.payload);
               break;
             }
 
