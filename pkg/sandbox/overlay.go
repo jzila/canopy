@@ -43,7 +43,7 @@ type Overlay struct {
 // DefaultPassthroughPaths are directories that should bypass the overlay
 // and write directly to the original filesystem
 var DefaultPassthroughPaths = []string{
-	".beads",
+	// Empty - .beads removed to prevent git conflicts from concurrent workers
 }
 
 // DefaultHiddenPaths are paths that should be hidden from agents via whiteout
