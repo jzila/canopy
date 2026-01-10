@@ -26,6 +26,12 @@
     echo hello from $GREET
   '';
 
+  scripts.build.exec = ''
+    go build -o "$DEVENV_ROOT/canopy" ./cmd/canopy
+    go build -o "$DEVENV_ROOT/canopyd" ./cmd/canopyd
+    echo "Built: canopy, canopyd"
+  '';
+
   # https://devenv.sh/basics/
   enterShell = ''
     export PATH="$DEVENV_ROOT:$PATH"
