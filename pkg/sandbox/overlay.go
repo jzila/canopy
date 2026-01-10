@@ -81,7 +81,12 @@ func NewOverlay(baseDir, lowerDir string) (*Overlay, error) {
 	// Copy Claude credentials to upper dir so agents can authenticate
 	if err := overlay.copyClaudeCredentials(); err != nil {
 		// Non-fatal - agent might work with env vars
-		// Just log the error if verbose mode is enabled elsewhere
+		_ = err
+	}
+
+	// Copy git config so agents have correct authorship
+	if err := overlay.copyGitConfig(); err != nil {
+		// Non-fatal - agents can still commit with repo-local config
 		_ = err
 	}
 
@@ -184,6 +189,22 @@ func (o *Overlay) copyClaudeCredentials() error {
 	}
 
 	return nil
+}
+
+// copyGitConfig copies ~/.gitconfig to the overlay so agents have correct authorship
+func (o *Overlay) copyGitConfig() error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+
+	srcPath := filepath.Join(homeDir, ".gitconfig")
+	if _, err := os.Stat(srcPath); os.IsNotExist(err) {
+		return nil // No gitconfig to copy
+	}
+
+	dstPath := filepath.Join(o.UpperDir, ".gitconfig")
+	return copyFile(srcPath, dstPath)
 }
 
 // copyFile copies a file from src to dst
