@@ -292,6 +292,14 @@ func (o *Overlay) GetChanges() ([]FileChange, error) {
 		// Get relative path
 		relPath, _ := filepath.Rel(o.UpperDir, path)
 
+		// Skip .git directory entirely - git changes are handled separately via commit extraction
+		if relPath == ".git" || strings.HasPrefix(relPath, ".git"+string(filepath.Separator)) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
 		// Skip passthrough paths (they're bind-mounted, not overlayed)
 		for _, passthrough := range DefaultPassthroughPaths {
 			if relPath == passthrough || strings.HasPrefix(relPath, passthrough+string(filepath.Separator)) {
