@@ -11,7 +11,6 @@ devenv.local.yaml
 
 # Binaries
 /canopy
-/canopyd
 
 # Beads local sync state
 .beads/sync_base.jsonl

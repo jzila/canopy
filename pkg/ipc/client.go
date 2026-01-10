@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Client manages IPC communication from canopy run to canopyd
+// Client manages IPC communication from canopy run to canopy daemon
 // Connects to the daemon's Unix socket and sends events as workers execute
 type Client struct {
 	socketPath string
@@ -32,7 +32,7 @@ func NewClient(socketPath string) (*Client, error) {
 	return client, nil
 }
 
-// Connect establishes connection to the canopyd Unix socket
+// Connect establishes connection to the canopy daemon Unix socket
 // Can be called to reconnect after connection loss
 func (c *Client) Connect() error {
 	c.mu.Lock()
@@ -46,7 +46,7 @@ func (c *Client) Connect() error {
 	// Connect to Unix socket with timeout
 	conn, err := net.DialTimeout("unix", c.socketPath, 5*time.Second)
 	if err != nil {
-		return fmt.Errorf("failed to connect to canopyd socket: %w", err)
+		return fmt.Errorf("failed to connect to canopy daemon socket: %w", err)
 	}
 
 	c.conn = conn

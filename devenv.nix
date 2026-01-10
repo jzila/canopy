@@ -28,8 +28,7 @@
 
   scripts.build.exec = ''
     go build -o "$DEVENV_ROOT/canopy" ./cmd/canopy
-    go build -o "$DEVENV_ROOT/canopyd" ./cmd/canopyd
-    echo "Built: canopy, canopyd"
+    echo "Built: canopy"
   '';
 
   # https://devenv.sh/basics/

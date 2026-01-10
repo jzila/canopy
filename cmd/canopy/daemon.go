@@ -40,7 +40,7 @@ Example:
 
 func init() {
 	daemonCmd.Flags().IntVar(&daemonPort, "port", 8080, "HTTP server port")
-	daemonCmd.Flags().StringVar(&daemonSocket, "ipc-socket", "/tmp/canopyd.sock", "Unix socket path for IPC")
+	daemonCmd.Flags().StringVar(&daemonSocket, "ipc-socket", "/tmp/canopy.sock", "Unix socket path for IPC")
 	daemonCmd.Flags().BoolVar(&daemonDevMode, "dev", false, "Enable development mode")
 
 	rootCmd.AddCommand(daemonCmd)

@@ -80,7 +80,7 @@ func init() {
 	runCmd.Flags().StringVarP(&outputDir, "output", "o", "", "Output directory for merged results (default: workdir)")
 	runCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show execution plan without running")
 	runCmd.Flags().BoolVar(&sandbox, "sandbox", false, "Use bubblewrap (bwrap) for full process/filesystem isolation")
-	runCmd.Flags().StringVar(&daemonAddr, "daemon", "", "Connect to canopyd at this address (e.g., /tmp/canopyd.sock)")
+	runCmd.Flags().StringVar(&daemonAddr, "daemon", "", "Connect to canopy daemon at this address (e.g., /tmp/canopy.sock)")
 	runCmd.Flags().IntVar(&maxRetries, "max-retries", 3, "Maximum retry attempts for failed tasks (0=no retries, -1=infinite)")
 
 	rootCmd.AddCommand(runCmd)
@@ -138,7 +138,7 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		} else {
 			ipcClient = client
 			defer ipcClient.Close()
-			fmt.Printf("Connected to canopyd at %s\n", daemonAddr)
+			fmt.Printf("Connected to canopy daemon at %s\n", daemonAddr)
 		}
 	}
 
