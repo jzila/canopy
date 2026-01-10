@@ -1,4 +1,4 @@
-package canopy
+package main
 
 import (
 	"context"
