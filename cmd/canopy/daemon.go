@@ -8,6 +8,7 @@ import (
 
 	"github.com/jzila/canopy/pkg/daemon"
 	"github.com/jzila/canopy/pkg/ipc"
+	"github.com/jzila/canopy/pkg/runtime"
 )
 
 var (
@@ -40,15 +41,25 @@ Example:
 
 func init() {
 	daemonCmd.Flags().IntVar(&daemonPort, "port", 8080, "HTTP server port")
-	daemonCmd.Flags().StringVar(&daemonSocket, "ipc-socket", "/tmp/canopy.sock", "Unix socket path for IPC")
+	daemonCmd.Flags().StringVar(&daemonSocket, "ipc-socket", "", "Unix socket path for IPC (default: runtime dir)")
 	daemonCmd.Flags().BoolVar(&daemonDevMode, "dev", false, "Enable development mode")
 
 	rootCmd.AddCommand(daemonCmd)
 }
 
 func runDaemon(cmd *cobra.Command, args []string) error {
+	// Use runtime socket path if not specified
+	if daemonSocket == "" {
+		daemonSocket = runtime.SocketPath("")
+	}
+
 	if verbose {
 		fmt.Printf("Starting daemon on port %d with IPC socket %s\n", daemonPort, daemonSocket)
+	}
+
+	// Ensure runtime directory exists
+	if err := runtime.EnsureDir(); err != nil {
+		return fmt.Errorf("failed to create runtime directory: %w", err)
 	}
 
 	// Create daemon configuration

@@ -23,7 +23,7 @@ var (
 	outputDir   string
 	dryRun      bool
 	sandbox     bool
-	daemonAddr  string
+	noDaemon    bool
 	maxRetries  int
 )
 
@@ -34,6 +34,13 @@ var runCmd = &cobra.Command{
 
 Each task runs in an isolated OverlayFS sandbox with its own copy
 of the working directory. Changes are merged back after completion.
+
+DAEMON CONNECTION
+  By default, canopy run connects to the canopy daemon for monitoring
+  and real-time updates. If the daemon is not running, it will be
+  started automatically.
+
+  Use --no-daemon to disable daemon connection and run standalone.
 
 RETRY BEHAVIOR
   By default, failed tasks are retried up to 3 times. This prevents
@@ -58,8 +65,11 @@ SECURITY
   - Only /workspace writable
 
 Example:
-  # Run with default settings (3 retries)
+  # Run with default settings (auto-connects to daemon)
   canopy run
+
+  # Run without daemon connection
+  canopy run --no-daemon
 
   # Run with 8 concurrent agents
   canopy run --concurrency 8
@@ -80,7 +90,7 @@ func init() {
 	runCmd.Flags().StringVarP(&outputDir, "output", "o", "", "Output directory for merged results (default: workdir)")
 	runCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show execution plan without running")
 	runCmd.Flags().BoolVar(&sandbox, "sandbox", false, "Use bubblewrap (bwrap) for full process/filesystem isolation")
-	runCmd.Flags().StringVar(&daemonAddr, "daemon", "", "Connect to canopy daemon at this address (e.g., /tmp/canopy.sock)")
+	runCmd.Flags().BoolVar(&noDaemon, "no-daemon", false, "Disable automatic daemon connection (run without daemon)")
 	runCmd.Flags().IntVar(&maxRetries, "max-retries", 3, "Maximum retry attempts for failed tasks (0=no retries, -1=infinite)")
 
 	rootCmd.AddCommand(runCmd)
@@ -128,17 +138,21 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		outputDir = absWorkdir
 	}
 
-	// Set up IPC client if daemon address is provided
+	// Set up IPC client unless --no-daemon is specified
 	var ipcClient *ipc.Client
-	if daemonAddr != "" {
-		client, err := ipc.NewClient(daemonAddr)
+	if !noDaemon {
+		client, err := ipc.GetClient()
 		if err != nil {
-			// Always warn about daemon connection failures, not just in verbose mode
-			fmt.Fprintf(os.Stderr, "warning: failed to connect to daemon at %s: %v\n", daemonAddr, err)
+			// Warn about daemon connection/startup failures
+			if verbose {
+				fmt.Fprintf(os.Stderr, "warning: failed to connect to daemon: %v\n", err)
+			}
 		} else {
 			ipcClient = client
 			defer ipcClient.Close()
-			fmt.Printf("Connected to canopy daemon at %s\n", daemonAddr)
+			if verbose {
+				fmt.Println("Connected to canopy daemon")
+			}
 		}
 	}
 
