@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/john/canopy/pkg/beads"
+	"github.com/jzila/canopy/pkg/beads"
 )
 
 // Mock scheduler for testing

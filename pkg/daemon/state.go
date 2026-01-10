@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/john/canopy/pkg/beads"
+	"github.com/jzila/canopy/pkg/beads"
 )
 
 // AgentStatus represents the current state of an agent

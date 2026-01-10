@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/john/canopy/web"
+	"github.com/jzila/canopy/web"
 )
 
 // Server manages the HTTP server that serves the web UI and REST API

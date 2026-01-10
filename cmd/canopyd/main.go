@@ -7,8 +7,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/john/canopy/pkg/daemon"
-	"github.com/john/canopy/pkg/ipc"
+	"github.com/jzila/canopy/pkg/daemon"
+	"github.com/jzila/canopy/pkg/ipc"
 )
 
 var (

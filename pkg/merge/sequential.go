@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/john/canopy/pkg/agent"
-	"github.com/john/canopy/pkg/sandbox"
+	"github.com/jzila/canopy/pkg/agent"
+	"github.com/jzila/canopy/pkg/sandbox"
 )
 
 // AppliedChange records a change that was applied during merge

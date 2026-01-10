@@ -12,10 +12,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
-	"github.com/john/canopy/pkg/agent"
-	"github.com/john/canopy/pkg/beads"
-	"github.com/john/canopy/pkg/ipc"
-	"github.com/john/canopy/pkg/orchestrator"
+	"github.com/jzila/canopy/pkg/agent"
+	"github.com/jzila/canopy/pkg/beads"
+	"github.com/jzila/canopy/pkg/ipc"
+	"github.com/jzila/canopy/pkg/orchestrator"
 )
 
 var (

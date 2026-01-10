@@ -6,10 +6,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/john/canopy/pkg/agent"
-	"github.com/john/canopy/pkg/beads"
-	"github.com/john/canopy/pkg/merge"
-	"github.com/john/canopy/pkg/scheduler"
+	"github.com/jzila/canopy/pkg/agent"
+	"github.com/jzila/canopy/pkg/beads"
+	"github.com/jzila/canopy/pkg/merge"
+	"github.com/jzila/canopy/pkg/scheduler"
 )
 
 // EventCallbacks defines lifecycle callbacks for agent execution events

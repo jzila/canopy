@@ -1,4 +1,4 @@
-module github.com/john/canopy
+module github.com/jzila/canopy
 
 go 1.22
 

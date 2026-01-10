@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/john/canopy/pkg/daemon"
+	"github.com/jzila/canopy/pkg/daemon"
 )
 
 func TestClientConnectClose(t *testing.T) {

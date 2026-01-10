@@ -3,8 +3,8 @@ package orchestrator
 import (
 	"testing"
 
-	"github.com/john/canopy/pkg/agent"
-	"github.com/john/canopy/pkg/beads"
+	"github.com/jzila/canopy/pkg/agent"
+	"github.com/jzila/canopy/pkg/beads"
 )
 
 func TestEventCallbacks_Interface(t *testing.T) {

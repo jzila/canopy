@@ -12,8 +12,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/john/canopy/pkg/beads"
-	"github.com/john/canopy/pkg/sandbox"
+	"github.com/jzila/canopy/pkg/beads"
+	"github.com/jzila/canopy/pkg/sandbox"
 )
 
 // DefaultTimeout is the default execution timeout for agents

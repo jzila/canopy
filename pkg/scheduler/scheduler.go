@@ -11,9 +11,9 @@ import (
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
 
-	"github.com/john/canopy/pkg/agent"
-	"github.com/john/canopy/pkg/beads"
-	"github.com/john/canopy/pkg/sandbox"
+	"github.com/jzila/canopy/pkg/agent"
+	"github.com/jzila/canopy/pkg/beads"
+	"github.com/jzila/canopy/pkg/sandbox"
 )
 
 // CallbackHandler defines lifecycle callbacks for agent execution events.

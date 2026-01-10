@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/john/canopy/pkg/daemon"
+	"github.com/jzila/canopy/pkg/daemon"
 )
 
 func TestServerStartStop(t *testing.T) {

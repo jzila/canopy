@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/john/canopy/pkg/daemon"
+	"github.com/jzila/canopy/pkg/daemon"
 )
 
 // Server manages IPC connections from canopy run clients
