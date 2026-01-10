@@ -5,10 +5,11 @@ This project uses **bd** (beads) for issue tracking and **canopy** for parallel 
 Run `bd onboard` to learn beads, and `canopy help` to learn the orchestrator.
 
 ## Git Setup
-Before any git operations, load your identity:
+Before any git operations, verify identity is configured:
 ```bash
-git config user.name && git config user.email  # Verify config exists
+git config user.name && git config user.email  # Must both exist
 ```
+If missing, check `~/.gitconfig` or set locally for this repo.
 
 ## Commit Standards
 - Format: `type: concise description` (feat, fix, refactor, test, docs, chore)
