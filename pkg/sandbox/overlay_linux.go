@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"syscall"
+	"time"
 )
 
 // Mount mounts the overlay filesystem
@@ -112,19 +113,61 @@ func (o *Overlay) Unmount() error {
 	// Unmount bind mounts first
 	o.unmountPassthroughs()
 
-	var err error
-	if o.useFuse {
-		err = exec.Command("fusermount", "-u", o.MergedDir).Run()
-	} else {
-		// Try lazy unmount first
-		err = syscall.Unmount(o.MergedDir, syscall.MNT_DETACH)
+	// Try unmounting with retries
+	const maxRetries = 3
+	const retryDelay = 100 * time.Millisecond
+
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			time.Sleep(retryDelay)
+		}
+
+		// Try primary unmount method
+		var err error
+		if o.useFuse {
+			err = exec.Command("fusermount", "-u", o.MergedDir).Run()
+		} else {
+			err = syscall.Unmount(o.MergedDir, syscall.MNT_DETACH)
+		}
+
+		if err == nil {
+			// Verify unmount succeeded
+			if !o.isMounted() {
+				o.mounted = false
+				return nil
+			}
+			lastErr = fmt.Errorf("unmount appeared successful but %s is still mounted", o.MergedDir)
+			continue
+		}
+
+		lastErr = err
+
+		// If primary method failed, try umount -l as fallback
+		if fallbackErr := exec.Command("umount", "-l", o.MergedDir).Run(); fallbackErr == nil {
+			// Verify fallback succeeded
+			if !o.isMounted() {
+				o.mounted = false
+				return nil
+			}
+			lastErr = fmt.Errorf("umount -l appeared successful but %s is still mounted", o.MergedDir)
+			continue
+		}
 	}
 
+	// All attempts failed
+	return fmt.Errorf("failed to unmount %s after %d attempts: %w", o.MergedDir, maxRetries, lastErr)
+}
+
+// isMounted checks if the overlay is currently mounted by checking /proc/mounts
+func (o *Overlay) isMounted() bool {
+	// Use findmnt to check if the path is a mount point
+	cmd := exec.Command("findmnt", "-n", "-o", "TARGET", o.MergedDir)
+	output, err := cmd.Output()
 	if err != nil {
-		// Force unmount as last resort
-		_ = exec.Command("umount", "-l", o.MergedDir).Run()
+		// findmnt returns non-zero if not found, which means not mounted
+		return false
 	}
-
-	o.mounted = false
-	return err
+	// If findmnt found it, it's mounted
+	return len(output) > 0
 }
