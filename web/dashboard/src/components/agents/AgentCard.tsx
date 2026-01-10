@@ -107,22 +107,22 @@ export const AgentCard: React.FC<AgentCardProps> = ({
       className={`
         p-4 rounded-lg border-2 transition-all cursor-pointer
         ${isSelected
-          ? 'border-blue-500 bg-blue-50 shadow-lg'
-          : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-md'
+          ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/30 shadow-lg'
+          : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 hover:border-gray-300 dark:hover:border-gray-600 hover:shadow-md'
         }
       `}
     >
       <div className="flex items-start justify-between mb-3">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1">
-            <code className="text-sm font-mono text-gray-500">
+            <code className="text-sm font-mono text-gray-500 dark:text-gray-400">
               {truncateId(agent.id)}
             </code>
             <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium text-white ${statusColor}`}>
               {agent.status}
             </span>
           </div>
-          <h3 className="text-sm font-medium text-gray-900 truncate">
+          <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
             {agent.task_title}
           </h3>
         </div>
@@ -132,35 +132,35 @@ export const AgentCard: React.FC<AgentCardProps> = ({
             onClick={handleKill}
             disabled={isKilling}
             className={`
-              ml-2 p-1 rounded hover:bg-red-100 transition-colors
+              ml-2 p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/30 transition-colors
               ${isKilling ? 'opacity-50 cursor-not-allowed' : ''}
             `}
             title="Kill agent"
           >
-            <XCircle className="w-5 h-5 text-red-600" />
+            <XCircle className="w-5 h-5 text-red-600 dark:text-red-400" />
           </button>
         )}
       </div>
 
       <div className="grid grid-cols-3 gap-3 text-xs">
-        <div className="flex items-center gap-1.5 text-gray-600">
+        <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-400">
           <Clock className="w-4 h-4" />
           <span>{elapsedTime}</span>
         </div>
 
-        <div className="flex items-center gap-1.5 text-gray-600">
+        <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-400">
           <Zap className="w-4 h-4" />
           <span>{formatTokenCount(agent.token_usage.total_tokens)}</span>
         </div>
 
-        <div className="flex items-center gap-1.5 text-gray-600">
+        <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-400">
           <DollarSign className="w-4 h-4" />
           <span>{formatCost(agent.token_usage.cost_usd)}</span>
         </div>
       </div>
 
       {agent.error && (
-        <div className="mt-3 text-xs text-red-600 truncate" title={agent.error}>
+        <div className="mt-3 text-xs text-red-600 dark:text-red-400 truncate" title={agent.error}>
           Error: {agent.error}
         </div>
       )}

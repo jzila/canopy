@@ -93,7 +93,7 @@ export const TaskList: React.FC<TaskListProps> = ({ tasks, onSelectTask }) => {
   return (
     <div className="flex flex-col h-full">
       {/* Filter Tabs */}
-      <div className="flex gap-1 p-2 bg-gray-50 border-b border-gray-200">
+      <div className="flex gap-1 p-2 bg-gray-50 dark:bg-gray-700 border-b border-gray-200 dark:border-gray-700">
         {filterButtons.map(({ value, label }) => {
           const isActive = statusFilter === value;
           const count = statusCounts[value];
@@ -106,12 +106,12 @@ export const TaskList: React.FC<TaskListProps> = ({ tasks, onSelectTask }) => {
                 px-3 py-1.5 rounded text-sm font-medium transition-colors
                 ${isActive
                   ? 'bg-blue-500 text-white shadow-sm'
-                  : 'bg-white text-gray-700 hover:bg-gray-100 border border-gray-200'
+                  : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-600'
                 }
               `}
             >
               {label}
-              <span className={`ml-1.5 ${isActive ? 'text-blue-100' : 'text-gray-500'}`}>
+              <span className={`ml-1.5 ${isActive ? 'text-blue-100' : 'text-gray-500 dark:text-gray-400'}`}>
                 ({count})
               </span>
             </button>
@@ -122,7 +122,7 @@ export const TaskList: React.FC<TaskListProps> = ({ tasks, onSelectTask }) => {
       {/* Task List */}
       <div className="flex-1 overflow-y-auto p-2 space-y-2">
         {filteredTasks.length === 0 ? (
-          <div className="text-center text-gray-500 py-8">
+          <div className="text-center text-gray-500 dark:text-gray-400 py-8">
             No tasks found
           </div>
         ) : (
@@ -134,7 +134,7 @@ export const TaskList: React.FC<TaskListProps> = ({ tasks, onSelectTask }) => {
               <div
                 key={task.id}
                 onClick={() => onSelectTask(task.id)}
-                className="p-3 bg-white rounded-lg border border-gray-200 hover:border-blue-300 hover:shadow-md transition-all cursor-pointer"
+                className="p-3 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-500 hover:shadow-md transition-all cursor-pointer"
               >
                 <div className="flex items-start gap-2 mb-2">
                   {/* Priority Badge */}
@@ -152,19 +152,19 @@ export const TaskList: React.FC<TaskListProps> = ({ tasks, onSelectTask }) => {
                   </span>
 
                   {/* Task ID */}
-                  <code className="text-xs font-mono text-gray-500 ml-auto">
+                  <code className="text-xs font-mono text-gray-500 dark:text-gray-400 ml-auto">
                     {truncateId(task.id)}
                   </code>
                 </div>
 
                 {/* Task Title */}
-                <h3 className="text-sm font-medium text-gray-900 mb-1">
+                <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-1">
                   {task.title}
                 </h3>
 
                 {/* Agent Info */}
                 {task.agent_id && (
-                  <div className="flex items-center gap-2 text-xs text-gray-600">
+                  <div className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400">
                     <span className="font-medium">Agent:</span>
                     <code className="font-mono">{truncateId(task.agent_id)}</code>
                   </div>
@@ -172,7 +172,7 @@ export const TaskList: React.FC<TaskListProps> = ({ tasks, onSelectTask }) => {
 
                 {/* Dependencies */}
                 {task.dependencies && task.dependencies.length > 0 && (
-                  <div className="flex items-center gap-2 text-xs text-gray-600 mt-1">
+                  <div className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400 mt-1">
                     <span className="font-medium">Deps:</span>
                     <code className="font-mono">
                       {task.dependencies.map(d => truncateId(d)).join(', ')}
