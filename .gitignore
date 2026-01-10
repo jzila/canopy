@@ -8,5 +8,13 @@ devenv.local.yaml
 
 # pre-commit
 .pre-commit-config.yaml
+
+# Binaries
 /canopy
 /canopyd
+
+# Beads local sync state
+.beads/sync_base.jsonl
+
+# Claude local settings
+.claude/settings.local.json
