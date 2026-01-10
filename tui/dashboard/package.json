@@ -1,0 +1,30 @@
+{
+  "name": "@canopy/tui-dashboard",
+  "version": "0.1.0",
+  "description": "Terminal-based dashboard for Canopy orchestrator",
+  "type": "module",
+  "main": "dist/cli.js",
+  "bin": {
+    "canopy-tui": "./dist/cli.js"
+  },
+  "scripts": {
+    "dev": "tsx watch src/cli.tsx",
+    "build": "tsc",
+    "start": "node dist/cli.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ink": "^5.0.1",
+    "ink-spinner": "^5.0.0",
+    "react": "^18.2.0",
+    "zustand": "^4.4.7",
+    "ws": "^8.14.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/react": "^18.2.0",
+    "@types/ws": "^8.5.10",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  }
+}
