@@ -52,6 +52,20 @@ var DefaultHiddenPaths = []string{
 	".claude", // Hide parent session settings and approved commands
 }
 
+// HomeExcludedPaths are paths created by tools when HOME is set to merged dir
+// These should be excluded from GetChanges() as they're not project files
+var HomeExcludedPaths = []string{
+	".npm",          // npm cache and global packages
+	".cache",        // General cache directory
+	".claude.json",  // Claude CLI credentials (copied to overlay)
+	".gitconfig",    // Git config (copied to overlay)
+	".config",       // General config directory (may contain tool state)
+	".local",        // User-local data directory
+	".bash_history", // Shell history
+	".viminfo",      // Vim state
+	".lesshst",      // Less history
+}
+
 // NewOverlay creates a new overlay filesystem structure
 func NewOverlay(baseDir, lowerDir string) (*Overlay, error) {
 	id := generateID()
@@ -291,6 +305,16 @@ func (o *Overlay) GetChanges() ([]FileChange, error) {
 		// Skip hidden paths (they're whiteouts we created, not real changes)
 		for _, hidden := range DefaultHiddenPaths {
 			if relPath == hidden || strings.HasPrefix(relPath, hidden+string(filepath.Separator)) {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+		}
+
+		// Skip HOME-related paths (created when HOME=merged, not project files)
+		for _, excluded := range HomeExcludedPaths {
+			if relPath == excluded || strings.HasPrefix(relPath, excluded+string(filepath.Separator)) {
 				if d.IsDir() {
 					return filepath.SkipDir
 				}
