@@ -11,6 +11,11 @@ import (
 	"time"
 )
 
+// IsStub returns false on Linux where overlay is supported
+func IsStub() bool {
+	return false
+}
+
 // Mount mounts the overlay filesystem
 // Tries kernel overlayfs first, falls back to fuse-overlayfs for rootless operation
 func (o *Overlay) Mount() error {

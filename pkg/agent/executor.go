@@ -31,6 +31,7 @@ type Result struct {
 	GitState *sandbox.GitState // Git commits made by worker
 	Duration time.Duration
 	Error    string
+	Overlay  *sandbox.Overlay  // Overlay sandbox (must be cleaned up after merge)
 }
 
 // DependencyContext holds outputs from upstream tasks

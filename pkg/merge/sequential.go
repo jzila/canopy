@@ -113,7 +113,7 @@ func (m *SequentialMerger) Merge(results []*agent.Result) (*Result, error) {
 	// Second pass: apply file changes (later results overwrite earlier)
 	for _, r := range withoutCommits {
 		for _, change := range r.Changes {
-			applied, err := m.applyChange(r.TaskID, change)
+			applied, err := m.applyChange(r, change)
 			if err != nil {
 				mergeResult.Errors = append(mergeResult.Errors,
 					fmt.Sprintf("failed to apply %s from %s: %v", change.Path, r.TaskID, err))
@@ -128,7 +128,7 @@ func (m *SequentialMerger) Merge(results []*agent.Result) (*Result, error) {
 	return mergeResult, nil
 }
 
-func (m *SequentialMerger) applyChange(taskID string, change sandbox.FileChange) (*AppliedChange, error) {
+func (m *SequentialMerger) applyChange(result *agent.Result, change sandbox.FileChange) (*AppliedChange, error) {
 	dstPath := filepath.Join(m.outputDir, change.Path)
 
 	switch change.Type {
@@ -138,13 +138,17 @@ func (m *SequentialMerger) applyChange(taskID string, change sandbox.FileChange)
 		}
 		return &AppliedChange{
 			Path:   change.Path,
-			Source: taskID,
+			Source: result.TaskID,
 			Type:   sandbox.ChangeDeleted,
 		}, nil
 
 	case sandbox.ChangeCreated, sandbox.ChangeModified:
-		// Source file is in the task's upper directory
-		srcPath := filepath.Join(m.tempDir, taskID, "upper", change.Path)
+		// Source file is in the overlay's upper directory
+		// Use the overlay from the result to get the correct path
+		if result.Overlay == nil {
+			return nil, fmt.Errorf("result missing overlay reference")
+		}
+		srcPath := result.Overlay.UpperPath(change.Path)
 
 		// Ensure destination directory exists
 		if err := os.MkdirAll(filepath.Dir(dstPath), 0755); err != nil {
@@ -158,7 +162,7 @@ func (m *SequentialMerger) applyChange(taskID string, change sandbox.FileChange)
 
 		return &AppliedChange{
 			Path:   change.Path,
-			Source: taskID,
+			Source: result.TaskID,
 			Type:   change.Type,
 		}, nil
 	}

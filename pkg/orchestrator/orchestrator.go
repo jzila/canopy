@@ -195,6 +195,15 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			return fmt.Errorf("merge failed: %w", err)
 		}
 
+		// Clean up overlays now that merge is complete
+		for _, r := range results {
+			if r.Overlay != nil {
+				if cleanupErr := r.Overlay.Cleanup(); cleanupErr != nil && o.config.Verbose {
+					fmt.Fprintf(os.Stderr, "warning: failed to cleanup overlay for task %s: %v\n", r.TaskID, cleanupErr)
+				}
+			}
+		}
+
 		// Report merge results
 		if o.config.Verbose {
 			fmt.Printf("Merged %d changes", len(mergeResult.Applied))
@@ -254,4 +263,9 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 // Cleanup removes temporary files
 func (o *Orchestrator) Cleanup() error {
 	return os.RemoveAll(o.tempDir)
+}
+
+// GetScheduler returns the underlying scheduler for advanced operations like signal cleanup
+func (o *Orchestrator) GetScheduler() *scheduler.Scheduler {
+	return o.scheduler
 }

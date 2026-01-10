@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
@@ -40,6 +41,9 @@ type Scheduler struct {
 
 	// Per-agent kill support
 	agentContexts sync.Map // map[string]context.CancelFunc
+
+	// Active overlay tracking for signal cleanup
+	activeOverlays sync.Map // map[string]*sandbox.Overlay
 }
 
 // Config holds scheduler configuration
@@ -191,7 +195,8 @@ func (s *Scheduler) executeTask(ctx context.Context, task *beads.Task) *agent.Re
 			Error:   errMsg,
 		}
 	}
-	defer overlay.Cleanup()
+	// NOTE: Don't cleanup overlay here - it must remain until after merge completes
+	// The orchestrator is responsible for cleaning up overlays after merge
 
 	// Mount the overlay
 	if err := overlay.Mount(); err != nil {
@@ -199,16 +204,27 @@ func (s *Scheduler) executeTask(ctx context.Context, task *beads.Task) *agent.Re
 		if s.config.Verbose {
 			fmt.Printf("Task %s failed: %s\n", task.ID, errMsg)
 		}
+		// Clean up on mount failure since we won't return the overlay
+		overlay.Cleanup()
 		return &agent.Result{
 			TaskID:  task.ID,
 			Success: false,
 			Error:   errMsg,
 		}
 	}
+
+	// Register overlay in active list for signal cleanup
+	s.activeOverlays.Store(task.ID, overlay)
+	defer s.activeOverlays.Delete(task.ID)
+
+	// Unmount when task completes, but don't delete directories yet
 	defer overlay.Unmount()
 
 	// Execute the agent with dependency context
 	result := s.executor.Execute(ctx, task, overlay, deps)
+
+	// Attach overlay to result so it can be cleaned up after merge
+	result.Overlay = overlay
 
 	// Invoke OnOutput callback for captured output
 	if s.callbacks != nil {
@@ -339,4 +355,59 @@ func (s *Scheduler) Kill(agentID string) error {
 		return nil
 	}
 	return fmt.Errorf("agent %s not found", agentID)
+}
+
+// CleanupAll synchronously unmounts all active overlays.
+// This should be called on shutdown to ensure no orphaned FUSE mounts remain.
+// Returns the number of overlays cleaned and any errors encountered.
+func (s *Scheduler) CleanupAll(timeout time.Duration) (int, error) {
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var errors []error
+	count := 0
+
+	// Create a channel to signal completion
+	done := make(chan struct{})
+
+	go func() {
+		s.activeOverlays.Range(func(key, value interface{}) bool {
+			wg.Add(1)
+			count++
+
+			go func(taskID string, overlay *sandbox.Overlay) {
+				defer wg.Done()
+
+				// Try to unmount (it may already be unmounted by defer, but that's ok)
+				if err := overlay.Unmount(); err != nil {
+					mu.Lock()
+					errors = append(errors, fmt.Errorf("task %s unmount: %w", taskID, err))
+					mu.Unlock()
+				}
+
+				// Try to cleanup directories
+				if err := overlay.Cleanup(); err != nil {
+					mu.Lock()
+					errors = append(errors, fmt.Errorf("task %s cleanup: %w", taskID, err))
+					mu.Unlock()
+				}
+			}(key.(string), value.(*sandbox.Overlay))
+
+			return true
+		})
+
+		wg.Wait()
+		close(done)
+	}()
+
+	// Wait with timeout
+	select {
+	case <-done:
+		// All cleanups completed
+		if len(errors) > 0 {
+			return count, fmt.Errorf("cleanup completed with %d error(s): %v", len(errors), errors)
+		}
+		return count, nil
+	case <-time.After(timeout):
+		return count, fmt.Errorf("cleanup timed out after %v (attempted %d overlays)", timeout, count)
+	}
 }

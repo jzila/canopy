@@ -90,13 +90,31 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Orchestrator will be set once created, for signal cleanup
+	var orch *orchestrator.Orchestrator
+
 	// Handle interrupt signals
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		fmt.Fprintln(os.Stderr, "\nInterrupted, cleaning up...")
+		fmt.Fprintln(os.Stderr, "\nInterrupted, cleaning up overlays...")
+
+		// Cancel context to stop agents
 		cancel()
+
+		// Synchronously cleanup all active overlays to prevent orphans
+		if orch != nil {
+			sched := orch.GetScheduler()
+			if sched != nil {
+				count, err := sched.CleanupAll(5 * time.Second)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Warning: overlay cleanup encountered errors: %v\n", err)
+				} else if count > 0 {
+					fmt.Fprintf(os.Stderr, "Cleaned up %d active overlay(s)\n", count)
+				}
+			}
+		}
 	}()
 
 	// Resolve working directory
@@ -125,7 +143,7 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create and run orchestrator
-	orch, err := orchestrator.New(&orchestrator.Config{
+	orch, err = orchestrator.New(&orchestrator.Config{
 		WorkDir:     absWorkdir,
 		OutputDir:   outputDir,
 		Concurrency: concurrency,
