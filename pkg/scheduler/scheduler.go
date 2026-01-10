@@ -176,20 +176,28 @@ func (s *Scheduler) executeTask(ctx context.Context, task *beads.Task) *agent.Re
 	// Create overlay sandbox
 	overlay, err := sandbox.NewOverlay(s.config.TempDir, s.config.WorkDir)
 	if err != nil {
+		errMsg := fmt.Sprintf("failed to create sandbox: %v", err)
+		if s.config.Verbose {
+			fmt.Printf("Task %s failed: %s\n", task.ID, errMsg)
+		}
 		return &agent.Result{
 			TaskID:  task.ID,
 			Success: false,
-			Error:   fmt.Sprintf("failed to create sandbox: %v", err),
+			Error:   errMsg,
 		}
 	}
 	defer overlay.Cleanup()
 
 	// Mount the overlay
 	if err := overlay.Mount(); err != nil {
+		errMsg := fmt.Sprintf("failed to mount sandbox: %v", err)
+		if s.config.Verbose {
+			fmt.Printf("Task %s failed: %s\n", task.ID, errMsg)
+		}
 		return &agent.Result{
 			TaskID:  task.ID,
 			Success: false,
-			Error:   fmt.Sprintf("failed to mount sandbox: %v", err),
+			Error:   errMsg,
 		}
 	}
 	defer overlay.Unmount()

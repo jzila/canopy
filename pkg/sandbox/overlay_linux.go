@@ -17,6 +17,12 @@ func (o *Overlay) Mount() error {
 		return fmt.Errorf("overlay %s already mounted", o.ID)
 	}
 
+	// Setup passthrough symlinks in upperdir BEFORE mounting
+	// This way they'll appear in the merged view when overlay is mounted
+	if err := o.setupPassthroughSymlinks(); err != nil {
+		return err
+	}
+
 	// Build mount options
 	// Format: lowerdir=X,upperdir=Y,workdir=Z
 	mountOpts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s",
@@ -27,7 +33,7 @@ func (o *Overlay) Mount() error {
 	if err == nil {
 		o.mounted = true
 		o.useFuse = false
-		return o.mountPassthroughs()
+		return nil
 	}
 
 	// Try with userxattr for rootless (kernel >= 5.11)
@@ -36,48 +42,41 @@ func (o *Overlay) Mount() error {
 	if err == nil {
 		o.mounted = true
 		o.useFuse = false
-		return o.mountPassthroughs()
+		return nil
 	}
 
 	// Fall back to fuse-overlayfs
 	if err := o.mountFuse(); err != nil {
 		return err
 	}
-	return o.mountPassthroughs()
+	return nil
 }
 
-// mountPassthroughs bind-mounts directories that should bypass the overlay
-func (o *Overlay) mountPassthroughs() error {
+// setupPassthroughSymlinks creates symlinks in upperdir for paths that should
+// bypass the overlay. Must be called BEFORE mounting the overlay.
+func (o *Overlay) setupPassthroughSymlinks() error {
 	for _, relPath := range DefaultPassthroughPaths {
 		srcPath := filepath.Join(o.LowerDir, relPath)
-		dstPath := filepath.Join(o.MergedDir, relPath)
+		upperPath := filepath.Join(o.UpperDir, relPath)
 
-		// Only mount if source exists
+		// Only setup if source exists in lowerdir
 		if _, err := os.Stat(srcPath); os.IsNotExist(err) {
 			continue
 		}
 
-		// Ensure destination exists
-		if err := os.MkdirAll(dstPath, 0755); err != nil {
-			return fmt.Errorf("failed to create passthrough mount point %s: %w", dstPath, err)
+		// Create symlink in upperdir pointing to original location
+		// When overlay is mounted, upperdir takes precedence over lowerdir
+		if err := os.Symlink(srcPath, upperPath); err != nil {
+			return fmt.Errorf("failed to create passthrough symlink for %s: %w", relPath, err)
 		}
-
-		// Bind mount
-		if err := syscall.Mount(srcPath, dstPath, "", syscall.MS_BIND, ""); err != nil {
-			return fmt.Errorf("failed to bind mount %s: %w", relPath, err)
-		}
-
-		o.bindMounts = append(o.bindMounts, dstPath)
 	}
 	return nil
 }
 
-// unmountPassthroughs unmounts all bind-mounted directories
+// unmountPassthroughs removes passthrough symlinks
 func (o *Overlay) unmountPassthroughs() {
-	// Unmount in reverse order
-	for i := len(o.bindMounts) - 1; i >= 0; i-- {
-		syscall.Unmount(o.bindMounts[i], syscall.MNT_DETACH)
-	}
+	// Remove symlinks (they'll be cleaned up with the overlay anyway,
+	// but this keeps the slice consistent)
 	o.bindMounts = nil
 }
 
