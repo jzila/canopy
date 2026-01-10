@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"sync"
@@ -98,7 +99,10 @@ func (s *Server) acceptLoop() {
 		// Register connection
 		s.mu.Lock()
 		s.connections[conn] = struct{}{}
+		connCount := len(s.connections)
 		s.mu.Unlock()
+
+		log.Printf("IPC: accepted connection from canopy run client (total: %d)", connCount)
 
 		// Handle connection in goroutine
 		s.wg.Add(1)
@@ -134,13 +138,18 @@ func (s *Server) handleConnection(conn net.Conn) {
 		// Parse message
 		var msg Message
 		if err := json.Unmarshal(line, &msg); err != nil {
-			// TODO: Consider logging parse errors
+			log.Printf("IPC: failed to parse message: %v", err)
 			continue
 		}
 
+		log.Printf("IPC: received message type=%s", msg.Type)
+
 		// Convert and forward to EventBus
 		if event := s.convertToEvent(&msg); event != nil {
+			log.Printf("IPC: forwarding event type=%s to EventBus", event.Type)
 			s.eventBus.Publish(*event)
+		} else {
+			log.Printf("IPC: warning - failed to convert message type=%s to event", msg.Type)
 		}
 	}
 }

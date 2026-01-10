@@ -93,7 +93,7 @@ export const TaskList: React.FC<TaskListProps> = ({ tasks, onSelectTask }) => {
   return (
     <div className="flex flex-col h-full">
       {/* Filter Tabs */}
-      <div className="flex gap-1 p-2 bg-gray-50 dark:bg-gray-700 border-b border-gray-200 dark:border-gray-700">
+      <div className="flex flex-wrap gap-1 p-2 bg-gray-50 dark:bg-gray-700 border-b border-gray-200 dark:border-gray-700">
         {filterButtons.map(({ value, label }) => {
           const isActive = statusFilter === value;
           const count = statusCounts[value];
@@ -103,7 +103,7 @@ export const TaskList: React.FC<TaskListProps> = ({ tasks, onSelectTask }) => {
               key={value}
               onClick={() => setStatusFilter(value)}
               className={`
-                px-3 py-1.5 rounded text-sm font-medium transition-colors
+                px-2 py-1 rounded text-xs font-medium transition-colors whitespace-nowrap
                 ${isActive
                   ? 'bg-blue-500 text-white shadow-sm'
                   : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-600'
@@ -111,7 +111,7 @@ export const TaskList: React.FC<TaskListProps> = ({ tasks, onSelectTask }) => {
               `}
             >
               {label}
-              <span className={`ml-1.5 ${isActive ? 'text-blue-100' : 'text-gray-500 dark:text-gray-400'}`}>
+              <span className={`ml-1 ${isActive ? 'text-blue-100' : 'text-gray-500 dark:text-gray-400'}`}>
                 ({count})
               </span>
             </button>

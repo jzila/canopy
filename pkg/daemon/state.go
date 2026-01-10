@@ -246,3 +246,139 @@ func (r *RuntimeState) GetSnapshot() RuntimeState {
 
 	return snapshot
 }
+
+// SubscribeToEventBus subscribes to the EventBus and updates state from events.
+// Returns an unsubscribe function. This bridges IPC events to RuntimeState updates.
+func (r *RuntimeState) SubscribeToEventBus(eventBus *EventBus) func() {
+	return eventBus.Subscribe(func(event Event) {
+		r.handleEvent(event)
+	})
+}
+
+// handleEvent processes an event and updates the runtime state accordingly
+func (r *RuntimeState) handleEvent(event Event) {
+	// Extract payload as a map for easy access
+	payload, ok := event.Payload.(map[string]interface{})
+	if !ok {
+		return
+	}
+
+	switch event.Type {
+	case EventAgentStarted:
+		r.handleAgentStarted(payload, event.Timestamp)
+	case EventAgentOutput:
+		r.handleAgentOutput(payload)
+	case EventAgentCompleted:
+		r.handleAgentCompleted(payload, event.Timestamp)
+	case EventStatsUpdated:
+		// Stats updates are informational, we recalculate from agents
+		r.UpdateStats()
+	}
+}
+
+func (r *RuntimeState) handleAgentStarted(payload map[string]interface{}, timestamp time.Time) {
+	agentID, _ := payload["agent_id"].(string)
+	taskID, _ := payload["task_id"].(string)
+	taskTitle, _ := payload["task_title"].(string)
+
+	if agentID == "" {
+		return
+	}
+
+	agent := &AgentState{
+		ID:        agentID,
+		TaskID:    taskID,
+		TaskTitle: taskTitle,
+		Status:    AgentStatusRunning,
+		StartTime: timestamp,
+	}
+
+	r.AddAgent(agent)
+
+	// Update task status if we have it
+	if taskID != "" {
+		r.UpdateTaskStatus(taskID, "in_progress", agentID)
+	}
+
+	r.UpdateStats()
+}
+
+func (r *RuntimeState) handleAgentOutput(payload map[string]interface{}) {
+	agentID, _ := payload["agent_id"].(string)
+	output, _ := payload["output"].(string)
+	isError, _ := payload["is_error"].(bool)
+
+	if agentID == "" || output == "" {
+		return
+	}
+
+	agent := r.GetAgent(agentID)
+	if agent == nil {
+		return
+	}
+
+	if isError {
+		agent.Output.Append("", output)
+	} else {
+		agent.Output.Append(output, "")
+	}
+}
+
+func (r *RuntimeState) handleAgentCompleted(payload map[string]interface{}, timestamp time.Time) {
+	agentID, _ := payload["agent_id"].(string)
+	if agentID == "" {
+		return
+	}
+
+	agent := r.GetAgent(agentID)
+	if agent == nil {
+		return
+	}
+
+	agent.Update(func(a *AgentState) {
+		a.EndTime = &timestamp
+
+		// Check if this is a failure (has error field)
+		if errMsg, ok := payload["error"].(string); ok && errMsg != "" {
+			a.Status = AgentStatusFailed
+			a.Error = errMsg
+		} else {
+			a.Status = AgentStatusCompleted
+		}
+
+		// Extract result fields
+		if exitCode, ok := payload["exit_code"].(float64); ok {
+			a.ExitCode = int(exitCode)
+		}
+		if duration, ok := payload["duration"].(float64); ok {
+			a.Duration = duration
+		}
+		if inputTokens, ok := payload["input_tokens"].(float64); ok {
+			a.TokenUsage.InputTokens = int(inputTokens)
+		}
+		if outputTokens, ok := payload["output_tokens"].(float64); ok {
+			a.TokenUsage.OutputTokens = int(outputTokens)
+		}
+		a.TokenUsage.TotalTokens = a.TokenUsage.InputTokens + a.TokenUsage.OutputTokens
+		if costUSD, ok := payload["cost_usd"].(float64); ok {
+			a.TokenUsage.CostUSD = costUSD
+		}
+		if filesChanged, ok := payload["files_changed"].(float64); ok {
+			a.Changes = int(filesChanged)
+		}
+		if commitsCreated, ok := payload["commits_created"].(float64); ok {
+			a.Commits = int(commitsCreated)
+		}
+	})
+
+	// Update task status
+	if agent.TaskID != "" {
+		status := "completed"
+		if agent.Status == AgentStatusFailed {
+			status = "failed"
+		}
+		r.UpdateTaskStatus(agent.TaskID, status, agentID)
+	}
+
+	r.UpdateStats()
+}

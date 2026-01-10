@@ -101,15 +101,12 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 	if daemonAddr != "" {
 		client, err := ipc.NewClient(daemonAddr)
 		if err != nil {
-			if verbose {
-				fmt.Fprintf(os.Stderr, "warning: failed to connect to daemon at %s: %v\n", daemonAddr, err)
-			}
+			// Always warn about daemon connection failures, not just in verbose mode
+			fmt.Fprintf(os.Stderr, "warning: failed to connect to daemon at %s: %v\n", daemonAddr, err)
 		} else {
 			ipcClient = client
 			defer ipcClient.Close()
-			if verbose {
-				fmt.Printf("Connected to canopyd at %s\n", daemonAddr)
-			}
+			fmt.Printf("Connected to canopyd at %s\n", daemonAddr)
 		}
 	}
 

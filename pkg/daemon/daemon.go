@@ -62,6 +62,11 @@ func (d *Daemon) Start() error {
 	d.state = NewRuntimeState()
 	log.Println("RuntimeState initialized")
 
+	// Subscribe RuntimeState to EventBus to update from IPC events
+	unsubscribeState := d.state.SubscribeToEventBus(d.eventBus)
+	defer unsubscribeState()
+	log.Println("RuntimeState subscribed to EventBus")
+
 	// Initialize HTTP server (REST API + WebSocket)
 	d.httpServer = NewServer(d.config.Port, d.state, d.eventBus, d.scheduler, d.beadsClient)
 
