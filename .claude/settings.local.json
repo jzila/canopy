@@ -28,7 +28,15 @@
       "Bash(go vet:*)",
       "Bash(gofmt:*)",
       "Bash(go test:*)",
-      "Bash(go get:*)"
+      "Bash(go get:*)",
+      "Bash(/tmp/canopy-test run:*)",
+      "Bash(chmod:*)",
+      "Bash(npm run build:*)",
+      "Bash(tree:*)",
+      "Bash(npm run type-check:*)",
+      "Bash(go run:*)",
+      "Bash(git pull:*)",
+      "Bash(git push)"
     ]
   }
 }
