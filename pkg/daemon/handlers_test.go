@@ -371,3 +371,76 @@ func TestMethodNotAllowed(t *testing.T) {
 		})
 	}
 }
+
+func TestHandlersWithNilScheduler(t *testing.T) {
+	state := NewRuntimeState()
+	handler := NewHandler(state, nil, nil) // nil scheduler and beadsClient
+
+	// Add an agent so we can test kill
+	agent := &AgentState{
+		ID:        "agent-1",
+		TaskID:    "task-1",
+		TaskTitle: "Test Task",
+		Status:    AgentStatusRunning,
+		StartTime: time.Now(),
+	}
+	state.AddAgent(agent)
+
+	tests := []struct {
+		name    string
+		method  string
+		path    string
+		handler func(w http.ResponseWriter, r *http.Request)
+	}{
+		{"PauseOrch", http.MethodPost, "/api/orch/pause", handler.HandlePauseOrch},
+		{"ResumeOrch", http.MethodPost, "/api/orch/resume", handler.HandleResumeOrch},
+		{"KillAgent", http.MethodPost, "/api/agents/agent-1/kill", handler.HandleKillAgent},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, tt.path, nil)
+			w := httptest.NewRecorder()
+
+			tt.handler(w, req)
+
+			if w.Code != http.StatusNotImplemented {
+				t.Errorf("Expected status 501 Not Implemented, got %d", w.Code)
+			}
+		})
+	}
+}
+
+func TestHandlersWithNilBeadsClient(t *testing.T) {
+	state := NewRuntimeState()
+	scheduler := &mockScheduler{}
+	handler := NewHandler(state, scheduler, nil) // nil beadsClient
+
+	t.Run("CreateTask", func(t *testing.T) {
+		reqBody := TaskCreateRequest{Title: "Test", Priority: 5}
+		body, _ := json.Marshal(reqBody)
+		req := httptest.NewRequest(http.MethodPost, "/api/tasks", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+
+		handler.HandleCreateTask(w, req)
+
+		if w.Code != http.StatusNotImplemented {
+			t.Errorf("Expected status 501 Not Implemented, got %d", w.Code)
+		}
+	})
+
+	t.Run("UpdateTask", func(t *testing.T) {
+		reqBody := TaskUpdateRequest{Status: "in_progress"}
+		body, _ := json.Marshal(reqBody)
+		req := httptest.NewRequest(http.MethodPatch, "/api/tasks?id=task-1", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+
+		handler.HandleUpdateTask(w, req)
+
+		// UpdateTask should succeed with 200 since it updates local state first
+		// and only skips the beads sync
+		if w.Code != http.StatusOK {
+			t.Errorf("Expected status 200 OK, got %d", w.Code)
+		}
+	})
+}

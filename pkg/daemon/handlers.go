@@ -111,6 +111,12 @@ func (h *Handler) HandleKillAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if scheduler is available
+	if h.scheduler == nil {
+		http.Error(w, "Scheduler not available", http.StatusNotImplemented)
+		return
+	}
+
 	// Check if agent exists
 	agent := h.state.GetAgent(agentID)
 	if agent == nil {
@@ -187,6 +193,12 @@ func (h *Handler) HandleCreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if beads client is available
+	if h.beadsClient == nil {
+		http.Error(w, "Beads client not available", http.StatusNotImplemented)
+		return
+	}
+
 	// Create task via beads client
 	taskID, err := h.beadsClient.Create(req.Title, req.Priority)
 	if err != nil {
@@ -249,7 +261,17 @@ func (h *Handler) HandleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		h.state.UpdateTaskStatus(taskID, req.Status, "")
 	}
 
-	// Also update in beads if applicable
+	// Also update in beads if applicable (skip if beads client unavailable)
+	if h.beadsClient == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{
+			"id":     taskID,
+			"status": req.Status,
+		})
+		return
+	}
+
 	if req.Status == "in_progress" {
 		if err := h.beadsClient.Start(taskID); err != nil {
 			http.Error(w, fmt.Sprintf("Failed to update task in beads: %v", err), http.StatusInternalServerError)
@@ -282,6 +304,11 @@ func (h *Handler) HandlePauseOrch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.scheduler == nil {
+		http.Error(w, "Scheduler not available", http.StatusNotImplemented)
+		return
+	}
+
 	h.scheduler.Pause()
 	h.state.Pause()
 
@@ -296,6 +323,11 @@ func (h *Handler) HandlePauseOrch(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) HandleResumeOrch(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if h.scheduler == nil {
+		http.Error(w, "Scheduler not available", http.StatusNotImplemented)
 		return
 	}
 
