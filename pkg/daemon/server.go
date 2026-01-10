@@ -3,12 +3,14 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/john/canopy/web"
 )
 
 // Server manages the HTTP server that serves the web UI and REST API
@@ -176,22 +178,25 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleStaticFiles serves static files for the web UI
-// TODO: Implement embedded filesystem serving when React build is ready
 func (s *Server) handleStaticFiles(w http.ResponseWriter, r *http.Request) {
-	// Placeholder: serve a simple message
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head>
-    <title>Canopy Daemon</title>
-    <meta charset="utf-8">
-</head>
-<body>
-    <h1>Canopy Daemon</h1>
-    <p>Web UI coming soon...</p>
-    <p>API endpoints available at <code>/api/*</code></p>
-    <p>WebSocket endpoint available at <code>/ws</code></p>
-</body>
-</html>`)
+	webFS, err := web.GetFS()
+	if err != nil {
+		http.Error(w, "Dashboard not available: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Serve files using http.FileServer
+	fileServer := http.FileServer(http.FS(webFS))
+
+	// For SPA routing: serve index.html for non-existent paths
+	path := r.URL.Path
+	if path != "/" {
+		// Check if file exists
+		if _, err := fs.Stat(webFS, strings.TrimPrefix(path, "/")); err != nil {
+			// File doesn't exist, serve index.html for SPA routing
+			r.URL.Path = "/"
+		}
+	}
+
+	fileServer.ServeHTTP(w, r)
 }
