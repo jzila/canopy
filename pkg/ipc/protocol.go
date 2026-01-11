@@ -48,13 +48,29 @@ type AgentLiveFeedPayload struct {
 
 // AgentResult contains execution metrics for an agent
 type AgentResult struct {
-	ExitCode        int     `json:"exit_code"`
-	DurationSeconds float64 `json:"duration_seconds"`
-	InputTokens     int     `json:"input_tokens,omitempty"`
-	OutputTokens    int     `json:"output_tokens,omitempty"`
-	CostUSD         float64 `json:"cost_usd,omitempty"`
-	FilesChanged    int     `json:"files_changed"`
-	CommitsCreated  int     `json:"commits_created,omitempty"`
+	ExitCode                int                     `json:"exit_code"`
+	DurationSeconds         float64                 `json:"duration_seconds"`
+	DurationMS              int64                   `json:"duration_ms,omitempty"`
+	DurationAPIMS           int64                   `json:"duration_api_ms,omitempty"`
+	NumTurns                int                     `json:"num_turns,omitempty"`
+	InputTokens             int                     `json:"input_tokens,omitempty"`
+	OutputTokens            int                     `json:"output_tokens,omitempty"`
+	CacheCreationInputToken int                     `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens    int                     `json:"cache_read_input_tokens,omitempty"`
+	CostUSD                 float64                 `json:"cost_usd,omitempty"`
+	FilesChanged            int                     `json:"files_changed"`
+	CommitsCreated          int                     `json:"commits_created,omitempty"`
+	ModelUsage              map[string]ModelUsage   `json:"model_usage,omitempty"`
+	ResultMessage           string                  `json:"result_message,omitempty"`
+}
+
+// ModelUsage represents per-model token usage and cost
+type ModelUsage struct {
+	InputTokens             int     `json:"input_tokens"`
+	OutputTokens            int     `json:"output_tokens"`
+	CacheReadInputTokens    int     `json:"cache_read_input_tokens"`
+	CacheCreationInputToken int     `json:"cache_creation_input_tokens"`
+	CostUSD                 float64 `json:"cost_usd"`
 }
 
 // AgentDonePayload is sent when an agent completes successfully
@@ -78,15 +94,18 @@ type RunStartedPayload struct {
 
 // RunStats contains aggregate statistics for a run
 type RunStats struct {
-	TotalTasks        int     `json:"total_tasks"`
-	SucceededTasks    int     `json:"succeeded_tasks"`
-	FailedTasks       int     `json:"failed_tasks"`
-	TotalDuration     float64 `json:"total_duration_seconds"`
-	TotalInputTokens  int     `json:"total_input_tokens"`
-	TotalOutputTokens int     `json:"total_output_tokens"`
-	TotalCostUSD      float64 `json:"total_cost_usd"`
-	FilesChanged      int     `json:"files_changed"`
-	ConflictsResolved int     `json:"conflicts_resolved"`
+	TotalTasks                   int     `json:"total_tasks"`
+	SucceededTasks               int     `json:"succeeded_tasks"`
+	FailedTasks                  int     `json:"failed_tasks"`
+	TotalDuration                float64 `json:"total_duration_seconds"`
+	TotalInputTokens             int     `json:"total_input_tokens"`
+	TotalOutputTokens            int     `json:"total_output_tokens"`
+	TotalCacheCreationInputToken int     `json:"total_cache_creation_input_tokens"`
+	TotalCacheReadInputTokens    int     `json:"total_cache_read_input_tokens"`
+	TotalCostUSD                 float64 `json:"total_cost_usd"`
+	TotalTurns                   int     `json:"total_turns"`
+	FilesChanged                 int     `json:"files_changed"`
+	ConflictsResolved            int     `json:"conflicts_resolved"`
 }
 
 // RunCompletedPayload is sent when a canopy run completes

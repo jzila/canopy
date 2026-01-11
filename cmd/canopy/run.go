@@ -260,7 +260,27 @@ func convertToIPCResult(result *agent.Result) *ipc.AgentResult {
 	if result.Output != nil {
 		ipcResult.InputTokens = result.Output.TotalInputTokens
 		ipcResult.OutputTokens = result.Output.TotalOutputTokens
+		ipcResult.CacheCreationInputToken = result.Output.CacheCreationInputTokens
+		ipcResult.CacheReadInputTokens = result.Output.CacheReadInputTokens
 		ipcResult.CostUSD = result.Output.CostUSD
+		ipcResult.DurationMS = result.Output.DurationMS
+		ipcResult.DurationAPIMS = result.Output.DurationAPIMS
+		ipcResult.NumTurns = result.Output.NumTurns
+		ipcResult.ResultMessage = result.Output.ResultMessage
+
+		// Convert model usage
+		if result.Output.ModelUsage != nil {
+			ipcResult.ModelUsage = make(map[string]ipc.ModelUsage)
+			for model, usage := range result.Output.ModelUsage {
+				ipcResult.ModelUsage[model] = ipc.ModelUsage{
+					InputTokens:             usage.InputTokens,
+					OutputTokens:            usage.OutputTokens,
+					CacheReadInputTokens:    usage.CacheReadInputTokens,
+					CacheCreationInputToken: usage.CacheCreationInputTokens,
+					CostUSD:                 usage.CostUSD,
+				}
+			}
+		}
 	}
 
 	if result.GitState != nil {
@@ -272,16 +292,19 @@ func convertToIPCResult(result *agent.Result) *ipc.AgentResult {
 
 // runStatsCollector tracks statistics across all agents in a run
 type runStatsCollector struct {
-	runID         string
-	startTime     time.Time
-	totalTasks    int
-	succeeded     int
-	failed        int
-	inputTokens   int
-	outputTokens  int
-	costUSD       float64
-	filesChanged  int
-	conflictsRes  int
+	runID                string
+	startTime            time.Time
+	totalTasks           int
+	succeeded            int
+	failed               int
+	inputTokens          int
+	outputTokens         int
+	cacheCreationTokens  int
+	cacheReadTokens      int
+	costUSD              float64
+	totalTurns           int
+	filesChanged         int
+	conflictsRes         int
 }
 
 func (r *runStatsCollector) recordResult(result *agent.Result, success bool) {
@@ -295,7 +318,10 @@ func (r *runStatsCollector) recordResult(result *agent.Result, success bool) {
 	if result.Output != nil {
 		r.inputTokens += result.Output.TotalInputTokens
 		r.outputTokens += result.Output.TotalOutputTokens
+		r.cacheCreationTokens += result.Output.CacheCreationInputTokens
+		r.cacheReadTokens += result.Output.CacheReadInputTokens
 		r.costUSD += result.Output.CostUSD
+		r.totalTurns += result.Output.NumTurns
 	}
 
 	r.filesChanged += len(result.Changes)
@@ -303,14 +329,17 @@ func (r *runStatsCollector) recordResult(result *agent.Result, success bool) {
 
 func (r *runStatsCollector) getStats() *ipc.RunStats {
 	return &ipc.RunStats{
-		TotalTasks:        r.totalTasks,
-		SucceededTasks:    r.succeeded,
-		FailedTasks:       r.failed,
-		TotalDuration:     time.Since(r.startTime).Seconds(),
-		TotalInputTokens:  r.inputTokens,
-		TotalOutputTokens: r.outputTokens,
-		TotalCostUSD:      r.costUSD,
-		FilesChanged:      r.filesChanged,
-		ConflictsResolved: r.conflictsRes,
+		TotalTasks:                   r.totalTasks,
+		SucceededTasks:               r.succeeded,
+		FailedTasks:                  r.failed,
+		TotalDuration:                time.Since(r.startTime).Seconds(),
+		TotalInputTokens:             r.inputTokens,
+		TotalOutputTokens:            r.outputTokens,
+		TotalCacheCreationInputToken: r.cacheCreationTokens,
+		TotalCacheReadInputTokens:    r.cacheReadTokens,
+		TotalCostUSD:                 r.costUSD,
+		TotalTurns:                   r.totalTurns,
+		FilesChanged:                 r.filesChanged,
+		ConflictsResolved:            r.conflictsRes,
 	}
 }

@@ -255,10 +255,19 @@ func (d *Dashboard) renderStatsBar(stats daemon.Stats) string {
 	completed := lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render(fmt.Sprintf("✓ %d", stats.CompletedTasks))
 	failed := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(fmt.Sprintf("✗ %d", stats.FailedTasks))
 
-	tokens := fmt.Sprintf("tokens: %dk", stats.TotalTokens/1000)
-	cost := fmt.Sprintf("cost: $%.2f", stats.TotalCostUSD)
+	// Format tokens with input/output breakdown
+	tokens := fmt.Sprintf("in: %dk out: %dk", stats.TotalInputTokens/1000, stats.TotalOutputTokens/1000)
 
-	return fmt.Sprintf("  %s  %s  %s  │  %s  │  %s", running, completed, failed, tokens, cost)
+	// Add cache info if significant
+	cacheInfo := ""
+	if stats.TotalCacheReadTokens > 0 {
+		cacheInfo = fmt.Sprintf(" (cache: %dk)", stats.TotalCacheReadTokens/1000)
+	}
+
+	cost := fmt.Sprintf("$%.2f", stats.TotalCostUSD)
+	turns := fmt.Sprintf("turns: %d", stats.TotalTurns)
+
+	return fmt.Sprintf("  %s  %s  %s  │  %s%s  │  %s  │  %s", running, completed, failed, tokens, cacheInfo, turns, cost)
 }
 
 // renderAgentList renders the left pane agent list
@@ -328,9 +337,18 @@ func (d *Dashboard) renderAgentList(width, height int) string {
 			duration = formatDuration(time.Duration(agent.Duration * float64(time.Second)))
 		}
 
+		// Turns info
+		var turnsInfo string
+		if agent.NumTurns > 0 {
+			turnsInfo = fmt.Sprintf("%dt", agent.NumTurns)
+		}
+
 		line := fmt.Sprintf("%s %s %s", status, agentID, title)
 		if duration != "" {
 			line += dimStyle.Render(" " + duration)
+		}
+		if turnsInfo != "" {
+			line += dimStyle.Render(" " + turnsInfo)
 		}
 
 		// Apply selection style

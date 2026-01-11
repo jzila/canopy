@@ -8,18 +8,45 @@ import (
 
 // ClaudeStreamResult represents the final result from stream-json output
 type ClaudeStreamResult struct {
-	Type         string      `json:"type"`
-	SessionID    string      `json:"session_id"`
-	Result       string      `json:"result"`
-	TotalCostUSD float64     `json:"total_cost_usd"`
-	Usage        StreamUsage `json:"usage"`
-	SubType      string      `json:"subtype"`
+	Type          string                    `json:"type"`
+	SubType       string                    `json:"subtype"`
+	SessionID     string                    `json:"session_id"`
+	Result        string                    `json:"result"`
+	TotalCostUSD  float64                   `json:"total_cost_usd"`
+	DurationMS    int64                     `json:"duration_ms"`
+	DurationAPIMS int64                     `json:"duration_api_ms"`
+	NumTurns      int                       `json:"num_turns"`
+	Usage         StreamUsage                    `json:"usage"`
+	ModelUsage    map[string]StreamModelUsageData `json:"modelUsage"`
+	IsError       bool                      `json:"is_error"`
 }
 
 // StreamUsage represents token usage from the stream result
 type StreamUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens             int                `json:"input_tokens"`
+	OutputTokens            int                `json:"output_tokens"`
+	CacheCreationInputToken int                `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens    int                `json:"cache_read_input_tokens"`
+	ServiceTier             string             `json:"service_tier"`
+	CacheCreation           *CacheCreationInfo `json:"cache_creation,omitempty"`
+}
+
+// CacheCreationInfo contains detailed cache token information
+type CacheCreationInfo struct {
+	Ephemeral1HInputTokens int `json:"ephemeral_1h_input_tokens"`
+	Ephemeral5MInputTokens int `json:"ephemeral_5m_input_tokens"`
+}
+
+// StreamModelUsageData represents per-model usage statistics from stream result
+// Note: JSON keys use camelCase to match Claude's stream-json output format
+type StreamModelUsageData struct {
+	InputTokens              int     `json:"inputTokens"`
+	OutputTokens             int     `json:"outputTokens"`
+	CacheReadInputTokens     int     `json:"cacheReadInputTokens"`
+	CacheCreationInputTokens int     `json:"cacheCreationInputTokens"`
+	WebSearchRequests        int     `json:"webSearchRequests"`
+	CostUSD                  float64 `json:"costUSD"`
+	ContextWindow            int     `json:"contextWindow"`
 }
 
 // StreamEvent represents a parsed event from Claude's stream-json output

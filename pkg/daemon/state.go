@@ -43,28 +43,44 @@ func (b *OutputBuffer) Get() (stdout, stderr string) {
 
 // TokenUsage tracks token consumption and cost for an agent execution
 type TokenUsage struct {
-	InputTokens  int     `json:"input_tokens"`
-	OutputTokens int     `json:"output_tokens"`
-	TotalTokens  int     `json:"total_tokens"`
-	CostUSD      float64 `json:"cost_usd"`
+	InputTokens              int                       `json:"input_tokens"`
+	OutputTokens             int                       `json:"output_tokens"`
+	CacheCreationInputTokens int                       `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int                       `json:"cache_read_input_tokens"`
+	TotalTokens              int                       `json:"total_tokens"`
+	CostUSD                  float64                   `json:"cost_usd"`
+	ModelUsage               map[string]ModelUsageData `json:"model_usage,omitempty"`
+}
+
+// ModelUsageData represents per-model token usage and cost
+type ModelUsageData struct {
+	InputTokens              int     `json:"input_tokens"`
+	OutputTokens             int     `json:"output_tokens"`
+	CacheReadInputTokens     int     `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int     `json:"cache_creation_input_tokens"`
+	CostUSD                  float64 `json:"cost_usd"`
 }
 
 // AgentState tracks the state of a single agent execution
 type AgentState struct {
-	ID         string       `json:"id"`          // Unique agent ID
-	TaskID     string       `json:"task_id"`     // Beads task ID
-	TaskTitle  string       `json:"task_title"`  // Task title for display
-	Status     AgentStatus  `json:"status"`      // Current agent status
-	StartTime  time.Time    `json:"start_time"`  // When agent started
-	EndTime    *time.Time   `json:"end_time"`    // When agent finished (nil if running)
-	Duration   float64      `json:"duration"`    // Execution duration in seconds
-	Output     OutputBuffer `json:"output"`      // Stdout/stderr buffers
-	TokenUsage TokenUsage   `json:"token_usage"` // Token consumption stats
-	ExitCode   int          `json:"exit_code"`   // Process exit code
-	Error      string       `json:"error"`       // Error message if failed
-	Changes    int          `json:"changes"`     // Number of files changed
-	Commits    int          `json:"commits"`     // Number of git commits made
-	mu         sync.RWMutex
+	ID            string       `json:"id"`              // Unique agent ID
+	TaskID        string       `json:"task_id"`         // Beads task ID
+	TaskTitle     string       `json:"task_title"`      // Task title for display
+	Status        AgentStatus  `json:"status"`          // Current agent status
+	StartTime     time.Time    `json:"start_time"`      // When agent started
+	EndTime       *time.Time   `json:"end_time"`        // When agent finished (nil if running)
+	Duration      float64      `json:"duration"`        // Execution duration in seconds
+	DurationMS    int64        `json:"duration_ms"`     // Execution duration in milliseconds (from Claude)
+	DurationAPIMS int64        `json:"duration_api_ms"` // API duration in milliseconds
+	NumTurns      int          `json:"num_turns"`       // Number of agentic turns
+	Output        OutputBuffer `json:"output"`          // Stdout/stderr buffers
+	TokenUsage    TokenUsage   `json:"token_usage"`     // Token consumption stats
+	ExitCode      int          `json:"exit_code"`       // Process exit code
+	Error         string       `json:"error"`           // Error message if failed
+	Changes       int          `json:"changes"`         // Number of files changed
+	Commits       int          `json:"commits"`         // Number of git commits made
+	ResultMessage string       `json:"result_message"`  // Final result message from Claude
+	mu            sync.RWMutex
 }
 
 // Update atomically updates agent state fields
@@ -93,16 +109,21 @@ type TaskState struct {
 
 // Stats aggregates statistics across all agents
 type Stats struct {
-	TotalTasks      int     `json:"total_tasks"`
-	CompletedTasks  int     `json:"completed_tasks"`
-	FailedTasks     int     `json:"failed_tasks"`
-	RunningTasks    int     `json:"running_tasks"`
-	TotalTokens     int     `json:"total_tokens"`
-	TotalCostUSD    float64 `json:"total_cost_usd"`
-	TotalDuration   float64 `json:"total_duration"` // Total execution time in seconds
-	AverageDuration float64 `json:"avg_duration"`   // Average task duration
-	FileChanges     int     `json:"file_changes"`   // Total files changed
-	GitCommits      int     `json:"git_commits"`    // Total commits made
+	TotalTasks               int     `json:"total_tasks"`
+	CompletedTasks           int     `json:"completed_tasks"`
+	FailedTasks              int     `json:"failed_tasks"`
+	RunningTasks             int     `json:"running_tasks"`
+	TotalInputTokens         int     `json:"total_input_tokens"`
+	TotalOutputTokens        int     `json:"total_output_tokens"`
+	TotalCacheCreationTokens int     `json:"total_cache_creation_tokens"`
+	TotalCacheReadTokens     int     `json:"total_cache_read_tokens"`
+	TotalTokens              int     `json:"total_tokens"`
+	TotalCostUSD             float64 `json:"total_cost_usd"`
+	TotalTurns               int     `json:"total_turns"`
+	TotalDuration            float64 `json:"total_duration"` // Total execution time in seconds
+	AverageDuration          float64 `json:"avg_duration"`   // Average task duration
+	FileChanges              int     `json:"file_changes"`   // Total files changed
+	GitCommits               int     `json:"git_commits"`    // Total commits made
 }
 
 // RuntimeState aggregates the complete state of an orchestration run
@@ -184,8 +205,13 @@ func (r *RuntimeState) UpdateStats() {
 			stats.RunningTasks++
 		}
 
+		stats.TotalInputTokens += agent.TokenUsage.InputTokens
+		stats.TotalOutputTokens += agent.TokenUsage.OutputTokens
+		stats.TotalCacheCreationTokens += agent.TokenUsage.CacheCreationInputTokens
+		stats.TotalCacheReadTokens += agent.TokenUsage.CacheReadInputTokens
 		stats.TotalTokens += agent.TokenUsage.TotalTokens
 		stats.TotalCostUSD += agent.TokenUsage.CostUSD
+		stats.TotalTurns += agent.NumTurns
 		stats.FileChanges += agent.Changes
 		stats.GitCommits += agent.Commits
 
@@ -353,11 +379,26 @@ func (r *RuntimeState) handleAgentCompleted(payload map[string]interface{}, time
 		if duration, ok := payload["duration"].(float64); ok {
 			a.Duration = duration
 		}
+		if durationMS, ok := payload["duration_ms"].(float64); ok {
+			a.DurationMS = int64(durationMS)
+		}
+		if durationAPIMS, ok := payload["duration_api_ms"].(float64); ok {
+			a.DurationAPIMS = int64(durationAPIMS)
+		}
+		if numTurns, ok := payload["num_turns"].(float64); ok {
+			a.NumTurns = int(numTurns)
+		}
 		if inputTokens, ok := payload["input_tokens"].(float64); ok {
 			a.TokenUsage.InputTokens = int(inputTokens)
 		}
 		if outputTokens, ok := payload["output_tokens"].(float64); ok {
 			a.TokenUsage.OutputTokens = int(outputTokens)
+		}
+		if cacheCreation, ok := payload["cache_creation_input_tokens"].(float64); ok {
+			a.TokenUsage.CacheCreationInputTokens = int(cacheCreation)
+		}
+		if cacheRead, ok := payload["cache_read_input_tokens"].(float64); ok {
+			a.TokenUsage.CacheReadInputTokens = int(cacheRead)
 		}
 		a.TokenUsage.TotalTokens = a.TokenUsage.InputTokens + a.TokenUsage.OutputTokens
 		if costUSD, ok := payload["cost_usd"].(float64); ok {
@@ -368,6 +409,35 @@ func (r *RuntimeState) handleAgentCompleted(payload map[string]interface{}, time
 		}
 		if commitsCreated, ok := payload["commits_created"].(float64); ok {
 			a.Commits = int(commitsCreated)
+		}
+		if resultMessage, ok := payload["result_message"].(string); ok {
+			a.ResultMessage = resultMessage
+		}
+
+		// Parse model usage if present
+		if modelUsageRaw, ok := payload["model_usage"].(map[string]interface{}); ok {
+			a.TokenUsage.ModelUsage = make(map[string]ModelUsageData)
+			for model, usageRaw := range modelUsageRaw {
+				if usage, ok := usageRaw.(map[string]interface{}); ok {
+					data := ModelUsageData{}
+					if v, ok := usage["input_tokens"].(float64); ok {
+						data.InputTokens = int(v)
+					}
+					if v, ok := usage["output_tokens"].(float64); ok {
+						data.OutputTokens = int(v)
+					}
+					if v, ok := usage["cache_read_input_tokens"].(float64); ok {
+						data.CacheReadInputTokens = int(v)
+					}
+					if v, ok := usage["cache_creation_input_tokens"].(float64); ok {
+						data.CacheCreationInputTokens = int(v)
+					}
+					if v, ok := usage["cost_usd"].(float64); ok {
+						data.CostUSD = v
+					}
+					a.TokenUsage.ModelUsage[model] = data
+				}
+			}
 		}
 	})
 

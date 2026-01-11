@@ -43,11 +43,27 @@ type DependencyContext struct {
 
 // ClaudeOutput represents the JSON output from claude --print --output-format json
 type ClaudeOutput struct {
-	SessionID         string    `json:"session_id"`
-	CostUSD           float64   `json:"cost_usd"`
-	TotalInputTokens  int       `json:"total_input_tokens"`
-	TotalOutputTokens int       `json:"total_output_tokens"`
-	Messages          []Message `json:"messages"`
+	SessionID                string                    `json:"session_id"`
+	CostUSD                  float64                   `json:"cost_usd"`
+	TotalInputTokens         int                       `json:"total_input_tokens"`
+	TotalOutputTokens        int                       `json:"total_output_tokens"`
+	CacheCreationInputTokens int                       `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int                       `json:"cache_read_input_tokens"`
+	DurationMS               int64                     `json:"duration_ms"`
+	DurationAPIMS            int64                     `json:"duration_api_ms"`
+	NumTurns                 int                       `json:"num_turns"`
+	ResultMessage            string                    `json:"result_message"`
+	ModelUsage               map[string]ModelUsageData `json:"model_usage"`
+	Messages                 []Message                 `json:"messages"`
+}
+
+// ModelUsageData represents per-model usage statistics
+type ModelUsageData struct {
+	InputTokens              int     `json:"input_tokens"`
+	OutputTokens             int     `json:"output_tokens"`
+	CacheReadInputTokens     int     `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int     `json:"cache_creation_input_tokens"`
+	CostUSD                  float64 `json:"cost_usd"`
 }
 
 // Message represents a conversation message
@@ -263,11 +279,32 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 	// Convert stream result to ClaudeOutput
 	if finalResult != nil {
 		result.Output = &ClaudeOutput{
-			SessionID:         finalResult.SessionID,
-			CostUSD:           finalResult.TotalCostUSD,
-			TotalInputTokens:  finalResult.Usage.InputTokens,
-			TotalOutputTokens: finalResult.Usage.OutputTokens,
+			SessionID:                finalResult.SessionID,
+			CostUSD:                  finalResult.TotalCostUSD,
+			TotalInputTokens:         finalResult.Usage.InputTokens,
+			TotalOutputTokens:        finalResult.Usage.OutputTokens,
+			CacheCreationInputTokens: finalResult.Usage.CacheCreationInputToken,
+			CacheReadInputTokens:     finalResult.Usage.CacheReadInputTokens,
+			DurationMS:               finalResult.DurationMS,
+			DurationAPIMS:            finalResult.DurationAPIMS,
+			NumTurns:                 finalResult.NumTurns,
+			ResultMessage:            finalResult.Result,
 		}
+
+		// Convert model usage
+		if finalResult.ModelUsage != nil {
+			result.Output.ModelUsage = make(map[string]ModelUsageData)
+			for model, usage := range finalResult.ModelUsage {
+				result.Output.ModelUsage[model] = ModelUsageData{
+					InputTokens:              usage.InputTokens,
+					OutputTokens:             usage.OutputTokens,
+					CacheReadInputTokens:     usage.CacheReadInputTokens,
+					CacheCreationInputTokens: usage.CacheCreationInputTokens,
+					CostUSD:                  usage.CostUSD,
+				}
+			}
+		}
+
 		// Extract stdout from final result for compatibility
 		result.Stdout = finalResult.Result
 	}
