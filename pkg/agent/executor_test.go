@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/jzila/canopy/pkg/sandbox"
 )
 
 func TestTimeoutDetection(t *testing.T) {
@@ -119,6 +121,107 @@ func TestTimeoutDetection(t *testing.T) {
 		}
 		if result.Error != "execution timed out" {
 			t.Errorf("Expected error='execution timed out', got '%s'", result.Error)
+		}
+	})
+}
+
+func TestAddGoCacheEnv(t *testing.T) {
+	t.Run("nil config returns original env", func(t *testing.T) {
+		env := []string{"PATH=/usr/bin", "HOME=/home/test"}
+		result := addGoCacheEnv(env, nil)
+		if len(result) != len(env) {
+			t.Errorf("Expected %d env vars, got %d", len(env), len(result))
+		}
+	})
+
+	t.Run("config without Go caches returns original env", func(t *testing.T) {
+		config := &sandbox.SandboxConfig{
+			Paths: sandbox.PathSettings{
+				CacheMounts: []string{"~/.npm", "~/.cargo/registry"},
+			},
+		}
+		env := []string{"PATH=/usr/bin"}
+		result := addGoCacheEnv(env, config)
+		if len(result) != 1 {
+			t.Errorf("Expected 1 env var, got %d", len(result))
+		}
+	})
+
+	t.Run("config with Go module cache sets GOMODCACHE", func(t *testing.T) {
+		config := &sandbox.SandboxConfig{
+			Paths: sandbox.PathSettings{
+				CacheMounts: []string{"/home/user/go/pkg/mod"},
+			},
+		}
+		env := []string{"PATH=/usr/bin"}
+		result := addGoCacheEnv(env, config)
+		if len(result) != 2 {
+			t.Errorf("Expected 2 env vars, got %d", len(result))
+		}
+		found := false
+		for _, e := range result {
+			if e == "GOMODCACHE=/home/user/go/pkg/mod" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Error("Expected GOMODCACHE=/home/user/go/pkg/mod in env")
+		}
+	})
+
+	t.Run("config with Go build cache sets GOCACHE", func(t *testing.T) {
+		config := &sandbox.SandboxConfig{
+			Paths: sandbox.PathSettings{
+				CacheMounts: []string{"/home/user/.cache/go-build"},
+			},
+		}
+		env := []string{"PATH=/usr/bin"}
+		result := addGoCacheEnv(env, config)
+		if len(result) != 2 {
+			t.Errorf("Expected 2 env vars, got %d", len(result))
+		}
+		found := false
+		for _, e := range result {
+			if e == "GOCACHE=/home/user/.cache/go-build" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Error("Expected GOCACHE=/home/user/.cache/go-build in env")
+		}
+	})
+
+	t.Run("config with both Go caches sets both vars", func(t *testing.T) {
+		config := &sandbox.SandboxConfig{
+			Paths: sandbox.PathSettings{
+				CacheMounts: []string{
+					"/home/user/go/pkg/mod",
+					"/home/user/.cache/go-build",
+				},
+			},
+		}
+		env := []string{"PATH=/usr/bin"}
+		result := addGoCacheEnv(env, config)
+		if len(result) != 3 {
+			t.Errorf("Expected 3 env vars, got %d", len(result))
+		}
+		foundModCache := false
+		foundBuildCache := false
+		for _, e := range result {
+			if e == "GOMODCACHE=/home/user/go/pkg/mod" {
+				foundModCache = true
+			}
+			if e == "GOCACHE=/home/user/.cache/go-build" {
+				foundBuildCache = true
+			}
+		}
+		if !foundModCache {
+			t.Error("Expected GOMODCACHE in env")
+		}
+		if !foundBuildCache {
+			t.Error("Expected GOCACHE in env")
 		}
 	})
 }

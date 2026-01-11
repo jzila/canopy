@@ -176,6 +176,10 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 	// Using "false" works because git uses shell to execute the command
 	env = append(env, "GIT_SSH_COMMAND=false")
 
+	// Set Go cache environment variables if sandbox has cache mounts
+	// This ensures Go uses shared caches instead of polluting workspace
+	env = addGoCacheEnv(env, e.config.SandboxConfig)
+
 	// Build command - use bwrap sandbox if available and enabled
 	var cmd *exec.Cmd
 	useBwrap := e.config.UseBwrap && sandbox.BwrapAvailable()
@@ -381,6 +385,8 @@ var allowedEnvPrefixes = []string{
 	"TERM=",      // Terminal type
 	"TMPDIR=",    // Temp directory
 	"TZ=",        // Timezone
+	"GOMODCACHE=", // Go module cache (set by sandbox for shared cache)
+	"GOCACHE=",    // Go build cache (set by sandbox for shared cache)
 }
 
 // filterEnvironment returns only safe environment variables for agent execution
@@ -395,4 +401,27 @@ func filterEnvironment(env []string) []string {
 		}
 	}
 	return filtered
+}
+
+// addGoCacheEnv adds GOMODCACHE and GOCACHE environment variables if sandbox
+// config has corresponding cache mounts. This ensures Go uses shared caches
+// instead of creating workspace-local go/pkg/mod/ directories.
+func addGoCacheEnv(env []string, sandboxCfg *sandbox.SandboxConfig) []string {
+	if sandboxCfg == nil {
+		return env
+	}
+
+	cacheMounts := sandboxCfg.GetAllCacheMounts()
+	for _, mount := range cacheMounts {
+		// Check for Go module cache (~/go/pkg/mod or similar ending in /pkg/mod)
+		if strings.HasSuffix(mount, "/pkg/mod") {
+			env = append(env, "GOMODCACHE="+mount)
+		}
+		// Check for Go build cache (~/.cache/go-build)
+		if strings.HasSuffix(mount, "/go-build") {
+			env = append(env, "GOCACHE="+mount)
+		}
+	}
+
+	return env
 }
