@@ -40,7 +40,12 @@ func NewClient(workDir string) (*Client, error) {
 
 // Ready returns all tasks with no open blockers
 func (c *Client) Ready() ([]Task, error) {
-	out, err := c.run("ready", "--json")
+	return c.ReadyWithArgs("ready", "--json")
+}
+
+// ReadyWithArgs returns tasks with no open blockers using custom bd ready arguments
+func (c *Client) ReadyWithArgs(args ...string) ([]Task, error) {
+	out, err := c.run(args...)
 	if err != nil {
 		return nil, fmt.Errorf("bd ready failed: %w", err)
 	}

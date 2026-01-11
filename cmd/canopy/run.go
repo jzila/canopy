@@ -25,6 +25,7 @@ var (
 	sandbox     bool
 	noDaemon    bool
 	maxRetries  int
+	prompt      string
 )
 
 var runCmd = &cobra.Command{
@@ -81,7 +82,12 @@ Example:
   canopy run --max-retries 0
 
   # Dry run to see what would execute
-  canopy run --dry-run`,
+  canopy run --dry-run
+
+  # Filter work by prompt
+  canopy run --prompt "Only work on P0 issues"
+  canopy run --prompt "Focus on tasks only"
+  canopy run --prompt "Stop after completing all P1s"`,
 	RunE: runOrchestrator,
 }
 
@@ -92,6 +98,7 @@ func init() {
 	runCmd.Flags().BoolVar(&sandbox, "sandbox", false, "Use bubblewrap (bwrap) for full process/filesystem isolation")
 	runCmd.Flags().BoolVar(&noDaemon, "no-daemon", false, "Disable automatic daemon connection (run without daemon)")
 	runCmd.Flags().IntVar(&maxRetries, "max-retries", 3, "Maximum retry attempts for failed tasks (0=no retries, -1=infinite)")
+	runCmd.Flags().StringVar(&prompt, "prompt", "", "Prompt to filter/direct work selection (e.g., 'Only work on P0 issues', 'Stop after completing all P1s')")
 
 	rootCmd.AddCommand(runCmd)
 }
@@ -165,6 +172,7 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		DryRun:      dryRun,
 		UseBwrap:    sandbox,
 		MaxRetries:  maxRetries,
+		Prompt:      prompt,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create orchestrator: %w", err)
