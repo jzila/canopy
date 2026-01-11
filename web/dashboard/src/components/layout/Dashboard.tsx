@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { Play, Pause, Activity, DollarSign, Zap, GitCommit, FileEdit, Sun, Moon, Terminal as TerminalIcon, List, CheckCircle, XCircle, ListTodo } from 'lucide-react';
+import { Play, Pause, Activity, DollarSign, Zap, GitCommit, FileEdit, Sun, Moon, Terminal as TerminalIcon, List, CheckCircle, XCircle, ListTodo, ChevronUp, ChevronDown, Maximize2, Minimize2 } from 'lucide-react';
 import { useStateStore } from '../../stores/stateStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { pauseOrch, resumeOrch, getState } from '../../api/client';
@@ -21,6 +21,15 @@ export const Dashboard: React.FC = () => {
     return window.matchMedia('(prefers-color-scheme: dark)').matches;
   });
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [isPaneExpanded, setIsPaneExpanded] = useState(() => {
+    const saved = localStorage.getItem('outputPaneExpanded');
+    return saved === 'true';
+  });
+
+  // Persist pane expansion state
+  useEffect(() => {
+    localStorage.setItem('outputPaneExpanded', String(isPaneExpanded));
+  }, [isPaneExpanded]);
 
   // Apply dark mode class to document
   useEffect(() => {
@@ -318,7 +327,13 @@ export const Dashboard: React.FC = () => {
 
           {/* Bottom Terminal Panel */}
           {hasSelectedAgent && (
-            <div className="h-80 border-t border-gray-200 dark:border-gray-700 bg-gray-900 flex-shrink-0">
+            <div
+              className={`
+                border-t border-gray-200 dark:border-gray-700 bg-gray-900 flex-shrink-0
+                transition-all duration-300 ease-in-out
+                ${isPaneExpanded ? 'h-[60vh]' : 'h-80'}
+              `}
+            >
               <div className="h-full flex flex-col">
                 {/* Terminal Header with Tabs */}
                 <div className="flex items-center justify-between px-4 py-2 bg-gray-800 border-b border-gray-700">
@@ -365,12 +380,26 @@ export const Dashboard: React.FC = () => {
                       </span>
                     </div>
                   </div>
-                  <button
-                    onClick={() => setSelectedAgent(null)}
-                    className="text-gray-400 hover:text-gray-200 transition-colors px-2 py-1 rounded hover:bg-gray-700"
-                  >
-                    <span className="text-sm">Close</span>
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {/* Expand/Collapse button */}
+                    <button
+                      onClick={() => setIsPaneExpanded(!isPaneExpanded)}
+                      className="text-gray-400 hover:text-gray-200 transition-colors p-1.5 rounded hover:bg-gray-700"
+                      title={isPaneExpanded ? 'Collapse panel' : 'Expand panel'}
+                    >
+                      {isPaneExpanded ? (
+                        <Minimize2 className="w-4 h-4" />
+                      ) : (
+                        <Maximize2 className="w-4 h-4" />
+                      )}
+                    </button>
+                    <button
+                      onClick={() => setSelectedAgent(null)}
+                      className="text-gray-400 hover:text-gray-200 transition-colors px-2 py-1 rounded hover:bg-gray-700"
+                    >
+                      <span className="text-sm">Close</span>
+                    </button>
+                  </div>
                 </div>
 
                 {/* Tab Content */}
