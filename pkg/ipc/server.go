@@ -142,7 +142,9 @@ func (s *Server) handleConnection(conn net.Conn) {
 			continue
 		}
 
-		log.Printf("IPC: received message type=%s", msg.Type)
+		// Extract identifier for logging
+		identifier := s.extractIdentifier(&msg)
+		log.Printf("IPC: received message type=%s%s", msg.Type, identifier)
 
 		// Log agent completion events with pretty-printed JSON for readability
 		if msg.Type == MessageTypeAgentDone || msg.Type == MessageTypeAgentFail {
@@ -153,11 +155,75 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 		// Convert and forward to EventBus
 		if event := s.convertToEvent(&msg); event != nil {
-			log.Printf("IPC: forwarding event type=%s to EventBus", event.Type)
+			log.Printf("IPC: forwarding event type=%s%s to EventBus", event.Type, identifier)
 			s.eventBus.Publish(*event)
 		} else {
-			log.Printf("IPC: warning - failed to convert message type=%s to event", msg.Type)
+			log.Printf("IPC: warning - failed to convert message type=%s%s to event", msg.Type, identifier)
 		}
+	}
+}
+
+// extractIdentifier extracts agent_id or run_id from message payload for logging
+// Returns formatted string like " agent=canopy-abc" or " run=xyz123" or empty string
+func (s *Server) extractIdentifier(msg *Message) string {
+	// Re-marshal payload for type extraction
+	payloadBytes, err := json.Marshal(msg.Payload)
+	if err != nil {
+		return ""
+	}
+
+	switch msg.Type {
+	case MessageTypeAgentStart:
+		var payload AgentStartPayload
+		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+			return ""
+		}
+		return fmt.Sprintf(" agent=%s", payload.AgentID)
+
+	case MessageTypeAgentOutput:
+		var payload AgentOutputPayload
+		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+			return ""
+		}
+		return fmt.Sprintf(" agent=%s", payload.AgentID)
+
+	case MessageTypeAgentLiveFeed:
+		var payload AgentLiveFeedPayload
+		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+			return ""
+		}
+		return fmt.Sprintf(" agent=%s", payload.AgentID)
+
+	case MessageTypeAgentDone:
+		var payload AgentDonePayload
+		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+			return ""
+		}
+		return fmt.Sprintf(" agent=%s", payload.AgentID)
+
+	case MessageTypeAgentFail:
+		var payload AgentFailPayload
+		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+			return ""
+		}
+		return fmt.Sprintf(" agent=%s", payload.AgentID)
+
+	case MessageTypeRunStarted:
+		var payload RunStartedPayload
+		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+			return ""
+		}
+		return fmt.Sprintf(" run=%s", payload.RunID)
+
+	case MessageTypeRunCompleted:
+		var payload RunCompletedPayload
+		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+			return ""
+		}
+		return fmt.Sprintf(" run=%s", payload.RunID)
+
+	default:
+		return ""
 	}
 }
 
