@@ -74,12 +74,11 @@ type Message struct {
 
 // Config holds agent configuration
 type Config struct {
-	ClaudePath      string
-	Timeout         time.Duration
-	Verbose         bool
-	UseBwrap        bool                                      // Use bubblewrap sandbox for isolation (auto-detected if not set)
-	SandboxConfig   *sandbox.SandboxConfig                    // Sandbox configuration from .canopy/sandbox.toml
-	OnLiveFeedEvent func(taskID string, event *LiveFeedEvent) // Callback for live streaming events
+	ClaudePath    string
+	Timeout       time.Duration
+	Verbose       bool
+	UseBwrap      bool                   // Use bubblewrap sandbox for isolation (auto-detected if not set)
+	SandboxConfig *sandbox.SandboxConfig // Sandbox configuration from .canopy/sandbox.toml
 }
 
 // NewConfig creates a default agent config
@@ -120,13 +119,12 @@ func NewExecutor(config *Config) *Executor {
 	return &Executor{config: config}
 }
 
-// SetLiveFeedCallback sets the callback for live feed events
-func (e *Executor) SetLiveFeedCallback(callback func(taskID string, event *LiveFeedEvent)) {
-	e.config.OnLiveFeedEvent = callback
-}
+// LiveFeedCallback is the type for live feed event callbacks
+type LiveFeedCallback func(taskID string, event *LiveFeedEvent)
 
 // Execute runs an agent for the given task in the provided sandbox
-func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandbox.Overlay, deps []DependencyContext) *Result {
+// The optional liveFeedCallback receives streaming events during execution.
+func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandbox.Overlay, deps []DependencyContext, liveFeedCallback LiveFeedCallback) *Result {
 	start := time.Now()
 
 	result := &Result{
@@ -267,9 +265,9 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 		}
 
 		// Forward live feed events if callback is set
-		if e.config.OnLiveFeedEvent != nil {
+		if liveFeedCallback != nil {
 			if liveEvent := FilterForLiveFeed(&event); liveEvent != nil {
-				e.config.OnLiveFeedEvent(task.ID, liveEvent)
+				liveFeedCallback(task.ID, liveEvent)
 			}
 		}
 	}

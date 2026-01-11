@@ -7,6 +7,7 @@ import { AgentCard } from '../agents/AgentCard';
 import { AgentTerminal } from '../agents/AgentTerminal';
 import { LiveFeed } from '../agents/LiveFeed';
 import { CommitList } from '../agents/CommitList';
+import { BeadsPane } from '../beads/BeadsPane';
 
 type TerminalTab = 'feed' | 'terminal' | 'commits';
 type StatusFilter = 'all' | 'running' | 'completed' | 'failed';
@@ -22,6 +23,15 @@ export const Dashboard: React.FC = () => {
     return window.matchMedia('(prefers-color-scheme: dark)').matches;
   });
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [beadsPaneExpanded, setBeadsPaneExpanded] = useState(() => {
+    const saved = localStorage.getItem('beadsPaneExpanded');
+    return saved !== null ? saved === 'true' : true;
+  });
+
+  // Persist beads pane state
+  useEffect(() => {
+    localStorage.setItem('beadsPaneExpanded', String(beadsPaneExpanded));
+  }, [beadsPaneExpanded]);
 
   // Resizable pane state
   const MIN_PANE_HEIGHT = 200;
@@ -340,10 +350,18 @@ export const Dashboard: React.FC = () => {
         </div>
       </header>
 
-      {/* Main Content Area */}
-      <main className="flex-1 flex flex-col overflow-hidden">
-        {/* Agent Grid */}
-        <div className="flex-1 overflow-y-auto p-6">
+      {/* Main Content Area with Beads Pane */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Beads Left Pane */}
+        <BeadsPane
+          isExpanded={beadsPaneExpanded}
+          onToggle={() => setBeadsPaneExpanded(!beadsPaneExpanded)}
+        />
+
+        {/* Main Content */}
+        <main className="flex-1 flex flex-col overflow-hidden">
+          {/* Agent Grid */}
+          <div className="flex-1 overflow-y-auto p-6">
           {filteredAgents.length === 0 ? (
             <div className="flex items-center justify-center h-full">
               <div className="text-center">
@@ -483,7 +501,8 @@ export const Dashboard: React.FC = () => {
               </div>
             </div>
           )}
-      </main>
+        </main>
+      </div>
     </div>
   );
 };
