@@ -78,6 +78,7 @@ type Config struct {
 	UseBwrap    bool   // Use bubblewrap sandbox for agent isolation
 	MaxRetries  int    // Maximum number of times to retry failed tasks (0 = no retries, -1 = infinite)
 	Prompt      string // Prompt to filter/direct work selection
+	MaxPriority int    // Hard filter: only run tasks with priority <= this value (-1 = no filter)
 }
 
 // Orchestrator coordinates the execution of tasks from beads
@@ -281,6 +282,14 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		}
 		if err != nil {
 			return fmt.Errorf("failed to get ready tasks: %w", err)
+		}
+
+		// Apply hard max-priority filter (this is a hard filter, not a soft prompt)
+		if o.config.MaxPriority >= 0 {
+			tasks = filterTasksByMaxPriority(tasks, o.config.MaxPriority)
+			if o.config.Verbose {
+				fmt.Printf("After max-priority filter (<= P%d): %d tasks\n", o.config.MaxPriority, len(tasks))
+			}
 		}
 
 		// Check stop condition
@@ -499,4 +508,20 @@ func (o *Orchestrator) commitMergedChanges(results []*agent.Result, mergeResult 
 	}
 
 	return nil
+}
+
+// filterTasksByMaxPriority filters tasks to only include those with priority <= maxPriority.
+// This is a hard filter applied after fetching tasks from beads.
+func filterTasksByMaxPriority(tasks []beads.Task, maxPriority int) []beads.Task {
+	if maxPriority < 0 {
+		return tasks
+	}
+
+	filtered := make([]beads.Task, 0, len(tasks))
+	for _, task := range tasks {
+		if task.Priority <= maxPriority {
+			filtered = append(filtered, task)
+		}
+	}
+	return filtered
 }
