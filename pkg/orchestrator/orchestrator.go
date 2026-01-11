@@ -392,6 +392,11 @@ func (o *Orchestrator) mergeAndCleanupWithContext(ctx context.Context, result *a
 					result.TaskID, resolverResult.Error)
 				// Mark the original task as failed since resolver couldn't fix it
 				o.markTaskFailed(result.TaskID, fmt.Sprintf("resolver failed: %s", resolverResult.Error))
+
+				// Clean up resolver overlay on failure to prevent temp dir leaks
+				if resolverResult.AgentResult != nil && resolverResult.AgentResult.Overlay != nil {
+					resolverResult.AgentResult.Overlay.Cleanup()
+				}
 			}
 		}
 	} else {
