@@ -10,20 +10,25 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// testPort is a port number used in tests that don't actually bind to it.
+// These tests use httptest which doesn't bind to real ports, so this value
+// is only used to verify the Server struct stores it correctly.
+const testPort = 9999
+
 func TestNewServer(t *testing.T) {
 	state := NewRuntimeState()
 	eventBus := NewEventBus()
 	scheduler := &mockScheduler{}
 	beadsClient := &mockBeadsClient{}
 
-	server := NewServer(8080, state, eventBus, scheduler, beadsClient)
+	server := NewServer(testPort, state, eventBus, scheduler, beadsClient)
 
 	if server == nil {
 		t.Fatal("Expected server to be created")
 	}
 
-	if server.port != 8080 {
-		t.Errorf("Expected port 8080, got %d", server.port)
+	if server.port != testPort {
+		t.Errorf("Expected port %d, got %d", testPort, server.port)
 	}
 
 	if server.hub == nil {
@@ -41,7 +46,7 @@ func TestSetupRoutes(t *testing.T) {
 	scheduler := &mockScheduler{}
 	beadsClient := &mockBeadsClient{}
 
-	server := NewServer(8080, state, eventBus, scheduler, beadsClient)
+	server := NewServer(testPort, state, eventBus, scheduler, beadsClient)
 	mux := server.setupRoutes()
 
 	// Test that routes are properly registered by making test requests
@@ -88,7 +93,7 @@ func TestHandleAgentsRoutes(t *testing.T) {
 	}
 	state.AddAgent(agent)
 
-	server := NewServer(8080, state, eventBus, scheduler, beadsClient)
+	server := NewServer(testPort, state, eventBus, scheduler, beadsClient)
 	mux := server.setupRoutes()
 
 	// Test GET /api/agents
@@ -135,7 +140,7 @@ func TestHandleTasksRoutes(t *testing.T) {
 	scheduler := &mockScheduler{}
 	beadsClient := &mockBeadsClient{}
 
-	server := NewServer(8080, state, eventBus, scheduler, beadsClient)
+	server := NewServer(testPort, state, eventBus, scheduler, beadsClient)
 	mux := server.setupRoutes()
 
 	tests := []struct {
@@ -169,7 +174,7 @@ func TestHandleStaticFiles(t *testing.T) {
 	scheduler := &mockScheduler{}
 	beadsClient := &mockBeadsClient{}
 
-	server := NewServer(8080, state, eventBus, scheduler, beadsClient)
+	server := NewServer(testPort, state, eventBus, scheduler, beadsClient)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
@@ -197,7 +202,7 @@ func TestHandleWebSocket(t *testing.T) {
 	scheduler := &mockScheduler{}
 	beadsClient := &mockBeadsClient{}
 
-	server := NewServer(8080, state, eventBus, scheduler, beadsClient)
+	server := NewServer(testPort, state, eventBus, scheduler, beadsClient)
 
 	// Start hub in background
 	go server.hub.Run()
@@ -266,7 +271,7 @@ func TestServerStopBeforeStart(t *testing.T) {
 	scheduler := &mockScheduler{}
 	beadsClient := &mockBeadsClient{}
 
-	server := NewServer(8080, state, eventBus, scheduler, beadsClient)
+	server := NewServer(testPort, state, eventBus, scheduler, beadsClient)
 
 	// Should not panic when stopping before starting
 	err := server.Stop()

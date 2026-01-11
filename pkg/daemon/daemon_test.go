@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,6 +10,23 @@ import (
 
 	"github.com/jzila/canopy/pkg/persistence"
 )
+
+// getAvailablePort finds an available port starting from 8081, iterating up to avoid
+// conflicts with the production daemon which typically runs on port 8080.
+func getAvailablePort(t *testing.T) int {
+	t.Helper()
+	for port := 8081; port < 8200; port++ {
+		addr := fmt.Sprintf(":%d", port)
+		listener, err := net.Listen("tcp", addr)
+		if err != nil {
+			continue // Port in use, try next
+		}
+		listener.Close()
+		return port
+	}
+	t.Fatal("Could not find an available port in range 8081-8199")
+	return 0
+}
 
 // mockIPCServer implements IPCServer interface for testing
 type mockIPCServer struct {
@@ -27,8 +46,9 @@ func (m *mockIPCServer) Stop() error {
 
 // TestDaemonInitialization verifies daemon component initialization
 func TestDaemonInitialization(t *testing.T) {
+	port := getAvailablePort(t)
 	config := Config{
-		Port:       8080,
+		Port:       port,
 		SocketPath: "/tmp/test-canopy.sock",
 	}
 
