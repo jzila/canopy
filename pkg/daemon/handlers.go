@@ -6,13 +6,15 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // Handler wraps RuntimeState and provides HTTP handlers
 type Handler struct {
-	state      *RuntimeState
-	scheduler  SchedulerInterface
+	state       *RuntimeState
+	scheduler   SchedulerInterface
 	beadsClient BeadsClientInterface
+	eventBus    *EventBus
 }
 
 // SchedulerInterface abstracts scheduler operations for handlers
@@ -33,11 +35,12 @@ type BeadsClientInterface interface {
 }
 
 // NewHandler creates a new handler with the given state
-func NewHandler(state *RuntimeState, scheduler SchedulerInterface, beadsClient BeadsClientInterface) *Handler {
+func NewHandler(state *RuntimeState, scheduler SchedulerInterface, beadsClient BeadsClientInterface, eventBus *EventBus) *Handler {
 	return &Handler{
-		state:      state,
-		scheduler:  scheduler,
+		state:       state,
+		scheduler:   scheduler,
 		beadsClient: beadsClient,
+		eventBus:    eventBus,
 	}
 }
 
@@ -312,6 +315,15 @@ func (h *Handler) HandlePauseOrch(w http.ResponseWriter, r *http.Request) {
 	h.scheduler.Pause()
 	h.state.Pause()
 
+	// Publish pause event to notify WebSocket clients
+	if h.eventBus != nil {
+		h.eventBus.Publish(Event{
+			Type:      EventOrchPaused,
+			Timestamp: time.Now(),
+			Payload:   map[string]bool{"paused": true},
+		})
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{
@@ -333,6 +345,15 @@ func (h *Handler) HandleResumeOrch(w http.ResponseWriter, r *http.Request) {
 
 	h.scheduler.Resume()
 	h.state.Resume()
+
+	// Publish resume event to notify WebSocket clients
+	if h.eventBus != nil {
+		h.eventBus.Publish(Event{
+			Type:      EventOrchResumed,
+			Timestamp: time.Now(),
+			Payload:   map[string]bool{"paused": false},
+		})
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

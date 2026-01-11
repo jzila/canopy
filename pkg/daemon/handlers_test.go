@@ -70,7 +70,7 @@ func TestHandleGetState(t *testing.T) {
 	state := NewRuntimeState()
 	scheduler := &mockScheduler{}
 	beadsClient := &mockBeadsClient{}
-	handler := NewHandler(state, scheduler, beadsClient)
+	handler := NewHandler(state, scheduler, beadsClient, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/state", nil)
 	w := httptest.NewRecorder()
@@ -102,7 +102,7 @@ func TestHandleGetAgents(t *testing.T) {
 
 	scheduler := &mockScheduler{}
 	beadsClient := &mockBeadsClient{}
-	handler := NewHandler(state, scheduler, beadsClient)
+	handler := NewHandler(state, scheduler, beadsClient, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/agents", nil)
 	w := httptest.NewRecorder()
@@ -138,7 +138,7 @@ func TestHandleKillAgent(t *testing.T) {
 
 	scheduler := &mockScheduler{}
 	beadsClient := &mockBeadsClient{}
-	handler := NewHandler(state, scheduler, beadsClient)
+	handler := NewHandler(state, scheduler, beadsClient, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/agents/agent-1/kill", nil)
 	w := httptest.NewRecorder()
@@ -168,7 +168,7 @@ func TestHandleGetTasks(t *testing.T) {
 
 	scheduler := &mockScheduler{}
 	beadsClient := &mockBeadsClient{}
-	handler := NewHandler(state, scheduler, beadsClient)
+	handler := NewHandler(state, scheduler, beadsClient, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
 	w := httptest.NewRecorder()
@@ -193,7 +193,7 @@ func TestHandleCreateTask(t *testing.T) {
 	state := NewRuntimeState()
 	scheduler := &mockScheduler{}
 	beadsClient := &mockBeadsClient{}
-	handler := NewHandler(state, scheduler, beadsClient)
+	handler := NewHandler(state, scheduler, beadsClient, nil)
 
 	reqBody := TaskCreateRequest{
 		Title:    "New Task",
@@ -219,7 +219,7 @@ func TestHandleUpdateTask(t *testing.T) {
 	state := NewRuntimeState()
 	scheduler := &mockScheduler{}
 	beadsClient := &mockBeadsClient{}
-	handler := NewHandler(state, scheduler, beadsClient)
+	handler := NewHandler(state, scheduler, beadsClient, nil)
 
 	reqBody := TaskUpdateRequest{
 		Status: "in_progress",
@@ -244,7 +244,7 @@ func TestHandlePauseOrch(t *testing.T) {
 	state := NewRuntimeState()
 	scheduler := &mockScheduler{}
 	beadsClient := &mockBeadsClient{}
-	handler := NewHandler(state, scheduler, beadsClient)
+	handler := NewHandler(state, scheduler, beadsClient, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/orch/pause", nil)
 	w := httptest.NewRecorder()
@@ -270,7 +270,7 @@ func TestHandleResumeOrch(t *testing.T) {
 	state.Pause()
 
 	beadsClient := &mockBeadsClient{}
-	handler := NewHandler(state, scheduler, beadsClient)
+	handler := NewHandler(state, scheduler, beadsClient, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/orch/resume", nil)
 	w := httptest.NewRecorder()
@@ -310,7 +310,7 @@ func TestHandleGetStats(t *testing.T) {
 
 	scheduler := &mockScheduler{}
 	beadsClient := &mockBeadsClient{}
-	handler := NewHandler(state, scheduler, beadsClient)
+	handler := NewHandler(state, scheduler, beadsClient, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/stats", nil)
 	w := httptest.NewRecorder()
@@ -339,7 +339,7 @@ func TestMethodNotAllowed(t *testing.T) {
 	state := NewRuntimeState()
 	scheduler := &mockScheduler{}
 	beadsClient := &mockBeadsClient{}
-	handler := NewHandler(state, scheduler, beadsClient)
+	handler := NewHandler(state, scheduler, beadsClient, nil)
 
 	tests := []struct {
 		name    string
@@ -374,7 +374,7 @@ func TestMethodNotAllowed(t *testing.T) {
 
 func TestHandlersWithNilScheduler(t *testing.T) {
 	state := NewRuntimeState()
-	handler := NewHandler(state, nil, nil) // nil scheduler and beadsClient
+	handler := NewHandler(state, nil, nil, nil) // nil scheduler, beadsClient, and eventBus
 
 	// Add an agent so we can test kill
 	agent := &AgentState{
@@ -414,7 +414,7 @@ func TestHandlersWithNilScheduler(t *testing.T) {
 func TestHandlersWithNilBeadsClient(t *testing.T) {
 	state := NewRuntimeState()
 	scheduler := &mockScheduler{}
-	handler := NewHandler(state, scheduler, nil) // nil beadsClient
+	handler := NewHandler(state, scheduler, nil, nil) // nil beadsClient and eventBus
 
 	t.Run("CreateTask", func(t *testing.T) {
 		reqBody := TaskCreateRequest{Title: "Test", Priority: 5}

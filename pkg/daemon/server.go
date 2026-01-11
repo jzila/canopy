@@ -31,7 +31,7 @@ func NewServer(port int, state *RuntimeState, eventBus *EventBus, scheduler Sche
 	hub := NewHub(eventBus)
 
 	// Create HTTP handler
-	handler := NewHandler(state, scheduler, beadsClient)
+	handler := NewHandler(state, scheduler, beadsClient, eventBus)
 
 	// Configure WebSocket upgrader
 	upgrader := websocket.Upgrader{

@@ -14,6 +14,7 @@ const (
 	EventAgentCompleted EventType = "agent:completed"
 	EventTaskUpdated    EventType = "task:updated"
 	EventOrchPaused     EventType = "orch:paused"
+	EventOrchResumed    EventType = "orch:resumed"
 	EventStatsUpdated   EventType = "stats:updated"
 )
 

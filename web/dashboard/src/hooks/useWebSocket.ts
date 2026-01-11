@@ -131,6 +131,21 @@ interface StateSyncEvent {
   payload: BackendRuntimeState;
 }
 
+interface OrchPausedEvent {
+  type: 'orch:paused';
+  timestamp: string;
+  payload: {
+    paused: boolean;
+  };
+}
+
+interface OrchResumedEvent {
+  type: 'orch:resumed';
+  timestamp: string;
+  payload: {
+    paused: boolean;
+  };
+}
 type EventType =
   | StateSyncEvent
   | AgentStartedEvent
@@ -138,7 +153,9 @@ type EventType =
   | AgentLiveFeedEvent
   | AgentCompletedEvent
   | TaskUpdatedEvent
-  | StatsUpdatedEvent;
+  | StatsUpdatedEvent
+  | OrchPausedEvent
+  | OrchResumedEvent;
 
 const MAX_BACKOFF = 30000; // 30 seconds
 const INITIAL_BACKOFF = 1000; // 1 second
@@ -166,7 +183,8 @@ export function useWebSocket() {
     updateAgent,
     appendOutput,
     appendLiveFeedEvent,
-    syncState
+    syncState,
+    setIsPaused
   } = useStateStore();
 
   const connect = useCallback(() => {
@@ -335,6 +353,18 @@ export function useWebSocket() {
               break;
             }
 
+            case 'orch:paused': {
+              console.log('[WebSocket] Orchestrator paused');
+              setIsPaused(true);
+              break;
+            }
+
+            case 'orch:resumed': {
+              console.log('[WebSocket] Orchestrator resumed');
+              setIsPaused(false);
+              break;
+            }
+
             default:
               console.warn('[WebSocket] Unknown event type:', (message as WebSocketEvent).type);
           }
@@ -377,7 +407,7 @@ export function useWebSocket() {
         }, backoffTime);
       }
     }
-  }, [setConnected, updateAgent, appendOutput, appendLiveFeedEvent, syncState]);
+  }, [setConnected, updateAgent, appendOutput, appendLiveFeedEvent, syncState, setIsPaused]);
 
   const disconnect = useCallback(() => {
     isManuallyClosedRef.current = true;
