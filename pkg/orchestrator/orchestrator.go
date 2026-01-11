@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
@@ -261,10 +263,38 @@ func (o *Orchestrator) markTaskFailed(taskID string, reason string) {
 // mergeAndCleanup merges a single agent result and cleans up its overlay.
 // This is called immediately when each agent completes, while the overlay is still mounted.
 // This is safe to call from concurrent goroutines.
+//
+// The merge flow:
+// 1. Acquire merge slot (bd merge-slot acquire)
+// 2. Auto-commit any dirty .beads/ changes to prevent git am failures
+// 3. Apply git patches or file changes
+// 4. Release merge slot (bd merge-slot release)
 func (o *Orchestrator) mergeAndCleanup(result *agent.Result) {
 	// Serialize merge operations to ensure atomic commits
 	o.mergeMu.Lock()
 	defer o.mergeMu.Unlock()
+
+	// Acquire merge slot before attempting git operations
+	// This prevents race conditions with other agents trying to merge simultaneously
+	if err := o.acquireMergeSlot(result.TaskID); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to acquire merge slot for task %s: %v\n", result.TaskID, err)
+		// Continue with merge anyway - the slot mechanism is best-effort
+	}
+
+	// Ensure we release the merge slot when done
+	defer func() {
+		if err := o.releaseMergeSlot(result.TaskID); err != nil && o.config.Verbose {
+			fmt.Fprintf(os.Stderr, "warning: failed to release merge slot for task %s: %v\n", result.TaskID, err)
+		}
+	}()
+
+	// Auto-commit any dirty .beads/ changes before git am
+	// This fixes canopy-pja: git am fails if .beads/ has uncommitted changes
+	// because 'git am' won't apply patches when local changes would be overwritten
+	if err := o.commitDirtyBeadsChanges(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to commit .beads/ changes: %v\n", err)
+		// Continue with merge - better to try than to fail completely
+	}
 
 	// Merge the result (applies patches or file changes and commits)
 	mergeResult, err := o.merger.MergeSingle(result)
@@ -283,6 +313,95 @@ func (o *Orchestrator) mergeAndCleanup(result *agent.Result) {
 
 	// Clean up overlay now that merge is complete
 	o.cleanupOverlay(result)
+}
+
+// acquireMergeSlot acquires the merge slot for exclusive merge access.
+// If the slot is held, this will add to the waiters queue with the task's priority.
+func (o *Orchestrator) acquireMergeSlot(taskID string) error {
+	// Use taskID as the holder identifier
+	result, err := o.beadsClient.MergeSlotAcquire(taskID, true) // wait=true to join queue
+	if err != nil {
+		return err
+	}
+
+	if result != nil && !result.Acquired {
+		// We're in the waiters queue - poll until we get the slot
+		// The priority queue is managed by bd merge-slot
+		return o.waitForMergeSlot(taskID)
+	}
+
+	return nil
+}
+
+// waitForMergeSlot polls for the merge slot with exponential backoff.
+// This is called when the initial acquire put us in the waiters queue.
+func (o *Orchestrator) waitForMergeSlot(taskID string) error {
+	// Poll with increasing intervals
+	intervals := []int{10, 20, 50, 100, 200, 500} // milliseconds
+	maxAttempts := 60                              // ~30 seconds total with backoff
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		// Calculate sleep duration
+		intervalIdx := attempt
+		if intervalIdx >= len(intervals) {
+			intervalIdx = len(intervals) - 1
+		}
+		sleepDuration := intervals[intervalIdx]
+
+		// Sleep before retry
+		time.Sleep(time.Duration(sleepDuration) * time.Millisecond)
+
+		// Try to acquire again
+		result, err := o.beadsClient.MergeSlotAcquire(taskID, false) // don't re-add to queue
+		if err == nil && result != nil && result.Acquired {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("timeout waiting for merge slot after %d attempts", maxAttempts)
+}
+
+// releaseMergeSlot releases the merge slot after merge is complete.
+func (o *Orchestrator) releaseMergeSlot(taskID string) error {
+	return o.beadsClient.MergeSlotRelease(taskID)
+}
+
+// commitDirtyBeadsChanges commits any uncommitted changes in the .beads/ directory.
+// This prevents git am from failing when .beads/ files have been modified.
+func (o *Orchestrator) commitDirtyBeadsChanges() error {
+	// Check if .beads/ directory has uncommitted changes
+	statusCmd := exec.Command("git", "status", "--porcelain", ".beads/")
+	statusCmd.Dir = o.config.OutputDir
+	output, err := statusCmd.Output()
+	if err != nil {
+		return fmt.Errorf("git status failed: %w", err)
+	}
+
+	// No changes to commit
+	if len(output) == 0 {
+		return nil
+	}
+
+	if o.config.Verbose {
+		fmt.Printf("Auto-committing dirty .beads/ changes before merge\n")
+	}
+
+	// Stage .beads/ changes
+	addCmd := exec.Command("git", "add", ".beads/")
+	addCmd.Dir = o.config.OutputDir
+	if err := addCmd.Run(); err != nil {
+		return fmt.Errorf("git add .beads/ failed: %w", err)
+	}
+
+	// Commit with a clear message
+	commitCmd := exec.Command("git", "commit", "-m", "canopy: auto-commit beads changes before merge")
+	commitCmd.Dir = o.config.OutputDir
+	if err := commitCmd.Run(); err != nil {
+		// Check if there's actually nothing to commit (possible race with bd sync)
+		return fmt.Errorf("git commit failed: %w", err)
+	}
+
+	return nil
 }
 
 // cleanupOverlay cleans up the overlay for a result.

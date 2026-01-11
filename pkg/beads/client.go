@@ -164,6 +164,91 @@ func (t *Task) GetDependencies() []string {
 	return t.BlockedBy
 }
 
+// MergeSlotResult represents the result of a merge-slot operation
+type MergeSlotResult struct {
+	Available bool     `json:"available"`
+	Holder    string   `json:"holder,omitempty"`
+	Waiters   []string `json:"waiters,omitempty"`
+	Acquired  bool     `json:"acquired,omitempty"`
+	Released  bool     `json:"released,omitempty"`
+}
+
+// MergeSlotAcquire tries to acquire the merge slot for exclusive access.
+// If wait is true and the slot is held, adds to the waiters queue.
+// Returns acquired=true if slot was acquired, false otherwise.
+func (c *Client) MergeSlotAcquire(holder string, wait bool) (*MergeSlotResult, error) {
+	args := []string{"merge-slot", "acquire", "--json"}
+	if holder != "" {
+		args = append(args, "--holder", holder)
+	}
+	if wait {
+		args = append(args, "--wait")
+	}
+
+	out, err := c.run(args...)
+	if err != nil {
+		// If the slot is held, bd returns an error but may still have useful JSON
+		// Try to parse as MergeSlotResult anyway
+		out = strings.TrimSpace(out)
+		if out == "" {
+			return nil, fmt.Errorf("merge-slot acquire failed: %w", err)
+		}
+	}
+
+	out = strings.TrimSpace(out)
+	if out == "" {
+		// Successful acquire with no JSON output means we got the slot
+		return &MergeSlotResult{Acquired: true}, nil
+	}
+
+	var result MergeSlotResult
+	if jsonErr := json.Unmarshal([]byte(out), &result); jsonErr != nil {
+		if err != nil {
+			return nil, fmt.Errorf("merge-slot acquire failed: %w", err)
+		}
+		return nil, fmt.Errorf("failed to parse merge-slot result: %w", jsonErr)
+	}
+
+	return &result, err
+}
+
+// MergeSlotRelease releases the merge slot after merge is complete.
+func (c *Client) MergeSlotRelease(holder string) error {
+	args := []string{"merge-slot", "release"}
+	if holder != "" {
+		args = append(args, "--holder", holder)
+	}
+
+	_, err := c.run(args...)
+	return err
+}
+
+// MergeSlotCheck checks if the merge slot is available.
+func (c *Client) MergeSlotCheck() (*MergeSlotResult, error) {
+	out, err := c.run("merge-slot", "check", "--json")
+	if err != nil {
+		return nil, fmt.Errorf("merge-slot check failed: %w", err)
+	}
+
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return &MergeSlotResult{Available: true}, nil
+	}
+
+	var result MergeSlotResult
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		return nil, fmt.Errorf("failed to parse merge-slot result: %w", err)
+	}
+
+	return &result, nil
+}
+
+// Sync runs bd sync to commit and push beads changes
+func (c *Client) Sync() error {
+	_, err := c.run("sync")
+	return err
+}
+
 // run executes a bd command and returns stdout
 func (c *Client) run(args ...string) (string, error) {
 	cmd := exec.Command(c.bdPath, args...)
