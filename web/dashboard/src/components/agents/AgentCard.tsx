@@ -116,7 +116,7 @@ export const AgentCard: React.FC<AgentCardProps> = ({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1">
             <code className="text-sm font-mono text-gray-500 dark:text-gray-400">
-              {truncateId(agent.id)}
+              {agent.task_id}
             </code>
             <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium text-white ${statusColor}`}>
               {agent.status}
