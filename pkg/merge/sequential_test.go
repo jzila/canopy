@@ -3,6 +3,7 @@ package merge
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jzila/canopy/pkg/agent"
@@ -79,44 +80,32 @@ func TestMergeWithBeadsChanges(t *testing.T) {
 		},
 	}
 
-	// Create merger (skip bd sync since we don't have a real beads setup)
+	// Create merger
 	merger := NewSequentialMerger(outputDir, tempDir, true)
 
-	// Note: This test will fail at bd sync step since we don't have a real beads repo
-	// But it validates the logic up to that point
+	// Merge should skip .beads files since agents don't have access to them
 	result, err := merger.Merge(results)
-
-	// We expect an error because bd sync will fail in this test environment
 	if err != nil {
-		t.Logf("Expected error due to missing beads setup: %v", err)
+		t.Fatalf("Merge failed: %v", err)
 	}
 
-	// Verify that beads changes were identified
-	if len(result.Errors) > 0 {
-		// Check that the error is related to bd sync, not the separation logic
-		foundBeadsError := false
-		for _, errMsg := range result.Errors {
-			if contains(errMsg, "bd sync") || contains(errMsg, "beads") {
-				foundBeadsError = true
-				break
-			}
-		}
-		if !foundBeadsError {
-			t.Errorf("Expected beads-related error, got: %v", result.Errors)
+	// Verify that .beads changes were skipped
+	for _, applied := range result.Applied {
+		if strings.HasPrefix(applied.Path, ".beads/") {
+			t.Errorf("Expected .beads files to be skipped, but found: %s", applied.Path)
 		}
 	}
-}
 
-func TestCountUniqueResults(t *testing.T) {
-	changes := []beadsChange{
-		{result: &agent.Result{TaskID: "task-1"}},
-		{result: &agent.Result{TaskID: "task-1"}},
-		{result: &agent.Result{TaskID: "task-2"}},
+	// Verify that regular file was applied
+	foundRegular := false
+	for _, applied := range result.Applied {
+		if applied.Path == "test.txt" {
+			foundRegular = true
+			break
+		}
 	}
-
-	count := countUniqueResults(changes)
-	if count != 2 {
-		t.Errorf("countUniqueResults() = %d, expected 2", count)
+	if !foundRegular {
+		t.Error("Expected test.txt to be applied")
 	}
 }
 

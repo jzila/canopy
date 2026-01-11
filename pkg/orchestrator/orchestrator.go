@@ -234,6 +234,20 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			return fmt.Errorf("merge failed: %w", err)
 		}
 
+		// Update beads status for all tasks (orchestrator-only, no concurrency)
+		for _, r := range results {
+			if r.Success {
+				if err := o.beadsClient.Done(r.TaskID); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: failed to mark task %s done: %v\n", r.TaskID, err)
+				}
+			} else {
+				if err := o.beadsClient.Fail(r.TaskID, r.Error); err != nil {
+					fmt.Fprintf(os.Stderr, "ERROR: failed to mark task %s as failed: %v\n", r.TaskID, err)
+					fmt.Fprintf(os.Stderr, "       This task will be retried in the next iteration.\n")
+				}
+			}
+		}
+
 		// Clean up overlays now that merge is complete
 		for _, r := range results {
 			if r.Overlay != nil {

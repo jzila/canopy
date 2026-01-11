@@ -139,21 +139,8 @@ func (s *Scheduler) ExecuteBatch(ctx context.Context, tasks []beads.Task) ([]*ag
 				}
 			}
 
-			// Update beads status
-			if result.Success {
-				if err := s.beadsClient.Done(task.ID); err != nil {
-					// Always log failures to update beads, not just in verbose mode
-					fmt.Fprintf(os.Stderr, "warning: failed to mark task %s done: %v\n", task.ID, err)
-				}
-			} else {
-				if err := s.beadsClient.Fail(task.ID, result.Error); err != nil {
-					// Always log failures to update beads, not just in verbose mode
-					// This is critical because if we can't mark tasks as failed,
-					// they will be retried indefinitely
-					fmt.Fprintf(os.Stderr, "ERROR: failed to mark task %s as failed: %v\n", task.ID, err)
-					fmt.Fprintf(os.Stderr, "       This task will be retried in the next iteration.\n")
-				}
-			}
+			// NOTE: Beads status updates have been moved to orchestrator (after merge)
+			// to prevent SQLite corruption from concurrent writes
 
 			return nil // Don't fail the group for individual task failures
 		})
@@ -172,10 +159,8 @@ func (s *Scheduler) executeTask(ctx context.Context, task *beads.Task) *agent.Re
 		s.callbacks.OnAgentStart(task.ID, task)
 	}
 
-	// Mark task as started
-	if err := s.beadsClient.Start(task.ID); err != nil && s.config.Verbose {
-		fmt.Fprintf(os.Stderr, "warning: failed to mark task %s started: %v\n", task.ID, err)
-	}
+	// NOTE: beadsClient.Start() removed to prevent SQLite corruption
+	// Task status updates now happen only in orchestrator after merge
 
 	// Print agent start to console
 	fmt.Printf("[%s] Starting: %s\n", task.ID, task.Title)
