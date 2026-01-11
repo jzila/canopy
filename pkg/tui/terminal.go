@@ -161,34 +161,63 @@ func (m *TerminalModel) updateViewportContent() {
 		return
 	}
 
-	stdout, stderr := m.agent.Output.Get()
+	var sections []string
 
-	// Split both outputs into lines and interleave them
-	// For now, we'll show stdout first, then stderr
-	// In a more sophisticated version, we could track line order
-	var lines []string
+	// Render styled live feed events first (the main content)
+	if len(m.agent.LiveFeedEvents) > 0 {
+		liveFeedContent := RenderLiveFeedEvents(m.agent.LiveFeedEvents, m.viewport.Width)
+		if liveFeedContent != "" {
+			sections = append(sections, liveFeedContent)
+		}
+	}
+
+	// Get raw stdout/stderr
+	stdout, stderr := m.agent.Output.Get()
 
 	// Style for stderr (red)
 	stderrStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	dimStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 
-	// Add stdout lines
+	// Add stdout lines if present
 	if stdout != "" {
+		// Add a separator and header if we have live feed events
+		if len(sections) > 0 {
+			separator := dimStyle.Render(strings.Repeat("═", min(m.viewport.Width, 50)))
+			header := dimStyle.Render("─── Raw Output ───")
+			sections = append(sections, separator, header)
+		}
+
 		stdoutLines := strings.Split(stdout, "\n")
-		lines = append(lines, stdoutLines...)
+		var outputLines []string
+		for _, line := range stdoutLines {
+			outputLines = append(outputLines, line)
+		}
+		if len(outputLines) > 0 {
+			sections = append(sections, strings.Join(outputLines, "\n"))
+		}
 	}
 
 	// Add stderr lines with red color
 	if stderr != "" {
 		stderrLines := strings.Split(stderr, "\n")
+		var errorLines []string
 		for _, line := range stderrLines {
 			if line != "" {
-				lines = append(lines, stderrStyle.Render(line))
+				errorLines = append(errorLines, stderrStyle.Render(line))
 			}
+		}
+		if len(errorLines) > 0 {
+			// Add error header if we have other content
+			if len(sections) > 0 {
+				errorHeader := stderrStyle.Render("─── Errors ───")
+				sections = append(sections, errorHeader)
+			}
+			sections = append(sections, strings.Join(errorLines, "\n"))
 		}
 	}
 
 	// Set viewport content
-	content := strings.Join(lines, "\n")
+	content := strings.Join(sections, "\n")
 	m.viewport.SetContent(content)
 }
 
