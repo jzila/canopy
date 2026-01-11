@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/jzila/canopy/pkg/beads"
 )
 
 // Handler wraps RuntimeState and provides HTTP handlers
@@ -32,6 +34,7 @@ type BeadsClientInterface interface {
 	Done(taskID string) error
 	Fail(taskID string, reason string) error
 	AddDep(child, parent string) error
+	List() ([]beads.Task, error)
 }
 
 // NewHandler creates a new handler with the given state

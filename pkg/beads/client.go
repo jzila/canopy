@@ -47,6 +47,40 @@ func (c *Client) Ready() ([]Task, error) {
 	return c.ReadyWithArgs("ready", "--json")
 }
 
+// List returns all open tasks (status: open, in_progress, blocked).
+// This is used by the daemon to populate the UI with pending work on startup.
+func (c *Client) List() ([]Task, error) {
+	// Get open tasks (default excludes closed)
+	out, err := c.run("list", "--json", "--limit", "0")
+	if err != nil {
+		return nil, fmt.Errorf("bd list failed: %w", err)
+	}
+
+	out = strings.TrimSpace(out)
+	if out == "" || out == "[]" {
+		return nil, nil
+	}
+
+	var tasks []Task
+	if err := json.Unmarshal([]byte(out), &tasks); err != nil {
+		// Try parsing as newline-delimited JSON
+		tasks = nil
+		for _, line := range strings.Split(out, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			var task Task
+			if err := json.Unmarshal([]byte(line), &task); err != nil {
+				return nil, fmt.Errorf("failed to parse task: %w\nline: %s", err, line)
+			}
+			tasks = append(tasks, task)
+		}
+	}
+
+	return tasks, nil
+}
+
 // ReadyWithArgs returns tasks with no open blockers using custom bd ready arguments
 func (c *Client) ReadyWithArgs(args ...string) ([]Task, error) {
 	out, err := c.run(args...)

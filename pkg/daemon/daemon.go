@@ -84,6 +84,11 @@ func (d *Daemon) Init() {
 			}
 		}
 	}
+
+	// Load pending tasks from beads database to populate the UI
+	if err := d.loadTasksFromBeads(); err != nil {
+		log.Printf("Warning: failed to load tasks from beads: %v", err)
+	}
 }
 
 // restoreStateFromDB loads any running run and its agents from the database
@@ -162,6 +167,32 @@ func (d *Daemon) markOrphanedStatesAsFailed() error {
 		log.Printf("Marked %d orphaned run(s) as failed (daemon terminated unexpectedly)", runCount)
 	}
 
+	return nil
+}
+
+// loadTasksFromBeads loads pending tasks from the beads database into RuntimeState.
+// This populates the UI with available work when the daemon starts.
+func (d *Daemon) loadTasksFromBeads() error {
+	if d.beadsClient == nil {
+		return nil
+	}
+
+	tasks, err := d.beadsClient.List()
+	if err != nil {
+		return fmt.Errorf("failed to list tasks from beads: %w", err)
+	}
+
+	if len(tasks) == 0 {
+		log.Println("No pending tasks found in beads database")
+		return nil
+	}
+
+	// Add each task to the RuntimeState
+	for i := range tasks {
+		d.state.AddTask(&tasks[i])
+	}
+
+	log.Printf("Loaded %d pending task(s) from beads database", len(tasks))
 	return nil
 }
 

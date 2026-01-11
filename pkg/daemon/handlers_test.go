@@ -66,6 +66,10 @@ func (m *mockBeadsClient) AddDep(child, parent string) error {
 	return nil
 }
 
+func (m *mockBeadsClient) List() ([]beads.Task, error) {
+	return nil, nil
+}
+
 func TestHandleGetState(t *testing.T) {
 	state := NewRuntimeState()
 	scheduler := &mockScheduler{}
