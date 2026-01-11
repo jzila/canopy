@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -205,20 +206,34 @@ func (o *Overlay) copyClaudeCredentials() error {
 	return nil
 }
 
-// copyGitConfig copies ~/.gitconfig to the overlay so agents have correct authorship
+// copyGitConfig creates a minimal .gitconfig with only user.name and user.email
+// for commit authorship. Does NOT copy credential helpers or URL rewrites to
+// prevent agents from pushing to remote repositories.
 func (o *Overlay) copyGitConfig() error {
-	homeDir, err := os.UserHomeDir()
+	// Get user.name and user.email from git config
+	userName, err := exec.Command("git", "config", "--global", "user.name").Output()
 	if err != nil {
-		return err
+		return fmt.Errorf("get user.name: %w", err)
 	}
 
-	srcPath := filepath.Join(homeDir, ".gitconfig")
-	if _, err := os.Stat(srcPath); os.IsNotExist(err) {
-		return nil // No gitconfig to copy
+	userEmail, err := exec.Command("git", "config", "--global", "user.email").Output()
+	if err != nil {
+		return fmt.Errorf("get user.email: %w", err)
 	}
+
+	// Trim whitespace from values
+	name := strings.TrimSpace(string(userName))
+	email := strings.TrimSpace(string(userEmail))
+
+	if name == "" || email == "" {
+		return fmt.Errorf("git user.name or user.email not configured")
+	}
+
+	// Create minimal gitconfig with only [user] section
+	gitconfig := fmt.Sprintf("[user]\n\tname = %s\n\temail = %s\n", name, email)
 
 	dstPath := filepath.Join(o.UpperDir, ".gitconfig")
-	return copyFile(srcPath, dstPath)
+	return os.WriteFile(dstPath, []byte(gitconfig), 0644)
 }
 
 // copyFile copies a file from src to dst
