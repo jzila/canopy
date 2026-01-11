@@ -3,18 +3,22 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
 	"github.com/jzila/canopy/pkg/daemon"
 	"github.com/jzila/canopy/pkg/ipc"
 	"github.com/jzila/canopy/pkg/runtime"
+	"github.com/jzila/canopy/pkg/tui"
 )
 
 var (
 	daemonPort      int
 	daemonSocket    string
 	daemonDevMode   bool
+	daemonTUIMode   bool
 )
 
 var daemonCmd = &cobra.Command{
@@ -35,7 +39,10 @@ Example:
   canopy daemon --port 9090 --ipc-socket /tmp/my-canopy.sock
 
   # Start in development mode
-  canopy daemon --dev`,
+  canopy daemon --dev
+
+  # Start with TUI dashboard
+  canopy daemon --tui`,
 	RunE: runDaemon,
 }
 
@@ -43,6 +50,7 @@ func init() {
 	daemonCmd.Flags().IntVar(&daemonPort, "port", 8080, "HTTP server port")
 	daemonCmd.Flags().StringVar(&daemonSocket, "ipc-socket", "", "Unix socket path for IPC (default: runtime dir)")
 	daemonCmd.Flags().BoolVar(&daemonDevMode, "dev", false, "Enable development mode")
+	daemonCmd.Flags().BoolVar(&daemonTUIMode, "tui", false, "Enable TUI dashboard view")
 
 	rootCmd.AddCommand(daemonCmd)
 }
@@ -53,7 +61,7 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 		daemonSocket = runtime.SocketPath("")
 	}
 
-	if verbose {
+	if verbose && !daemonTUIMode {
 		fmt.Printf("Starting daemon on port %d with IPC socket %s\n", daemonPort, daemonSocket)
 	}
 
@@ -78,6 +86,10 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	// These are optional - the daemon can run standalone for monitoring
 	d := daemon.NewDaemon(config, ipcServerFactory, nil, nil)
 
+	if daemonTUIMode {
+		return runDaemonWithTUI(d)
+	}
+
 	// Start daemon (blocks until interrupted)
 	if err := d.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "daemon error: %v\n", err)
@@ -85,4 +97,49 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// runDaemonWithTUI starts the daemon and TUI dashboard concurrently
+func runDaemonWithTUI(d *daemon.Daemon) error {
+	// Initialize daemon components first (before Start which blocks)
+	d.Init()
+
+	// Get event bus and state from daemon for TUI
+	eventBus := d.GetEventBus()
+	state := d.GetRuntimeState()
+
+	// Create TUI dashboard
+	dashboard := tui.NewDashboard(state, eventBus)
+
+	// Start daemon in background (non-blocking)
+	errChan := make(chan error, 1)
+	go func() {
+		if err := d.Start(); err != nil {
+			errChan <- err
+		}
+	}()
+
+	// Handle signals for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Run TUI in a goroutine
+	tuiDone := make(chan error, 1)
+	go func() {
+		tuiDone <- dashboard.Run()
+	}()
+
+	// Wait for TUI to exit, daemon error, or signal
+	select {
+	case err := <-errChan:
+		return fmt.Errorf("daemon error: %w", err)
+	case err := <-tuiDone:
+		// TUI exited (user pressed q), stop daemon
+		d.Stop()
+		return err
+	case <-sigChan:
+		// Signal received, stop both
+		d.Stop()
+		return nil
+	}
 }

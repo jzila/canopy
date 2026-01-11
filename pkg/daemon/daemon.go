@@ -49,17 +49,25 @@ func NewDaemon(config Config, ipcServerFactory IPCServerFactory, scheduler Sched
 	}
 }
 
+// Init initializes daemon components without starting servers
+// Call this before Start() if you need access to EventBus or RuntimeState
+func (d *Daemon) Init() {
+	if d.eventBus == nil {
+		d.eventBus = NewEventBus()
+	}
+	if d.state == nil {
+		d.state = NewRuntimeState()
+	}
+}
+
 // Start initializes and starts all daemon components
 // Blocks until a termination signal is received
 func (d *Daemon) Start() error {
 	log.Println("Starting Canopy daemon...")
 
-	// Initialize EventBus (pub/sub for internal communication)
-	d.eventBus = NewEventBus()
+	// Initialize components if not already done (allows pre-initialization via Init())
+	d.Init()
 	log.Println("EventBus initialized")
-
-	// Initialize RuntimeState (tracks agent/task state)
-	d.state = NewRuntimeState()
 	log.Println("RuntimeState initialized")
 
 	// Subscribe RuntimeState to EventBus to update from IPC events
@@ -156,4 +164,11 @@ func (d *Daemon) GetState() RuntimeState {
 		return d.state.GetSnapshot()
 	}
 	return RuntimeState{}
+}
+
+// GetRuntimeState returns the RuntimeState instance for direct access
+// This is useful for components that need to subscribe to state changes
+// Returns nil if Start() has not been called yet
+func (d *Daemon) GetRuntimeState() *RuntimeState {
+	return d.state
 }

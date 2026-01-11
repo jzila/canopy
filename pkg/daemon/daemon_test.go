@@ -140,3 +140,65 @@ func TestGetState(t *testing.T) {
 		t.Errorf("Expected task-1, got %s", snapshot.Agents["agent-1"].TaskID)
 	}
 }
+
+// TestDaemonInit verifies Init() initializes components
+func TestDaemonInit(t *testing.T) {
+	daemon := &Daemon{}
+
+	// Before Init
+	if daemon.GetEventBus() != nil {
+		t.Error("EventBus should be nil before Init")
+	}
+	if daemon.GetRuntimeState() != nil {
+		t.Error("RuntimeState should be nil before Init")
+	}
+
+	// Call Init
+	daemon.Init()
+
+	// After Init
+	if daemon.GetEventBus() == nil {
+		t.Error("EventBus should be initialized after Init")
+	}
+	if daemon.GetRuntimeState() == nil {
+		t.Error("RuntimeState should be initialized after Init")
+	}
+
+	// Init should be idempotent
+	eventBus := daemon.GetEventBus()
+	state := daemon.GetRuntimeState()
+	daemon.Init()
+
+	if daemon.GetEventBus() != eventBus {
+		t.Error("Init should not re-create EventBus")
+	}
+	if daemon.GetRuntimeState() != state {
+		t.Error("Init should not re-create RuntimeState")
+	}
+}
+
+// TestGetRuntimeState verifies GetRuntimeState returns the actual state
+func TestGetRuntimeState(t *testing.T) {
+	daemon := &Daemon{}
+	daemon.Init()
+
+	state := daemon.GetRuntimeState()
+	if state == nil {
+		t.Error("GetRuntimeState should return non-nil after Init")
+	}
+
+	// Verify we can modify through the returned pointer
+	agent := &AgentState{
+		ID:        "agent-1",
+		TaskID:    "task-1",
+		TaskTitle: "Test Task",
+		Status:    AgentStatusRunning,
+		StartTime: time.Now(),
+	}
+	state.AddAgent(agent)
+
+	// Verify change is reflected
+	if daemon.GetRuntimeState().GetAgent("agent-1") == nil {
+		t.Error("Agent should be accessible after adding to returned state")
+	}
+}
