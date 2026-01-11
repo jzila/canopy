@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -176,9 +177,8 @@ func (s *Scheduler) executeTask(ctx context.Context, task *beads.Task) *agent.Re
 		fmt.Fprintf(os.Stderr, "warning: failed to mark task %s started: %v\n", task.ID, err)
 	}
 
-	if s.config.Verbose {
-		fmt.Printf("Starting task %s: %s\n", task.ID, task.Title)
-	}
+	// Print agent start to console
+	fmt.Printf("[%s] Starting: %s\n", task.ID, task.Title)
 
 	// Gather dependency context from completed tasks
 	deps := s.gatherDependencyContext(task)
@@ -244,6 +244,24 @@ func (s *Scheduler) executeTask(ctx context.Context, task *beads.Task) *agent.Re
 		}
 		if result.Stderr != "" {
 			s.callbacks.OnOutput(task.ID, result.Stderr, true)
+		}
+	}
+
+	// Print agent completion to console
+	if result.Success {
+		fmt.Printf("[%s] Completed: %s\n", task.ID, task.Title)
+		// Print commit messages with indentation
+		if result.GitState != nil && len(result.GitState.CommitMessages) > 0 {
+			for _, msg := range result.GitState.CommitMessages {
+				// Print only the first line of the commit message (the subject)
+				firstLine := strings.Split(msg, "\n")[0]
+				fmt.Printf("  → %s\n", firstLine)
+			}
+		}
+	} else {
+		fmt.Printf("[%s] Failed: %s\n", task.ID, task.Title)
+		if s.config.Verbose {
+			fmt.Fprintf(os.Stderr, "  Error: %s\n", result.Error)
 		}
 	}
 
