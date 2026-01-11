@@ -9,6 +9,7 @@ type EventType string
 const (
 	EventAgentStarted   EventType = "agent:started"
 	EventAgentOutput    EventType = "agent:output"
+	EventAgentLiveFeed  EventType = "agent:live_feed"
 	EventAgentCompleted EventType = "agent:completed"
 	EventTaskUpdated    EventType = "task:updated"
 	EventOrchPaused     EventType = "orch:paused"

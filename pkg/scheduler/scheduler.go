@@ -22,6 +22,7 @@ import (
 type CallbackHandler interface {
 	OnAgentStart(taskID string, task *beads.Task)
 	OnOutput(taskID string, output string, isError bool)
+	OnLiveFeed(taskID string, event *agent.LiveFeedEvent)
 	OnDone(taskID string, result *agent.Result)
 	OnFail(taskID string, result *agent.Result)
 }
@@ -220,8 +221,18 @@ func (s *Scheduler) executeTask(ctx context.Context, task *beads.Task) *agent.Re
 	// Unmount when task completes, but don't delete directories yet
 	defer overlay.Unmount()
 
+	// Set up live feed callback if handler is configured
+	if s.callbacks != nil {
+		s.executor.SetLiveFeedCallback(func(taskID string, event *agent.LiveFeedEvent) {
+			s.callbacks.OnLiveFeed(taskID, event)
+		})
+	}
+
 	// Execute the agent with dependency context
 	result := s.executor.Execute(ctx, task, overlay, deps)
+
+	// Clear the callback after execution
+	s.executor.SetLiveFeedCallback(nil)
 
 	// Attach overlay to result so it can be cleaned up after merge
 	result.Overlay = overlay

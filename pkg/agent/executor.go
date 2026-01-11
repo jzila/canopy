@@ -58,10 +58,11 @@ type Message struct {
 
 // Config holds agent configuration
 type Config struct {
-	ClaudePath string
-	Timeout    time.Duration
-	Verbose    bool
-	UseBwrap   bool // Use bubblewrap sandbox for isolation (auto-detected if not set)
+	ClaudePath      string
+	Timeout         time.Duration
+	Verbose         bool
+	UseBwrap        bool                                      // Use bubblewrap sandbox for isolation (auto-detected if not set)
+	OnLiveFeedEvent func(taskID string, event *LiveFeedEvent) // Callback for live streaming events
 }
 
 // NewConfig creates a default agent config
@@ -102,6 +103,11 @@ func NewExecutor(config *Config) *Executor {
 	return &Executor{config: config}
 }
 
+// SetLiveFeedCallback sets the callback for live feed events
+func (e *Executor) SetLiveFeedCallback(callback func(taskID string, event *LiveFeedEvent)) {
+	e.config.OnLiveFeedEvent = callback
+}
+
 // Execute runs an agent for the given task in the provided sandbox
 func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandbox.Overlay, deps []DependencyContext) *Result {
 	start := time.Now()
@@ -133,7 +139,8 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 	// Build command arguments
 	args := []string{
 		"--print",
-		"--output-format", "json",
+		"--output-format", "stream-json",
+		"--verbose", // Required for stream-json
 		"--dangerously-skip-permissions", // Safe in sandbox
 		prompt,
 	}
@@ -186,27 +193,83 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 		setResourceLimits(cmd)
 	}
 
-	// Capture output
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
+	// Set up streaming stdout/stderr capture
+	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
-	// Execute
-	err := cmd.Run()
+	// Create stdout pipe for streaming
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		result.Error = fmt.Sprintf("failed to create stdout pipe: %v", err)
+		return result
+	}
+
+	// Start the command
+	if err := cmd.Start(); err != nil {
+		result.Error = fmt.Sprintf("failed to start command: %v", err)
+		result.ExitCode = -1
+		return result
+	}
+
+	// Parse streaming output and collect final result
+	var finalResult *ClaudeStreamResult
+	parser := NewStreamParser(stdoutPipe)
+	for parser.scanner.Scan() {
+		line := parser.scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+
+		// Try to parse as generic event first for type checking
+		var eventType struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(line, &eventType); err != nil {
+			continue
+		}
+
+		// Handle result events specially
+		if eventType.Type == "result" {
+			var result ClaudeStreamResult
+			if err := json.Unmarshal(line, &result); err == nil {
+				finalResult = &result
+			}
+			continue
+		}
+
+		// Parse as regular stream event for live feed
+		var event StreamEvent
+		if err := json.Unmarshal(line, &event); err != nil {
+			continue
+		}
+
+		// Forward live feed events if callback is set
+		if e.config.OnLiveFeedEvent != nil {
+			if liveEvent := FilterForLiveFeed(&event); liveEvent != nil {
+				e.config.OnLiveFeedEvent(task.ID, liveEvent)
+			}
+		}
+	}
+
+	// Wait for command to complete
+	err = cmd.Wait()
 	result.Duration = time.Since(start)
-	result.Stdout = stdout.String()
 	result.Stderr = stderr.String()
 
 	if cmd.ProcessState != nil {
 		result.ExitCode = cmd.ProcessState.ExitCode()
 	}
 
-	// Parse JSON output
-	if stdout.Len() > 0 {
-		var output ClaudeOutput
-		if jsonErr := json.Unmarshal(stdout.Bytes(), &output); jsonErr == nil {
-			result.Output = &output
+	// Convert stream result to ClaudeOutput
+	if finalResult != nil {
+		result.Output = &ClaudeOutput{
+			SessionID:         finalResult.SessionID,
+			CostUSD:           finalResult.TotalCostUSD,
+			TotalInputTokens:  finalResult.Usage.InputTokens,
+			TotalOutputTokens: finalResult.Usage.OutputTokens,
 		}
+		// Extract stdout from final result for compatibility
+		result.Stdout = finalResult.Result
 	}
 
 	// Get file changes from overlay

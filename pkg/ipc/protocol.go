@@ -7,10 +7,11 @@ type MessageType string
 
 const (
 	// Agent lifecycle events
-	MessageTypeAgentStart  MessageType = "agent_start"
-	MessageTypeAgentOutput MessageType = "agent_output"
-	MessageTypeAgentDone   MessageType = "agent_done"
-	MessageTypeAgentFail   MessageType = "agent_fail"
+	MessageTypeAgentStart     MessageType = "agent_start"
+	MessageTypeAgentOutput    MessageType = "agent_output"
+	MessageTypeAgentLiveFeed  MessageType = "agent_live_feed"
+	MessageTypeAgentDone      MessageType = "agent_done"
+	MessageTypeAgentFail      MessageType = "agent_fail"
 
 	// Run lifecycle events
 	MessageTypeRunStarted   MessageType = "run_started"
@@ -36,6 +37,13 @@ type AgentOutputPayload struct {
 	AgentID string `json:"agent_id"`
 	Output  string `json:"output"`
 	IsError bool   `json:"is_error"`
+}
+
+// AgentLiveFeedPayload is sent for real-time streaming events from agents
+type AgentLiveFeedPayload struct {
+	AgentID   string                 `json:"agent_id"`
+	EventType string                 `json:"event_type"` // "tool_use", "file_change", "text"
+	Data      map[string]interface{} `json:"data"`
 }
 
 // AgentResult contains execution metrics for an agent

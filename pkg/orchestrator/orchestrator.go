@@ -23,6 +23,9 @@ type EventCallbacks struct {
 	// OnOutputFn is called when an agent produces output (stdout/stderr)
 	OnOutputFn func(taskID string, output string, isError bool)
 
+	// OnLiveFeedFn is called for real-time streaming events from agents
+	OnLiveFeedFn func(taskID string, event *agent.LiveFeedEvent)
+
 	// OnDoneFn is called when an agent completes successfully
 	OnDoneFn func(taskID string, result *agent.Result)
 
@@ -41,6 +44,13 @@ func (e *EventCallbacks) OnAgentStart(taskID string, task *beads.Task) {
 func (e *EventCallbacks) OnOutput(taskID string, output string, isError bool) {
 	if e != nil && e.OnOutputFn != nil {
 		e.OnOutputFn(taskID, output, isError)
+	}
+}
+
+// OnLiveFeed implements scheduler.CallbackHandler
+func (e *EventCallbacks) OnLiveFeed(taskID string, event *agent.LiveFeedEvent) {
+	if e != nil && e.OnLiveFeedFn != nil {
+		e.OnLiveFeedFn(taskID, event)
 	}
 }
 

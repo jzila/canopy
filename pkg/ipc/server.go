@@ -195,6 +195,21 @@ func (s *Server) convertToEvent(msg *Message) *daemon.Event {
 			},
 		}
 
+	case MessageTypeAgentLiveFeed:
+		var payload AgentLiveFeedPayload
+		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+			return nil
+		}
+		return &daemon.Event{
+			Type:      daemon.EventAgentLiveFeed,
+			Timestamp: msg.Timestamp,
+			Payload: map[string]interface{}{
+				"agent_id":   payload.AgentID,
+				"event_type": payload.EventType,
+				"data":       payload.Data,
+			},
+		}
+
 	case MessageTypeAgentDone:
 		var payload AgentDonePayload
 		if err := json.Unmarshal(payloadBytes, &payload); err != nil {

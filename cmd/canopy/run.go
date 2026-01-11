@@ -191,6 +191,12 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 					fmt.Fprintf(os.Stderr, "warning: failed to send agent output: %v\n", err)
 				}
 			},
+			OnLiveFeedFn: func(taskID string, event *agent.LiveFeedEvent) {
+				agentID := fmt.Sprintf("agent-%s", taskID)
+				if err := ipcClient.SendAgentLiveFeed(agentID, event.EventType, event.Data); err != nil && verbose {
+					fmt.Fprintf(os.Stderr, "warning: failed to send agent live feed: %v\n", err)
+				}
+			},
 			OnDoneFn: func(taskID string, result *agent.Result) {
 				agentID := fmt.Sprintf("agent-%s", taskID)
 				ipcResult := convertToIPCResult(result)

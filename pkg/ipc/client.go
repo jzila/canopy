@@ -101,6 +101,17 @@ func (c *Client) SendAgentOutput(agentID, output string, isError bool) error {
 	return c.sendMessage(MessageTypeAgentOutput, payload)
 }
 
+// SendAgentLiveFeed sends real-time streaming events from an agent
+func (c *Client) SendAgentLiveFeed(agentID, eventType string, data map[string]interface{}) error {
+	payload := AgentLiveFeedPayload{
+		AgentID:   agentID,
+		EventType: eventType,
+		Data:      data,
+	}
+
+	return c.sendMessage(MessageTypeAgentLiveFeed, payload)
+}
+
 // SendAgentDone notifies the daemon that an agent completed successfully
 func (c *Client) SendAgentDone(agentID string, result *AgentResult) error {
 	if result == nil {
