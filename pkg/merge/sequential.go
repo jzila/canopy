@@ -132,15 +132,40 @@ func (m *SequentialMerger) Merge(results []*agent.Result) (*Result, error) {
 	}
 
 	// Report conflicts (but still apply using last-writer-wins)
+	var userConflicts, vendorConflicts []Conflict
 	for path, modifiers := range fileModifiers {
 		if len(modifiers) > 1 {
-			mergeResult.Conflicts = append(mergeResult.Conflicts, Conflict{
+			conflict := Conflict{
 				Path:    path,
 				Sources: modifiers,
-			})
-			if m.verbose {
-				fmt.Printf("Conflict: %s modified by %v (using last)\n", path, modifiers)
 			}
+			mergeResult.Conflicts = append(mergeResult.Conflicts, conflict)
+
+			if isVendorPath(path) {
+				vendorConflicts = append(vendorConflicts, conflict)
+			} else {
+				userConflicts = append(userConflicts, conflict)
+			}
+		}
+	}
+
+	// Print conflict summary if verbose
+	if m.verbose {
+		// Show user conflicts (max 5)
+		if len(userConflicts) > 0 {
+			maxShow := 5
+			for i, c := range userConflicts {
+				if i >= maxShow {
+					fmt.Printf("... and %d more user conflicts\n", len(userConflicts)-maxShow)
+					break
+				}
+				fmt.Printf("Conflict: %s modified by %v (using last)\n", c.Path, c.Sources)
+			}
+		}
+
+		// Show vendor conflicts as one-line summary
+		if len(vendorConflicts) > 0 {
+			fmt.Printf("%d vendor/module conflicts (expected when agents add dependencies)\n", len(vendorConflicts))
 		}
 	}
 
@@ -184,6 +209,26 @@ type beadsChange struct {
 // isBeadsFile checks if a path is within the .beads directory
 func isBeadsFile(path string) bool {
 	return path == ".beads" || strings.HasPrefix(path, ".beads/")
+}
+
+// isVendorPath checks if a path is within vendor/dependency directories
+func isVendorPath(path string) bool {
+	// Normalize path separators for cross-platform compatibility
+	normalizedPath := filepath.ToSlash(path)
+
+	vendorPrefixes := []string{
+		"go/pkg/mod/",
+		"vendor/",
+		"node_modules/",
+	}
+
+	for _, prefix := range vendorPrefixes {
+		if strings.HasPrefix(normalizedPath, prefix) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // mergeBeadsChanges applies .beads changes sequentially and runs bd sync
