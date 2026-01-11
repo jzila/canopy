@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sync"
 
@@ -92,6 +91,7 @@ type Orchestrator struct {
 	failureCounts map[string]int // Tracks how many times each task has failed
 	promptFilter  *PromptFilter  // Parsed prompt for filtering tasks
 	beadsMu       sync.Mutex     // Serializes beads updates to prevent corruption
+	mergeMu       sync.Mutex     // Serializes merge operations to prevent race conditions
 }
 
 // New creates a new orchestrator
@@ -205,6 +205,9 @@ func (o *Orchestrator) setupInternalCallbacks(userCallbacks *EventCallbacks) {
 			}
 		},
 		OnDoneFn: func(taskID string, result *agent.Result) {
+			// Merge result immediately while overlay is still mounted
+			o.mergeAndCleanup(result)
+
 			// Update beads immediately when task completes
 			o.markTaskDone(taskID)
 
@@ -214,6 +217,9 @@ func (o *Orchestrator) setupInternalCallbacks(userCallbacks *EventCallbacks) {
 			}
 		},
 		OnFailFn: func(taskID string, result *agent.Result) {
+			// Clean up overlay for failed task (no merge needed)
+			o.cleanupOverlay(result)
+
 			// Update beads immediately when task fails
 			o.markTaskFailed(taskID, result.Error)
 
@@ -249,6 +255,43 @@ func (o *Orchestrator) markTaskFailed(taskID string, reason string) {
 
 	if err := o.beadsClient.Fail(taskID, reason); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: failed to mark task %s as failed: %v\n", taskID, err)
+	}
+}
+
+// mergeAndCleanup merges a single agent result and cleans up its overlay.
+// This is called immediately when each agent completes, while the overlay is still mounted.
+// This is safe to call from concurrent goroutines.
+func (o *Orchestrator) mergeAndCleanup(result *agent.Result) {
+	// Serialize merge operations to ensure atomic commits
+	o.mergeMu.Lock()
+	defer o.mergeMu.Unlock()
+
+	// Merge the result (applies patches or file changes and commits)
+	mergeResult, err := o.merger.MergeSingle(result)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to merge result for task %s: %v\n", result.TaskID, err)
+	}
+
+	// Report merge errors
+	for _, errMsg := range mergeResult.Errors {
+		fmt.Fprintf(os.Stderr, "merge error for %s: %s\n", result.TaskID, errMsg)
+	}
+
+	if o.config.Verbose && mergeResult.CommitsApplied > 0 {
+		fmt.Printf("Merged %d commit(s) from task %s\n", mergeResult.CommitsApplied, result.TaskID)
+	}
+
+	// Clean up overlay now that merge is complete
+	o.cleanupOverlay(result)
+}
+
+// cleanupOverlay cleans up the overlay for a result.
+// This is safe to call from concurrent goroutines.
+func (o *Orchestrator) cleanupOverlay(result *agent.Result) {
+	if result.Overlay != nil {
+		if err := result.Overlay.Cleanup(); err != nil && o.config.Verbose {
+			fmt.Fprintf(os.Stderr, "warning: failed to cleanup overlay for task %s: %v\n", result.TaskID, err)
+		}
 	}
 }
 
@@ -326,50 +369,11 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		}
 
 		// Execute batch
+		// NOTE: Merging and cleanup happen in the OnDone/OnFail callbacks
+		// as each agent completes, so we don't need to do batch merge here.
 		results, err := o.scheduler.ExecuteBatch(ctx, tasks)
 		if err != nil {
 			return fmt.Errorf("batch execution failed: %w", err)
-		}
-
-		// Merge results
-		mergeResult, err := o.merger.Merge(results)
-		if err != nil {
-			return fmt.Errorf("merge failed: %w", err)
-		}
-
-		// NOTE: Beads status updates now happen immediately in the OnDone/OnFail
-		// callbacks (via markTaskDone/markTaskFailed), so no need to update here.
-
-		// Clean up overlays now that merge is complete
-		for _, r := range results {
-			if r.Overlay != nil {
-				if cleanupErr := r.Overlay.Cleanup(); cleanupErr != nil && o.config.Verbose {
-					fmt.Fprintf(os.Stderr, "warning: failed to cleanup overlay for task %s: %v\n", r.TaskID, cleanupErr)
-				}
-			}
-		}
-
-		// Report merge results
-		if o.config.Verbose {
-			fmt.Printf("Merged %d changes", len(mergeResult.Applied))
-			if len(mergeResult.Conflicts) > 0 {
-				fmt.Printf(" (%d conflicts resolved by last-writer-wins)", len(mergeResult.Conflicts))
-			}
-			if mergeResult.BeadsSynced {
-				fmt.Printf(" (beads state synced)")
-			}
-			fmt.Println()
-		}
-
-		// Commit merged changes
-		if err := o.commitMergedChanges(results, mergeResult); err != nil {
-			// Log but don't fail - the changes are already merged
-			fmt.Fprintf(os.Stderr, "warning: failed to commit merged changes: %v\n", err)
-		}
-
-		// Report errors
-		for _, errMsg := range mergeResult.Errors {
-			fmt.Fprintf(os.Stderr, "merge error: %s\n", errMsg)
 		}
 
 		// Summary of this iteration
@@ -422,92 +426,6 @@ func (o *Orchestrator) Cleanup() error {
 // GetScheduler returns the underlying scheduler for advanced operations like signal cleanup
 func (o *Orchestrator) GetScheduler() *scheduler.Scheduler {
 	return o.scheduler
-}
-
-// commitMergedChanges creates individual git commits for each task's file-only changes.
-// Note: Tasks that made git commits have already been applied via git am with their
-// original commit messages. This function commits:
-// 1. File-only changes (tasks that made no git commits)
-// 2. File changes from tasks where git patch application failed
-func (o *Orchestrator) commitMergedChanges(results []*agent.Result, mergeResult *merge.Result) error {
-	// Identify tasks that need their file changes committed
-	var tasksToCommit []*agent.Result
-	for _, r := range results {
-		if !r.Success {
-			continue
-		}
-
-		hasFileChanges := len(r.Changes) > 0
-		hasGitCommits := r.GitState != nil && len(r.GitState.Patches) > 0
-		patchFailed := mergeResult.PatchFailed[r.TaskID]
-
-		// Commit file changes if:
-		// 1. Task has file changes but no git commits, OR
-		// 2. Task had git commits but patch application failed
-		if hasFileChanges && (!hasGitCommits || patchFailed) {
-			tasksToCommit = append(tasksToCommit, r)
-		}
-	}
-
-	if len(tasksToCommit) == 0 {
-		if o.config.Verbose {
-			fmt.Println("No file changes to commit")
-		}
-		return nil
-	}
-
-	// Commit each task's file changes separately
-	for _, task := range tasksToCommit {
-		// Collect paths for this task
-		var paths []string
-		for _, change := range task.Changes {
-			paths = append(paths, change.Path)
-		}
-
-		if len(paths) == 0 {
-			continue
-		}
-
-		// Stage this task's files
-		addCmd := exec.Command("git", "add", "--")
-		addCmd.Args = append(addCmd.Args, paths...)
-		addCmd.Dir = o.config.OutputDir
-		if err := addCmd.Run(); err != nil {
-			return fmt.Errorf("git add failed for task %s: %w", task.TaskID, err)
-		}
-
-		// Check if there are staged changes for this task
-		diffCmd := exec.Command("git", "diff", "--cached", "--quiet")
-		diffCmd.Dir = o.config.OutputDir
-		if err := diffCmd.Run(); err == nil {
-			// No staged changes (exit code 0 means no diff)
-			if o.config.Verbose {
-				fmt.Printf("No changes to commit for task %s (files may have been committed via git am)\n", task.TaskID)
-			}
-			continue
-		}
-
-		// Create commit for this task
-		commitMsg := fmt.Sprintf("canopy: apply changes from %s", task.TaskID)
-		if mergeResult.PatchFailed[task.TaskID] {
-			commitMsg = fmt.Sprintf("canopy: apply changes from %s (git patch failed, using file-based merge)", task.TaskID)
-		}
-		commitCmd := exec.Command("git", "commit", "-m", commitMsg)
-		commitCmd.Dir = o.config.OutputDir
-		if err := commitCmd.Run(); err != nil {
-			return fmt.Errorf("git commit failed for task %s: %w", task.TaskID, err)
-		}
-
-		if o.config.Verbose {
-			if mergeResult.PatchFailed[task.TaskID] {
-				fmt.Printf("Created commit for file changes from task %s (patch application failed)\n", task.TaskID)
-			} else {
-				fmt.Printf("Created commit for file-only changes from task %s\n", task.TaskID)
-			}
-		}
-	}
-
-	return nil
 }
 
 // filterTasksByMaxPriority filters tasks to only include those with priority <= maxPriority.
