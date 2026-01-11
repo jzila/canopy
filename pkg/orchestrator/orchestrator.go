@@ -283,6 +283,8 @@ func (o *Orchestrator) GetScheduler() *scheduler.Scheduler {
 }
 
 // commitMergedChanges creates a git commit for merged changes from completed tasks
+// Note: Tasks that made git commits have already been applied via git am with their
+// original commit messages. This function only commits file-only changes (if any).
 func (o *Orchestrator) commitMergedChanges(results []*agent.Result) error {
 	// Check if there are any uncommitted changes
 	statusCmd := exec.Command("git", "status", "--porcelain")
@@ -307,15 +309,9 @@ func (o *Orchestrator) commitMergedChanges(results []*agent.Result) error {
 		return fmt.Errorf("git add failed: %w", err)
 	}
 
-	// Build commit message with task IDs
-	var taskIDs []string
-	for _, r := range results {
-		if r.Success {
-			taskIDs = append(taskIDs, r.TaskID)
-		}
-	}
-
-	commitMsg := fmt.Sprintf("canopy: merge results from %s", strings.Join(taskIDs, ", "))
+	// Build commit message based on what tasks made file-only changes
+	// (Tasks with git commits were already applied via git am)
+	commitMsg := o.buildCommitMessage(results)
 
 	// Create commit
 	commitCmd := exec.Command("git", "commit", "-m", commitMsg)
@@ -325,8 +321,56 @@ func (o *Orchestrator) commitMergedChanges(results []*agent.Result) error {
 	}
 
 	if o.config.Verbose {
-		fmt.Printf("Created commit for merged changes from %d tasks\n", len(taskIDs))
+		fmt.Printf("Created commit for file-only changes\n")
 	}
 
 	return nil
+}
+
+// buildCommitMessage creates an appropriate commit message for merged changes
+func (o *Orchestrator) buildCommitMessage(results []*agent.Result) string {
+	// Separate results with git commits from those with file-only changes
+	var withCommits, fileOnly []*agent.Result
+	for _, r := range results {
+		if !r.Success {
+			continue
+		}
+		if r.GitState != nil && len(r.GitState.CommitMessages) > 0 {
+			withCommits = append(withCommits, r)
+		} else if len(r.Changes) > 0 {
+			fileOnly = append(fileOnly, r)
+		}
+	}
+
+	// If there's only one task with file-only changes, use its task ID as the message
+	if len(fileOnly) == 1 && len(withCommits) == 0 {
+		return fmt.Sprintf("canopy: apply changes from %s", fileOnly[0].TaskID)
+	}
+
+	// If there's one task with commits and no file-only, use its commit message(s)
+	// This shouldn't normally happen since git am already committed, but handle it
+	if len(withCommits) == 1 && len(fileOnly) == 0 {
+		messages := withCommits[0].GitState.CommitMessages
+		if len(messages) == 1 {
+			return messages[0]
+		}
+		return fmt.Sprintf("canopy: merge %d commits from %s", len(messages), withCommits[0].TaskID)
+	}
+
+	// Multiple tasks: combine their information
+	var parts []string
+
+	// Add commit summaries
+	for _, r := range withCommits {
+		if len(r.GitState.CommitMessages) > 0 {
+			parts = append(parts, fmt.Sprintf("%s (%d commits)", r.TaskID, len(r.GitState.CommitMessages)))
+		}
+	}
+
+	// Add file-only task IDs
+	for _, r := range fileOnly {
+		parts = append(parts, r.TaskID)
+	}
+
+	return fmt.Sprintf("canopy: merge results from %s", strings.Join(parts, ", "))
 }

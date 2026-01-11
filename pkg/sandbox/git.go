@@ -11,9 +11,10 @@ import (
 
 // GitState captures the git state before/after worker execution
 type GitState struct {
-	BaseCommit string   // HEAD before worker started
-	NewCommits []string // Commits made by worker (oldest first)
-	Patches    []string // Patch content for each new commit
+	BaseCommit     string   // HEAD before worker started
+	NewCommits     []string // Commits made by worker (oldest first)
+	Patches        []string // Patch content for each new commit
+	CommitMessages []string // Commit messages (one per patch, oldest first)
 }
 
 // GetBaseCommit returns the current HEAD commit in the overlay
@@ -59,6 +60,10 @@ func (o *Overlay) ExtractNewCommits(baseCommit string) (*GitState, error) {
 			return state, fmt.Errorf("failed to format patch for %s: %w", commit, err)
 		}
 		state.Patches = append(state.Patches, patch)
+
+		// Extract commit message from patch
+		msg := extractCommitMessageFromPatch(patch)
+		state.CommitMessages = append(state.CommitMessages, msg)
 	}
 
 	return state, nil
@@ -144,4 +149,52 @@ func (o *Overlay) HasGitRepo() bool {
 	gitDir := filepath.Join(o.MergedDir, ".git")
 	info, err := os.Stat(gitDir)
 	return err == nil && info.IsDir()
+}
+
+// extractCommitMessageFromPatch extracts the commit message from a git format-patch output
+// The patch format includes "Subject: [PATCH] <commit message>" followed by the commit body
+func extractCommitMessageFromPatch(patch string) string {
+	lines := strings.Split(patch, "\n")
+
+	var subject string
+	var bodyLines []string
+	inBody := false
+
+	for _, line := range lines {
+		// Look for Subject line
+		if strings.HasPrefix(line, "Subject: ") {
+			// Extract subject, removing "[PATCH]" prefix if present
+			subject = strings.TrimPrefix(line, "Subject: ")
+			subject = strings.TrimSpace(subject)
+			if strings.HasPrefix(subject, "[PATCH] ") {
+				subject = strings.TrimPrefix(subject, "[PATCH] ")
+			}
+			inBody = true
+			continue
+		}
+
+		// After subject, collect body until we hit "---" or "diff"
+		if inBody {
+			if strings.HasPrefix(line, "---") || strings.HasPrefix(line, "diff ") {
+				break
+			}
+			// Skip the empty line immediately after subject (it's metadata separator)
+			if len(bodyLines) == 0 && line == "" {
+				continue
+			}
+			// Collect body lines
+			bodyLines = append(bodyLines, line)
+		}
+	}
+
+	// If there's a body, combine subject and body with blank line separator
+	if len(bodyLines) > 0 {
+		body := strings.Join(bodyLines, "\n")
+		body = strings.TrimSpace(body)
+		if body != "" {
+			return subject + "\n\n" + body
+		}
+	}
+
+	return subject
 }
