@@ -17,6 +17,22 @@ If missing, check `~/.gitconfig` or set locally for this repo.
 - Run `go test ./...` before committing code changes
 - Run `go build ./...` to verify compilation
 
+## Persistence Invariant
+
+**ALL canopy persistence MUST live at `$XDG_CACHE_HOME/canopy/` or `~/.cache/canopy/`.**
+
+This includes:
+- `runs.db` - SQLite database for run/agent history
+- `repositories.json` - Registry of known repositories
+- Any other persistent state
+
+**Do NOT store canopy state in:**
+- The repository itself (`.canopy/` is for config only, not state)
+- Other XDG directories (`~/.local/share/`, etc.)
+- User home directory directly
+
+Repository identity is stored in `$XDG_CACHE_HOME/canopy/repositories.json` keyed by absolute path, not in the repo itself. This keeps repos clean and portable.
+
 ## Quick Reference
 
 ```bash
