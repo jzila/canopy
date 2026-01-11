@@ -1,13 +1,11 @@
 package orchestrator
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
@@ -320,95 +318,75 @@ func (o *Orchestrator) GetScheduler() *scheduler.Scheduler {
 	return o.scheduler
 }
 
-// commitMergedChanges creates a git commit for merged changes from completed tasks
+// commitMergedChanges creates individual git commits for each task's file-only changes.
 // Note: Tasks that made git commits have already been applied via git am with their
 // original commit messages. This function only commits file-only changes (if any).
 func (o *Orchestrator) commitMergedChanges(results []*agent.Result) error {
-	// Check if there are any uncommitted changes
-	statusCmd := exec.Command("git", "status", "--porcelain")
-	statusCmd.Dir = o.config.OutputDir
-	statusOut, err := statusCmd.Output()
-	if err != nil {
-		return fmt.Errorf("git status failed: %w", err)
-	}
-
-	// If no changes, don't create an empty commit
-	if len(bytes.TrimSpace(statusOut)) == 0 {
-		if o.config.Verbose {
-			fmt.Println("No uncommitted changes to commit")
-		}
-		return nil
-	}
-
-	// Stage all changes
-	addCmd := exec.Command("git", "add", ".")
-	addCmd.Dir = o.config.OutputDir
-	if err := addCmd.Run(); err != nil {
-		return fmt.Errorf("git add failed: %w", err)
-	}
-
-	// Build commit message based on what tasks made file-only changes
-	// (Tasks with git commits were already applied via git am)
-	commitMsg := o.buildCommitMessage(results)
-
-	// Create commit
-	commitCmd := exec.Command("git", "commit", "-m", commitMsg)
-	commitCmd.Dir = o.config.OutputDir
-	if err := commitCmd.Run(); err != nil {
-		return fmt.Errorf("git commit failed: %w", err)
-	}
-
-	if o.config.Verbose {
-		fmt.Printf("Created commit for file-only changes\n")
-	}
-
-	return nil
-}
-
-// buildCommitMessage creates an appropriate commit message for merged changes
-func (o *Orchestrator) buildCommitMessage(results []*agent.Result) string {
-	// Separate results with git commits from those with file-only changes
-	var withCommits, fileOnly []*agent.Result
+	// Identify tasks with file-only changes (no git commits)
+	var fileOnlyTasks []*agent.Result
 	for _, r := range results {
 		if !r.Success {
 			continue
 		}
-		if r.GitState != nil && len(r.GitState.CommitMessages) > 0 {
-			withCommits = append(withCommits, r)
-		} else if len(r.Changes) > 0 {
-			fileOnly = append(fileOnly, r)
+		// Task has file changes but no git commits
+		hasFileChanges := len(r.Changes) > 0
+		hasGitCommits := r.GitState != nil && len(r.GitState.Patches) > 0
+
+		if hasFileChanges && !hasGitCommits {
+			fileOnlyTasks = append(fileOnlyTasks, r)
 		}
 	}
 
-	// If there's only one task with file-only changes, use its task ID as the message
-	if len(fileOnly) == 1 && len(withCommits) == 0 {
-		return fmt.Sprintf("canopy: apply changes from %s", fileOnly[0].TaskID)
-	}
-
-	// If there's one task with commits and no file-only, use its commit message(s)
-	// This shouldn't normally happen since git am already committed, but handle it
-	if len(withCommits) == 1 && len(fileOnly) == 0 {
-		messages := withCommits[0].GitState.CommitMessages
-		if len(messages) == 1 {
-			return messages[0]
+	if len(fileOnlyTasks) == 0 {
+		if o.config.Verbose {
+			fmt.Println("No file-only changes to commit")
 		}
-		return fmt.Sprintf("canopy: merge %d commits from %s", len(messages), withCommits[0].TaskID)
+		return nil
 	}
 
-	// Multiple tasks: combine their information
-	var parts []string
+	// Commit each task's file-only changes separately
+	for _, task := range fileOnlyTasks {
+		// Collect paths for this task
+		var paths []string
+		for _, change := range task.Changes {
+			paths = append(paths, change.Path)
+		}
 
-	// Add commit summaries
-	for _, r := range withCommits {
-		if len(r.GitState.CommitMessages) > 0 {
-			parts = append(parts, fmt.Sprintf("%s (%d commits)", r.TaskID, len(r.GitState.CommitMessages)))
+		if len(paths) == 0 {
+			continue
+		}
+
+		// Stage this task's files
+		addCmd := exec.Command("git", "add", "--")
+		addCmd.Args = append(addCmd.Args, paths...)
+		addCmd.Dir = o.config.OutputDir
+		if err := addCmd.Run(); err != nil {
+			return fmt.Errorf("git add failed for task %s: %w", task.TaskID, err)
+		}
+
+		// Check if there are staged changes for this task
+		diffCmd := exec.Command("git", "diff", "--cached", "--quiet")
+		diffCmd.Dir = o.config.OutputDir
+		if err := diffCmd.Run(); err == nil {
+			// No staged changes (exit code 0 means no diff)
+			if o.config.Verbose {
+				fmt.Printf("No changes to commit for task %s (files may have been committed via git am)\n", task.TaskID)
+			}
+			continue
+		}
+
+		// Create commit for this task
+		commitMsg := fmt.Sprintf("canopy: apply changes from %s", task.TaskID)
+		commitCmd := exec.Command("git", "commit", "-m", commitMsg)
+		commitCmd.Dir = o.config.OutputDir
+		if err := commitCmd.Run(); err != nil {
+			return fmt.Errorf("git commit failed for task %s: %w", task.TaskID, err)
+		}
+
+		if o.config.Verbose {
+			fmt.Printf("Created commit for file-only changes from task %s\n", task.TaskID)
 		}
 	}
 
-	// Add file-only task IDs
-	for _, r := range fileOnly {
-		parts = append(parts, r.TaskID)
-	}
-
-	return fmt.Sprintf("canopy: merge results from %s", strings.Join(parts, ", "))
+	return nil
 }
