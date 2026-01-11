@@ -60,28 +60,32 @@ func NewSequentialMerger(outputDir, tempDir string, verbose bool) *SequentialMer
 func (m *SequentialMerger) Merge(results []*agent.Result) (*Result, error) {
 	mergeResult := &Result{}
 
-	// Separate results into those with commits and those with only file changes
-	var withCommits, withoutCommits []*agent.Result
+	// Separate results into those with commits and those with file changes
+	var withCommits, withFileChanges []*agent.Result
 	for _, r := range results {
 		if !r.Success {
 			continue
 		}
 		if r.GitState != nil && len(r.GitState.Patches) > 0 {
 			withCommits = append(withCommits, r)
-		} else if len(r.Changes) > 0 {
-			withoutCommits = append(withoutCommits, r)
+		}
+		// Include all results with file changes, even if they also have commits
+		// (commits may not include all file changes if agent made uncommitted edits)
+		if len(r.Changes) > 0 {
+			withFileChanges = append(withFileChanges, r)
 		}
 	}
 
 	// Apply git patches first (these are the "proper" changes with commit history)
+	patchedTasks := make(map[string]bool) // Track which tasks had patches applied successfully
 	for _, r := range withCommits {
 		if err := sandbox.ApplyPatches(m.outputDir, r.GitState.Patches); err != nil {
 			mergeResult.Errors = append(mergeResult.Errors,
 				fmt.Sprintf("failed to apply commits from %s: %v", r.TaskID, err))
-			// Fall back to file-based merge for this result
-			withoutCommits = append(withoutCommits, r)
+			// Don't mark as patched - will fall back to file-based merge
 		} else {
 			mergeResult.CommitsApplied += len(r.GitState.Patches)
+			patchedTasks[r.TaskID] = true
 			if m.verbose {
 				fmt.Printf("Applied %d commits from task %s\n", len(r.GitState.Patches), r.TaskID)
 			}
@@ -96,7 +100,7 @@ func (m *SequentialMerger) Merge(results []*agent.Result) (*Result, error) {
 	var regularChanges []*agent.Result
 
 	// First pass: detect conflicts and separate .beads changes
-	for _, r := range withoutCommits {
+	for _, r := range withFileChanges {
 		hasBeadsChanges := false
 		hasRegularChanges := false
 
