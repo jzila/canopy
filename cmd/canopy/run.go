@@ -202,8 +202,10 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 	callbacks := &orchestrator.EventCallbacks{
 		OnAgentStartFn: func(taskID string, task *beads.Task) {
 			runStats.recordTaskStart(taskID, task)
+			agentID := fmt.Sprintf("agent-%s", taskID)
+			// Record agent ID for parent-child tracking (resolver agents need this)
+			orch.SetAgentID(taskID, agentID)
 			if ipcClient != nil {
-				agentID := fmt.Sprintf("agent-%s", taskID)
 				parentAgentID := "" // Top-level agents have no parent
 				if err := ipcClient.SendAgentStart(agentID, taskID, task.Title, parentAgentID); err != nil && verbose {
 					fmt.Fprintf(os.Stderr, "warning: failed to send agent start: %v\n", err)
@@ -256,6 +258,11 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 	}
 
 	orch.SetCallbacks(callbacks)
+
+	// Pass IPC client to orchestrator for resolver agent events
+	if ipcClient != nil {
+		orch.SetIPCClient(ipcClient)
+	}
 
 	// Get initial ready tasks to send task count (IPC only)
 	if ipcClient != nil {
