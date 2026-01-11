@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { Box, useApp, useInput, useStdout } from 'ink';
+import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import { Header } from './components/Header.js';
 import { Sidebar } from './components/Sidebar.js';
 import { AgentGrid } from './components/AgentGrid.js';
-import { TerminalPanel } from './components/TerminalPanel.js';
+import { AgentTerminal } from './components/AgentTerminal.js';
 import type { Stats, AgentState, TaskState } from './types.js';
 
 // Initial empty stats
@@ -47,7 +47,7 @@ export function App({
 
   // Calculate layout heights
   const headerHeight = 3;
-  const terminalPanelHeight = 10;
+  const terminalPanelHeight = 15;
   const mainAreaHeight = terminalHeight - headerHeight - terminalPanelHeight - 2;
 
   // Handle keyboard input
@@ -118,7 +118,25 @@ export function App({
       </Box>
 
       {/* Bottom Panel - Terminal Output */}
-      <TerminalPanel agent={selectedAgent} />
+      {selectedAgent ? (
+        <AgentTerminal
+          agentId={selectedAgent.id}
+          taskTitle={selectedAgent.task_title}
+          output={selectedAgent.output}
+          height={terminalPanelHeight}
+          isFocused={false}
+        />
+      ) : (
+        <Box
+          flexDirection="column"
+          height={terminalPanelHeight}
+          borderStyle="single"
+          borderColor="gray"
+          paddingX={1}
+        >
+          <Text dimColor>Select an agent to view output (j/k or arrow keys)</Text>
+        </Box>
+      )}
     </Box>
   );
 }
