@@ -144,6 +144,13 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 		log.Printf("IPC: received message type=%s", msg.Type)
 
+		// Log agent completion events with pretty-printed JSON for readability
+		if msg.Type == MessageTypeAgentDone || msg.Type == MessageTypeAgentFail {
+			if formatted, err := FormatJSON(msg.Payload); err == nil {
+				log.Printf("IPC: %s payload:\n%s", msg.Type, IndentMultilineString(formatted, "  "))
+			}
+		}
+
 		// Convert and forward to EventBus
 		if event := s.convertToEvent(&msg); event != nil {
 			log.Printf("IPC: forwarding event type=%s to EventBus", event.Type)
