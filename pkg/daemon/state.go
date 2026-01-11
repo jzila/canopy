@@ -250,6 +250,9 @@ func (r *RuntimeState) Resume() {
 
 // GetSnapshot returns a complete snapshot of the runtime state (thread-safe)
 func (r *RuntimeState) GetSnapshot() RuntimeState {
+	// Recalculate stats before taking snapshot to ensure they're up to date
+	r.UpdateStats()
+
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
