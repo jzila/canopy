@@ -405,6 +405,19 @@ func (s *Store) GetAgentsByRun(runID string) ([]Agent, error) {
 	return agents, nil
 }
 
+// GetRunningRun returns the most recent run with status "running", or nil if none exists.
+// This is used to restore state on daemon startup.
+func (s *Store) GetRunningRun() (*Run, error) {
+	query := `
+		SELECT id, started_at, finished_at, status, concurrency, git_branch, git_commit, total_tasks, completed_tasks, failed_tasks
+		FROM runs WHERE status = 'running'
+		ORDER BY started_at DESC
+		LIMIT 1
+	`
+	row := s.db.QueryRow(query)
+	return s.scanRun(row)
+}
+
 // GetStats returns aggregate statistics, optionally filtered by time range
 func (s *Store) GetStats(since *time.Time) (*AggregateStats, error) {
 	// Query runs

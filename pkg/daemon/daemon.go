@@ -77,7 +77,112 @@ func (d *Daemon) Init() {
 			d.persistenceHandler = NewPersistenceHandler(store, d.eventBus)
 			d.persistenceUnsubscribe = d.persistenceHandler.Start()
 			log.Println("Persistence enabled - run history will be saved to SQLite")
+
+			// Restore state from database if there was a running run
+			if err := d.restoreStateFromDB(); err != nil {
+				log.Printf("Warning: failed to restore state from database: %v", err)
+			}
 		}
+	}
+}
+
+// restoreStateFromDB loads any running run and its agents from the database
+// into the RuntimeState. This allows the daemon to resume displaying state
+// after a restart.
+func (d *Daemon) restoreStateFromDB() error {
+	if d.persistenceStore == nil {
+		return nil
+	}
+
+	// Get any running run
+	run, err := d.persistenceStore.GetRunningRun()
+	if err != nil {
+		return fmt.Errorf("failed to get running run: %w", err)
+	}
+	if run == nil {
+		log.Println("No running run found in database, starting fresh")
+		return nil
+	}
+
+	log.Printf("Restoring state from run %s (started %s)", run.ID, run.StartedAt.Format("2006-01-02 15:04:05"))
+
+	// Update RuntimeState start time to match the run
+	d.state.StartTime = run.StartedAt
+
+	// Load all agents for this run
+	agents, err := d.persistenceStore.GetAgentsByRun(run.ID)
+	if err != nil {
+		return fmt.Errorf("failed to get agents for run %s: %w", run.ID, err)
+	}
+
+	// Convert persistence.Agent to daemon.AgentState and add to RuntimeState
+	for _, pAgent := range agents {
+		agentState := d.convertPersistenceAgentToState(&pAgent)
+		d.state.AddAgent(agentState)
+		log.Printf("  Restored agent %s (%s): %s", pAgent.ID, pAgent.TaskID, pAgent.Status)
+	}
+
+	// Update stats after restoring all agents
+	d.state.UpdateStats()
+
+	log.Printf("Restored %d agents from previous run", len(agents))
+	return nil
+}
+
+// convertPersistenceAgentToState converts a persistence.Agent to a daemon.AgentState
+func (d *Daemon) convertPersistenceAgentToState(pAgent *persistence.Agent) *AgentState {
+	agent := &AgentState{
+		ID:        pAgent.ID,
+		TaskID:    pAgent.TaskID,
+		TaskTitle: pAgent.TaskTitle,
+		Status:    convertPersistenceStatus(pAgent.Status),
+		StartTime: pAgent.StartedAt,
+		Duration:  pAgent.DurationSeconds,
+		TokenUsage: TokenUsage{
+			InputTokens:  pAgent.InputTokens,
+			OutputTokens: pAgent.OutputTokens,
+			TotalTokens:  pAgent.TotalTokens,
+			CostUSD:      pAgent.CostUSD,
+		},
+		Changes: pAgent.FilesChanged,
+		Commits: pAgent.GitCommitsCreated,
+		Error:   pAgent.ErrorMessage,
+	}
+
+	if pAgent.FinishedAt != nil {
+		agent.EndTime = pAgent.FinishedAt
+	}
+
+	if pAgent.ExitCode != nil {
+		agent.ExitCode = *pAgent.ExitCode
+	}
+
+	// Restore stdout/stderr if available
+	if pAgent.Stdout != "" || pAgent.Stderr != "" {
+		agent.Output.Stdout = pAgent.Stdout
+		agent.Output.Stderr = pAgent.Stderr
+	}
+
+	return agent
+}
+
+// convertPersistenceStatus converts persistence.AgentStatus to daemon.AgentStatus
+func convertPersistenceStatus(status persistence.AgentStatus) AgentStatus {
+	switch status {
+	case persistence.AgentStatusStarting:
+		return AgentStatusStarting
+	case persistence.AgentStatusRunning:
+		return AgentStatusRunning
+	case persistence.AgentStatusCompleted:
+		return AgentStatusCompleted
+	case persistence.AgentStatusFailed:
+		return AgentStatusFailed
+	case persistence.AgentStatusTimedOut:
+		return AgentStatusTimedOut
+	case persistence.AgentStatusCancelled:
+		return AgentStatusCancelled
+	default:
+		return AgentStatusRunning
 	}
 }
 

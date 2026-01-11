@@ -1,8 +1,12 @@
 package daemon
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/jzila/canopy/pkg/persistence"
 )
 
 // mockIPCServer implements IPCServer interface for testing
@@ -201,4 +205,206 @@ func TestGetRuntimeState(t *testing.T) {
 	if daemon.GetRuntimeState().GetAgent("agent-1") == nil {
 		t.Error("Agent should be accessible after adding to returned state")
 	}
+}
+
+// TestRestoreStateFromDB verifies that state is restored from database on daemon init
+func TestRestoreStateFromDB(t *testing.T) {
+	// Create temp directory for test database
+	tmpDir, err := os.MkdirTemp("", "canopy-daemon-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dbPath := filepath.Join(tmpDir, "test.db")
+	store, err := persistence.NewStoreWithPath(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+
+	// Create a running run with agents in the database
+	now := time.Now()
+	run := &persistence.Run{
+		ID:          "run-to-restore",
+		StartedAt:   now.Add(-time.Hour),
+		Status:      persistence.RunStatusRunning,
+		Concurrency: 4,
+		TotalTasks:  5,
+	}
+	if err := store.CreateRun(run); err != nil {
+		t.Fatalf("failed to create run: %v", err)
+	}
+
+	// Create agents with various statuses
+	agents := []*persistence.Agent{
+		{
+			ID:           "agent-1",
+			RunID:        "run-to-restore",
+			TaskID:       "task-1",
+			TaskTitle:    "Task 1",
+			Status:       persistence.AgentStatusCompleted,
+			StartedAt:    now.Add(-50 * time.Minute),
+			InputTokens:  1000,
+			OutputTokens: 500,
+			TotalTokens:  1500,
+			CostUSD:      0.05,
+		},
+		{
+			ID:           "agent-2",
+			RunID:        "run-to-restore",
+			TaskID:       "task-2",
+			TaskTitle:    "Task 2",
+			Status:       persistence.AgentStatusRunning,
+			StartedAt:    now.Add(-30 * time.Minute),
+			InputTokens:  2000,
+			OutputTokens: 800,
+			TotalTokens:  2800,
+			CostUSD:      0.08,
+		},
+		{
+			ID:              "agent-3",
+			RunID:           "run-to-restore",
+			TaskID:          "task-3",
+			TaskTitle:       "Task 3",
+			Status:          persistence.AgentStatusFailed,
+			StartedAt:       now.Add(-20 * time.Minute),
+			ErrorMessage:    "test error",
+			DurationSeconds: 120.5,
+		},
+	}
+	for _, agent := range agents {
+		if err := store.CreateAgent(agent); err != nil {
+			t.Fatalf("failed to create agent: %v", err)
+		}
+	}
+
+	store.Close()
+
+	// Now create a daemon with persistence enabled using the same database
+	store2, err := persistence.NewStoreWithPath(dbPath)
+	if err != nil {
+		t.Fatalf("failed to reopen store: %v", err)
+	}
+
+	daemon := &Daemon{
+		config:           Config{EnablePersistence: true},
+		eventBus:         NewEventBus(),
+		state:            NewRuntimeState(),
+		persistenceStore: store2,
+	}
+
+	// Manually call restoreStateFromDB
+	if err := daemon.restoreStateFromDB(); err != nil {
+		t.Fatalf("restoreStateFromDB failed: %v", err)
+	}
+
+	// Verify state was restored
+	state := daemon.GetRuntimeState()
+	if state == nil {
+		t.Fatal("state should not be nil")
+	}
+
+	if len(state.Agents) != 3 {
+		t.Errorf("expected 3 agents, got %d", len(state.Agents))
+	}
+
+	// Check agent-1 was restored correctly
+	agent1 := state.GetAgent("agent-1")
+	if agent1 == nil {
+		t.Fatal("agent-1 should exist")
+	}
+	if agent1.TaskID != "task-1" {
+		t.Errorf("expected task-1, got %s", agent1.TaskID)
+	}
+	if agent1.Status != AgentStatusCompleted {
+		t.Errorf("expected completed status, got %s", agent1.Status)
+	}
+	if agent1.TokenUsage.InputTokens != 1000 {
+		t.Errorf("expected 1000 input tokens, got %d", agent1.TokenUsage.InputTokens)
+	}
+
+	// Check agent-2 was restored correctly
+	agent2 := state.GetAgent("agent-2")
+	if agent2 == nil {
+		t.Fatal("agent-2 should exist")
+	}
+	if agent2.Status != AgentStatusRunning {
+		t.Errorf("expected running status, got %s", agent2.Status)
+	}
+
+	// Check agent-3 was restored with error
+	agent3 := state.GetAgent("agent-3")
+	if agent3 == nil {
+		t.Fatal("agent-3 should exist")
+	}
+	if agent3.Status != AgentStatusFailed {
+		t.Errorf("expected failed status, got %s", agent3.Status)
+	}
+	if agent3.Error != "test error" {
+		t.Errorf("expected 'test error', got %s", agent3.Error)
+	}
+	if agent3.Duration != 120.5 {
+		t.Errorf("expected duration 120.5, got %f", agent3.Duration)
+	}
+
+	// Verify stats were updated
+	state.UpdateStats()
+	if state.Stats.CompletedTasks != 1 {
+		t.Errorf("expected 1 completed task, got %d", state.Stats.CompletedTasks)
+	}
+	if state.Stats.FailedTasks != 1 {
+		t.Errorf("expected 1 failed task, got %d", state.Stats.FailedTasks)
+	}
+	if state.Stats.RunningTasks != 1 {
+		t.Errorf("expected 1 running task, got %d", state.Stats.RunningTasks)
+	}
+
+	store2.Close()
+}
+
+// TestRestoreStateFromDB_NoRunningRun verifies no restoration happens when no running run exists
+func TestRestoreStateFromDB_NoRunningRun(t *testing.T) {
+	// Create temp directory for test database
+	tmpDir, err := os.MkdirTemp("", "canopy-daemon-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dbPath := filepath.Join(tmpDir, "test.db")
+	store, err := persistence.NewStoreWithPath(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+
+	// Create only completed runs
+	now := time.Now()
+	run := &persistence.Run{
+		ID:        "run-completed",
+		StartedAt: now.Add(-time.Hour),
+		Status:    persistence.RunStatusCompleted,
+	}
+	if err := store.CreateRun(run); err != nil {
+		t.Fatalf("failed to create run: %v", err)
+	}
+
+	daemon := &Daemon{
+		config:           Config{EnablePersistence: true},
+		eventBus:         NewEventBus(),
+		state:            NewRuntimeState(),
+		persistenceStore: store,
+	}
+
+	// Manually call restoreStateFromDB
+	if err := daemon.restoreStateFromDB(); err != nil {
+		t.Fatalf("restoreStateFromDB failed: %v", err)
+	}
+
+	// Verify no agents were restored
+	state := daemon.GetRuntimeState()
+	if len(state.Agents) != 0 {
+		t.Errorf("expected 0 agents, got %d", len(state.Agents))
+	}
+
+	store.Close()
 }

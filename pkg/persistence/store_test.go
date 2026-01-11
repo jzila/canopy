@@ -369,6 +369,106 @@ func TestGetRun_NotFound(t *testing.T) {
 	}
 }
 
+func TestGetRunningRun(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	now := time.Now()
+
+	// Create multiple runs with different statuses
+	runs := []*Run{
+		{ID: "run-completed-1", StartedAt: now.Add(-3 * time.Hour), Status: RunStatusCompleted},
+		{ID: "run-failed", StartedAt: now.Add(-2 * time.Hour), Status: RunStatusFailed},
+		{ID: "run-running", StartedAt: now.Add(-1 * time.Hour), Status: RunStatusRunning},
+		{ID: "run-completed-2", StartedAt: now.Add(-30 * time.Minute), Status: RunStatusCompleted},
+	}
+
+	for _, run := range runs {
+		if err := store.CreateRun(run); err != nil {
+			t.Fatalf("failed to create run: %v", err)
+		}
+	}
+
+	// Should return the running run
+	runningRun, err := store.GetRunningRun()
+	if err != nil {
+		t.Fatalf("failed to get running run: %v", err)
+	}
+
+	if runningRun == nil {
+		t.Fatal("expected running run, got nil")
+	}
+
+	if runningRun.ID != "run-running" {
+		t.Errorf("expected run-running, got %s", runningRun.ID)
+	}
+	if runningRun.Status != RunStatusRunning {
+		t.Errorf("expected status running, got %s", runningRun.Status)
+	}
+}
+
+func TestGetRunningRun_NoRunning(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	now := time.Now()
+
+	// Create only completed runs
+	runs := []*Run{
+		{ID: "run-completed-1", StartedAt: now.Add(-2 * time.Hour), Status: RunStatusCompleted},
+		{ID: "run-completed-2", StartedAt: now.Add(-1 * time.Hour), Status: RunStatusCompleted},
+	}
+
+	for _, run := range runs {
+		if err := store.CreateRun(run); err != nil {
+			t.Fatalf("failed to create run: %v", err)
+		}
+	}
+
+	// Should return nil when no running run exists
+	runningRun, err := store.GetRunningRun()
+	if err != nil {
+		t.Fatalf("failed to get running run: %v", err)
+	}
+
+	if runningRun != nil {
+		t.Errorf("expected nil, got run: %v", runningRun)
+	}
+}
+
+func TestGetRunningRun_MultipleRunning(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	now := time.Now()
+
+	// Create multiple running runs (edge case - should return most recent)
+	runs := []*Run{
+		{ID: "run-running-old", StartedAt: now.Add(-2 * time.Hour), Status: RunStatusRunning},
+		{ID: "run-running-new", StartedAt: now.Add(-1 * time.Hour), Status: RunStatusRunning},
+	}
+
+	for _, run := range runs {
+		if err := store.CreateRun(run); err != nil {
+			t.Fatalf("failed to create run: %v", err)
+		}
+	}
+
+	// Should return the most recent running run
+	runningRun, err := store.GetRunningRun()
+	if err != nil {
+		t.Fatalf("failed to get running run: %v", err)
+	}
+
+	if runningRun == nil {
+		t.Fatal("expected running run, got nil")
+	}
+
+	if runningRun.ID != "run-running-new" {
+		t.Errorf("expected run-running-new (most recent), got %s", runningRun.ID)
+	}
+}
+
 // Helper function to create a test store
 func createTestStore(t *testing.T) *Store {
 	tmpDir, err := os.MkdirTemp("", "canopy-test-*")
