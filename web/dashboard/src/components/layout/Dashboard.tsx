@@ -1,16 +1,20 @@
 import React, { useEffect, useState } from 'react';
-import { Play, Pause, Activity, Clock, DollarSign, Zap, GitCommit, FileEdit, Sun, Moon } from 'lucide-react';
+import { Play, Pause, Activity, Clock, DollarSign, Zap, GitCommit, FileEdit, Sun, Moon, Terminal as TerminalIcon, List } from 'lucide-react';
 import { useStateStore } from '../../stores/stateStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { pauseOrch, resumeOrch, getState } from '../../api/client';
 import { TaskList } from '../tasks/TaskList';
 import { AgentCard } from '../agents/AgentCard';
 import { AgentTerminal } from '../agents/AgentTerminal';
+import { LiveFeed } from '../agents/LiveFeed';
+
+type TerminalTab = 'feed' | 'terminal';
 
 export const Dashboard: React.FC = () => {
   const { connected } = useWebSocket();
   const [isPauseLoading, setIsPauseLoading] = useState(false);
   const [isResumeLoading, setIsResumeLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<TerminalTab>('feed');
   const [isDark, setIsDark] = useState(() => {
     const saved = localStorage.getItem('darkMode');
     if (saved !== null) return saved === 'true';
@@ -283,30 +287,66 @@ export const Dashboard: React.FC = () => {
           {hasSelectedAgent && (
             <div className="h-80 border-t border-gray-200 dark:border-gray-700 bg-gray-900 flex-shrink-0">
               <div className="h-full flex flex-col">
-                {/* Terminal Header */}
+                {/* Terminal Header with Tabs */}
                 <div className="flex items-center justify-between px-4 py-2 bg-gray-800 border-b border-gray-700">
-                  <div className="flex items-center gap-3">
-                    <span className="text-sm font-medium text-gray-300">Terminal</span>
-                    <span className="text-xs text-gray-500">|</span>
-                    <code className="text-xs font-mono text-gray-400">
-                      {selectedAgentId}
-                    </code>
-                    <span className="text-xs text-gray-500">|</span>
-                    <span className="text-xs text-gray-400">
-                      {agents[selectedAgentId]?.task_title}
-                    </span>
+                  <div className="flex items-center gap-4">
+                    {/* Tab buttons */}
+                    <div className="flex items-center gap-1 bg-gray-900/50 rounded-lg p-1">
+                      <button
+                        onClick={() => setActiveTab('feed')}
+                        className={`
+                          flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all
+                          ${activeTab === 'feed'
+                            ? 'bg-blue-600 text-white'
+                            : 'text-gray-400 hover:text-gray-200 hover:bg-gray-700/50'
+                          }
+                        `}
+                      >
+                        <List className="w-4 h-4" />
+                        Live Feed
+                      </button>
+                      <button
+                        onClick={() => setActiveTab('terminal')}
+                        className={`
+                          flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all
+                          ${activeTab === 'terminal'
+                            ? 'bg-blue-600 text-white'
+                            : 'text-gray-400 hover:text-gray-200 hover:bg-gray-700/50'
+                          }
+                        `}
+                      >
+                        <TerminalIcon className="w-4 h-4" />
+                        Raw Output
+                      </button>
+                    </div>
+
+                    {/* Agent info */}
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="text-gray-500">|</span>
+                      <code className="font-mono text-gray-400">
+                        {selectedAgentId}
+                      </code>
+                      <span className="text-gray-500">-</span>
+                      <span className="text-gray-400 truncate max-w-[200px]">
+                        {agents[selectedAgentId]?.task_title}
+                      </span>
+                    </div>
                   </div>
                   <button
                     onClick={() => setSelectedAgent(null)}
-                    className="text-gray-400 hover:text-gray-200 transition-colors"
+                    className="text-gray-400 hover:text-gray-200 transition-colors px-2 py-1 rounded hover:bg-gray-700"
                   >
                     <span className="text-sm">Close</span>
                   </button>
                 </div>
 
-                {/* Terminal Content */}
+                {/* Tab Content */}
                 <div className="flex-1 overflow-hidden">
-                  <AgentTerminal agentId={selectedAgentId} />
+                  {activeTab === 'feed' ? (
+                    <LiveFeed agentId={selectedAgentId} />
+                  ) : (
+                    <AgentTerminal agentId={selectedAgentId} />
+                  )}
                 </div>
               </div>
             </div>

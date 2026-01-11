@@ -15,6 +15,13 @@ export interface OutputBuffer {
   stderr: string;
 }
 
+export interface LiveFeedEvent {
+  id: string;
+  timestamp: string;
+  event_type: 'tool_use' | 'file_change' | 'text' | 'tool_result' | 'error';
+  data: Record<string, unknown>;
+}
+
 export interface TokenUsage {
   input_tokens: number;
   output_tokens: number;
@@ -31,6 +38,7 @@ export interface AgentState {
   end_time: string | null;
   duration: number;
   output: OutputBuffer;
+  liveFeed: LiveFeedEvent[];
   token_usage: TokenUsage;
   exit_code: number;
   error: string;
@@ -83,6 +91,7 @@ interface StateStore {
   updateAgent: (id: string, update: Partial<AgentState>) => void;
   syncState: (state: RuntimeState) => void;
   appendOutput: (agentId: string, output: string, isError?: boolean) => void;
+  appendLiveFeedEvent: (agentId: string, event: LiveFeedEvent) => void;
   setSelectedAgent: (id: string | null) => void;
   setIsPaused: (paused: boolean) => void;
 }
@@ -163,6 +172,27 @@ export const useStateStore = create<StateStore>((set) => ({
               stdout: isError ? agent.output.stdout : agent.output.stdout + output,
               stderr: isError ? agent.output.stderr + output : agent.output.stderr,
             },
+          },
+        },
+      };
+    }),
+
+  appendLiveFeedEvent: (agentId, event) =>
+    set((state) => {
+      const agent = state.agents[agentId];
+      if (!agent) return state;
+
+      // Limit feed to last 500 events to prevent memory issues
+      const maxEvents = 500;
+      const existingEvents = agent.liveFeed || [];
+      const newEvents = [...existingEvents, event].slice(-maxEvents);
+
+      return {
+        agents: {
+          ...state.agents,
+          [agentId]: {
+            ...agent,
+            liveFeed: newEvents,
           },
         },
       };

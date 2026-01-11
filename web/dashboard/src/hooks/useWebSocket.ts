@@ -29,6 +29,16 @@ interface AgentOutputEvent {
   };
 }
 
+interface AgentLiveFeedEvent {
+  type: 'agent:live_feed';
+  timestamp: string;
+  payload: {
+    agent_id: string;
+    event_type: 'tool_use' | 'file_change' | 'text' | 'tool_result' | 'error';
+    data: Record<string, unknown>;
+  };
+}
+
 interface AgentCompletedEvent {
   type: 'agent:completed';
   timestamp: string;
@@ -66,6 +76,7 @@ interface StatsUpdatedEvent {
 type EventType =
   | AgentStartedEvent
   | AgentOutputEvent
+  | AgentLiveFeedEvent
   | AgentCompletedEvent
   | TaskUpdatedEvent
   | StatsUpdatedEvent;
@@ -95,6 +106,7 @@ export function useWebSocket() {
     setConnected,
     updateAgent,
     appendOutput,
+    appendLiveFeedEvent,
     syncState
   } = useStateStore();
 
@@ -141,6 +153,7 @@ export function useWebSocket() {
                 end_time: null,
                 duration: 0,
                 output: { stdout: '', stderr: '' },
+                liveFeed: [],
                 token_usage: {
                   input_tokens: 0,
                   output_tokens: 0,
@@ -158,6 +171,19 @@ export function useWebSocket() {
             case 'agent:output': {
               const { agent_id, output, is_error } = message.payload;
               appendOutput(agent_id, output, is_error);
+              break;
+            }
+
+            case 'agent:live_feed': {
+              const { agent_id, event_type, data } = message.payload;
+              // Generate unique ID for the event
+              const eventId = `${agent_id}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+              appendLiveFeedEvent(agent_id, {
+                id: eventId,
+                timestamp: message.timestamp,
+                event_type,
+                data,
+              });
               break;
             }
 
@@ -233,7 +259,7 @@ export function useWebSocket() {
         }, backoffTime);
       }
     }
-  }, [setConnected, updateAgent, appendOutput, syncState]);
+  }, [setConnected, updateAgent, appendOutput, appendLiveFeedEvent, syncState]);
 
   const disconnect = useCallback(() => {
     isManuallyClosedRef.current = true;

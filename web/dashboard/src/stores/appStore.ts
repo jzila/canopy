@@ -15,6 +15,13 @@ export interface OutputBuffer {
   stderr: string;
 }
 
+export interface LiveFeedEvent {
+  id: string;
+  timestamp: string;
+  event_type: 'tool_use' | 'file_change' | 'text' | 'tool_result' | 'error';
+  data: Record<string, unknown>;
+}
+
 export interface TokenUsage {
   input_tokens: number;
   output_tokens: number;
@@ -31,6 +38,7 @@ export interface AgentState {
   end_time: string | null;
   duration: number;
   output: OutputBuffer;
+  liveFeed: LiveFeedEvent[];
   token_usage: TokenUsage;
   exit_code: number;
   error: string;
