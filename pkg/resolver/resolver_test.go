@@ -1,6 +1,7 @@
 package resolver
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -28,27 +29,27 @@ func TestBuildResolverPrompt(t *testing.T) {
 	}
 
 	// Check for task ID
-	if !contains(prompt, "canopy-abc") {
+	if !strings.Contains(prompt, "canopy-abc") {
 		t.Error("Prompt should contain task ID")
 	}
 
 	// Check for task title
-	if !contains(prompt, "Add feature X") {
+	if !strings.Contains(prompt, "Add feature X") {
 		t.Error("Prompt should contain task title")
 	}
 
 	// Check for task description
-	if !contains(prompt, "Implement feature X") {
+	if !strings.Contains(prompt, "Implement feature X") {
 		t.Error("Prompt should contain task description")
 	}
 
 	// Check for conflict resolution instructions
-	if !contains(prompt, "Merge Conflict Resolution") {
+	if !strings.Contains(prompt, "Merge Conflict Resolution") {
 		t.Error("Prompt should contain conflict resolution header")
 	}
 
 	// Check for patch file references
-	if !contains(prompt, ".canopy/conflict") {
+	if !strings.Contains(prompt, ".canopy/conflict") {
 		t.Error("Prompt should reference patch file location")
 	}
 }
@@ -96,18 +97,4 @@ func TestNewResolver(t *testing.T) {
 	if r.executor == nil {
 		t.Error("Expected resolver to have non-nil executor")
 	}
-}
-
-// Helper function
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
-}
-
-func containsHelper(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
