@@ -72,8 +72,9 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 
 	// Create daemon configuration
 	config := daemon.Config{
-		Port:       daemonPort,
-		SocketPath: daemonSocket,
+		Port:              daemonPort,
+		SocketPath:        daemonSocket,
+		EnablePersistence: true,
 	}
 
 	// Create IPC server factory that wraps ipc.NewServer
