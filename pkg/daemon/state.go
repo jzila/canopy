@@ -47,6 +47,43 @@ func (b *OutputBuffer) Get() (stdout, stderr string) {
 	return b.Stdout, b.Stderr
 }
 
+// getIntFromPayload extracts an integer from a map value that may be int or float64
+// (JSON unmarshal produces float64, but direct map assignment produces int)
+func getIntFromPayload(payload map[string]interface{}, key string) (int, bool) {
+	val, exists := payload[key]
+	if !exists {
+		return 0, false
+	}
+	switch v := val.(type) {
+	case int:
+		return v, true
+	case float64:
+		return int(v), true
+	case int64:
+		return int(v), true
+	default:
+		return 0, false
+	}
+}
+
+// getInt64FromPayload extracts an int64 from a map value that may be int, int64, or float64
+func getInt64FromPayload(payload map[string]interface{}, key string) (int64, bool) {
+	val, exists := payload[key]
+	if !exists {
+		return 0, false
+	}
+	switch v := val.(type) {
+	case int:
+		return int64(v), true
+	case int64:
+		return v, true
+	case float64:
+		return int64(v), true
+	default:
+		return 0, false
+	}
+}
+
 // TokenUsage tracks token consumption and cost for an agent execution
 type TokenUsage struct {
 	InputTokens              int                       `json:"input_tokens"`
@@ -410,42 +447,42 @@ func (r *RuntimeState) handleAgentCompleted(payload map[string]interface{}, time
 		}
 
 		// Extract result fields
-		if exitCode, ok := payload["exit_code"].(float64); ok {
-			a.ExitCode = int(exitCode)
+		if exitCode, ok := getIntFromPayload(payload, "exit_code"); ok {
+			a.ExitCode = exitCode
 		}
 		if duration, ok := payload["duration"].(float64); ok {
 			a.Duration = duration
 		}
-		if durationMS, ok := payload["duration_ms"].(float64); ok {
-			a.DurationMS = int64(durationMS)
+		if durationMS, ok := getInt64FromPayload(payload, "duration_ms"); ok {
+			a.DurationMS = durationMS
 		}
-		if durationAPIMS, ok := payload["duration_api_ms"].(float64); ok {
-			a.DurationAPIMS = int64(durationAPIMS)
+		if durationAPIMS, ok := getInt64FromPayload(payload, "duration_api_ms"); ok {
+			a.DurationAPIMS = durationAPIMS
 		}
-		if numTurns, ok := payload["num_turns"].(float64); ok {
-			a.NumTurns = int(numTurns)
+		if numTurns, ok := getIntFromPayload(payload, "num_turns"); ok {
+			a.NumTurns = numTurns
 		}
-		if inputTokens, ok := payload["input_tokens"].(float64); ok {
-			a.TokenUsage.InputTokens = int(inputTokens)
+		if inputTokens, ok := getIntFromPayload(payload, "input_tokens"); ok {
+			a.TokenUsage.InputTokens = inputTokens
 		}
-		if outputTokens, ok := payload["output_tokens"].(float64); ok {
-			a.TokenUsage.OutputTokens = int(outputTokens)
+		if outputTokens, ok := getIntFromPayload(payload, "output_tokens"); ok {
+			a.TokenUsage.OutputTokens = outputTokens
 		}
-		if cacheCreation, ok := payload["cache_creation_input_tokens"].(float64); ok {
-			a.TokenUsage.CacheCreationInputTokens = int(cacheCreation)
+		if cacheCreation, ok := getIntFromPayload(payload, "cache_creation_input_tokens"); ok {
+			a.TokenUsage.CacheCreationInputTokens = cacheCreation
 		}
-		if cacheRead, ok := payload["cache_read_input_tokens"].(float64); ok {
-			a.TokenUsage.CacheReadInputTokens = int(cacheRead)
+		if cacheRead, ok := getIntFromPayload(payload, "cache_read_input_tokens"); ok {
+			a.TokenUsage.CacheReadInputTokens = cacheRead
 		}
 		a.TokenUsage.TotalTokens = a.TokenUsage.InputTokens + a.TokenUsage.OutputTokens
 		if costUSD, ok := payload["cost_usd"].(float64); ok {
 			a.TokenUsage.CostUSD = costUSD
 		}
-		if filesChanged, ok := payload["files_changed"].(float64); ok {
-			a.Changes = int(filesChanged)
+		if filesChanged, ok := getIntFromPayload(payload, "files_changed"); ok {
+			a.Changes = filesChanged
 		}
-		if commitsCreated, ok := payload["commits_created"].(float64); ok {
-			a.Commits = int(commitsCreated)
+		if commitsCreated, ok := getIntFromPayload(payload, "commits_created"); ok {
+			a.Commits = commitsCreated
 		}
 		if resultMessage, ok := payload["result_message"].(string); ok {
 			a.ResultMessage = resultMessage
@@ -457,17 +494,17 @@ func (r *RuntimeState) handleAgentCompleted(payload map[string]interface{}, time
 			for model, usageRaw := range modelUsageRaw {
 				if usage, ok := usageRaw.(map[string]interface{}); ok {
 					data := ModelUsageData{}
-					if v, ok := usage["input_tokens"].(float64); ok {
-						data.InputTokens = int(v)
+					if v, ok := getIntFromPayload(usage, "input_tokens"); ok {
+						data.InputTokens = v
 					}
-					if v, ok := usage["output_tokens"].(float64); ok {
-						data.OutputTokens = int(v)
+					if v, ok := getIntFromPayload(usage, "output_tokens"); ok {
+						data.OutputTokens = v
 					}
-					if v, ok := usage["cache_read_input_tokens"].(float64); ok {
-						data.CacheReadInputTokens = int(v)
+					if v, ok := getIntFromPayload(usage, "cache_read_input_tokens"); ok {
+						data.CacheReadInputTokens = v
 					}
-					if v, ok := usage["cache_creation_input_tokens"].(float64); ok {
-						data.CacheCreationInputTokens = int(v)
+					if v, ok := getIntFromPayload(usage, "cache_creation_input_tokens"); ok {
+						data.CacheCreationInputTokens = v
 					}
 					if v, ok := usage["cost_usd"].(float64); ok {
 						data.CostUSD = v
