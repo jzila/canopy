@@ -117,25 +117,27 @@ type ModelUsageData struct {
 
 // AgentState tracks the state of a single agent execution
 type AgentState struct {
-	ID              string          `json:"id"`                // Unique agent ID
-	TaskID          string          `json:"task_id"`           // Beads task ID
-	TaskTitle       string          `json:"task_title"`        // Task title for display
-	Status          AgentStatus     `json:"status"`            // Current agent status
-	StartTime       time.Time       `json:"start_time"`        // When agent started
-	EndTime         *time.Time      `json:"end_time"`          // When agent finished (nil if running)
-	Duration        float64         `json:"duration"`          // Execution duration in seconds
-	DurationMS      int64           `json:"duration_ms"`       // Execution duration in milliseconds (from Claude)
-	DurationAPIMS   int64           `json:"duration_api_ms"`   // API duration in milliseconds
-	NumTurns        int             `json:"num_turns"`         // Number of agentic turns
-	Output          OutputBuffer    `json:"output"`            // Stdout/stderr buffers
-	LiveFeedEvents  []LiveFeedEvent `json:"live_feed_events"`  // Real-time events from Claude API
-	TokenUsage      TokenUsage      `json:"token_usage"`       // Token consumption stats
-	ExitCode        int             `json:"exit_code"`         // Process exit code
-	Error           string          `json:"error"`             // Error message if failed
-	Changes         int             `json:"changes"`           // Number of files changed
-	Commits         int             `json:"commits"`           // Number of git commits made (legacy, use len(GitCommits))
-	GitCommits      []GitCommit     `json:"git_commits"`       // Detailed git commit history
-	ResultMessage   string          `json:"result_message"`    // Final result message from Claude
+	ID              string          `json:"id"`                         // Unique agent ID
+	TaskID          string          `json:"task_id"`                    // Beads task ID
+	TaskTitle       string          `json:"task_title"`                 // Task title for display
+	ParentAgentID   string          `json:"parent_agent_id,omitempty"`  // ID of parent agent if spawned by another agent
+	ChildAgentIDs   []string        `json:"child_agent_ids,omitempty"`  // IDs of child agents spawned by this agent
+	Status          AgentStatus     `json:"status"`                     // Current agent status
+	StartTime       time.Time       `json:"start_time"`                 // When agent started
+	EndTime         *time.Time      `json:"end_time"`                   // When agent finished (nil if running)
+	Duration        float64         `json:"duration"`                   // Execution duration in seconds
+	DurationMS      int64           `json:"duration_ms"`                // Execution duration in milliseconds (from Claude)
+	DurationAPIMS   int64           `json:"duration_api_ms"`            // API duration in milliseconds
+	NumTurns        int             `json:"num_turns"`                  // Number of agentic turns
+	Output          OutputBuffer    `json:"output"`                     // Stdout/stderr buffers
+	LiveFeedEvents  []LiveFeedEvent `json:"live_feed_events"`           // Real-time events from Claude API
+	TokenUsage      TokenUsage      `json:"token_usage"`                // Token consumption stats
+	ExitCode        int             `json:"exit_code"`                  // Process exit code
+	Error           string          `json:"error"`                      // Error message if failed
+	Changes         int             `json:"changes"`                    // Number of files changed
+	Commits         int             `json:"commits"`                    // Number of git commits made (legacy, use len(GitCommits))
+	GitCommits      []GitCommit     `json:"git_commits"`                // Detailed git commit history
+	ResultMessage   string          `json:"result_message"`             // Final result message from Claude
 	mu              sync.RWMutex
 }
 
@@ -387,20 +389,31 @@ func (r *RuntimeState) handleAgentStarted(payload map[string]interface{}, timest
 	agentID, _ := payload["agent_id"].(string)
 	taskID, _ := payload["task_id"].(string)
 	taskTitle, _ := payload["task_title"].(string)
+	parentAgentID, _ := payload["parent_agent_id"].(string)
 
 	if agentID == "" {
 		return
 	}
 
 	agent := &AgentState{
-		ID:        agentID,
-		TaskID:    taskID,
-		TaskTitle: taskTitle,
-		Status:    AgentStatusRunning,
-		StartTime: timestamp,
+		ID:            agentID,
+		TaskID:        taskID,
+		TaskTitle:     taskTitle,
+		ParentAgentID: parentAgentID,
+		Status:        AgentStatusRunning,
+		StartTime:     timestamp,
 	}
 
 	r.AddAgent(agent)
+
+	// Link child to parent agent if parent exists
+	if parentAgentID != "" {
+		if parent := r.GetAgent(parentAgentID); parent != nil {
+			parent.Update(func(p *AgentState) {
+				p.ChildAgentIDs = append(p.ChildAgentIDs, agentID)
+			})
+		}
+	}
 
 	// Update task status if we have it
 	if taskID != "" {

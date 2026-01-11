@@ -43,6 +43,8 @@ export interface AgentState {
   id: string;
   task_id: string;
   task_title: string;
+  parent_agent_id?: string;    // ID of parent agent if spawned by another agent
+  child_agent_ids?: string[];  // IDs of child agents spawned by this agent
   status: AgentStatus;
   start_time: string;
   end_time: string | null;

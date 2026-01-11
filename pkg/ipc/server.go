@@ -250,14 +250,18 @@ func (s *Server) convertToEvent(msg *Message) *daemon.Event {
 		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 			return nil
 		}
+		eventPayload := map[string]interface{}{
+			"agent_id":   payload.AgentID,
+			"task_id":    payload.TaskID,
+			"task_title": payload.TaskTitle,
+		}
+		if payload.ParentAgentID != "" {
+			eventPayload["parent_agent_id"] = payload.ParentAgentID
+		}
 		return &daemon.Event{
 			Type:      daemon.EventAgentStarted,
 			Timestamp: msg.Timestamp,
-			Payload: map[string]interface{}{
-				"agent_id":   payload.AgentID,
-				"task_id":    payload.TaskID,
-				"task_title": payload.TaskTitle,
-			},
+			Payload:   eventPayload,
 		}
 
 	case MessageTypeAgentOutput:
@@ -315,19 +319,23 @@ func (s *Server) convertToEvent(msg *Message) *daemon.Event {
 		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 			return nil
 		}
+		eventPayload := map[string]interface{}{
+			"agent_id":        payload.AgentID,
+			"exit_code":       payload.Result.ExitCode,
+			"duration":        payload.Result.DurationSeconds,
+			"input_tokens":    payload.Result.InputTokens,
+			"output_tokens":   payload.Result.OutputTokens,
+			"cost_usd":        payload.Result.CostUSD,
+			"files_changed":   payload.Result.FilesChanged,
+			"commits_created": payload.Result.CommitsCreated,
+		}
+		if payload.ParentAgentID != "" {
+			eventPayload["parent_agent_id"] = payload.ParentAgentID
+		}
 		return &daemon.Event{
 			Type:      daemon.EventAgentCompleted,
 			Timestamp: msg.Timestamp,
-			Payload: map[string]interface{}{
-				"agent_id":        payload.AgentID,
-				"exit_code":       payload.Result.ExitCode,
-				"duration":        payload.Result.DurationSeconds,
-				"input_tokens":    payload.Result.InputTokens,
-				"output_tokens":   payload.Result.OutputTokens,
-				"cost_usd":        payload.Result.CostUSD,
-				"files_changed":   payload.Result.FilesChanged,
-				"commits_created": payload.Result.CommitsCreated,
-			},
+			Payload:   eventPayload,
 		}
 
 	case MessageTypeAgentFail:
@@ -335,20 +343,24 @@ func (s *Server) convertToEvent(msg *Message) *daemon.Event {
 		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 			return nil
 		}
+		eventPayload := map[string]interface{}{
+			"agent_id":        payload.AgentID,
+			"error":           payload.Error,
+			"exit_code":       payload.Result.ExitCode,
+			"duration":        payload.Result.DurationSeconds,
+			"input_tokens":    payload.Result.InputTokens,
+			"output_tokens":   payload.Result.OutputTokens,
+			"cost_usd":        payload.Result.CostUSD,
+			"files_changed":   payload.Result.FilesChanged,
+			"commits_created": payload.Result.CommitsCreated,
+		}
+		if payload.ParentAgentID != "" {
+			eventPayload["parent_agent_id"] = payload.ParentAgentID
+		}
 		return &daemon.Event{
 			Type:      daemon.EventAgentCompleted,
 			Timestamp: msg.Timestamp,
-			Payload: map[string]interface{}{
-				"agent_id":        payload.AgentID,
-				"error":           payload.Error,
-				"exit_code":       payload.Result.ExitCode,
-				"duration":        payload.Result.DurationSeconds,
-				"input_tokens":    payload.Result.InputTokens,
-				"output_tokens":   payload.Result.OutputTokens,
-				"cost_usd":        payload.Result.CostUSD,
-				"files_changed":   payload.Result.FilesChanged,
-				"commits_created": payload.Result.CommitsCreated,
-			},
+			Payload:   eventPayload,
 		}
 
 	case MessageTypeRunStarted:

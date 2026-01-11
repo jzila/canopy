@@ -197,12 +197,15 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 	}
 
 	// Set up callbacks (history tracking always, IPC only if connected)
+	// Note: parentAgentID is empty for top-level orchestrated agents
+	// Child agents (e.g., resolvers) will populate this when spawned
 	callbacks := &orchestrator.EventCallbacks{
 		OnAgentStartFn: func(taskID string, task *beads.Task) {
 			runStats.recordTaskStart(taskID, task)
 			if ipcClient != nil {
 				agentID := fmt.Sprintf("agent-%s", taskID)
-				if err := ipcClient.SendAgentStart(agentID, taskID, task.Title); err != nil && verbose {
+				parentAgentID := "" // Top-level agents have no parent
+				if err := ipcClient.SendAgentStart(agentID, taskID, task.Title, parentAgentID); err != nil && verbose {
 					fmt.Fprintf(os.Stderr, "warning: failed to send agent start: %v\n", err)
 				}
 			}
@@ -227,10 +230,11 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 			runStats.recordResult(taskID, result, true)
 			if ipcClient != nil {
 				agentID := fmt.Sprintf("agent-%s", taskID)
+				parentAgentID := "" // Top-level agents have no parent
 				// Send individual commit events before completion
 				sendAgentCommits(ipcClient, agentID, result, verbose)
 				ipcResult := convertToIPCResult(result)
-				if err := ipcClient.SendAgentDone(agentID, ipcResult); err != nil && verbose {
+				if err := ipcClient.SendAgentDone(agentID, parentAgentID, ipcResult); err != nil && verbose {
 					fmt.Fprintf(os.Stderr, "warning: failed to send agent done: %v\n", err)
 				}
 			}
@@ -239,11 +243,12 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 			runStats.recordResult(taskID, result, false)
 			if ipcClient != nil {
 				agentID := fmt.Sprintf("agent-%s", taskID)
+				parentAgentID := "" // Top-level agents have no parent
 				// Send individual commit events before failure (agent may have committed before failing)
 				sendAgentCommits(ipcClient, agentID, result, verbose)
 				ipcResult := convertToIPCResult(result)
 				execErr := fmt.Errorf("%s", result.Error)
-				if err := ipcClient.SendAgentFail(agentID, execErr, ipcResult); err != nil && verbose {
+				if err := ipcClient.SendAgentFail(agentID, parentAgentID, execErr, ipcResult); err != nil && verbose {
 					fmt.Fprintf(os.Stderr, "warning: failed to send agent fail: %v\n", err)
 				}
 			}

@@ -80,8 +80,8 @@ func TestClientSendAgentStart(t *testing.T) {
 	}
 	defer client.Close()
 
-	// Send agent start event
-	if err := client.SendAgentStart("agent-1", "task-1", "Test Task"); err != nil {
+	// Send agent start event (empty parent for top-level agent)
+	if err := client.SendAgentStart("agent-1", "task-1", "Test Task", ""); err != nil {
 		t.Fatalf("Failed to send agent start: %v", err)
 	}
 
@@ -100,6 +100,53 @@ func TestClientSendAgentStart(t *testing.T) {
 		}
 		if payload["task_title"] != "Test Task" {
 			t.Errorf("Expected task_title='Test Task', got %v", payload["task_title"])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Timeout waiting for event")
+	}
+}
+
+func TestClientSendAgentStartWithParent(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+
+	// Setup server
+	eventBus := daemon.NewEventBus()
+	server := NewServer(socketPath, eventBus)
+	if err := server.Start(); err != nil {
+		t.Fatalf("Failed to start server: %v", err)
+	}
+	defer server.Stop()
+
+	// Subscribe to events
+	receivedEvents := make(chan daemon.Event, 10)
+	eventBus.Subscribe(func(event daemon.Event) {
+		receivedEvents <- event
+	})
+
+	// Create client
+	client, err := NewClient(socketPath)
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	defer client.Close()
+
+	// Send agent start event with parent agent ID
+	if err := client.SendAgentStart("agent-child", "task-1", "Child Task", "agent-parent"); err != nil {
+		t.Fatalf("Failed to send agent start: %v", err)
+	}
+
+	// Verify event received with parent_agent_id
+	select {
+	case event := <-receivedEvents:
+		if event.Type != daemon.EventAgentStarted {
+			t.Errorf("Expected EventAgentStarted, got %s", event.Type)
+		}
+		payload := event.Payload.(map[string]interface{})
+		if payload["agent_id"] != "agent-child" {
+			t.Errorf("Expected agent_id=agent-child, got %v", payload["agent_id"])
+		}
+		if payload["parent_agent_id"] != "agent-parent" {
+			t.Errorf("Expected parent_agent_id=agent-parent, got %v", payload["parent_agent_id"])
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Timeout waiting for event")
@@ -199,7 +246,7 @@ func TestClientSendAgentDone(t *testing.T) {
 		CommitsCreated:  1,
 	}
 
-	if err := client.SendAgentDone("agent-1", result); err != nil {
+	if err := client.SendAgentDone("agent-1", "", result); err != nil {
 		t.Fatalf("Failed to send agent done: %v", err)
 	}
 
@@ -240,7 +287,7 @@ func TestClientSendAgentDoneNilResult(t *testing.T) {
 	defer client.Close()
 
 	// Should fail with nil result
-	if err := client.SendAgentDone("agent-1", nil); err == nil {
+	if err := client.SendAgentDone("agent-1", "", nil); err == nil {
 		t.Error("Expected error when sending nil result, got nil")
 	}
 }
@@ -272,7 +319,7 @@ func TestClientSendAgentFail(t *testing.T) {
 	}
 
 	testErr := errors.New("task failed")
-	if err := client.SendAgentFail("agent-1", testErr, result); err != nil {
+	if err := client.SendAgentFail("agent-1", "", testErr, result); err != nil {
 		t.Fatalf("Failed to send agent fail: %v", err)
 	}
 
@@ -312,12 +359,12 @@ func TestClientSendAgentFailNilError(t *testing.T) {
 	result := &AgentResult{ExitCode: 1}
 
 	// Should fail with nil error
-	if err := client.SendAgentFail("agent-1", nil, result); err == nil {
+	if err := client.SendAgentFail("agent-1", "", nil, result); err == nil {
 		t.Error("Expected error when sending nil error, got nil")
 	}
 
 	// Should fail with nil result
-	if err := client.SendAgentFail("agent-1", errors.New("test"), nil); err == nil {
+	if err := client.SendAgentFail("agent-1", "", errors.New("test"), nil); err == nil {
 		t.Error("Expected error when sending nil result, got nil")
 	}
 }
@@ -450,7 +497,7 @@ func TestClientSendWithoutConnection(t *testing.T) {
 	client := &Client{socketPath: socketPath}
 
 	// All send operations should fail
-	if err := client.SendAgentStart("a1", "t1", "title"); err == nil {
+	if err := client.SendAgentStart("a1", "t1", "title", ""); err == nil {
 		t.Error("Expected error when not connected")
 	}
 
@@ -459,11 +506,11 @@ func TestClientSendWithoutConnection(t *testing.T) {
 	}
 
 	result := &AgentResult{ExitCode: 0}
-	if err := client.SendAgentDone("a1", result); err == nil {
+	if err := client.SendAgentDone("a1", "", result); err == nil {
 		t.Error("Expected error when not connected")
 	}
 
-	if err := client.SendAgentFail("a1", errors.New("err"), result); err == nil {
+	if err := client.SendAgentFail("a1", "", errors.New("err"), result); err == nil {
 		t.Error("Expected error when not connected")
 	}
 
@@ -516,7 +563,7 @@ func TestClientReconnect(t *testing.T) {
 		receivedEvents <- event
 	})
 
-	if err := client.SendAgentStart("agent-1", "task-1", "Test"); err != nil {
+	if err := client.SendAgentStart("agent-1", "task-1", "Test", ""); err != nil {
 		t.Fatalf("Failed to send after reconnect: %v", err)
 	}
 
@@ -605,7 +652,7 @@ func TestClientMessageFormat(t *testing.T) {
 	})
 
 	// Send a message and verify it arrives properly formatted
-	if err := client.SendAgentStart("agent-1", "task-1", "Test"); err != nil {
+	if err := client.SendAgentStart("agent-1", "task-1", "Test", ""); err != nil {
 		t.Fatalf("Failed to send: %v", err)
 	}
 

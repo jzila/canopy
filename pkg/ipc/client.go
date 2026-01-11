@@ -79,11 +79,13 @@ func (c *Client) sendMessage(msgType MessageType, payload interface{}) error {
 }
 
 // SendAgentStart notifies the daemon that an agent has started executing a task
-func (c *Client) SendAgentStart(agentID, taskID, taskTitle string) error {
+// parentAgentID is optional and specifies the ID of the parent agent if this agent was spawned by another
+func (c *Client) SendAgentStart(agentID, taskID, taskTitle, parentAgentID string) error {
 	payload := AgentStartPayload{
-		AgentID:   agentID,
-		TaskID:    taskID,
-		TaskTitle: taskTitle,
+		AgentID:       agentID,
+		TaskID:        taskID,
+		TaskTitle:     taskTitle,
+		ParentAgentID: parentAgentID,
 	}
 
 	return c.sendMessage(MessageTypeAgentStart, payload)
@@ -123,21 +125,24 @@ func (c *Client) SendAgentCommit(agentID string, commit *AgentCommitPayload) err
 }
 
 // SendAgentDone notifies the daemon that an agent completed successfully
-func (c *Client) SendAgentDone(agentID string, result *AgentResult) error {
+// parentAgentID is optional and specifies the ID of the parent agent if this agent was spawned by another
+func (c *Client) SendAgentDone(agentID, parentAgentID string, result *AgentResult) error {
 	if result == nil {
 		return fmt.Errorf("result cannot be nil")
 	}
 
 	payload := AgentDonePayload{
-		AgentID: agentID,
-		Result:  *result,
+		AgentID:       agentID,
+		ParentAgentID: parentAgentID,
+		Result:        *result,
 	}
 
 	return c.sendMessage(MessageTypeAgentDone, payload)
 }
 
 // SendAgentFail notifies the daemon that an agent failed
-func (c *Client) SendAgentFail(agentID string, err error, result *AgentResult) error {
+// parentAgentID is optional and specifies the ID of the parent agent if this agent was spawned by another
+func (c *Client) SendAgentFail(agentID, parentAgentID string, err error, result *AgentResult) error {
 	if err == nil {
 		return fmt.Errorf("error cannot be nil")
 	}
@@ -146,9 +151,10 @@ func (c *Client) SendAgentFail(agentID string, err error, result *AgentResult) e
 	}
 
 	payload := AgentFailPayload{
-		AgentID: agentID,
-		Error:   err.Error(),
-		Result:  *result,
+		AgentID:       agentID,
+		ParentAgentID: parentAgentID,
+		Error:         err.Error(),
+		Result:        *result,
 	}
 
 	return c.sendMessage(MessageTypeAgentFail, payload)

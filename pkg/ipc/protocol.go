@@ -31,9 +31,10 @@ type Message struct {
 
 // AgentStartPayload is sent when an agent begins execution
 type AgentStartPayload struct {
-	AgentID   string `json:"agent_id"`
-	TaskID    string `json:"task_id"`
-	TaskTitle string `json:"task_title"`
+	AgentID       string `json:"agent_id"`
+	TaskID        string `json:"task_id"`
+	TaskTitle     string `json:"task_title"`
+	ParentAgentID string `json:"parent_agent_id,omitempty"` // ID of parent agent if spawned by another agent
 }
 
 // AgentOutputPayload is sent when an agent produces output
@@ -91,15 +92,17 @@ type ModelUsage struct {
 
 // AgentDonePayload is sent when an agent completes successfully
 type AgentDonePayload struct {
-	AgentID string      `json:"agent_id"`
-	Result  AgentResult `json:"result"`
+	AgentID       string      `json:"agent_id"`
+	ParentAgentID string      `json:"parent_agent_id,omitempty"` // ID of parent agent if spawned by another agent
+	Result        AgentResult `json:"result"`
 }
 
 // AgentFailPayload is sent when an agent fails
 type AgentFailPayload struct {
-	AgentID string      `json:"agent_id"`
-	Error   string      `json:"error"`
-	Result  AgentResult `json:"result"`
+	AgentID       string      `json:"agent_id"`
+	ParentAgentID string      `json:"parent_agent_id,omitempty"` // ID of parent agent if spawned by another agent
+	Error         string      `json:"error"`
+	Result        AgentResult `json:"result"`
 }
 
 // TaskUpdatedPayload is sent when a task status changes
