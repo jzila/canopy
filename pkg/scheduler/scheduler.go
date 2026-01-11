@@ -50,10 +50,11 @@ type Scheduler struct {
 
 // Config holds scheduler configuration
 type Config struct {
-	Concurrency int
-	TempDir     string
-	WorkDir     string
-	Verbose     bool
+	Concurrency   int
+	TempDir       string
+	WorkDir       string
+	Verbose       bool
+	SandboxConfig *sandbox.SandboxConfig // Sandbox configuration from .canopy/sandbox.toml
 }
 
 // NewScheduler creates a new task scheduler
@@ -183,6 +184,16 @@ func (s *Scheduler) executeTask(ctx context.Context, task *beads.Task) *agent.Re
 	}
 	// NOTE: Don't cleanup overlay here - it must remain until after merge completes
 	// The orchestrator is responsible for cleaning up overlays after merge
+
+	// Copy additional config files from sandbox config if present
+	if s.config.SandboxConfig != nil {
+		configPaths := s.config.SandboxConfig.GetAllCopyConfigs()
+		if len(configPaths) > 0 {
+			if err := overlay.CopyConfigPaths(configPaths); err != nil && s.config.Verbose {
+				fmt.Fprintf(os.Stderr, "warning: failed to copy config paths: %v\n", err)
+			}
+		}
+	}
 
 	// Mount the overlay
 	if err := overlay.Mount(); err != nil {

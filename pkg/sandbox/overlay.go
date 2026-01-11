@@ -239,6 +239,56 @@ func (o *Overlay) copyGitConfig() error {
 	return os.WriteFile(dstPath, []byte(gitconfig), 0644)
 }
 
+// CopyConfigPaths copies additional config files to the overlay based on sandbox config.
+// Each config file is copied to the same relative path in the upper directory.
+// This allows agents to use these configs while protecting the originals.
+func (o *Overlay) CopyConfigPaths(configPaths []string) error {
+	for _, srcPath := range configPaths {
+		// Skip if source doesn't exist
+		info, err := os.Stat(srcPath)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("stat %s: %w", srcPath, err)
+		}
+
+		// Determine relative path from home directory
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("get user home dir: %w", err)
+		}
+
+		var relPath string
+		if strings.HasPrefix(srcPath, homeDir+"/") {
+			relPath = srcPath[len(homeDir)+1:]
+		} else {
+			// For absolute paths outside home, use basename
+			relPath = filepath.Base(srcPath)
+		}
+
+		dstPath := filepath.Join(o.UpperDir, relPath)
+
+		// Create parent directory in upper if needed
+		dstDir := filepath.Dir(dstPath)
+		if err := os.MkdirAll(dstDir, 0755); err != nil {
+			return fmt.Errorf("create parent dir for %s: %w", relPath, err)
+		}
+
+		// Copy the file or directory
+		if info.IsDir() {
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return fmt.Errorf("copy dir %s: %w", srcPath, err)
+			}
+		} else {
+			if err := copyFile(srcPath, dstPath); err != nil {
+				return fmt.Errorf("copy file %s: %w", srcPath, err)
+			}
+		}
+	}
+	return nil
+}
+
 // copyFile copies a file from src to dst
 func copyFile(src, dst string) error {
 	srcFile, err := os.Open(src)

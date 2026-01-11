@@ -14,6 +14,9 @@ const (
 	MessageTypeAgentDone      MessageType = "agent_done"
 	MessageTypeAgentFail      MessageType = "agent_fail"
 
+	// Task lifecycle events
+	MessageTypeTaskUpdated MessageType = "task_updated"
+
 	// Run lifecycle events
 	MessageTypeRunStarted   MessageType = "run_started"
 	MessageTypeRunCompleted MessageType = "run_completed"
@@ -97,6 +100,14 @@ type AgentFailPayload struct {
 	AgentID string      `json:"agent_id"`
 	Error   string      `json:"error"`
 	Result  AgentResult `json:"result"`
+}
+
+// TaskUpdatedPayload is sent when a task status changes
+type TaskUpdatedPayload struct {
+	ID      string `json:"id"`
+	Title   string `json:"title,omitempty"`
+	Status  string `json:"status"`
+	AgentID string `json:"agent_id,omitempty"`
 }
 
 // RunStartedPayload is sent when a canopy run begins

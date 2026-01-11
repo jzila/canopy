@@ -78,6 +78,7 @@ type Config struct {
 	Timeout         time.Duration
 	Verbose         bool
 	UseBwrap        bool                                      // Use bubblewrap sandbox for isolation (auto-detected if not set)
+	SandboxConfig   *sandbox.SandboxConfig                    // Sandbox configuration from .canopy/sandbox.toml
 	OnLiveFeedEvent func(taskID string, event *LiveFeedEvent) // Callback for live streaming events
 }
 
@@ -182,15 +183,17 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 	useBwrap := e.config.UseBwrap && sandbox.BwrapAvailable()
 
 	if useBwrap {
-		bwrapCmd, err := sandbox.BuildBwrapCommand(&sandbox.BwrapConfig{
+		bwrapCfg := &sandbox.BwrapConfig{
 			MergedDir:      overlay.MergedDir,
 			Command:        e.config.ClaudePath,
 			Args:           args,
 			Env:            env,
-			MaxMemoryBytes: 4 << 30, // 4GB
+			MaxMemoryBytes: 4 << 30, // 4GB (default, can be overridden by sandbox config)
 			MaxProcesses:   100,
 			MaxOpenFiles:   1024,
-		})
+			SandboxConfig:  e.config.SandboxConfig, // Pass sandbox config for path bindings
+		}
+		bwrapCmd, err := sandbox.BuildBwrapCommand(bwrapCfg)
 		if err != nil {
 			result.Error = fmt.Sprintf("failed to build bwrap command: %v", err)
 			return result

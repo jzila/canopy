@@ -22,13 +22,13 @@ import (
 )
 
 var (
-	concurrency int
-	outputDir   string
-	dryRun      bool
-	sandbox     bool
-	noDaemon    bool
-	maxRetries  int
-	prompt      string
+	concurrency   int
+	outputDir     string
+	dryRun        bool
+	useSandbox    bool
+	noDaemon      bool
+	maxRetries    int
+	prompt        string
 )
 
 var runCmd = &cobra.Command{
@@ -98,7 +98,7 @@ func init() {
 	runCmd.Flags().IntVarP(&concurrency, "concurrency", "c", 4, "Maximum concurrent agents")
 	runCmd.Flags().StringVarP(&outputDir, "output", "o", "", "Output directory for merged results (default: workdir)")
 	runCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show execution plan without running")
-	runCmd.Flags().BoolVar(&sandbox, "sandbox", false, "Use bubblewrap (bwrap) for full process/filesystem isolation")
+	runCmd.Flags().BoolVar(&useSandbox, "sandbox", false, "Use bubblewrap (bwrap) for full process/filesystem isolation")
 	runCmd.Flags().BoolVar(&noDaemon, "no-daemon", false, "Disable automatic daemon connection (run without daemon)")
 	runCmd.Flags().IntVar(&maxRetries, "max-retries", 3, "Maximum retry attempts for failed tasks (0=no retries, -1=infinite)")
 	runCmd.Flags().StringVar(&prompt, "prompt", "", "Prompt to filter/direct work selection (e.g., 'Only work on P0 issues', 'Stop after completing all P1s')")
@@ -173,7 +173,7 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		Concurrency: concurrency,
 		Verbose:     verbose,
 		DryRun:      dryRun,
-		UseBwrap:    sandbox,
+		UseBwrap:    useSandbox,
 		MaxRetries:  maxRetries,
 		Prompt:      prompt,
 	})

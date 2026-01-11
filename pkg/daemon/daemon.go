@@ -6,12 +6,15 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/jzila/canopy/pkg/persistence"
 )
 
 // Config holds configuration for the daemon
 type Config struct {
-	Port       int    // HTTP server port
-	SocketPath string // Unix socket path for IPC
+	Port              int    // HTTP server port
+	SocketPath        string // Unix socket path for IPC
+	EnablePersistence bool   // Enable SQLite persistence for run history
 }
 
 // IPCServer defines the interface for IPC server operations
@@ -36,6 +39,11 @@ type Daemon struct {
 	state            *RuntimeState
 	scheduler        SchedulerInterface
 	beadsClient      BeadsClientInterface
+
+	// Persistence components (optional, controlled by EnablePersistence config)
+	persistenceStore           *persistence.Store
+	persistenceHandler         *PersistenceHandler
+	persistenceUnsubscribe     func()
 }
 
 // NewDaemon creates a new daemon instance with the given configuration
@@ -58,6 +66,19 @@ func (d *Daemon) Init() {
 	if d.state == nil {
 		d.state = NewRuntimeState()
 	}
+
+	// Initialize persistence if enabled
+	if d.config.EnablePersistence && d.persistenceStore == nil {
+		store, err := persistence.NewStore()
+		if err != nil {
+			log.Printf("Warning: failed to initialize persistence store: %v", err)
+		} else {
+			d.persistenceStore = store
+			d.persistenceHandler = NewPersistenceHandler(store, d.eventBus)
+			d.persistenceUnsubscribe = d.persistenceHandler.Start()
+			log.Println("Persistence enabled - run history will be saved to SQLite")
+		}
+	}
 }
 
 // Start initializes and starts all daemon components
@@ -76,7 +97,8 @@ func (d *Daemon) Start() error {
 	log.Println("RuntimeState subscribed to EventBus")
 
 	// Initialize HTTP server (REST API + WebSocket)
-	d.httpServer = NewServer(d.config.Port, d.state, d.eventBus, d.scheduler, d.beadsClient)
+	// Pass persistence store if available (for /api/runs endpoints)
+	d.httpServer = NewServerWithPersistence(d.config.Port, d.state, d.eventBus, d.scheduler, d.beadsClient, d.persistenceStore)
 
 	// Create IPC server (receives events from canopy run)
 	// The factory function creates an ipc.Server with the EventBus we just initialized
@@ -134,6 +156,21 @@ func (d *Daemon) Stop() error {
 		log.Println("Stopping HTTP server...")
 		if err := d.httpServer.Stop(); err != nil {
 			log.Printf("HTTP server stop error: %v", err)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+
+	// Stop persistence handler and close store
+	if d.persistenceUnsubscribe != nil {
+		log.Println("Stopping persistence handler...")
+		d.persistenceUnsubscribe()
+	}
+	if d.persistenceStore != nil {
+		log.Println("Closing persistence store...")
+		if err := d.persistenceStore.Close(); err != nil {
+			log.Printf("Persistence store close error: %v", err)
 			if firstErr == nil {
 				firstErr = err
 			}

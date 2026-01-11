@@ -154,6 +154,18 @@ func (c *Client) SendAgentFail(agentID string, err error, result *AgentResult) e
 	return c.sendMessage(MessageTypeAgentFail, payload)
 }
 
+// SendTaskUpdated notifies the daemon that a task status has changed
+func (c *Client) SendTaskUpdated(taskID, title, status, agentID string) error {
+	payload := TaskUpdatedPayload{
+		ID:      taskID,
+		Title:   title,
+		Status:  status,
+		AgentID: agentID,
+	}
+
+	return c.sendMessage(MessageTypeTaskUpdated, payload)
+}
+
 // SendRunStarted notifies the daemon that a canopy run has started
 func (c *Client) SendRunStarted(runID string, taskCount int) error {
 	payload := RunStartedPayload{

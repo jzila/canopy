@@ -102,6 +102,7 @@ interface StateStore {
   // Actions
   setConnected: (connected: boolean) => void;
   updateAgent: (id: string, update: Partial<AgentState>) => void;
+  updateTask: (id: string, update: Partial<TaskState>) => void;
   syncState: (state: RuntimeState) => void;
   appendOutput: (agentId: string, output: string, isError?: boolean) => void;
   appendLiveFeedEvent: (agentId: string, event: LiveFeedEvent) => void;
@@ -208,6 +209,34 @@ export const useStateStore = create<StateStore>((set) => ({
       return {
         agents: newAgents,
         stats: recalculateStats(newAgents),
+      };
+    }),
+
+  updateTask: (id, update) =>
+    set((state) => {
+      const existingTask = state.tasks[id];
+
+      // If task doesn't exist, create it with the update data
+      if (!existingTask) {
+        // Only create if we have the required id field
+        if (!update.id) return state;
+
+        return {
+          tasks: {
+            ...state.tasks,
+            [id]: update as TaskState,
+          },
+        };
+      }
+
+      return {
+        tasks: {
+          ...state.tasks,
+          [id]: {
+            ...existingTask,
+            ...update,
+          },
+        },
       };
     }),
 

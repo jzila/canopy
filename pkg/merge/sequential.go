@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -262,4 +263,117 @@ func copyFile(src, dst string) error {
 
 	_, err = io.Copy(dstFile, srcFile)
 	return err
+}
+
+// MergeSingle merges and commits a single agent result atomically.
+// This should be called immediately when each agent completes.
+// The overlay must still be mounted when this is called.
+func (m *SequentialMerger) MergeSingle(result *agent.Result) (*Result, error) {
+	mergeResult := &Result{
+		PatchFailed: make(map[string]bool),
+	}
+
+	if !result.Success {
+		return mergeResult, nil
+	}
+
+	// Apply git patches first (these preserve the agent's commit history)
+	if result.GitState != nil && len(result.GitState.Patches) > 0 {
+		if err := sandbox.ApplyPatches(m.outputDir, result.GitState.Patches); err != nil {
+			mergeResult.Errors = append(mergeResult.Errors,
+				fmt.Sprintf("failed to apply commits from %s: %v", result.TaskID, err))
+			mergeResult.PatchFailed[result.TaskID] = true
+		} else {
+			mergeResult.CommitsApplied += len(result.GitState.Patches)
+			if m.verbose {
+				fmt.Printf("Applied %d commits from task %s\n", len(result.GitState.Patches), result.TaskID)
+			}
+			// Patches applied successfully - no need to commit file changes
+			// since they're already committed via git am
+			return mergeResult, nil
+		}
+	}
+
+	// If we get here, either there were no git patches, or patch application failed
+	// Apply file changes from the overlay
+	if len(result.Changes) > 0 {
+		var paths []string
+		for _, change := range result.Changes {
+			// Skip .beads files
+			if isBeadsFile(change.Path) {
+				continue
+			}
+
+			applied, err := m.applyChange(result, change)
+			if err != nil {
+				mergeResult.Errors = append(mergeResult.Errors,
+					fmt.Sprintf("failed to apply %s from %s: %v", change.Path, result.TaskID, err))
+				continue
+			}
+			if applied != nil {
+				mergeResult.Applied = append(mergeResult.Applied, *applied)
+				paths = append(paths, change.Path)
+			}
+		}
+
+		// Commit the file changes
+		if len(paths) > 0 {
+			if err := m.commitFileChanges(result, paths, mergeResult.PatchFailed[result.TaskID]); err != nil {
+				mergeResult.Errors = append(mergeResult.Errors,
+					fmt.Sprintf("failed to commit changes from %s: %v", result.TaskID, err))
+			} else {
+				mergeResult.CommitsApplied++
+			}
+		}
+	}
+
+	return mergeResult, nil
+}
+
+// commitFileChanges stages and commits file changes for a single task
+func (m *SequentialMerger) commitFileChanges(result *agent.Result, paths []string, patchFailed bool) error {
+	if len(paths) == 0 {
+		return nil
+	}
+
+	// Stage the files
+	addCmd := exec.Command("git", "add", "--")
+	addCmd.Args = append(addCmd.Args, paths...)
+	addCmd.Dir = m.outputDir
+	if err := addCmd.Run(); err != nil {
+		return fmt.Errorf("git add failed: %w", err)
+	}
+
+	// Check if there are staged changes
+	diffCmd := exec.Command("git", "diff", "--cached", "--quiet")
+	diffCmd.Dir = m.outputDir
+	if err := diffCmd.Run(); err == nil {
+		// No staged changes (exit code 0 means no diff)
+		if m.verbose {
+			fmt.Printf("No changes to commit for task %s (files may have been committed via git am)\n", result.TaskID)
+		}
+		return nil
+	}
+
+	// Create commit message
+	commitMsg := fmt.Sprintf("canopy: apply changes from %s", result.TaskID)
+	if patchFailed {
+		commitMsg = fmt.Sprintf("canopy: apply changes from %s (git patch failed, using file-based merge)", result.TaskID)
+	}
+
+	commitCmd := exec.Command("git", "commit", "-m", commitMsg)
+	commitCmd.Dir = m.outputDir
+	if err := commitCmd.Run(); err != nil {
+		return fmt.Errorf("git commit failed: %w", err)
+	}
+
+	if m.verbose {
+		if patchFailed {
+			fmt.Printf("Created commit for file changes from task %s (patch application failed)\n", result.TaskID)
+		} else {
+			fmt.Printf("Created commit for file-only changes from task %s\n", result.TaskID)
+		}
+	}
+
+	return nil
 }

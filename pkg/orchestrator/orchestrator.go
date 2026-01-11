@@ -11,6 +11,7 @@ import (
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
 	"github.com/jzila/canopy/pkg/merge"
+	"github.com/jzila/canopy/pkg/sandbox"
 	"github.com/jzila/canopy/pkg/scheduler"
 )
 
@@ -106,18 +107,37 @@ func New(config *Config) (*Orchestrator, error) {
 		return nil, fmt.Errorf("failed to create temp directory: %w", err)
 	}
 
+	// Try to load sandbox config from .canopy/sandbox.toml
+	var sandboxConfig *sandbox.SandboxConfig
+	if config.UseBwrap {
+		loadedConfig, err := sandbox.LoadConfig(config.WorkDir)
+		if err != nil && config.Verbose {
+			fmt.Fprintf(os.Stderr, "warning: failed to load sandbox config: %v\n", err)
+		}
+		if loadedConfig != nil {
+			sandboxConfig = loadedConfig
+			if config.Verbose {
+				fmt.Printf("Loaded sandbox config from %s/.canopy/sandbox.toml\n", config.WorkDir)
+			}
+		} else if config.Verbose {
+			fmt.Println("No sandbox config found, using default bwrap settings")
+		}
+	}
+
 	// Create agent executor
 	executor := agent.NewExecutor(&agent.Config{
-		Verbose:  config.Verbose,
-		UseBwrap: config.UseBwrap,
+		Verbose:       config.Verbose,
+		UseBwrap:      config.UseBwrap,
+		SandboxConfig: sandboxConfig,
 	})
 
 	// Create scheduler
 	sched := scheduler.NewScheduler(beadsClient, executor, &scheduler.Config{
-		Concurrency: config.Concurrency,
-		TempDir:     tempDir,
-		WorkDir:     config.WorkDir,
-		Verbose:     config.Verbose,
+		Concurrency:   config.Concurrency,
+		TempDir:       tempDir,
+		WorkDir:       config.WorkDir,
+		Verbose:       config.Verbose,
+		SandboxConfig: sandboxConfig,
 	})
 
 	// Create merger

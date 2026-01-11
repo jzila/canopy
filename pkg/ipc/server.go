@@ -389,6 +389,22 @@ func (s *Server) convertToEvent(msg *Message) *daemon.Event {
 			},
 		}
 
+	case MessageTypeTaskUpdated:
+		var payload TaskUpdatedPayload
+		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+			return nil
+		}
+		return &daemon.Event{
+			Type:      daemon.EventTaskUpdated,
+			Timestamp: msg.Timestamp,
+			Payload: map[string]interface{}{
+				"id":       payload.ID,
+				"title":    payload.Title,
+				"status":   payload.Status,
+				"agent_id": payload.AgentID,
+			},
+		}
+
 	default:
 		// Unknown message type
 		return nil

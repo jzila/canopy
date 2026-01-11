@@ -195,6 +195,7 @@ export function useWebSocket() {
   const {
     setConnected,
     updateAgent,
+    updateTask,
     appendOutput,
     appendLiveFeedEvent,
     syncState,
@@ -364,7 +365,14 @@ export function useWebSocket() {
             }
 
             case 'task:updated': {
-              console.log('[WebSocket] Task updated:', message.payload);
+              const { id, title, status, agent_id, priority } = message.payload;
+              console.log('[WebSocket] Task updated:', id, status);
+              updateTask(id, {
+                ...(title !== undefined && { title }),
+                ...(status !== undefined && { status }),
+                ...(agent_id !== undefined && { agent_id }),
+                ...(priority !== undefined && { priority }),
+              });
               break;
             }
 
@@ -427,7 +435,7 @@ export function useWebSocket() {
         }, backoffTime);
       }
     }
-  }, [setConnected, updateAgent, appendOutput, appendLiveFeedEvent, syncState, setIsPaused]);
+  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, syncState, setIsPaused]);
 
   const disconnect = useCallback(() => {
     isManuallyClosedRef.current = true;

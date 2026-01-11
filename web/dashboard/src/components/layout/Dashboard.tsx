@@ -1,5 +1,5 @@
-import React, { useEffect, useState, useMemo } from 'react';
-import { Play, Pause, Activity, DollarSign, Zap, GitCommit, FileEdit, Sun, Moon, Terminal as TerminalIcon, List, CheckCircle, XCircle, ListTodo, ChevronUp, ChevronDown, Maximize2, Minimize2 } from 'lucide-react';
+import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
+import { Play, Pause, Activity, DollarSign, Zap, GitCommit, FileEdit, Sun, Moon, Terminal as TerminalIcon, List, CheckCircle, XCircle, ListTodo, GripHorizontal } from 'lucide-react';
 import { useStateStore } from '../../stores/stateStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { pauseOrch, resumeOrch, getState } from '../../api/client';
@@ -22,15 +22,62 @@ export const Dashboard: React.FC = () => {
     return window.matchMedia('(prefers-color-scheme: dark)').matches;
   });
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
-  const [isPaneExpanded, setIsPaneExpanded] = useState(() => {
-    const saved = localStorage.getItem('outputPaneExpanded');
-    return saved === 'true';
-  });
 
-  // Persist pane expansion state
+  // Resizable pane state
+  const MIN_PANE_HEIGHT = 200;
+  const MAX_PANE_HEIGHT_RATIO = 0.8; // 80% of viewport
+  const DEFAULT_PANE_HEIGHT = 320;
+
+  const [paneHeight, setPaneHeight] = useState(() => {
+    const saved = localStorage.getItem('outputPaneHeight');
+    return saved ? parseInt(saved, 10) : DEFAULT_PANE_HEIGHT;
+  });
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeRef = useRef<{ startY: number; startHeight: number } | null>(null);
+
+  // Persist pane height
   useEffect(() => {
-    localStorage.setItem('outputPaneExpanded', String(isPaneExpanded));
-  }, [isPaneExpanded]);
+    localStorage.setItem('outputPaneHeight', String(paneHeight));
+  }, [paneHeight]);
+
+  // Handle resize mouse events
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+    resizeRef.current = {
+      startY: e.clientY,
+      startHeight: paneHeight,
+    };
+  }, [paneHeight]);
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!resizeRef.current) return;
+
+      const deltaY = resizeRef.current.startY - e.clientY;
+      const maxHeight = window.innerHeight * MAX_PANE_HEIGHT_RATIO;
+      const newHeight = Math.min(
+        maxHeight,
+        Math.max(MIN_PANE_HEIGHT, resizeRef.current.startHeight + deltaY)
+      );
+      setPaneHeight(newHeight);
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+      resizeRef.current = null;
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing]);
 
   // Apply dark mode class to document
   useEffect(() => {
@@ -329,13 +376,23 @@ export const Dashboard: React.FC = () => {
           {/* Bottom Terminal Panel */}
           {hasSelectedAgent && (
             <div
-              className={`
-                border-t border-gray-200 dark:border-gray-700 bg-gray-900 flex-shrink-0
-                transition-all duration-300 ease-in-out
-                ${isPaneExpanded ? 'h-[60vh]' : 'h-80'}
-              `}
+              className="border-t border-gray-200 dark:border-gray-700 bg-gray-900 flex-shrink-0"
+              style={{ height: paneHeight }}
             >
               <div className="h-full flex flex-col">
+                {/* Resize Handle */}
+                <div
+                  onMouseDown={handleResizeStart}
+                  className={`
+                    h-1.5 bg-gray-800 cursor-ns-resize flex items-center justify-center
+                    hover:bg-gray-700 transition-colors group
+                    ${isResizing ? 'bg-blue-600' : ''}
+                  `}
+                  title="Drag to resize"
+                >
+                  <GripHorizontal className={`w-4 h-4 text-gray-600 group-hover:text-gray-400 ${isResizing ? 'text-blue-400' : ''}`} />
+                </div>
+
                 {/* Terminal Header with Tabs */}
                 <div className="flex items-center justify-between px-4 py-2 bg-gray-800 border-b border-gray-700">
                   <div className="flex items-center gap-4">
@@ -400,18 +457,6 @@ export const Dashboard: React.FC = () => {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    {/* Expand/Collapse button */}
-                    <button
-                      onClick={() => setIsPaneExpanded(!isPaneExpanded)}
-                      className="text-gray-400 hover:text-gray-200 transition-colors p-1.5 rounded hover:bg-gray-700"
-                      title={isPaneExpanded ? 'Collapse panel' : 'Expand panel'}
-                    >
-                      {isPaneExpanded ? (
-                        <Minimize2 className="w-4 h-4" />
-                      ) : (
-                        <Maximize2 className="w-4 h-4" />
-                      )}
-                    </button>
                     <button
                       onClick={() => setSelectedAgent(null)}
                       className="text-gray-400 hover:text-gray-200 transition-colors px-2 py-1 rounded hover:bg-gray-700"

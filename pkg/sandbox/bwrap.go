@@ -25,6 +25,9 @@ type BwrapConfig struct {
 	// ReadOnlyBinds are paths to bind-mount read-only (e.g., /nix/store)
 	ReadOnlyBinds []string
 
+	// ReadWriteBinds are paths to bind-mount read-write (e.g., cache dirs)
+	ReadWriteBinds []string
+
 	// MaxMemoryBytes limits virtual memory (0 = no limit)
 	MaxMemoryBytes uint64
 
@@ -33,6 +36,9 @@ type BwrapConfig struct {
 
 	// MaxOpenFiles limits file descriptors (0 = no limit)
 	MaxOpenFiles uint64
+
+	// SandboxConfig is the parsed .canopy/sandbox.toml config (optional)
+	SandboxConfig *SandboxConfig
 }
 
 // DefaultReadOnlyBinds are system paths needed for most binaries
@@ -85,28 +91,75 @@ func BuildBwrapCommand(cfg *BwrapConfig) (*exec.Cmd, error) {
 		"--proc", "/proc",
 	}
 
-	// Add read-only system binds
-	binds := cfg.ReadOnlyBinds
-	if len(binds) == 0 {
-		binds = DefaultReadOnlyBinds
+	// Add read-only system binds (always needed)
+	systemBinds := cfg.ReadOnlyBinds
+	if len(systemBinds) == 0 {
+		systemBinds = DefaultReadOnlyBinds
 	}
 
-	for _, bind := range binds {
-		// Only bind if source exists
+	for _, bind := range systemBinds {
+		// Only bind if source exists and is not blocked
 		if _, err := os.Stat(bind); err == nil {
-			args = append(args, "--ro-bind", bind, bind)
+			if !isBlockedPath(bind, cfg.SandboxConfig) {
+				args = append(args, "--ro-bind", bind, bind)
+			}
+		}
+	}
+
+	// Add paths from sandbox config if present
+	if cfg.SandboxConfig != nil {
+		// Add read-only tool paths from config
+		for _, path := range cfg.SandboxConfig.GetAllReadOnlyPaths() {
+			if _, err := os.Stat(path); err == nil {
+				args = append(args, "--ro-bind", path, path)
+			}
+		}
+
+		// Add read-write cache mounts from config
+		for _, path := range cfg.SandboxConfig.GetAllCacheMounts() {
+			if _, err := os.Stat(path); err == nil {
+				args = append(args, "--bind", path, path)
+			}
+		}
+	}
+
+	// Add explicit read-write binds (from BwrapConfig, not sandbox.toml)
+	for _, bind := range cfg.ReadWriteBinds {
+		if _, err := os.Stat(bind); err == nil {
+			if !isBlockedPath(bind, cfg.SandboxConfig) {
+				args = append(args, "--bind", bind, bind)
+			}
+		}
+	}
+
+	// Get resource limits from config or use defaults
+	maxMem := cfg.MaxMemoryBytes
+	maxProcs := cfg.MaxProcesses
+	maxFiles := cfg.MaxOpenFiles
+
+	if cfg.SandboxConfig != nil {
+		if cfg.SandboxConfig.Resources.MaxMemory != "" && maxMem == 0 {
+			if parsed, err := ParseMemoryLimit(cfg.SandboxConfig.Resources.MaxMemory); err == nil {
+				maxMem = parsed
+			}
+		}
+		if cfg.SandboxConfig.Resources.MaxProcesses > 0 && maxProcs == 0 {
+			maxProcs = uint64(cfg.SandboxConfig.Resources.MaxProcesses)
+		}
+		if cfg.SandboxConfig.Resources.MaxOpenFiles > 0 && maxFiles == 0 {
+			maxFiles = uint64(cfg.SandboxConfig.Resources.MaxOpenFiles)
 		}
 	}
 
 	// Add resource limits if specified
-	if cfg.MaxMemoryBytes > 0 {
-		args = append(args, "--rlimit", fmt.Sprintf("as=%d", cfg.MaxMemoryBytes))
+	if maxMem > 0 {
+		args = append(args, "--rlimit", fmt.Sprintf("as=%d", maxMem))
 	}
-	if cfg.MaxProcesses > 0 {
-		args = append(args, "--rlimit", fmt.Sprintf("nproc=%d", cfg.MaxProcesses))
+	if maxProcs > 0 {
+		args = append(args, "--rlimit", fmt.Sprintf("nproc=%d", maxProcs))
 	}
-	if cfg.MaxOpenFiles > 0 {
-		args = append(args, "--rlimit", fmt.Sprintf("nofile=%d", cfg.MaxOpenFiles))
+	if maxFiles > 0 {
+		args = append(args, "--rlimit", fmt.Sprintf("nofile=%d", maxFiles))
 	}
 
 	// Add the command to run
@@ -128,6 +181,29 @@ func BuildBwrapCommand(cfg *BwrapConfig) (*exec.Cmd, error) {
 	}
 
 	return cmd, nil
+}
+
+// isBlockedPath checks if a path is in the security blocklist
+func isBlockedPath(path string, sandboxCfg *SandboxConfig) bool {
+	// Check hardcoded blocklist
+	for _, blocked := range SecurityBlocklist {
+		blockedExpanded := ExpandPath(blocked)
+		if path == blockedExpanded || strings.HasPrefix(path, blockedExpanded+"/") {
+			return true
+		}
+	}
+
+	// Check user-defined blocklist from config
+	if sandboxCfg != nil {
+		for _, blocked := range sandboxCfg.Security.Blocked {
+			blockedExpanded := ExpandPath(blocked)
+			if path == blockedExpanded || strings.HasPrefix(path, blockedExpanded+"/") {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // ResolveCommandPath finds the full path to a command, searching common locations

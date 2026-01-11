@@ -8,6 +8,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
+	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/spf13/cobra v1.8.1
 	golang.org/x/sync v0.16.0
 	modernc.org/sqlite v1.43.0
