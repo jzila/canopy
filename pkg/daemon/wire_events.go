@@ -7,6 +7,7 @@ type EventType string
 
 // Event type constants
 const (
+	EventStateSync      EventType = "state:sync"
 	EventAgentStarted   EventType = "agent:started"
 	EventAgentOutput    EventType = "agent:output"
 	EventAgentLiveFeed  EventType = "agent:live_feed"

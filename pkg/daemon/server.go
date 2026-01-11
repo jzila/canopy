@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log"
@@ -172,9 +173,39 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Register client with hub
 	s.hub.register <- client
 
+	// Send initial state snapshot to the new client
+	s.sendInitialState(client)
+
 	// Start client read and write pumps in goroutines
 	go client.WritePump()
 	go client.ReadPump()
+}
+
+// sendInitialState sends the current runtime state to a newly connected client
+func (s *Server) sendInitialState(client *Client) {
+	// Get a snapshot of the current state
+	snapshot := s.state.GetSnapshot()
+
+	// Create state sync event
+	event := Event{
+		Type:      EventStateSync,
+		Timestamp: time.Now(),
+		Payload:   snapshot,
+	}
+
+	// Marshal and send
+	data, err := json.Marshal(event)
+	if err != nil {
+		log.Printf("Error marshaling initial state: %v", err)
+		return
+	}
+
+	// Send to client's channel (non-blocking to avoid deadlock)
+	select {
+	case client.send <- data:
+	default:
+		log.Printf("Warning: could not send initial state to client (buffer full)")
+	}
 }
 
 // handleStaticFiles serves static files for the web UI

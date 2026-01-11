@@ -225,6 +225,17 @@ func TestHandleWebSocket(t *testing.T) {
 		t.Error("Expected EventBus to have subscribers")
 	}
 
+	// First, receive the initial state:sync event sent on connection
+	ws.SetReadDeadline(time.Now().Add(1 * time.Second))
+	var syncEvent Event
+	if err := ws.ReadJSON(&syncEvent); err != nil {
+		t.Logf("Expected to receive state:sync message, but got error: %v", err)
+		return
+	}
+	if syncEvent.Type != EventStateSync {
+		t.Errorf("Expected first event type %s, got %s", EventStateSync, syncEvent.Type)
+	}
+
 	// Publish an event through EventBus
 	event := Event{
 		Type:      EventAgentStarted,

@@ -73,7 +73,66 @@ interface StatsUpdatedEvent {
   payload: unknown;
 }
 
+// Backend RuntimeState format (snake_case)
+interface BackendAgentState {
+  id: string;
+  task_id: string;
+  task_title: string;
+  status: string;
+  start_time: string;
+  end_time: string | null;
+  duration: number;
+  output: { stdout: string; stderr: string };
+  live_feed_events: Array<{
+    event_type: string;
+    data: Record<string, unknown>;
+  }>;
+  token_usage: {
+    input_tokens: number;
+    output_tokens: number;
+    total_tokens: number;
+    cost_usd: number;
+  };
+  exit_code: number;
+  error: string;
+  changes: number;
+  commits: number;
+}
+
+interface BackendRuntimeState {
+  agents: Record<string, BackendAgentState>;
+  tasks: Record<string, {
+    id: string;
+    title: string;
+    status: string;
+    agent_id: string;
+    priority: number;
+    dependencies: string[];
+  }>;
+  stats: {
+    total_tasks: number;
+    completed_tasks: number;
+    failed_tasks: number;
+    running_tasks: number;
+    total_tokens: number;
+    total_cost_usd: number;
+    total_duration: number;
+    avg_duration: number;
+    file_changes: number;
+    git_commits: number;
+  };
+  is_paused: boolean;
+  start_time: string;
+}
+
+interface StateSyncEvent {
+  type: 'state:sync';
+  timestamp: string;
+  payload: BackendRuntimeState;
+}
+
 type EventType =
+  | StateSyncEvent
   | AgentStartedEvent
   | AgentOutputEvent
   | AgentLiveFeedEvent
@@ -141,6 +200,65 @@ export function useWebSocket() {
           console.log('[WebSocket] Received:', message.type, message);
 
           switch (message.type) {
+            case 'state:sync': {
+              // Transform backend state to frontend format
+              const backendState = message.payload;
+              const transformedAgents: Record<string, import('../stores/stateStore').AgentState> = {};
+
+              for (const [id, agent] of Object.entries(backendState.agents)) {
+                // Transform live_feed_events to liveFeed with generated IDs
+                const liveFeed = (agent.live_feed_events || []).map((event, index) => ({
+                  id: `${id}-sync-${index}`,
+                  timestamp: backendState.start_time, // Use start_time as fallback
+                  event_type: event.event_type as 'tool_use' | 'file_change' | 'text' | 'tool_result' | 'error',
+                  data: event.data || {},
+                }));
+
+                transformedAgents[id] = {
+                  id: agent.id,
+                  task_id: agent.task_id,
+                  task_title: agent.task_title,
+                  status: agent.status as import('../stores/stateStore').AgentStatus,
+                  start_time: agent.start_time,
+                  end_time: agent.end_time,
+                  duration: agent.duration,
+                  output: agent.output || { stdout: '', stderr: '' },
+                  liveFeed,
+                  token_usage: agent.token_usage || {
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    total_tokens: 0,
+                    cost_usd: 0,
+                  },
+                  exit_code: agent.exit_code,
+                  error: agent.error || '',
+                  changes: agent.changes,
+                  commits: agent.commits,
+                };
+              }
+
+              syncState({
+                agents: transformedAgents,
+                tasks: backendState.tasks || {},
+                stats: backendState.stats || {
+                  total_tasks: 0,
+                  completed_tasks: 0,
+                  failed_tasks: 0,
+                  running_tasks: 0,
+                  total_tokens: 0,
+                  total_cost_usd: 0,
+                  total_duration: 0,
+                  avg_duration: 0,
+                  file_changes: 0,
+                  git_commits: 0,
+                },
+                is_paused: backendState.is_paused,
+                start_time: backendState.start_time,
+              });
+              console.log('[WebSocket] State synced with', Object.keys(transformedAgents).length, 'agents');
+              break;
+            }
+
             case 'agent:started': {
               const { agent_id, task_id, task_title } = message.payload;
               // Create new agent entry
