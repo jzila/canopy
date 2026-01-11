@@ -110,6 +110,44 @@ const initialStats: Stats = {
   git_commits: 0,
 };
 
+// Helper function to recalculate stats from agents
+function recalculateStats(agents: Record<string, AgentState>): Stats {
+  const stats: Stats = { ...initialStats };
+  let totalDuration = 0;
+  let completedCount = 0;
+
+  for (const agent of Object.values(agents)) {
+    switch (agent.status) {
+      case 'completed':
+        stats.completed_tasks++;
+        completedCount++;
+        totalDuration += agent.duration;
+        break;
+      case 'failed':
+      case 'timed_out':
+        stats.failed_tasks++;
+        break;
+      case 'running':
+      case 'starting':
+        stats.running_tasks++;
+        break;
+    }
+
+    stats.total_tokens += agent.token_usage.total_tokens;
+    stats.total_cost_usd += agent.token_usage.cost_usd;
+    stats.file_changes += agent.changes;
+    stats.git_commits += agent.commits;
+  }
+
+  stats.total_tasks = Object.keys(agents).length;
+  stats.total_duration = totalDuration;
+  if (completedCount > 0) {
+    stats.avg_duration = totalDuration / completedCount;
+  }
+
+  return stats;
+}
+
 export const useStateStore = create<StateStore>((set) => ({
   // Initial state
   connected: false,
@@ -131,22 +169,26 @@ export const useStateStore = create<StateStore>((set) => ({
         // Only create if we have the required id field
         if (!update.id) return state;
 
+        const newAgents = {
+          ...state.agents,
+          [id]: update as AgentState,
+        };
         return {
-          agents: {
-            ...state.agents,
-            [id]: update as AgentState,
-          },
+          agents: newAgents,
+          stats: recalculateStats(newAgents),
         };
       }
 
-      return {
-        agents: {
-          ...state.agents,
-          [id]: {
-            ...existingAgent,
-            ...update,
-          },
+      const newAgents = {
+        ...state.agents,
+        [id]: {
+          ...existingAgent,
+          ...update,
         },
+      };
+      return {
+        agents: newAgents,
+        stats: recalculateStats(newAgents),
       };
     }),
 
