@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
@@ -88,6 +89,7 @@ type Orchestrator struct {
 	callbacks     *EventCallbacks
 	failureCounts map[string]int // Tracks how many times each task has failed
 	promptFilter  *PromptFilter  // Parsed prompt for filtering tasks
+	beadsMu       sync.Mutex     // Serializes beads updates to prevent corruption
 }
 
 // New creates a new orchestrator
@@ -136,7 +138,7 @@ func New(config *Config) (*Orchestrator, error) {
 		fmt.Printf("Prompt filter: %+v\n", promptFilter)
 	}
 
-	return &Orchestrator{
+	o := &Orchestrator{
 		config:        config,
 		beadsClient:   beadsClient,
 		scheduler:     sched,
@@ -145,15 +147,87 @@ func New(config *Config) (*Orchestrator, error) {
 		callbacks:     nil, // Set via SetCallbacks
 		failureCounts: make(map[string]int),
 		promptFilter:  promptFilter,
-	}, nil
+	}
+
+	// Set up default internal callbacks for beads updates.
+	// These will be wrapped with user callbacks if SetCallbacks is called later.
+	o.setupInternalCallbacks(nil)
+
+	return o, nil
 }
 
-// SetCallbacks configures event callbacks for the orchestrator
+// SetCallbacks configures event callbacks for the orchestrator.
+// The orchestrator wraps the provided callbacks to also update beads status
+// immediately when each task completes, ensuring timely status updates.
 func (o *Orchestrator) SetCallbacks(callbacks *EventCallbacks) {
 	o.callbacks = callbacks
-	// Pass callbacks through to scheduler
+	o.setupInternalCallbacks(callbacks)
+}
+
+// setupInternalCallbacks creates wrapper callbacks that include beads status updates.
+// If userCallbacks is provided, they are called after the internal beads updates.
+func (o *Orchestrator) setupInternalCallbacks(userCallbacks *EventCallbacks) {
+	wrappedCallbacks := &EventCallbacks{
+		OnAgentStartFn: func(taskID string, task *beads.Task) {
+			if userCallbacks != nil && userCallbacks.OnAgentStartFn != nil {
+				userCallbacks.OnAgentStartFn(taskID, task)
+			}
+		},
+		OnOutputFn: func(taskID string, output string, isError bool) {
+			if userCallbacks != nil && userCallbacks.OnOutputFn != nil {
+				userCallbacks.OnOutputFn(taskID, output, isError)
+			}
+		},
+		OnLiveFeedFn: func(taskID string, event *agent.LiveFeedEvent) {
+			if userCallbacks != nil && userCallbacks.OnLiveFeedFn != nil {
+				userCallbacks.OnLiveFeedFn(taskID, event)
+			}
+		},
+		OnDoneFn: func(taskID string, result *agent.Result) {
+			// Update beads immediately when task completes
+			o.markTaskDone(taskID)
+
+			// Then call user's callback
+			if userCallbacks != nil && userCallbacks.OnDoneFn != nil {
+				userCallbacks.OnDoneFn(taskID, result)
+			}
+		},
+		OnFailFn: func(taskID string, result *agent.Result) {
+			// Update beads immediately when task fails
+			o.markTaskFailed(taskID, result.Error)
+
+			// Then call user's callback
+			if userCallbacks != nil && userCallbacks.OnFailFn != nil {
+				userCallbacks.OnFailFn(taskID, result)
+			}
+		},
+	}
+
+	// Pass wrapped callbacks through to scheduler
 	if o.scheduler != nil {
-		o.scheduler.SetCallbacks(callbacks)
+		o.scheduler.SetCallbacks(wrappedCallbacks)
+	}
+}
+
+// markTaskDone marks a task as completed in beads with proper synchronization.
+// This is safe to call from concurrent goroutines.
+func (o *Orchestrator) markTaskDone(taskID string) {
+	o.beadsMu.Lock()
+	defer o.beadsMu.Unlock()
+
+	if err := o.beadsClient.Done(taskID); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to mark task %s done: %v\n", taskID, err)
+	}
+}
+
+// markTaskFailed marks a task as failed in beads with proper synchronization.
+// This is safe to call from concurrent goroutines.
+func (o *Orchestrator) markTaskFailed(taskID string, reason string) {
+	o.beadsMu.Lock()
+	defer o.beadsMu.Unlock()
+
+	if err := o.beadsClient.Fail(taskID, reason); err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: failed to mark task %s as failed: %v\n", taskID, err)
 	}
 }
 
@@ -234,19 +308,8 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			return fmt.Errorf("merge failed: %w", err)
 		}
 
-		// Update beads status for all tasks (orchestrator-only, no concurrency)
-		for _, r := range results {
-			if r.Success {
-				if err := o.beadsClient.Done(r.TaskID); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: failed to mark task %s done: %v\n", r.TaskID, err)
-				}
-			} else {
-				if err := o.beadsClient.Fail(r.TaskID, r.Error); err != nil {
-					fmt.Fprintf(os.Stderr, "ERROR: failed to mark task %s as failed: %v\n", r.TaskID, err)
-					fmt.Fprintf(os.Stderr, "       This task will be retried in the next iteration.\n")
-				}
-			}
-		}
+		// NOTE: Beads status updates now happen immediately in the OnDone/OnFail
+		// callbacks (via markTaskDone/markTaskFailed), so no need to update here.
 
 		// Clean up overlays now that merge is complete
 		for _, r := range results {
