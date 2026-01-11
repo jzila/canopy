@@ -18,4 +18,5 @@ devenv.local.yaml
 # Claude local settings
 .claude/settings.local.json
 .claude.json.backup
+# Go module cache (downloaded dependencies)
 go/
