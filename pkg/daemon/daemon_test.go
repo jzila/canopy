@@ -207,7 +207,8 @@ func TestGetRuntimeState(t *testing.T) {
 	}
 }
 
-// TestRestoreStateFromDB verifies that state is restored from database on daemon init
+// TestRestoreStateFromDB verifies that orphaned runs/agents are marked as failed
+// and state is NOT restored (since orphaned runs are no longer "running")
 func TestRestoreStateFromDB(t *testing.T) {
 	// Create temp directory for test database
 	tmpDir, err := os.MkdirTemp("", "canopy-daemon-test-*")
@@ -223,6 +224,7 @@ func TestRestoreStateFromDB(t *testing.T) {
 	}
 
 	// Create a running run with agents in the database
+	// This simulates a daemon that crashed while a run was in progress
 	now := time.Now()
 	run := &persistence.Run{
 		ID:          "run-to-restore",
@@ -254,7 +256,7 @@ func TestRestoreStateFromDB(t *testing.T) {
 			RunID:        "run-to-restore",
 			TaskID:       "task-2",
 			TaskTitle:    "Task 2",
-			Status:       persistence.AgentStatusRunning,
+			Status:       persistence.AgentStatusRunning, // This should be marked as failed
 			StartedAt:    now.Add(-30 * time.Minute),
 			InputTokens:  2000,
 			OutputTokens: 800,
@@ -293,70 +295,64 @@ func TestRestoreStateFromDB(t *testing.T) {
 		persistenceStore: store2,
 	}
 
-	// Manually call restoreStateFromDB
+	// Manually call restoreStateFromDB - this should mark orphaned states as failed
 	if err := daemon.restoreStateFromDB(); err != nil {
 		t.Fatalf("restoreStateFromDB failed: %v", err)
 	}
 
-	// Verify state was restored
+	// Verify that NO agents were restored to RuntimeState
+	// (orphaned run was marked as failed, so GetRunningRun returns nil)
 	state := daemon.GetRuntimeState()
 	if state == nil {
 		t.Fatal("state should not be nil")
 	}
 
-	if len(state.Agents) != 3 {
-		t.Errorf("expected 3 agents, got %d", len(state.Agents))
+	if len(state.Agents) != 0 {
+		t.Errorf("expected 0 agents (orphaned run marked as failed), got %d", len(state.Agents))
 	}
 
-	// Check agent-1 was restored correctly
-	agent1 := state.GetAgent("agent-1")
-	if agent1 == nil {
-		t.Fatal("agent-1 should exist")
+	// Verify the orphaned run and agent were marked as failed in the database
+	restoredRun, err := store2.GetRun("run-to-restore")
+	if err != nil {
+		t.Fatalf("failed to get run: %v", err)
 	}
-	if agent1.TaskID != "task-1" {
-		t.Errorf("expected task-1, got %s", agent1.TaskID)
+	if restoredRun.Status != persistence.RunStatusFailed {
+		t.Errorf("expected run status to be failed (orphaned), got %s", restoredRun.Status)
 	}
-	if agent1.Status != AgentStatusCompleted {
-		t.Errorf("expected completed status, got %s", agent1.Status)
-	}
-	if agent1.TokenUsage.InputTokens != 1000 {
-		t.Errorf("expected 1000 input tokens, got %d", agent1.TokenUsage.InputTokens)
+	if restoredRun.FinishedAt == nil {
+		t.Error("expected orphaned run to have finished_at set")
 	}
 
-	// Check agent-2 was restored correctly
-	agent2 := state.GetAgent("agent-2")
-	if agent2 == nil {
-		t.Fatal("agent-2 should exist")
+	// Verify agent-2 (which was running) is now marked as failed
+	agent2, err := store2.GetAgent("agent-2")
+	if err != nil {
+		t.Fatalf("failed to get agent: %v", err)
 	}
-	if agent2.Status != AgentStatusRunning {
-		t.Errorf("expected running status, got %s", agent2.Status)
+	if agent2.Status != persistence.AgentStatusFailed {
+		t.Errorf("expected agent-2 status to be failed (orphaned), got %s", agent2.Status)
 	}
-
-	// Check agent-3 was restored with error
-	agent3 := state.GetAgent("agent-3")
-	if agent3 == nil {
-		t.Fatal("agent-3 should exist")
-	}
-	if agent3.Status != AgentStatusFailed {
-		t.Errorf("expected failed status, got %s", agent3.Status)
-	}
-	if agent3.Error != "test error" {
-		t.Errorf("expected 'test error', got %s", agent3.Error)
-	}
-	if agent3.Duration != 120.5 {
-		t.Errorf("expected duration 120.5, got %f", agent3.Duration)
+	if agent2.ErrorMessage != "daemon terminated unexpectedly" {
+		t.Errorf("expected error message 'daemon terminated unexpectedly', got %s", agent2.ErrorMessage)
 	}
 
-	// Verify stats were updated
-	state.UpdateStats()
-	if state.Stats.CompletedTasks != 1 {
-		t.Errorf("expected 1 completed task, got %d", state.Stats.CompletedTasks)
+	// Verify agent-1 (completed) and agent-3 (already failed) are unchanged
+	agent1, err := store2.GetAgent("agent-1")
+	if err != nil {
+		t.Fatalf("failed to get agent: %v", err)
 	}
-	if state.Stats.FailedTasks != 1 {
-		t.Errorf("expected 1 failed task, got %d", state.Stats.FailedTasks)
+	if agent1.Status != persistence.AgentStatusCompleted {
+		t.Errorf("expected agent-1 to remain completed, got %s", agent1.Status)
 	}
-	if state.Stats.RunningTasks != 1 {
-		t.Errorf("expected 1 running task, got %d", state.Stats.RunningTasks)
+
+	agent3, err := store2.GetAgent("agent-3")
+	if err != nil {
+		t.Fatalf("failed to get agent: %v", err)
+	}
+	if agent3.Status != persistence.AgentStatusFailed {
+		t.Errorf("expected agent-3 to remain failed, got %s", agent3.Status)
+	}
+	if agent3.ErrorMessage != "test error" {
+		t.Errorf("expected agent-3 error message 'test error', got %s", agent3.ErrorMessage)
 	}
 
 	store2.Close()

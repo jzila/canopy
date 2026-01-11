@@ -418,6 +418,43 @@ func (s *Store) GetRunningRun() (*Run, error) {
 	return s.scanRun(row)
 }
 
+// MarkOrphanedRunsFailed marks all runs with status "running" as "failed".
+// This is used on daemon startup to handle runs that were interrupted by a crash.
+// Returns the number of runs marked as failed.
+func (s *Store) MarkOrphanedRunsFailed() (int64, error) {
+	now := time.Now().Unix()
+	query := `
+		UPDATE runs SET
+			status = 'failed',
+			finished_at = ?
+		WHERE status = 'running'
+	`
+	result, err := s.db.Exec(query, now)
+	if err != nil {
+		return 0, fmt.Errorf("failed to mark orphaned runs: %w", err)
+	}
+	return result.RowsAffected()
+}
+
+// MarkOrphanedAgentsFailed marks all agents with status "starting" or "running" as "failed".
+// This is used on daemon startup to handle agents that were interrupted by a crash.
+// Returns the number of agents marked as failed.
+func (s *Store) MarkOrphanedAgentsFailed() (int64, error) {
+	now := time.Now().Unix()
+	query := `
+		UPDATE agents SET
+			status = 'failed',
+			finished_at = ?,
+			error_message = 'daemon terminated unexpectedly'
+		WHERE status IN ('starting', 'running')
+	`
+	result, err := s.db.Exec(query, now)
+	if err != nil {
+		return 0, fmt.Errorf("failed to mark orphaned agents: %w", err)
+	}
+	return result.RowsAffected()
+}
+
 // GetStats returns aggregate statistics, optionally filtered by time range
 func (s *Store) GetStats(since *time.Time) (*AggregateStats, error) {
 	// Query runs

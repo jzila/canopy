@@ -89,12 +89,22 @@ func (d *Daemon) Init() {
 // restoreStateFromDB loads any running run and its agents from the database
 // into the RuntimeState. This allows the daemon to resume displaying state
 // after a restart.
+//
+// On startup, any runs or agents that were still "running" when the daemon
+// terminated are marked as failed, since they cannot be resumed.
 func (d *Daemon) restoreStateFromDB() error {
 	if d.persistenceStore == nil {
 		return nil
 	}
 
-	// Get any running run
+	// First, mark any orphaned runs/agents as failed.
+	// These are runs/agents that were still "running" when the daemon crashed or was killed.
+	// They cannot be resumed, so we mark them as failed to maintain data integrity.
+	if err := d.markOrphanedStatesAsFailed(); err != nil {
+		return fmt.Errorf("failed to mark orphaned states: %w", err)
+	}
+
+	// Now get the most recent run (which will be marked as failed if it was orphaned)
 	run, err := d.persistenceStore.GetRunningRun()
 	if err != nil {
 		return fmt.Errorf("failed to get running run: %w", err)
@@ -126,6 +136,32 @@ func (d *Daemon) restoreStateFromDB() error {
 	d.state.UpdateStats()
 
 	log.Printf("Restored %d agents from previous run", len(agents))
+	return nil
+}
+
+// markOrphanedStatesAsFailed marks any orphaned runs and agents as failed.
+// This handles the case where the daemon was terminated (crash, kill, etc.)
+// while a run was in progress. Since those runs cannot be resumed, we mark
+// them as failed to maintain data integrity.
+func (d *Daemon) markOrphanedStatesAsFailed() error {
+	// Mark orphaned agents first (agents in "starting" or "running" state)
+	agentCount, err := d.persistenceStore.MarkOrphanedAgentsFailed()
+	if err != nil {
+		return fmt.Errorf("failed to mark orphaned agents: %w", err)
+	}
+	if agentCount > 0 {
+		log.Printf("Marked %d orphaned agent(s) as failed (daemon terminated unexpectedly)", agentCount)
+	}
+
+	// Mark orphaned runs (runs in "running" state)
+	runCount, err := d.persistenceStore.MarkOrphanedRunsFailed()
+	if err != nil {
+		return fmt.Errorf("failed to mark orphaned runs: %w", err)
+	}
+	if runCount > 0 {
+		log.Printf("Marked %d orphaned run(s) as failed (daemon terminated unexpectedly)", runCount)
+	}
+
 	return nil
 }
 

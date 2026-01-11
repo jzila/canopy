@@ -469,6 +469,231 @@ func TestGetRunningRun_MultipleRunning(t *testing.T) {
 	}
 }
 
+func TestMarkOrphanedRunsFailed(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	now := time.Now()
+
+	// Create runs with different statuses
+	runs := []*Run{
+		{ID: "run-completed", StartedAt: now.Add(-3 * time.Hour), Status: RunStatusCompleted},
+		{ID: "run-failed", StartedAt: now.Add(-2 * time.Hour), Status: RunStatusFailed},
+		{ID: "run-running-1", StartedAt: now.Add(-1 * time.Hour), Status: RunStatusRunning},
+		{ID: "run-running-2", StartedAt: now.Add(-30 * time.Minute), Status: RunStatusRunning},
+		{ID: "run-cancelled", StartedAt: now.Add(-15 * time.Minute), Status: RunStatusCancelled},
+	}
+
+	for _, run := range runs {
+		if err := store.CreateRun(run); err != nil {
+			t.Fatalf("failed to create run: %v", err)
+		}
+	}
+
+	// Mark orphaned runs as failed
+	count, err := store.MarkOrphanedRunsFailed()
+	if err != nil {
+		t.Fatalf("failed to mark orphaned runs: %v", err)
+	}
+
+	if count != 2 {
+		t.Errorf("expected 2 runs marked as failed, got %d", count)
+	}
+
+	// Verify the running runs are now failed
+	run1, err := store.GetRun("run-running-1")
+	if err != nil {
+		t.Fatalf("failed to get run: %v", err)
+	}
+	if run1.Status != RunStatusFailed {
+		t.Errorf("expected run-running-1 status to be failed, got %s", run1.Status)
+	}
+	if run1.FinishedAt == nil {
+		t.Error("expected run-running-1 to have finished_at set")
+	}
+
+	run2, err := store.GetRun("run-running-2")
+	if err != nil {
+		t.Fatalf("failed to get run: %v", err)
+	}
+	if run2.Status != RunStatusFailed {
+		t.Errorf("expected run-running-2 status to be failed, got %s", run2.Status)
+	}
+
+	// Verify other runs are unchanged
+	completedRun, err := store.GetRun("run-completed")
+	if err != nil {
+		t.Fatalf("failed to get run: %v", err)
+	}
+	if completedRun.Status != RunStatusCompleted {
+		t.Errorf("expected run-completed to remain completed, got %s", completedRun.Status)
+	}
+
+	cancelledRun, err := store.GetRun("run-cancelled")
+	if err != nil {
+		t.Fatalf("failed to get run: %v", err)
+	}
+	if cancelledRun.Status != RunStatusCancelled {
+		t.Errorf("expected run-cancelled to remain cancelled, got %s", cancelledRun.Status)
+	}
+
+	// GetRunningRun should now return nil since all running runs are failed
+	runningRun, err := store.GetRunningRun()
+	if err != nil {
+		t.Fatalf("failed to get running run: %v", err)
+	}
+	if runningRun != nil {
+		t.Errorf("expected no running runs, got %v", runningRun)
+	}
+}
+
+func TestMarkOrphanedRunsFailed_NoOrphans(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	now := time.Now()
+
+	// Create only completed/failed runs
+	runs := []*Run{
+		{ID: "run-completed", StartedAt: now.Add(-2 * time.Hour), Status: RunStatusCompleted},
+		{ID: "run-failed", StartedAt: now.Add(-1 * time.Hour), Status: RunStatusFailed},
+	}
+
+	for _, run := range runs {
+		if err := store.CreateRun(run); err != nil {
+			t.Fatalf("failed to create run: %v", err)
+		}
+	}
+
+	// Mark orphaned runs - should affect nothing
+	count, err := store.MarkOrphanedRunsFailed()
+	if err != nil {
+		t.Fatalf("failed to mark orphaned runs: %v", err)
+	}
+
+	if count != 0 {
+		t.Errorf("expected 0 runs marked as failed, got %d", count)
+	}
+}
+
+func TestMarkOrphanedAgentsFailed(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	now := time.Now()
+
+	// Create a run
+	run := &Run{ID: "run-for-orphan-test", StartedAt: now, Status: RunStatusRunning}
+	if err := store.CreateRun(run); err != nil {
+		t.Fatalf("failed to create run: %v", err)
+	}
+
+	// Create agents with different statuses
+	agents := []*Agent{
+		{ID: "agent-completed", RunID: "run-for-orphan-test", TaskID: "task-1", TaskTitle: "Completed Task", Status: AgentStatusCompleted, StartedAt: now},
+		{ID: "agent-failed", RunID: "run-for-orphan-test", TaskID: "task-2", TaskTitle: "Failed Task", Status: AgentStatusFailed, StartedAt: now},
+		{ID: "agent-starting", RunID: "run-for-orphan-test", TaskID: "task-3", TaskTitle: "Starting Task", Status: AgentStatusStarting, StartedAt: now},
+		{ID: "agent-running", RunID: "run-for-orphan-test", TaskID: "task-4", TaskTitle: "Running Task", Status: AgentStatusRunning, StartedAt: now},
+		{ID: "agent-timed-out", RunID: "run-for-orphan-test", TaskID: "task-5", TaskTitle: "Timed Out Task", Status: AgentStatusTimedOut, StartedAt: now},
+		{ID: "agent-cancelled", RunID: "run-for-orphan-test", TaskID: "task-6", TaskTitle: "Cancelled Task", Status: AgentStatusCancelled, StartedAt: now},
+	}
+
+	for _, agent := range agents {
+		if err := store.CreateAgent(agent); err != nil {
+			t.Fatalf("failed to create agent: %v", err)
+		}
+	}
+
+	// Mark orphaned agents as failed
+	count, err := store.MarkOrphanedAgentsFailed()
+	if err != nil {
+		t.Fatalf("failed to mark orphaned agents: %v", err)
+	}
+
+	if count != 2 {
+		t.Errorf("expected 2 agents marked as failed (starting + running), got %d", count)
+	}
+
+	// Verify starting agent is now failed
+	startingAgent, err := store.GetAgent("agent-starting")
+	if err != nil {
+		t.Fatalf("failed to get agent: %v", err)
+	}
+	if startingAgent.Status != AgentStatusFailed {
+		t.Errorf("expected agent-starting status to be failed, got %s", startingAgent.Status)
+	}
+	if startingAgent.FinishedAt == nil {
+		t.Error("expected agent-starting to have finished_at set")
+	}
+	if startingAgent.ErrorMessage != "daemon terminated unexpectedly" {
+		t.Errorf("expected error message 'daemon terminated unexpectedly', got %s", startingAgent.ErrorMessage)
+	}
+
+	// Verify running agent is now failed
+	runningAgent, err := store.GetAgent("agent-running")
+	if err != nil {
+		t.Fatalf("failed to get agent: %v", err)
+	}
+	if runningAgent.Status != AgentStatusFailed {
+		t.Errorf("expected agent-running status to be failed, got %s", runningAgent.Status)
+	}
+	if runningAgent.ErrorMessage != "daemon terminated unexpectedly" {
+		t.Errorf("expected error message 'daemon terminated unexpectedly', got %s", runningAgent.ErrorMessage)
+	}
+
+	// Verify other agents are unchanged
+	completedAgent, err := store.GetAgent("agent-completed")
+	if err != nil {
+		t.Fatalf("failed to get agent: %v", err)
+	}
+	if completedAgent.Status != AgentStatusCompleted {
+		t.Errorf("expected agent-completed to remain completed, got %s", completedAgent.Status)
+	}
+
+	timedOutAgent, err := store.GetAgent("agent-timed-out")
+	if err != nil {
+		t.Fatalf("failed to get agent: %v", err)
+	}
+	if timedOutAgent.Status != AgentStatusTimedOut {
+		t.Errorf("expected agent-timed-out to remain timed_out, got %s", timedOutAgent.Status)
+	}
+}
+
+func TestMarkOrphanedAgentsFailed_NoOrphans(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	now := time.Now()
+
+	// Create a run
+	run := &Run{ID: "run-no-orphans", StartedAt: now, Status: RunStatusCompleted}
+	if err := store.CreateRun(run); err != nil {
+		t.Fatalf("failed to create run: %v", err)
+	}
+
+	// Create only completed/failed agents
+	agents := []*Agent{
+		{ID: "agent-completed", RunID: "run-no-orphans", TaskID: "task-1", TaskTitle: "Completed Task", Status: AgentStatusCompleted, StartedAt: now},
+		{ID: "agent-failed", RunID: "run-no-orphans", TaskID: "task-2", TaskTitle: "Failed Task", Status: AgentStatusFailed, StartedAt: now},
+	}
+
+	for _, agent := range agents {
+		if err := store.CreateAgent(agent); err != nil {
+			t.Fatalf("failed to create agent: %v", err)
+		}
+	}
+
+	// Mark orphaned agents - should affect nothing
+	count, err := store.MarkOrphanedAgentsFailed()
+	if err != nil {
+		t.Fatalf("failed to mark orphaned agents: %v", err)
+	}
+
+	if count != 0 {
+		t.Errorf("expected 0 agents marked as failed, got %d", count)
+	}
+}
+
 // Helper function to create a test store
 func createTestStore(t *testing.T) *Store {
 	tmpDir, err := os.MkdirTemp("", "canopy-test-*")
