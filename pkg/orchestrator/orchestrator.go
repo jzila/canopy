@@ -76,10 +76,11 @@ type Config struct {
 	Concurrency int
 	Verbose     bool
 	DryRun      bool
-	UseBwrap    bool   // Use bubblewrap sandbox for agent isolation
-	MaxRetries  int    // Maximum number of times to retry failed tasks (0 = no retries, -1 = infinite)
-	Prompt      string // Prompt to filter/direct work selection
-	MaxPriority int    // Hard filter: only run tasks with priority <= this value (-1 = no filter)
+	UseBwrap    bool          // Use bubblewrap sandbox for agent isolation
+	MaxRetries  int           // Maximum number of times to retry failed tasks (0 = no retries, -1 = infinite)
+	Prompt      string        // Prompt to filter/direct work selection
+	MaxPriority int           // Hard filter: only run tasks with priority <= this value (-1 = no filter)
+	SlotTimeout time.Duration // Timeout after which a merge slot is considered stale (0 = use default)
 }
 
 // Orchestrator coordinates the execution of tasks from beads
@@ -90,10 +91,12 @@ type Orchestrator struct {
 	merger        *merge.SequentialMerger
 	tempDir       string
 	callbacks     *EventCallbacks
-	failureCounts map[string]int // Tracks how many times each task has failed
-	promptFilter  *PromptFilter  // Parsed prompt for filtering tasks
-	beadsMu       sync.Mutex     // Serializes beads updates to prevent corruption
-	mergeMu       sync.Mutex     // Serializes merge operations to prevent race conditions
+	failureCounts map[string]int    // Tracks how many times each task has failed
+	promptFilter  *PromptFilter     // Parsed prompt for filtering tasks
+	beadsMu       sync.Mutex        // Serializes beads updates to prevent corruption
+	mergeMu       sync.Mutex        // Serializes merge operations to prevent race conditions
+	slotHolders   map[string]string // Maps taskID to encoded holder string for proper release
+	slotHoldersMu sync.Mutex        // Protects slotHolders map
 }
 
 // New creates a new orchestrator
@@ -151,6 +154,11 @@ func New(config *Config) (*Orchestrator, error) {
 		config.MaxRetries = 3
 	}
 
+	// Set default slot timeout if not specified
+	if config.SlotTimeout == 0 {
+		config.SlotTimeout = beads.DefaultSlotTimeout
+	}
+
 	// Parse prompt for filtering
 	promptFilter, err := ParsePrompt(config.Prompt)
 	if err != nil {
@@ -170,6 +178,7 @@ func New(config *Config) (*Orchestrator, error) {
 		callbacks:     nil, // Set via SetCallbacks
 		failureCounts: make(map[string]int),
 		promptFilter:  promptFilter,
+		slotHolders:   make(map[string]string),
 	}
 
 	// Set up default internal callbacks for beads updates.
@@ -318,8 +327,15 @@ func (o *Orchestrator) mergeAndCleanup(result *agent.Result) {
 // acquireMergeSlot acquires the merge slot for exclusive merge access.
 // If the slot is held, this will add to the waiters queue with the task's priority.
 func (o *Orchestrator) acquireMergeSlot(taskID string) error {
-	// Use taskID as the holder identifier
-	result, err := o.beadsClient.MergeSlotAcquire(taskID, true) // wait=true to join queue
+	// Encode taskID with PID and timestamp for staleness detection
+	encodedHolder := beads.EncodeSlotHolder(taskID)
+
+	// Store the encoded holder for later release
+	o.slotHoldersMu.Lock()
+	o.slotHolders[taskID] = encodedHolder
+	o.slotHoldersMu.Unlock()
+
+	result, err := o.beadsClient.MergeSlotAcquire(encodedHolder, true) // wait=true to join queue
 	if err != nil {
 		return err
 	}
@@ -327,7 +343,7 @@ func (o *Orchestrator) acquireMergeSlot(taskID string) error {
 	if result != nil && !result.Acquired {
 		// We're in the waiters queue - poll until we get the slot
 		// The priority queue is managed by bd merge-slot
-		return o.waitForMergeSlot(taskID)
+		return o.waitForMergeSlot(taskID, encodedHolder)
 	}
 
 	return nil
@@ -335,7 +351,7 @@ func (o *Orchestrator) acquireMergeSlot(taskID string) error {
 
 // waitForMergeSlot polls for the merge slot with exponential backoff.
 // This is called when the initial acquire put us in the waiters queue.
-func (o *Orchestrator) waitForMergeSlot(taskID string) error {
+func (o *Orchestrator) waitForMergeSlot(taskID, encodedHolder string) error {
 	// Poll with increasing intervals
 	intervals := []int{10, 20, 50, 100, 200, 500} // milliseconds
 	maxAttempts := 60                              // ~30 seconds total with backoff
@@ -351,8 +367,22 @@ func (o *Orchestrator) waitForMergeSlot(taskID string) error {
 		// Sleep before retry
 		time.Sleep(time.Duration(sleepDuration) * time.Millisecond)
 
+		// Check if the current holder is stale (crashed or timed out)
+		isStale, holderInfo, _ := o.beadsClient.IsSlotStale(o.config.SlotTimeout)
+		if isStale {
+			if o.config.Verbose {
+				fmt.Printf("Detected stale merge slot (holder: %s, PID: %d), force-releasing\n",
+					holderInfo.TaskID, holderInfo.PID)
+			}
+			if err := o.beadsClient.MergeSlotForceRelease("stale slot during wait"); err != nil {
+				if o.config.Verbose {
+					fmt.Fprintf(os.Stderr, "warning: failed to force-release stale slot: %v\n", err)
+				}
+			}
+		}
+
 		// Try to acquire again
-		result, err := o.beadsClient.MergeSlotAcquire(taskID, false) // don't re-add to queue
+		result, err := o.beadsClient.MergeSlotAcquire(encodedHolder, false) // don't re-add to queue
 		if err == nil && result != nil && result.Acquired {
 			return nil
 		}
@@ -363,7 +393,42 @@ func (o *Orchestrator) waitForMergeSlot(taskID string) error {
 
 // releaseMergeSlot releases the merge slot after merge is complete.
 func (o *Orchestrator) releaseMergeSlot(taskID string) error {
-	return o.beadsClient.MergeSlotRelease(taskID)
+	// Get the encoded holder we used when acquiring
+	o.slotHoldersMu.Lock()
+	encodedHolder := o.slotHolders[taskID]
+	delete(o.slotHolders, taskID)
+	o.slotHoldersMu.Unlock()
+
+	// Use the encoded holder if available, otherwise fall back to taskID
+	holder := encodedHolder
+	if holder == "" {
+		holder = taskID
+	}
+
+	return o.beadsClient.MergeSlotRelease(holder)
+}
+
+// cleanupStaleSlots checks for and cleans up any stale merge slots.
+// This is called on orchestrator startup for crash recovery.
+// A slot is considered stale if:
+// - The holder process is no longer running (crashed orchestrator)
+// - The slot has been held longer than the configured timeout
+func (o *Orchestrator) cleanupStaleSlots() error {
+	cleaned, holderInfo, err := o.beadsClient.MergeSlotCleanupStale(o.config.SlotTimeout)
+	if err != nil {
+		return err
+	}
+
+	if cleaned && holderInfo != nil {
+		if o.config.Verbose {
+			fmt.Printf("Cleaned up stale merge slot from crashed orchestrator (holder: %s, PID: %d, acquired: %s)\n",
+				holderInfo.TaskID, holderInfo.PID, holderInfo.Timestamp.Format(time.RFC3339))
+		} else {
+			fmt.Printf("Recovered from stale merge slot (previous holder: %s)\n", holderInfo.TaskID)
+		}
+	}
+
+	return nil
 }
 
 // commitDirtyBeadsChanges commits any uncommitted changes in the .beads/ directory.
@@ -422,6 +487,12 @@ func (o *Orchestrator) WithCallbacks(callbacks *EventCallbacks) *Orchestrator {
 
 // Run executes the orchestration loop until no ready tasks remain
 func (o *Orchestrator) Run(ctx context.Context) error {
+	// Crash recovery: clean up any stale merge slots from previous crashed runs
+	if err := o.cleanupStaleSlots(); err != nil {
+		// Log warning but don't fail startup - this is best-effort recovery
+		fmt.Fprintf(os.Stderr, "warning: failed to clean up stale merge slots: %v\n", err)
+	}
+
 	iteration := 0
 
 	for {

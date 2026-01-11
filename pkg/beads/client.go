@@ -4,8 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"strconv"
 	"strings"
+	"syscall"
+	"time"
 )
 
 // Task represents a beads task returned from bd ready
@@ -173,6 +177,92 @@ type MergeSlotResult struct {
 	Released  bool     `json:"released,omitempty"`
 }
 
+// SlotHolderInfo contains parsed metadata about the slot holder.
+// The holder field is encoded as "taskID|PID|timestamp" for staleness detection.
+type SlotHolderInfo struct {
+	TaskID    string    // Original task ID
+	PID       int       // Process ID of the holder
+	Timestamp time.Time // When the slot was acquired
+	Raw       string    // Raw holder string (for compatibility)
+}
+
+// DefaultSlotTimeout is the default timeout after which a slot is considered stale.
+const DefaultSlotTimeout = 10 * time.Minute
+
+// EncodeSlotHolder creates a holder string with embedded PID and timestamp.
+// Format: "taskID|PID|unixTimestamp"
+func EncodeSlotHolder(taskID string) string {
+	return fmt.Sprintf("%s|%d|%d", taskID, os.Getpid(), time.Now().Unix())
+}
+
+// DecodeSlotHolder parses a holder string to extract task ID, PID, and timestamp.
+// Returns nil if the holder string is not in the expected format (backward compatible).
+func DecodeSlotHolder(holder string) *SlotHolderInfo {
+	if holder == "" {
+		return nil
+	}
+
+	parts := strings.Split(holder, "|")
+	if len(parts) != 3 {
+		// Old format or simple holder - return with just raw info
+		return &SlotHolderInfo{
+			TaskID: holder,
+			Raw:    holder,
+		}
+	}
+
+	pid, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return &SlotHolderInfo{TaskID: parts[0], Raw: holder}
+	}
+
+	ts, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil {
+		return &SlotHolderInfo{TaskID: parts[0], PID: pid, Raw: holder}
+	}
+
+	return &SlotHolderInfo{
+		TaskID:    parts[0],
+		PID:       pid,
+		Timestamp: time.Unix(ts, 0),
+		Raw:       holder,
+	}
+}
+
+// IsStale returns true if the slot holder is considered stale based on timeout.
+func (s *SlotHolderInfo) IsStale(timeout time.Duration) bool {
+	if s == nil || s.Timestamp.IsZero() {
+		// Can't determine staleness without timestamp - assume not stale for safety
+		return false
+	}
+	return time.Since(s.Timestamp) > timeout
+}
+
+// IsProcessDead checks if the holder process is no longer running.
+// Returns false if PID is not available or process status can't be determined.
+func (s *SlotHolderInfo) IsProcessDead() bool {
+	if s == nil || s.PID == 0 {
+		return false
+	}
+
+	// On Unix, sending signal 0 checks if process exists without affecting it
+	proc, err := os.FindProcess(s.PID)
+	if err != nil {
+		return true // Can't find process, consider it dead
+	}
+
+	// Try to send signal 0 to check if process exists
+	// Signal(syscall.Signal(0)) is the proper way to test process existence
+	err = proc.Signal(syscall.Signal(0))
+	if err != nil {
+		// EPERM means process exists but we don't have permission - still alive
+		// ESRCH means no such process - dead
+		return true
+	}
+
+	return false
+}
+
 // MergeSlotAcquire tries to acquire the merge slot for exclusive access.
 // If wait is true and the slot is held, adds to the waiters queue.
 // Returns acquired=true if slot was acquired, false otherwise.
@@ -241,6 +331,73 @@ func (c *Client) MergeSlotCheck() (*MergeSlotResult, error) {
 	}
 
 	return &result, nil
+}
+
+// GetHolderInfo parses the holder string to extract task ID, PID, and timestamp.
+func (r *MergeSlotResult) GetHolderInfo() *SlotHolderInfo {
+	return DecodeSlotHolder(r.Holder)
+}
+
+// IsSlotStale checks if the current slot holder is stale (timed out or dead process).
+// Returns true if the slot should be force-released.
+func (c *Client) IsSlotStale(timeout time.Duration) (bool, *SlotHolderInfo, error) {
+	result, err := c.MergeSlotCheck()
+	if err != nil {
+		return false, nil, err
+	}
+
+	if result.Available {
+		return false, nil, nil // Slot is available, not stale
+	}
+
+	info := result.GetHolderInfo()
+	if info == nil {
+		return false, nil, nil
+	}
+
+	// Check if process is dead (crashed orchestrator)
+	if info.IsProcessDead() {
+		return true, info, nil
+	}
+
+	// Check if slot has timed out
+	if info.IsStale(timeout) {
+		return true, info, nil
+	}
+
+	return false, info, nil
+}
+
+// MergeSlotForceRelease forcibly releases a stale merge slot.
+// This should only be called after verifying the slot is stale via IsSlotStale.
+func (c *Client) MergeSlotForceRelease(reason string) error {
+	// We need to release without holder verification
+	// The bd merge-slot release command allows releasing without --holder for force release
+	args := []string{"merge-slot", "release"}
+
+	_, err := c.run(args...)
+	return err
+}
+
+// MergeSlotCleanupStale checks for and cleans up any stale merge slots.
+// This should be called on orchestrator startup for crash recovery.
+// Returns (cleaned, holderInfo, error) where cleaned indicates if a stale slot was released.
+func (c *Client) MergeSlotCleanupStale(timeout time.Duration) (bool, *SlotHolderInfo, error) {
+	isStale, info, err := c.IsSlotStale(timeout)
+	if err != nil {
+		return false, nil, err
+	}
+
+	if !isStale {
+		return false, info, nil
+	}
+
+	// Force release the stale slot
+	if err := c.MergeSlotForceRelease("stale slot cleanup"); err != nil {
+		return false, info, fmt.Errorf("failed to force-release stale slot: %w", err)
+	}
+
+	return true, info, nil
 }
 
 // Sync runs bd sync to commit and push beads changes
