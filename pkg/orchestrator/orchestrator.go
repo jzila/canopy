@@ -256,7 +256,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		}
 
 		// Commit merged changes
-		if err := o.commitMergedChanges(results); err != nil {
+		if err := o.commitMergedChanges(results, mergeResult); err != nil {
 			// Log but don't fail - the changes are already merged
 			fmt.Fprintf(os.Stderr, "warning: failed to commit merged changes: %v\n", err)
 		}
@@ -320,32 +320,38 @@ func (o *Orchestrator) GetScheduler() *scheduler.Scheduler {
 
 // commitMergedChanges creates individual git commits for each task's file-only changes.
 // Note: Tasks that made git commits have already been applied via git am with their
-// original commit messages. This function only commits file-only changes (if any).
-func (o *Orchestrator) commitMergedChanges(results []*agent.Result) error {
-	// Identify tasks with file-only changes (no git commits)
-	var fileOnlyTasks []*agent.Result
+// original commit messages. This function commits:
+// 1. File-only changes (tasks that made no git commits)
+// 2. File changes from tasks where git patch application failed
+func (o *Orchestrator) commitMergedChanges(results []*agent.Result, mergeResult *merge.Result) error {
+	// Identify tasks that need their file changes committed
+	var tasksToCommit []*agent.Result
 	for _, r := range results {
 		if !r.Success {
 			continue
 		}
-		// Task has file changes but no git commits
+
 		hasFileChanges := len(r.Changes) > 0
 		hasGitCommits := r.GitState != nil && len(r.GitState.Patches) > 0
+		patchFailed := mergeResult.PatchFailed[r.TaskID]
 
-		if hasFileChanges && !hasGitCommits {
-			fileOnlyTasks = append(fileOnlyTasks, r)
+		// Commit file changes if:
+		// 1. Task has file changes but no git commits, OR
+		// 2. Task had git commits but patch application failed
+		if hasFileChanges && (!hasGitCommits || patchFailed) {
+			tasksToCommit = append(tasksToCommit, r)
 		}
 	}
 
-	if len(fileOnlyTasks) == 0 {
+	if len(tasksToCommit) == 0 {
 		if o.config.Verbose {
-			fmt.Println("No file-only changes to commit")
+			fmt.Println("No file changes to commit")
 		}
 		return nil
 	}
 
-	// Commit each task's file-only changes separately
-	for _, task := range fileOnlyTasks {
+	// Commit each task's file changes separately
+	for _, task := range tasksToCommit {
 		// Collect paths for this task
 		var paths []string
 		for _, change := range task.Changes {
@@ -377,6 +383,9 @@ func (o *Orchestrator) commitMergedChanges(results []*agent.Result) error {
 
 		// Create commit for this task
 		commitMsg := fmt.Sprintf("canopy: apply changes from %s", task.TaskID)
+		if mergeResult.PatchFailed[task.TaskID] {
+			commitMsg = fmt.Sprintf("canopy: apply changes from %s (git patch failed, using file-based merge)", task.TaskID)
+		}
 		commitCmd := exec.Command("git", "commit", "-m", commitMsg)
 		commitCmd.Dir = o.config.OutputDir
 		if err := commitCmd.Run(); err != nil {
@@ -384,7 +393,11 @@ func (o *Orchestrator) commitMergedChanges(results []*agent.Result) error {
 		}
 
 		if o.config.Verbose {
-			fmt.Printf("Created commit for file-only changes from task %s\n", task.TaskID)
+			if mergeResult.PatchFailed[task.TaskID] {
+				fmt.Printf("Created commit for file changes from task %s (patch application failed)\n", task.TaskID)
+			} else {
+				fmt.Printf("Created commit for file-only changes from task %s\n", task.TaskID)
+			}
 		}
 	}
 

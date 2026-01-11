@@ -30,8 +30,9 @@ type Result struct {
 	Applied        []AppliedChange
 	Conflicts      []Conflict
 	Errors         []string
-	CommitsApplied int  // Number of git commits applied
-	BeadsSynced    bool // Whether bd sync was run for beads updates
+	CommitsApplied int             // Number of git commits applied
+	BeadsSynced    bool            // Whether bd sync was run for beads updates
+	PatchFailed    map[string]bool // Task IDs where git patch application failed
 }
 
 // SequentialMerger applies changes in order, later overwrites earlier
@@ -58,7 +59,9 @@ func NewSequentialMerger(outputDir, tempDir string, verbose bool) *SequentialMer
 // - If a worker only made file changes, apply them directly
 // - Handle .beads directory specially: apply changes sequentially and run bd sync
 func (m *SequentialMerger) Merge(results []*agent.Result) (*Result, error) {
-	mergeResult := &Result{}
+	mergeResult := &Result{
+		PatchFailed: make(map[string]bool),
+	}
 
 	// Separate results into those with commits and those with file changes
 	var withCommits, withFileChanges []*agent.Result
@@ -82,7 +85,8 @@ func (m *SequentialMerger) Merge(results []*agent.Result) (*Result, error) {
 		if err := sandbox.ApplyPatches(m.outputDir, r.GitState.Patches); err != nil {
 			mergeResult.Errors = append(mergeResult.Errors,
 				fmt.Sprintf("failed to apply commits from %s: %v", r.TaskID, err))
-			// Don't mark as patched - will fall back to file-based merge
+			// Mark as patch failed so orchestrator can commit file changes instead
+			mergeResult.PatchFailed[r.TaskID] = true
 		} else {
 			mergeResult.CommitsApplied += len(r.GitState.Patches)
 			patchedTasks[r.TaskID] = true
