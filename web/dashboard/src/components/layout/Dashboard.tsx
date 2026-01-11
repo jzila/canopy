@@ -1,14 +1,14 @@
-import React, { useEffect, useState } from 'react';
-import { Play, Pause, Activity, Clock, DollarSign, Zap, GitCommit, FileEdit, Sun, Moon, Terminal as TerminalIcon, List, ChevronUp, ChevronDown } from 'lucide-react';
+import React, { useEffect, useState, useMemo } from 'react';
+import { Play, Pause, Activity, DollarSign, Zap, GitCommit, FileEdit, Sun, Moon, Terminal as TerminalIcon, List, CheckCircle, XCircle, ListTodo } from 'lucide-react';
 import { useStateStore } from '../../stores/stateStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { pauseOrch, resumeOrch, getState } from '../../api/client';
-import { TaskList } from '../tasks/TaskList';
 import { AgentCard } from '../agents/AgentCard';
 import { AgentTerminal } from '../agents/AgentTerminal';
 import { LiveFeed } from '../agents/LiveFeed';
 
 type TerminalTab = 'feed' | 'terminal';
+type StatusFilter = 'all' | 'running' | 'completed' | 'failed';
 
 export const Dashboard: React.FC = () => {
   const { connected } = useWebSocket();
@@ -20,11 +20,7 @@ export const Dashboard: React.FC = () => {
     if (saved !== null) return saved === 'true';
     return window.matchMedia('(prefers-color-scheme: dark)').matches;
   });
-  const [isStatusExpanded, setIsStatusExpanded] = useState(() => {
-    const saved = localStorage.getItem('statusPaneExpanded');
-    if (saved !== null) return saved === 'true';
-    return true; // Default to expanded
-  });
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
 
   // Apply dark mode class to document
   useEffect(() => {
@@ -36,14 +32,8 @@ export const Dashboard: React.FC = () => {
     localStorage.setItem('darkMode', String(isDark));
   }, [isDark]);
 
-  // Persist status pane expanded state
-  useEffect(() => {
-    localStorage.setItem('statusPaneExpanded', String(isStatusExpanded));
-  }, [isStatusExpanded]);
-
   // State from store
   const agents = useStateStore((state) => state.agents);
-  const tasks = useStateStore((state) => state.tasks);
   const stats = useStateStore((state) => state.stats);
   const isPaused = useStateStore((state) => state.isPaused);
   const selectedAgentId = useStateStore((state) => state.selectedAgentId);
@@ -97,15 +87,29 @@ export const Dashboard: React.FC = () => {
     setSelectedAgent(agentId);
   };
 
-  const handleSelectTask = (taskId: string) => {
-    // Find agent assigned to this task
-    const task = tasks[taskId];
-    if (task?.agent_id) {
-      setSelectedAgent(task.agent_id);
-    }
-  };
-
   const agentList = Object.values(agents);
+
+  // Filter agents based on selected status
+  const filteredAgents = useMemo(() => {
+    if (statusFilter === 'all') return agentList;
+
+    return agentList.filter(agent => {
+      switch (statusFilter) {
+        case 'running':
+          return agent.status === 'running' || agent.status === 'starting';
+        case 'completed':
+          return agent.status === 'completed';
+        case 'failed':
+          return agent.status === 'failed' || agent.status === 'timed_out' || agent.status === 'cancelled';
+        default:
+          return true;
+      }
+    });
+  }, [agentList, statusFilter]);
+
+  const toggleFilter = (filter: StatusFilter) => {
+    setStatusFilter(current => current === filter ? 'all' : filter);
+  };
   const hasSelectedAgent = selectedAgentId && agents[selectedAgentId];
 
   const formatCost = (cost: number): string => {
@@ -113,20 +117,6 @@ export const Dashboard: React.FC = () => {
       return `$${(cost * 100).toFixed(2)}c`;
     }
     return `$${cost.toFixed(2)}`;
-  };
-
-  const formatDuration = (duration: number): string => {
-    const hours = Math.floor(duration / 3600);
-    const minutes = Math.floor((duration % 3600) / 60);
-    const seconds = Math.floor(duration % 60);
-
-    if (hours > 0) {
-      return `${hours}h ${minutes}m`;
-    } else if (minutes > 0) {
-      return `${minutes}m ${seconds}s`;
-    } else {
-      return `${seconds}s`;
-    }
   };
 
   const formatTokens = (tokens: number): string => {
@@ -163,24 +153,12 @@ export const Dashboard: React.FC = () => {
             >
               {isDark ? <Sun className="w-5 h-5 text-yellow-500" /> : <Moon className="w-5 h-5 text-gray-600" />}
             </button>
-            <button
-              onClick={() => setIsStatusExpanded(!isStatusExpanded)}
-              className="p-2 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
-              title={isStatusExpanded ? 'Collapse status pane' : 'Expand status pane'}
-            >
-              {isStatusExpanded ? <ChevronUp className="w-5 h-5 text-gray-600 dark:text-gray-400" /> : <ChevronDown className="w-5 h-5 text-gray-600 dark:text-gray-400" />}
-            </button>
           </div>
 
-          {/* Pause/Resume and Stats Summary */}
-          <div className="flex items-center gap-6">
-            {/* Stats Summary */}
+          {/* Pause/Resume Button */}
+          <div className="flex items-center gap-4">
+            {/* Stats Summary (non-interactive) */}
             <div className="flex items-center gap-4 text-sm">
-              <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-400">
-                <Activity className="w-4 h-4" />
-                <span className="font-medium">{stats.running_tasks}</span>
-                <span className="text-gray-500 dark:text-gray-500">running</span>
-              </div>
               <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-400">
                 <Zap className="w-4 h-4" />
                 <span className="font-medium">{formatTokens(stats.total_tokens)}</span>
@@ -189,9 +167,16 @@ export const Dashboard: React.FC = () => {
                 <DollarSign className="w-4 h-4" />
                 <span className="font-medium">{formatCost(stats.total_cost_usd)}</span>
               </div>
+              <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-400">
+                <FileEdit className="w-4 h-4" />
+                <span className="font-medium">{stats.file_changes}</span>
+              </div>
+              <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-400">
+                <GitCommit className="w-4 h-4" />
+                <span className="font-medium">{stats.git_commits}</span>
+              </div>
             </div>
 
-            {/* Pause/Resume Button */}
             {isPaused ? (
               <button
                 onClick={handleResume}
@@ -230,82 +215,106 @@ export const Dashboard: React.FC = () => {
           </div>
         </div>
 
-        {/* Extended Stats Bar - Collapsible */}
-        <div
-          className={`
-            overflow-hidden transition-all duration-300 ease-in-out
-            ${isStatusExpanded ? 'max-h-24 opacity-100 mt-4' : 'max-h-0 opacity-0 mt-0'}
-          `}
-        >
-          <div className="grid grid-cols-6 gap-4">
-            <div className="bg-gray-50 dark:bg-gray-700 rounded-lg px-4 py-2">
-              <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Total Tasks</div>
-              <div className="text-lg font-bold text-gray-900 dark:text-gray-100">{stats.total_tasks}</div>
-            </div>
-            <div className="bg-blue-50 dark:bg-blue-900/30 rounded-lg px-4 py-2">
-              <div className="text-xs text-blue-600 dark:text-blue-400 mb-1">Running</div>
-              <div className="text-lg font-bold text-blue-700 dark:text-blue-300">{stats.running_tasks}</div>
-            </div>
-            <div className="bg-green-50 dark:bg-green-900/30 rounded-lg px-4 py-2">
-              <div className="text-xs text-green-600 dark:text-green-400 mb-1">Completed</div>
-              <div className="text-lg font-bold text-green-700 dark:text-green-300">{stats.completed_tasks}</div>
-            </div>
-            <div className="bg-red-50 dark:bg-red-900/30 rounded-lg px-4 py-2">
-              <div className="text-xs text-red-600 dark:text-red-400 mb-1">Failed</div>
-              <div className="text-lg font-bold text-red-700 dark:text-red-300">{stats.failed_tasks}</div>
-            </div>
-            <div className="bg-purple-50 dark:bg-purple-900/30 rounded-lg px-4 py-2">
-              <div className="text-xs text-purple-600 dark:text-purple-400 mb-1 flex items-center gap-1">
-                <FileEdit className="w-3 h-3" />
-                Changes
-              </div>
-              <div className="text-lg font-bold text-purple-700 dark:text-purple-300">{stats.file_changes}</div>
-            </div>
-            <div className="bg-indigo-50 dark:bg-indigo-900/30 rounded-lg px-4 py-2">
-              <div className="text-xs text-indigo-600 dark:text-indigo-400 mb-1 flex items-center gap-1">
-                <GitCommit className="w-3 h-3" />
-                Commits
-              </div>
-              <div className="text-lg font-bold text-indigo-700 dark:text-indigo-300">{stats.git_commits}</div>
-            </div>
-          </div>
+        {/* Stats Filter Toggles */}
+        <div className="flex items-center gap-3 mt-4">
+          {/* All Tasks */}
+          <button
+            onClick={() => setStatusFilter('all')}
+            className={`
+              flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all cursor-pointer
+              ${statusFilter === 'all'
+                ? 'bg-gray-200 dark:bg-gray-600 ring-2 ring-gray-400 dark:ring-gray-500'
+                : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'
+              }
+            `}
+          >
+            <ListTodo className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+            <span className="text-sm text-gray-600 dark:text-gray-300">All</span>
+            <span className="text-lg font-bold text-gray-900 dark:text-gray-100">{stats.total_tasks}</span>
+          </button>
+
+          {/* Running */}
+          <button
+            onClick={() => toggleFilter('running')}
+            className={`
+              flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all cursor-pointer
+              ${statusFilter === 'running'
+                ? 'bg-blue-100 dark:bg-blue-900/50 ring-2 ring-blue-500'
+                : 'bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 dark:hover:bg-blue-900/50'
+              }
+            `}
+          >
+            <Activity className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+            <span className="text-sm text-blue-600 dark:text-blue-400">Running</span>
+            <span className="text-lg font-bold text-blue-700 dark:text-blue-300">{stats.running_tasks}</span>
+          </button>
+
+          {/* Completed */}
+          <button
+            onClick={() => toggleFilter('completed')}
+            className={`
+              flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all cursor-pointer
+              ${statusFilter === 'completed'
+                ? 'bg-green-100 dark:bg-green-900/50 ring-2 ring-green-500'
+                : 'bg-green-50 dark:bg-green-900/30 hover:bg-green-100 dark:hover:bg-green-900/50'
+              }
+            `}
+          >
+            <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
+            <span className="text-sm text-green-600 dark:text-green-400">Completed</span>
+            <span className="text-lg font-bold text-green-700 dark:text-green-300">{stats.completed_tasks}</span>
+          </button>
+
+          {/* Failed */}
+          <button
+            onClick={() => toggleFilter('failed')}
+            className={`
+              flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all cursor-pointer
+              ${statusFilter === 'failed'
+                ? 'bg-red-100 dark:bg-red-900/50 ring-2 ring-red-500'
+                : 'bg-red-50 dark:bg-red-900/30 hover:bg-red-100 dark:hover:bg-red-900/50'
+              }
+            `}
+          >
+            <XCircle className="w-4 h-4 text-red-600 dark:text-red-400" />
+            <span className="text-sm text-red-600 dark:text-red-400">Failed</span>
+            <span className="text-lg font-bold text-red-700 dark:text-red-300">{stats.failed_tasks}</span>
+          </button>
         </div>
       </header>
 
       {/* Main Content Area */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Left Sidebar - Task List */}
-        <aside className="w-80 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex-shrink-0 overflow-hidden">
-          <TaskList tasks={tasks} onSelectTask={handleSelectTask} />
-        </aside>
-
-        {/* Main Content - Agent Grid and Terminal */}
-        <main className="flex-1 flex flex-col overflow-hidden">
-          {/* Agent Grid */}
-          <div className="flex-1 overflow-y-auto p-6">
-            {agentList.length === 0 ? (
-              <div className="flex items-center justify-center h-full">
-                <div className="text-center">
-                  <Activity className="w-16 h-16 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
-                  <h3 className="text-lg font-medium text-gray-500 dark:text-gray-400 mb-2">No Active Agents</h3>
-                  <p className="text-sm text-gray-400 dark:text-gray-500">
-                    Agents will appear here when tasks are running
-                  </p>
-                </div>
+      <main className="flex-1 flex flex-col overflow-hidden">
+        {/* Agent Grid */}
+        <div className="flex-1 overflow-y-auto p-6">
+          {filteredAgents.length === 0 ? (
+            <div className="flex items-center justify-center h-full">
+              <div className="text-center">
+                <Activity className="w-16 h-16 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
+                <h3 className="text-lg font-medium text-gray-500 dark:text-gray-400 mb-2">
+                  {agentList.length === 0 ? 'No Agents' : `No ${statusFilter === 'all' ? '' : statusFilter} Agents`}
+                </h3>
+                <p className="text-sm text-gray-400 dark:text-gray-500">
+                  {agentList.length === 0
+                    ? 'Agents will appear here when tasks are running'
+                    : 'Try selecting a different filter above'
+                  }
+                </p>
               </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                {agentList.map((agent) => (
-                  <AgentCard
-                    key={agent.id}
-                    agent={agent}
-                    onSelect={handleSelectAgent}
-                    isSelected={agent.id === selectedAgentId}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {filteredAgents.map((agent) => (
+                <AgentCard
+                  key={agent.id}
+                  agent={agent}
+                  onSelect={handleSelectAgent}
+                  isSelected={agent.id === selectedAgentId}
+                />
+              ))}
+            </div>
+          )}
+        </div>
 
           {/* Bottom Terminal Panel */}
           {hasSelectedAgent && (
@@ -375,8 +384,7 @@ export const Dashboard: React.FC = () => {
               </div>
             </div>
           )}
-        </main>
-      </div>
+      </main>
     </div>
   );
 };
