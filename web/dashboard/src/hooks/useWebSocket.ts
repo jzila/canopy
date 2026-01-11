@@ -73,6 +73,17 @@ interface StatsUpdatedEvent {
   payload: unknown;
 }
 
+// Backend git commit format
+interface BackendGitCommit {
+  hash: string;
+  short_hash: string;
+  message: string;
+  author: string;
+  author_email: string;
+  timestamp: string;
+  files_changed: string[];
+}
+
 // Backend RuntimeState format (snake_case)
 interface BackendAgentState {
   id: string;
@@ -97,6 +108,7 @@ interface BackendAgentState {
   error: string;
   changes: number;
   commits: number;
+  git_commits: BackendGitCommit[];
 }
 
 interface BackendRuntimeState {
@@ -108,6 +120,7 @@ interface BackendRuntimeState {
     agent_id: string;
     priority: number;
     dependencies: string[];
+    archived: boolean;
   }>;
   stats: {
     total_tasks: number;
@@ -120,6 +133,7 @@ interface BackendRuntimeState {
     avg_duration: number;
     file_changes: number;
     git_commits: number;
+    all_git_commits: BackendGitCommit[];
   };
   is_paused: boolean;
   start_time: string;
@@ -252,13 +266,17 @@ export function useWebSocket() {
                   error: agent.error || '',
                   changes: agent.changes,
                   commits: agent.commits,
+                  git_commits: agent.git_commits || [],
                 };
               }
 
               syncState({
                 agents: transformedAgents,
                 tasks: backendState.tasks || {},
-                stats: backendState.stats || {
+                stats: backendState.stats ? {
+                  ...backendState.stats,
+                  all_git_commits: backendState.stats.all_git_commits || [],
+                } : {
                   total_tasks: 0,
                   completed_tasks: 0,
                   failed_tasks: 0,
@@ -269,6 +287,7 @@ export function useWebSocket() {
                   avg_duration: 0,
                   file_changes: 0,
                   git_commits: 0,
+                  all_git_commits: [],
                 },
                 is_paused: backendState.is_paused,
                 start_time: backendState.start_time,
@@ -300,6 +319,7 @@ export function useWebSocket() {
                 error: '',
                 changes: 0,
                 commits: 0,
+                git_commits: [],
               });
               break;
             }

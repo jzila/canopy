@@ -194,6 +194,13 @@ func (s *Server) extractIdentifier(msg *Message) string {
 		}
 		return fmt.Sprintf(" agent=%s", payload.AgentID)
 
+	case MessageTypeAgentCommit:
+		var payload AgentCommitPayload
+		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+			return ""
+		}
+		return fmt.Sprintf(" agent=%s", payload.AgentID)
+
 	case MessageTypeAgentDone:
 		var payload AgentDonePayload
 		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
@@ -280,6 +287,26 @@ func (s *Server) convertToEvent(msg *Message) *daemon.Event {
 				"agent_id":   payload.AgentID,
 				"event_type": payload.EventType,
 				"data":       payload.Data,
+			},
+		}
+
+	case MessageTypeAgentCommit:
+		var payload AgentCommitPayload
+		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+			return nil
+		}
+		return &daemon.Event{
+			Type:      daemon.EventAgentCommit,
+			Timestamp: msg.Timestamp,
+			Payload: map[string]interface{}{
+				"agent_id":      payload.AgentID,
+				"hash":          payload.Hash,
+				"short_hash":    payload.ShortHash,
+				"message":       payload.Message,
+				"author":        payload.Author,
+				"author_email":  payload.AuthorEmail,
+				"timestamp":     payload.Timestamp,
+				"files_changed": payload.FilesChanged,
 			},
 		}
 

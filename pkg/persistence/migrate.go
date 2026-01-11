@@ -1,0 +1,113 @@
+package persistence
+
+import (
+	"database/sql"
+	"fmt"
+)
+
+const currentSchemaVersion = 1
+
+// migrate runs all pending database migrations
+func (s *Store) migrate() error {
+	// Create migrations table if it doesn't exist
+	_, err := s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version INTEGER PRIMARY KEY,
+			applied_at INTEGER NOT NULL
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to create migrations table: %w", err)
+	}
+
+	// Get current version
+	var version int
+	err = s.db.QueryRow("SELECT COALESCE(MAX(version), 0) FROM schema_migrations").Scan(&version)
+	if err != nil {
+		return fmt.Errorf("failed to get schema version: %w", err)
+	}
+
+	// Run pending migrations
+	for v := version + 1; v <= currentSchemaVersion; v++ {
+		if err := s.runMigration(v); err != nil {
+			return fmt.Errorf("migration %d failed: %w", v, err)
+		}
+	}
+
+	return nil
+}
+
+func (s *Store) runMigration(version int) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	switch version {
+	case 1:
+		if err := s.migrateV1(tx); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("unknown migration version: %d", version)
+	}
+
+	// Record migration
+	_, err = tx.Exec("INSERT INTO schema_migrations (version, applied_at) VALUES (?, strftime('%s', 'now'))", version)
+	if err != nil {
+		return fmt.Errorf("failed to record migration: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// migrateV1 creates the initial schema
+func (s *Store) migrateV1(tx *sql.Tx) error {
+	schema := `
+		CREATE TABLE IF NOT EXISTS runs (
+			id TEXT PRIMARY KEY,
+			started_at INTEGER NOT NULL,
+			finished_at INTEGER,
+			status TEXT NOT NULL,
+			concurrency INTEGER NOT NULL,
+			git_branch TEXT,
+			git_commit TEXT,
+			total_tasks INTEGER DEFAULT 0,
+			completed_tasks INTEGER DEFAULT 0,
+			failed_tasks INTEGER DEFAULT 0
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
+
+		CREATE TABLE IF NOT EXISTS agents (
+			id TEXT PRIMARY KEY,
+			run_id TEXT NOT NULL,
+			task_id TEXT NOT NULL,
+			task_title TEXT NOT NULL,
+			status TEXT NOT NULL,
+			started_at INTEGER NOT NULL,
+			finished_at INTEGER,
+			duration_seconds REAL,
+			exit_code INTEGER,
+			error_message TEXT,
+			stdout TEXT,
+			stderr TEXT,
+			input_tokens INTEGER DEFAULT 0,
+			output_tokens INTEGER DEFAULT 0,
+			total_tokens INTEGER DEFAULT 0,
+			cost_usd REAL DEFAULT 0.0,
+			files_changed INTEGER DEFAULT 0,
+			git_commits_created INTEGER DEFAULT 0,
+			FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_agents_run_id ON agents(run_id);
+		CREATE INDEX IF NOT EXISTS idx_agents_started_at ON agents(started_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
+	`
+
+	_, err := tx.Exec(schema)
+	return err
+}

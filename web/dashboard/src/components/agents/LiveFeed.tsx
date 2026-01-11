@@ -22,7 +22,7 @@ interface LiveFeedProps {
 export interface LiveFeedEvent {
   id: string;
   timestamp: string;
-  event_type: 'tool_use' | 'file_change' | 'text' | 'tool_result' | 'error';
+  event_type: 'tool_use' | 'file_change' | 'text' | 'tool_result' | 'error' | 'agent_completed';
   data: Record<string, unknown>;
 }
 
@@ -80,6 +80,12 @@ const eventTypeStyles: Record<string, { bg: string; border: string; text: string
     border: 'border-red-500/50',
     text: 'text-red-300',
     icon: 'text-red-400',
+  },
+  agent_completed: {
+    bg: 'bg-emerald-900/30',
+    border: 'border-emerald-500/50',
+    text: 'text-emerald-300',
+    icon: 'text-emerald-400',
   },
 };
 
@@ -270,6 +276,47 @@ const renderError = (data: Record<string, unknown>) => {
   );
 };
 
+// Render agent completed event
+const renderAgentCompleted = (data: Record<string, unknown>) => {
+  const resultMessage = data.result_message as string | undefined;
+  const filesChanged = data.files_changed as number | undefined;
+  const commitsCreated = data.commits_created as number | undefined;
+  const error = data.error as string | undefined;
+
+  return (
+    <div className="flex items-start gap-3">
+      <div className={`flex-shrink-0 mt-0.5 ${error ? 'text-red-400' : 'text-emerald-400'}`}>
+        {error ? <XCircle className="w-4 h-4" /> : <CheckCircle className="w-4 h-4" />}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 mb-2">
+          <span className={`font-semibold ${error ? 'text-red-300' : 'text-emerald-300'}`}>
+            {error ? 'Agent Failed' : 'Agent Completed'}
+          </span>
+          {(filesChanged !== undefined && filesChanged > 0) && (
+            <span className="text-xs bg-purple-900/30 text-purple-300 px-2 py-0.5 rounded">
+              {filesChanged} file{filesChanged !== 1 ? 's' : ''} changed
+            </span>
+          )}
+          {(commitsCreated !== undefined && commitsCreated > 0) && (
+            <span className="text-xs bg-blue-900/30 text-blue-300 px-2 py-0.5 rounded">
+              {commitsCreated} commit{commitsCreated !== 1 ? 's' : ''}
+            </span>
+          )}
+        </div>
+        {error && (
+          <p className="text-red-200 text-sm mb-2">{truncate(error, 200)}</p>
+        )}
+        {resultMessage && (
+          <div className="text-gray-200 text-sm whitespace-pre-wrap break-words bg-gray-800/50 rounded p-3 border border-gray-700/50">
+            {resultMessage}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 // Default styles for unknown event types
 const defaultStyles = {
   bg: 'bg-gray-800/50',
@@ -294,6 +341,8 @@ const FeedEvent: React.FC<{ event: LiveFeedEvent }> = ({ event }) => {
         return renderToolResult(event.data);
       case 'error':
         return renderError(event.data);
+      case 'agent_completed':
+        return renderAgentCompleted(event.data);
       default:
         return (
           <pre className="text-xs text-gray-400 overflow-auto">

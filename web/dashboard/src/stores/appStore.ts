@@ -29,6 +29,16 @@ export interface TokenUsage {
   cost_usd: number;
 }
 
+export interface GitCommit {
+  hash: string;
+  short_hash: string;
+  message: string;
+  author: string;
+  author_email: string;
+  timestamp: string;
+  files_changed: string[];
+}
+
 export interface AgentState {
   id: string;
   task_id: string;
@@ -44,6 +54,7 @@ export interface AgentState {
   error: string;
   changes: number;
   commits: number;
+  git_commits: GitCommit[];
 }
 
 export interface TaskState {
@@ -53,6 +64,7 @@ export interface TaskState {
   agent_id: string;
   priority: number;
   dependencies: string[];
+  archived: boolean;
 }
 
 export interface Stats {
@@ -66,6 +78,7 @@ export interface Stats {
   avg_duration: number;
   file_changes: number;
   git_commits: number;
+  all_git_commits: GitCommit[];
 }
 
 export interface RuntimeState {
@@ -107,6 +120,7 @@ const initialStats: Stats = {
   avg_duration: 0,
   file_changes: 0,
   git_commits: 0,
+  all_git_commits: [],
 };
 
 export const useAppStore = create<AppState>((set) => ({

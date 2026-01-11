@@ -343,12 +343,26 @@ func (d *Dashboard) renderAgentList(width, height int) string {
 			turnsInfo = fmt.Sprintf("%dt", agent.NumTurns)
 		}
 
+		// Git commits info
+		var commitsInfo string
+		commitCount := len(agent.GitCommits)
+		if commitCount == 0 && agent.Commits > 0 {
+			commitCount = agent.Commits // fallback to legacy count
+		}
+		if commitCount > 0 {
+			commitStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("183")) // purple for commits
+			commitsInfo = commitStyle.Render(fmt.Sprintf("⎇%d", commitCount))
+		}
+
 		line := fmt.Sprintf("%s %s %s", status, agentID, title)
 		if duration != "" {
 			line += dimStyle.Render(" " + duration)
 		}
 		if turnsInfo != "" {
 			line += dimStyle.Render(" " + turnsInfo)
+		}
+		if commitsInfo != "" {
+			line += " " + commitsInfo
 		}
 
 		// Apply selection style

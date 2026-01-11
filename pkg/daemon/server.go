@@ -16,22 +16,34 @@ import (
 
 // Server manages the HTTP server that serves the web UI and REST API
 type Server struct {
-	port       int
-	httpServer *http.Server
-	hub        *Hub
-	handler    *Handler
-	state      *RuntimeState
-	eventBus   *EventBus
-	upgrader   websocket.Upgrader
+	port        int
+	httpServer  *http.Server
+	hub         *Hub
+	handler     *Handler
+	runsHandler *RunsHandler
+	state       *RuntimeState
+	eventBus    *EventBus
+	upgrader    websocket.Upgrader
 }
 
 // NewServer creates a new HTTP server instance
 func NewServer(port int, state *RuntimeState, eventBus *EventBus, scheduler SchedulerInterface, beadsClient BeadsClientInterface) *Server {
+	return NewServerWithPersistence(port, state, eventBus, scheduler, beadsClient, nil)
+}
+
+// NewServerWithPersistence creates a new HTTP server instance with optional persistence store
+func NewServerWithPersistence(port int, state *RuntimeState, eventBus *EventBus, scheduler SchedulerInterface, beadsClient BeadsClientInterface, persistenceStore PersistenceStoreInterface) *Server {
 	// Create WebSocket hub
 	hub := NewHub(eventBus)
 
 	// Create HTTP handler
 	handler := NewHandler(state, scheduler, beadsClient, eventBus)
+
+	// Create runs handler for persistence queries (may be nil if persistence disabled)
+	var runsHandler *RunsHandler
+	if persistenceStore != nil {
+		runsHandler = NewRunsHandler(persistenceStore)
+	}
 
 	// Configure WebSocket upgrader
 	upgrader := websocket.Upgrader{
@@ -44,12 +56,13 @@ func NewServer(port int, state *RuntimeState, eventBus *EventBus, scheduler Sche
 	}
 
 	return &Server{
-		port:     port,
-		hub:      hub,
-		handler:  handler,
-		state:    state,
-		eventBus: eventBus,
-		upgrader: upgrader,
+		port:        port,
+		hub:         hub,
+		handler:     handler,
+		runsHandler: runsHandler,
+		state:       state,
+		eventBus:    eventBus,
+		upgrader:    upgrader,
 	}
 }
 
@@ -108,7 +121,7 @@ func (s *Server) Stop() error {
 func (s *Server) setupRoutes() *http.ServeMux {
 	mux := http.NewServeMux()
 
-	// REST API routes
+	// REST API routes - current run state
 	mux.HandleFunc("/api/state", s.handler.HandleGetState)
 	mux.HandleFunc("/api/agents", s.handler.HandleGetAgents)
 	mux.HandleFunc("/api/agents/", s.handleAgentsRoutes) // Handles /api/agents/:id/kill
@@ -116,6 +129,11 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/stats", s.handler.HandleGetStats)
 	mux.HandleFunc("/api/orch/pause", s.handler.HandlePauseOrch)
 	mux.HandleFunc("/api/orch/resume", s.handler.HandleResumeOrch)
+
+	// REST API routes - historical run data (persistence)
+	mux.HandleFunc("/api/runs", s.handleRunsRoutes)       // Handles GET /api/runs
+	mux.HandleFunc("/api/runs/", s.handleRunsRoutes)      // Handles /api/runs/:id and /api/runs/:id/agents
+	mux.HandleFunc("/api/stats/history", s.handleStatsHistory) // Aggregate historical stats
 
 	// WebSocket endpoint
 	mux.HandleFunc("/ws", s.handleWebSocket)
@@ -152,6 +170,58 @@ func (s *Server) handleTasksRoutes(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// handleRunsRoutes routes run history requests
+func (s *Server) handleRunsRoutes(w http.ResponseWriter, r *http.Request) {
+	if s.runsHandler == nil {
+		http.Error(w, "Persistence not enabled", http.StatusNotImplemented)
+		return
+	}
+
+	path := r.URL.Path
+
+	// GET /api/runs - list runs
+	if path == "/api/runs" {
+		s.runsHandler.HandleListRuns(w, r)
+		return
+	}
+
+	// Parse run ID from path: /api/runs/:id or /api/runs/:id/agents
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 3 || parts[0] != "api" || parts[1] != "runs" {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+
+	runID := parts[2]
+	if runID == "" {
+		http.Error(w, "Run ID required", http.StatusBadRequest)
+		return
+	}
+
+	// GET /api/runs/:id/agents
+	if len(parts) == 4 && parts[3] == "agents" {
+		s.runsHandler.HandleGetRunAgents(w, r, runID)
+		return
+	}
+
+	// GET /api/runs/:id
+	if len(parts) == 3 {
+		s.runsHandler.HandleGetRun(w, r, runID)
+		return
+	}
+
+	http.Error(w, "Not found", http.StatusNotFound)
+}
+
+// handleStatsHistory handles aggregate historical statistics
+func (s *Server) handleStatsHistory(w http.ResponseWriter, r *http.Request) {
+	if s.runsHandler == nil {
+		http.Error(w, "Persistence not enabled", http.StatusNotImplemented)
+		return
+	}
+	s.runsHandler.HandleGetHistoricalStats(w, r)
 }
 
 // handleWebSocket upgrades HTTP connections to WebSocket

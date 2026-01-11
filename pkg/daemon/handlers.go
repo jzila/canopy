@@ -229,7 +229,8 @@ func (h *Handler) HandleCreateTask(w http.ResponseWriter, r *http.Request) {
 
 // TaskUpdateRequest represents a request to update a task
 type TaskUpdateRequest struct {
-	Status string `json:"status,omitempty"`
+	Status   string `json:"status,omitempty"`
+	Archived *bool  `json:"archived,omitempty"`
 }
 
 // HandleUpdateTask updates an existing task
@@ -264,14 +265,25 @@ func (h *Handler) HandleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		h.state.UpdateTaskStatus(taskID, req.Status, "")
 	}
 
+	// Update archived status if provided
+	if req.Archived != nil {
+		h.state.SetTaskArchived(taskID, *req.Archived)
+	}
+
 	// Also update in beads if applicable (skip if beads client unavailable)
 	if h.beadsClient == nil {
+		response := map[string]interface{}{
+			"id": taskID,
+		}
+		if req.Status != "" {
+			response["status"] = req.Status
+		}
+		if req.Archived != nil {
+			response["archived"] = *req.Archived
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{
-			"id":     taskID,
-			"status": req.Status,
-		})
+		json.NewEncoder(w).Encode(response)
 		return
 	}
 
@@ -292,12 +304,18 @@ func (h *Handler) HandleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	response := map[string]interface{}{
+		"id": taskID,
+	}
+	if req.Status != "" {
+		response["status"] = req.Status
+	}
+	if req.Archived != nil {
+		response["archived"] = *req.Archived
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
-		"id": taskID,
-		"status": req.Status,
-	})
+	json.NewEncoder(w).Encode(response)
 }
 
 // HandlePauseOrch pauses the orchestrator

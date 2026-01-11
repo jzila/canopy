@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Clock, Zap, DollarSign, XCircle } from 'lucide-react';
+import { Clock, Zap, DollarSign, XCircle, GitCommit } from 'lucide-react';
 import type { AgentState } from '../../stores/stateStore';
 import { killAgent } from '../../api/client';
 
@@ -142,21 +142,28 @@ export const AgentCard: React.FC<AgentCardProps> = ({
         )}
       </div>
 
-      <div className="grid grid-cols-3 gap-3 text-xs">
-        <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-400">
+      <div className="grid grid-cols-4 gap-3 text-xs">
+        <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-400" title="Elapsed time">
           <Clock className="w-4 h-4" />
           <span>{elapsedTime}</span>
         </div>
 
-        <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-400">
+        <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-400" title="Token usage">
           <Zap className="w-4 h-4" />
           <span>{formatTokenCount(agent.token_usage.total_tokens)}</span>
         </div>
 
-        <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-400">
+        <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-400" title="Cost (USD)">
           <DollarSign className="w-4 h-4" />
           <span>{formatCost(agent.token_usage.cost_usd)}</span>
         </div>
+
+        {agent.commits > 0 && (
+          <div className="flex items-center gap-1.5 text-blue-400" title={`${agent.commits} git commit${agent.commits !== 1 ? 's' : ''}`}>
+            <GitCommit className="w-4 h-4" />
+            <span>{agent.commits}</span>
+          </div>
+        )}
       </div>
 
       {agent.error && (

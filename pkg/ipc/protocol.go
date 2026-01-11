@@ -10,6 +10,7 @@ const (
 	MessageTypeAgentStart     MessageType = "agent_start"
 	MessageTypeAgentOutput    MessageType = "agent_output"
 	MessageTypeAgentLiveFeed  MessageType = "agent_live_feed"
+	MessageTypeAgentCommit    MessageType = "agent_commit"
 	MessageTypeAgentDone      MessageType = "agent_done"
 	MessageTypeAgentFail      MessageType = "agent_fail"
 
@@ -44,6 +45,18 @@ type AgentLiveFeedPayload struct {
 	AgentID   string                 `json:"agent_id"`
 	EventType string                 `json:"event_type"` // "tool_use", "file_change", "text"
 	Data      map[string]interface{} `json:"data"`
+}
+
+// AgentCommitPayload is sent when an agent creates a git commit
+type AgentCommitPayload struct {
+	AgentID      string   `json:"agent_id"`
+	Hash         string   `json:"hash"`           // Full commit hash
+	ShortHash    string   `json:"short_hash"`     // Short (7-char) commit hash
+	Message      string   `json:"message"`        // Commit message (first line)
+	Author       string   `json:"author"`         // Author name
+	AuthorEmail  string   `json:"author_email"`   // Author email
+	Timestamp    string   `json:"timestamp"`      // ISO 8601 timestamp
+	FilesChanged []string `json:"files_changed"`  // List of files modified in this commit
 }
 
 // AgentResult contains execution metrics for an agent

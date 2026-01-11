@@ -11,6 +11,7 @@ const (
 	EventAgentStarted   EventType = "agent:started"
 	EventAgentOutput    EventType = "agent:output"
 	EventAgentLiveFeed  EventType = "agent:live_feed"
+	EventAgentCommit    EventType = "agent:commit"
 	EventAgentCompleted EventType = "agent:completed"
 	EventTaskUpdated    EventType = "task:updated"
 	EventOrchPaused     EventType = "orch:paused"

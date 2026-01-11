@@ -32,6 +32,17 @@ type LiveFeedEvent struct {
 	Data      map[string]interface{} `json:"data"`       // Event-specific data
 }
 
+// GitCommit represents a git commit made by an agent
+type GitCommit struct {
+	Hash         string   `json:"hash"`          // Full commit hash
+	ShortHash    string   `json:"short_hash"`    // Short (7-char) commit hash
+	Message      string   `json:"message"`       // Commit message (first line)
+	Author       string   `json:"author"`        // Author name
+	AuthorEmail  string   `json:"author_email"`  // Author email
+	Timestamp    string   `json:"timestamp"`     // ISO 8601 timestamp
+	FilesChanged []string `json:"files_changed"` // List of files modified in this commit
+}
+
 // Append adds new output to the buffer (thread-safe)
 func (b *OutputBuffer) Append(stdout, stderr string) {
 	b.mu.Lock()
@@ -122,7 +133,8 @@ type AgentState struct {
 	ExitCode        int             `json:"exit_code"`         // Process exit code
 	Error           string          `json:"error"`             // Error message if failed
 	Changes         int             `json:"changes"`           // Number of files changed
-	Commits         int             `json:"commits"`           // Number of git commits made
+	Commits         int             `json:"commits"`           // Number of git commits made (legacy, use len(GitCommits))
+	GitCommits      []GitCommit     `json:"git_commits"`       // Detailed git commit history
 	ResultMessage   string          `json:"result_message"`    // Final result message from Claude
 	mu              sync.RWMutex
 }
@@ -149,25 +161,27 @@ type TaskState struct {
 	AgentID      string   `json:"agent_id"` // ID of agent executing this task
 	Priority     int      `json:"priority"`
 	Dependencies []string `json:"dependencies"` // Task IDs this task depends on
+	Archived     bool     `json:"archived"`     // Whether the task is archived
 }
 
 // Stats aggregates statistics across all agents
 type Stats struct {
-	TotalTasks               int     `json:"total_tasks"`
-	CompletedTasks           int     `json:"completed_tasks"`
-	FailedTasks              int     `json:"failed_tasks"`
-	RunningTasks             int     `json:"running_tasks"`
-	TotalInputTokens         int     `json:"total_input_tokens"`
-	TotalOutputTokens        int     `json:"total_output_tokens"`
-	TotalCacheCreationTokens int     `json:"total_cache_creation_tokens"`
-	TotalCacheReadTokens     int     `json:"total_cache_read_tokens"`
-	TotalTokens              int     `json:"total_tokens"`
-	TotalCostUSD             float64 `json:"total_cost_usd"`
-	TotalTurns               int     `json:"total_turns"`
-	TotalDuration            float64 `json:"total_duration"` // Total execution time in seconds
-	AverageDuration          float64 `json:"avg_duration"`   // Average task duration
-	FileChanges              int     `json:"file_changes"`   // Total files changed
-	GitCommits               int     `json:"git_commits"`    // Total commits made
+	TotalTasks               int         `json:"total_tasks"`
+	CompletedTasks           int         `json:"completed_tasks"`
+	FailedTasks              int         `json:"failed_tasks"`
+	RunningTasks             int         `json:"running_tasks"`
+	TotalInputTokens         int         `json:"total_input_tokens"`
+	TotalOutputTokens        int         `json:"total_output_tokens"`
+	TotalCacheCreationTokens int         `json:"total_cache_creation_tokens"`
+	TotalCacheReadTokens     int         `json:"total_cache_read_tokens"`
+	TotalTokens              int         `json:"total_tokens"`
+	TotalCostUSD             float64     `json:"total_cost_usd"`
+	TotalTurns               int         `json:"total_turns"`
+	TotalDuration            float64     `json:"total_duration"` // Total execution time in seconds
+	AverageDuration          float64     `json:"avg_duration"`   // Average task duration
+	FileChanges              int         `json:"file_changes"`   // Total files changed
+	GitCommits               int         `json:"git_commits"`    // Total commits made (count)
+	AllGitCommits            []GitCommit `json:"all_git_commits"` // All commits from all agents
 }
 
 // RuntimeState aggregates the complete state of an orchestration run
@@ -226,6 +240,15 @@ func (r *RuntimeState) UpdateTaskStatus(taskID, status, agentID string) {
 	}
 }
 
+// SetTaskArchived sets the archived status of a task
+func (r *RuntimeState) SetTaskArchived(taskID string, archived bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if task, exists := r.Tasks[taskID]; exists {
+		task.Archived = archived
+	}
+}
+
 // UpdateStats recalculates aggregate statistics from all agents
 func (r *RuntimeState) UpdateStats() {
 	r.mu.Lock()
@@ -234,6 +257,7 @@ func (r *RuntimeState) UpdateStats() {
 	stats := Stats{}
 	var totalDuration float64
 	completedCount := 0
+	var allCommits []GitCommit
 
 	for _, agent := range r.Agents {
 		agent.mu.RLock()
@@ -259,6 +283,11 @@ func (r *RuntimeState) UpdateStats() {
 		stats.FileChanges += agent.Changes
 		stats.GitCommits += agent.Commits
 
+		// Aggregate git commit details from all agents
+		if len(agent.GitCommits) > 0 {
+			allCommits = append(allCommits, agent.GitCommits...)
+		}
+
 		agent.mu.RUnlock()
 	}
 
@@ -267,6 +296,7 @@ func (r *RuntimeState) UpdateStats() {
 	if completedCount > 0 {
 		stats.AverageDuration = totalDuration / float64(completedCount)
 	}
+	stats.AllGitCommits = allCommits
 
 	r.Stats = stats
 }
@@ -343,6 +373,8 @@ func (r *RuntimeState) handleEvent(event Event) {
 		r.handleAgentOutput(payload)
 	case EventAgentLiveFeed:
 		r.handleAgentLiveFeed(payload)
+	case EventAgentCommit:
+		r.handleAgentCommit(payload)
 	case EventAgentCompleted:
 		r.handleAgentCompleted(payload, event.Timestamp)
 	case EventStatsUpdated:
@@ -422,6 +454,54 @@ func (r *RuntimeState) handleAgentLiveFeed(payload map[string]interface{}) {
 	agent.Update(func(a *AgentState) {
 		a.LiveFeedEvents = append(a.LiveFeedEvents, liveFeedEvent)
 	})
+}
+
+func (r *RuntimeState) handleAgentCommit(payload map[string]interface{}) {
+	agentID, _ := payload["agent_id"].(string)
+	if agentID == "" {
+		return
+	}
+
+	agent := r.GetAgent(agentID)
+	if agent == nil {
+		return
+	}
+
+	// Extract commit details from payload
+	hash, _ := payload["hash"].(string)
+	shortHash, _ := payload["short_hash"].(string)
+	message, _ := payload["message"].(string)
+	author, _ := payload["author"].(string)
+	authorEmail, _ := payload["author_email"].(string)
+	timestamp, _ := payload["timestamp"].(string)
+
+	// Extract files_changed as []string
+	var filesChanged []string
+	if files, ok := payload["files_changed"].([]interface{}); ok {
+		for _, f := range files {
+			if s, ok := f.(string); ok {
+				filesChanged = append(filesChanged, s)
+			}
+		}
+	}
+
+	commit := GitCommit{
+		Hash:         hash,
+		ShortHash:   shortHash,
+		Message:      message,
+		Author:       author,
+		AuthorEmail:  authorEmail,
+		Timestamp:    timestamp,
+		FilesChanged: filesChanged,
+	}
+
+	agent.Update(func(a *AgentState) {
+		a.GitCommits = append(a.GitCommits, commit)
+		a.Commits = len(a.GitCommits) // Keep legacy field in sync
+	})
+
+	// Update stats to include the new commit
+	r.UpdateStats()
 }
 
 func (r *RuntimeState) handleAgentCompleted(payload map[string]interface{}, timestamp time.Time) {

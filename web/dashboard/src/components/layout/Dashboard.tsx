@@ -6,8 +6,9 @@ import { pauseOrch, resumeOrch, getState } from '../../api/client';
 import { AgentCard } from '../agents/AgentCard';
 import { AgentTerminal } from '../agents/AgentTerminal';
 import { LiveFeed } from '../agents/LiveFeed';
+import { CommitList } from '../agents/CommitList';
 
-type TerminalTab = 'feed' | 'terminal';
+type TerminalTab = 'feed' | 'terminal' | 'commits';
 type StatusFilter = 'all' | 'running' | 'completed' | 'failed';
 
 export const Dashboard: React.FC = () => {
@@ -366,6 +367,24 @@ export const Dashboard: React.FC = () => {
                         <TerminalIcon className="w-4 h-4" />
                         Raw Output
                       </button>
+                      <button
+                        onClick={() => setActiveTab('commits')}
+                        className={`
+                          flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all
+                          ${activeTab === 'commits'
+                            ? 'bg-blue-600 text-white'
+                            : 'text-gray-400 hover:text-gray-200 hover:bg-gray-700/50'
+                          }
+                        `}
+                      >
+                        <GitCommit className="w-4 h-4" />
+                        Commits
+                        {(agents[selectedAgentId]?.commits ?? 0) > 0 && (
+                          <span className="ml-1 px-1.5 py-0.5 text-xs bg-blue-500/30 rounded">
+                            {agents[selectedAgentId]?.commits}
+                          </span>
+                        )}
+                      </button>
                     </div>
 
                     {/* Agent info */}
@@ -404,10 +423,16 @@ export const Dashboard: React.FC = () => {
 
                 {/* Tab Content */}
                 <div className="flex-1 overflow-hidden">
-                  {activeTab === 'feed' ? (
+                  {activeTab === 'feed' && (
                     <LiveFeed agentId={selectedAgentId} />
-                  ) : (
+                  )}
+                  {activeTab === 'terminal' && (
                     <AgentTerminal agentId={selectedAgentId} />
+                  )}
+                  {activeTab === 'commits' && (
+                    <div className="h-full overflow-y-auto p-4 bg-gray-900">
+                      <CommitList commits={agents[selectedAgentId]?.git_commits || []} />
+                    </div>
                   )}
                 </div>
               </div>

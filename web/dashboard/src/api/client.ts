@@ -96,25 +96,30 @@ export async function createTask(
 
 export interface UpdateTaskRequest {
   status?: string;
+  archived?: boolean;
 }
 
 export interface UpdateTaskResponse {
   id: string;
-  status: string;
+  status?: string;
+  archived?: boolean;
 }
 
 export async function updateTask(
   id: string,
-  status: string
+  updates: UpdateTaskRequest
 ): Promise<UpdateTaskResponse> {
-  const body: UpdateTaskRequest = {
-    status,
-  };
-
   return fetchJson<UpdateTaskResponse>(`/api/tasks?id=${id}`, {
     method: 'PATCH',
-    body: JSON.stringify(body),
+    body: JSON.stringify(updates),
   });
+}
+
+export async function archiveTask(
+  id: string,
+  archived: boolean
+): Promise<UpdateTaskResponse> {
+  return updateTask(id, { archived });
 }
 
 export async function pauseOrch(): Promise<{ status: string }> {

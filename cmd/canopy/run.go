@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -14,8 +15,10 @@ import (
 
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
+	"github.com/jzila/canopy/pkg/history"
 	"github.com/jzila/canopy/pkg/ipc"
 	"github.com/jzila/canopy/pkg/orchestrator"
+	sandboxpkg "github.com/jzila/canopy/pkg/sandbox"
 )
 
 var (
@@ -178,55 +181,72 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create orchestrator: %w", err)
 	}
 
-	// Set up callbacks if IPC client is connected
-	if ipcClient != nil {
-		runID := uuid.New().String()
-		runStats := &runStatsCollector{
-			runID:     runID,
-			startTime: time.Now(),
-		}
+	// Always create stats collector for history tracking
+	runID := uuid.New().String()
+	runStats := &runStatsCollector{
+		runID:     runID,
+		workDir:   absWorkdir,
+		startTime: time.Now(),
+	}
 
-		callbacks := &orchestrator.EventCallbacks{
-			OnAgentStartFn: func(taskID string, task *beads.Task) {
+	// Set up callbacks (history tracking always, IPC only if connected)
+	callbacks := &orchestrator.EventCallbacks{
+		OnAgentStartFn: func(taskID string, task *beads.Task) {
+			runStats.recordTaskStart(taskID, task)
+			if ipcClient != nil {
 				agentID := fmt.Sprintf("agent-%s", taskID)
 				if err := ipcClient.SendAgentStart(agentID, taskID, task.Title); err != nil && verbose {
 					fmt.Fprintf(os.Stderr, "warning: failed to send agent start: %v\n", err)
 				}
-			},
-			OnOutputFn: func(taskID string, output string, isError bool) {
+			}
+		},
+		OnOutputFn: func(taskID string, output string, isError bool) {
+			if ipcClient != nil {
 				agentID := fmt.Sprintf("agent-%s", taskID)
 				if err := ipcClient.SendAgentOutput(agentID, output, isError); err != nil && verbose {
 					fmt.Fprintf(os.Stderr, "warning: failed to send agent output: %v\n", err)
 				}
-			},
-			OnLiveFeedFn: func(taskID string, event *agent.LiveFeedEvent) {
+			}
+		},
+		OnLiveFeedFn: func(taskID string, event *agent.LiveFeedEvent) {
+			if ipcClient != nil {
 				agentID := fmt.Sprintf("agent-%s", taskID)
 				if err := ipcClient.SendAgentLiveFeed(agentID, event.EventType, event.Data); err != nil && verbose {
 					fmt.Fprintf(os.Stderr, "warning: failed to send agent live feed: %v\n", err)
 				}
-			},
-			OnDoneFn: func(taskID string, result *agent.Result) {
+			}
+		},
+		OnDoneFn: func(taskID string, result *agent.Result) {
+			runStats.recordResult(taskID, result, true)
+			if ipcClient != nil {
 				agentID := fmt.Sprintf("agent-%s", taskID)
+				// Send individual commit events before completion
+				sendAgentCommits(ipcClient, agentID, result, verbose)
 				ipcResult := convertToIPCResult(result)
 				if err := ipcClient.SendAgentDone(agentID, ipcResult); err != nil && verbose {
 					fmt.Fprintf(os.Stderr, "warning: failed to send agent done: %v\n", err)
 				}
-				runStats.recordResult(result, true)
-			},
-			OnFailFn: func(taskID string, result *agent.Result) {
+			}
+		},
+		OnFailFn: func(taskID string, result *agent.Result) {
+			runStats.recordResult(taskID, result, false)
+			if ipcClient != nil {
 				agentID := fmt.Sprintf("agent-%s", taskID)
+				// Send individual commit events before failure (agent may have committed before failing)
+				sendAgentCommits(ipcClient, agentID, result, verbose)
 				ipcResult := convertToIPCResult(result)
 				execErr := fmt.Errorf("%s", result.Error)
 				if err := ipcClient.SendAgentFail(agentID, execErr, ipcResult); err != nil && verbose {
 					fmt.Fprintf(os.Stderr, "warning: failed to send agent fail: %v\n", err)
 				}
-				runStats.recordResult(result, false)
-			},
-		}
+			}
+		},
+	}
 
-		orch.SetCallbacks(callbacks)
+	orch.SetCallbacks(callbacks)
 
-		// Get initial ready tasks to send task count
+	// Get initial ready tasks to send task count (IPC only)
+	if ipcClient != nil {
 		beadsClient, err := beads.NewClient(absWorkdir)
 		if err == nil {
 			tasks, err := beadsClient.Ready()
@@ -236,15 +256,38 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 				}
 			}
 		}
+	}
 
-		// Send run completed after orchestration finishes
-		defer func() {
+	// Save run to history and send IPC completion after orchestration finishes
+	defer func() {
+		// Skip saving history for dry runs
+		if !dryRun {
+			// Save to persistent history
+			store, err := history.NewStore()
+			if err != nil {
+				if verbose {
+					fmt.Fprintf(os.Stderr, "warning: failed to create history store: %v\n", err)
+				}
+			} else {
+				runRecord := runStats.getRunRecord()
+				if err := store.Save(runRecord); err != nil {
+					if verbose {
+						fmt.Fprintf(os.Stderr, "warning: failed to save run history: %v\n", err)
+					}
+				} else if verbose {
+					fmt.Fprintf(os.Stderr, "Run saved to history: %s\n", runID)
+				}
+			}
+		}
+
+		// Send IPC completion if connected
+		if ipcClient != nil {
 			stats := runStats.getStats()
 			if err := ipcClient.SendRunCompleted(runID, stats); err != nil && verbose {
 				fmt.Fprintf(os.Stderr, "warning: failed to send run completed: %v\n", err)
 			}
-		}()
-	}
+		}
+	}()
 
 	return orch.Run(ctx)
 }
@@ -290,30 +333,123 @@ func convertToIPCResult(result *agent.Result) *ipc.AgentResult {
 	return ipcResult
 }
 
-// runStatsCollector tracks statistics across all agents in a run
-type runStatsCollector struct {
-	runID                string
-	startTime            time.Time
-	totalTasks           int
-	succeeded            int
-	failed               int
-	inputTokens          int
-	outputTokens         int
-	cacheCreationTokens  int
-	cacheReadTokens      int
-	costUSD              float64
-	totalTurns           int
-	filesChanged         int
-	conflictsRes         int
+// sendAgentCommits sends individual commit events for each git commit made by an agent
+func sendAgentCommits(client *ipc.Client, agentID string, result *agent.Result, verboseMode bool) {
+	if client == nil || result == nil || result.GitState == nil {
+		return
+	}
+
+	overlay := result.Overlay
+	if overlay == nil {
+		return
+	}
+
+	for _, commitHash := range result.GitState.NewCommits {
+		// Get detailed commit info
+		info, err := overlay.GetCommitInfo(commitHash)
+		if err != nil {
+			if verboseMode {
+				fmt.Fprintf(os.Stderr, "warning: failed to get commit info for %s: %v\n", commitHash, err)
+			}
+			continue
+		}
+
+		commit := &ipc.AgentCommitPayload{
+			Hash:         info.Hash,
+			ShortHash:    info.ShortHash,
+			Message:      info.Message,
+			Author:       info.Author,
+			AuthorEmail:  info.AuthorEmail,
+			Timestamp:    info.Timestamp,
+			FilesChanged: info.FilesChanged,
+		}
+
+		if err := client.SendAgentCommit(agentID, commit); err != nil && verboseMode {
+			fmt.Fprintf(os.Stderr, "warning: failed to send agent commit: %v\n", err)
+		}
+	}
 }
 
-func (r *runStatsCollector) recordResult(result *agent.Result, success bool) {
+// sendAgentCommitsFromOverlay sends commits using the overlay directly (for when result.Overlay is nil)
+func sendAgentCommitsFromOverlay(client *ipc.Client, agentID string, overlay *sandboxpkg.Overlay, gitState *sandboxpkg.GitState, verboseMode bool) {
+	if client == nil || overlay == nil || gitState == nil {
+		return
+	}
+
+	for _, commitHash := range gitState.NewCommits {
+		info, err := overlay.GetCommitInfo(commitHash)
+		if err != nil {
+			if verboseMode {
+				fmt.Fprintf(os.Stderr, "warning: failed to get commit info for %s: %v\n", commitHash, err)
+			}
+			continue
+		}
+
+		commit := &ipc.AgentCommitPayload{
+			Hash:         info.Hash,
+			ShortHash:    info.ShortHash,
+			Message:      info.Message,
+			Author:       info.Author,
+			AuthorEmail:  info.AuthorEmail,
+			Timestamp:    info.Timestamp,
+			FilesChanged: info.FilesChanged,
+		}
+
+		if err := client.SendAgentCommit(agentID, commit); err != nil && verboseMode {
+			fmt.Fprintf(os.Stderr, "warning: failed to send agent commit: %v\n", err)
+		}
+	}
+}
+
+// runStatsCollector tracks statistics across all agents in a run
+type runStatsCollector struct {
+	runID               string
+	workDir             string
+	startTime           time.Time
+	totalTasks          int
+	succeeded           int
+	failed              int
+	inputTokens         int
+	outputTokens        int
+	cacheCreationTokens int
+	cacheReadTokens     int
+	costUSD             float64
+	totalTurns          int
+	filesChanged        int
+	gitCommits          int
+	conflictsRes        int
+	taskRecords         []history.TaskRecord
+	mu                  sync.Mutex
+}
+
+func (r *runStatsCollector) recordTaskStart(taskID string, task *beads.Task) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.taskRecords = append(r.taskRecords, history.TaskRecord{
+		ID:        taskID,
+		Title:     task.Title,
+		Status:    "running",
+		StartTime: time.Now(),
+	})
+}
+
+func (r *runStatsCollector) recordResult(taskID string, result *agent.Result, success bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	r.totalTasks++
 	if success {
 		r.succeeded++
 	} else {
 		r.failed++
 	}
+
+	var taskInputTokens, taskOutputTokens int
+	var taskCostUSD float64
+	var taskDurationMS int64
+	var taskResultMessage string
+	var taskModelUsage map[string]history.ModelUsage
 
 	if result.Output != nil {
 		r.inputTokens += result.Output.TotalInputTokens
@@ -322,12 +458,62 @@ func (r *runStatsCollector) recordResult(result *agent.Result, success bool) {
 		r.cacheReadTokens += result.Output.CacheReadInputTokens
 		r.costUSD += result.Output.CostUSD
 		r.totalTurns += result.Output.NumTurns
+
+		taskInputTokens = result.Output.TotalInputTokens
+		taskOutputTokens = result.Output.TotalOutputTokens
+		taskCostUSD = result.Output.CostUSD
+		taskDurationMS = result.Output.DurationMS
+		taskResultMessage = result.Output.ResultMessage
+
+		if result.Output.ModelUsage != nil {
+			taskModelUsage = make(map[string]history.ModelUsage)
+			for model, usage := range result.Output.ModelUsage {
+				taskModelUsage[model] = history.ModelUsage{
+					InputTokens:              usage.InputTokens,
+					OutputTokens:             usage.OutputTokens,
+					CacheReadInputTokens:     usage.CacheReadInputTokens,
+					CacheCreationInputTokens: usage.CacheCreationInputTokens,
+					CostUSD:                  usage.CostUSD,
+				}
+			}
+		}
 	}
 
 	r.filesChanged += len(result.Changes)
+
+	commits := 0
+	if result.GitState != nil {
+		commits = len(result.GitState.NewCommits)
+		r.gitCommits += commits
+	}
+
+	// Update task record
+	for i := range r.taskRecords {
+		if r.taskRecords[i].ID == taskID {
+			r.taskRecords[i].EndTime = time.Now()
+			r.taskRecords[i].DurationMS = taskDurationMS
+			r.taskRecords[i].InputTokens = taskInputTokens
+			r.taskRecords[i].OutputTokens = taskOutputTokens
+			r.taskRecords[i].CostUSD = taskCostUSD
+			r.taskRecords[i].FilesChanged = len(result.Changes)
+			r.taskRecords[i].Commits = commits
+			r.taskRecords[i].ResultMessage = taskResultMessage
+			r.taskRecords[i].ModelUsage = taskModelUsage
+			if success {
+				r.taskRecords[i].Status = "completed"
+			} else {
+				r.taskRecords[i].Status = "failed"
+				r.taskRecords[i].Error = result.Error
+			}
+			break
+		}
+	}
 }
 
 func (r *runStatsCollector) getStats() *ipc.RunStats {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	return &ipc.RunStats{
 		TotalTasks:                   r.totalTasks,
 		SucceededTasks:               r.succeeded,
@@ -341,5 +527,46 @@ func (r *runStatsCollector) getStats() *ipc.RunStats {
 		TotalTurns:                   r.totalTurns,
 		FilesChanged:                 r.filesChanged,
 		ConflictsResolved:            r.conflictsRes,
+	}
+}
+
+func (r *runStatsCollector) getRunRecord() *history.RunRecord {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	endTime := time.Now()
+	duration := endTime.Sub(r.startTime).Seconds()
+
+	// Determine overall run status
+	var status history.RunStatus
+	if r.failed == 0 && r.succeeded > 0 {
+		status = history.RunStatusCompleted
+	} else if r.succeeded == 0 && r.failed > 0 {
+		status = history.RunStatusFailed
+	} else if r.succeeded > 0 && r.failed > 0 {
+		status = history.RunStatusPartial
+	} else {
+		status = history.RunStatusCompleted // No tasks ran
+	}
+
+	return &history.RunRecord{
+		ID:                       r.runID,
+		StartTime:                r.startTime,
+		EndTime:                  endTime,
+		Status:                   status,
+		WorkDir:                  r.workDir,
+		TotalTasks:               r.totalTasks,
+		CompletedTasks:           r.succeeded,
+		FailedTasks:              r.failed,
+		DurationSeconds:          duration,
+		TotalInputTokens:         r.inputTokens,
+		TotalOutputTokens:        r.outputTokens,
+		TotalCacheCreationTokens: r.cacheCreationTokens,
+		TotalCacheReadTokens:     r.cacheReadTokens,
+		TotalCostUSD:             r.costUSD,
+		TotalTurns:               r.totalTurns,
+		FilesChanged:             r.filesChanged,
+		GitCommits:               r.gitCommits,
+		Tasks:                    r.taskRecords,
 	}
 }

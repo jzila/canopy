@@ -112,6 +112,16 @@ func (c *Client) SendAgentLiveFeed(agentID, eventType string, data map[string]in
 	return c.sendMessage(MessageTypeAgentLiveFeed, payload)
 }
 
+// SendAgentCommit notifies the daemon that an agent created a git commit
+func (c *Client) SendAgentCommit(agentID string, commit *AgentCommitPayload) error {
+	if commit == nil {
+		return fmt.Errorf("commit cannot be nil")
+	}
+
+	commit.AgentID = agentID
+	return c.sendMessage(MessageTypeAgentCommit, commit)
+}
+
 // SendAgentDone notifies the daemon that an agent completed successfully
 func (c *Client) SendAgentDone(agentID string, result *AgentResult) error {
 	if result == nil {

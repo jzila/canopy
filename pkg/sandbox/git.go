@@ -151,6 +151,62 @@ func (o *Overlay) HasGitRepo() bool {
 	return err == nil && info.IsDir()
 }
 
+// CommitInfo holds detailed information about a git commit
+type CommitInfo struct {
+	Hash         string   // Full commit hash
+	ShortHash    string   // Short (7-char) hash
+	Message      string   // Commit message (first line)
+	Author       string   // Author name
+	AuthorEmail  string   // Author email
+	Timestamp    string   // ISO 8601 timestamp
+	FilesChanged []string // Files modified in this commit
+}
+
+// GetCommitInfo extracts detailed information about a commit
+func (o *Overlay) GetCommitInfo(commitHash string) (*CommitInfo, error) {
+	info := &CommitInfo{
+		Hash:      commitHash,
+		ShortHash: commitHash,
+	}
+	if len(commitHash) >= 7 {
+		info.ShortHash = commitHash[:7]
+	}
+
+	// Get commit metadata using git show with format
+	// Format: %s (subject), %an (author name), %ae (author email), %aI (ISO timestamp)
+	cmd := exec.Command("git", "show", "-s", "--format=%s%n%an%n%ae%n%aI", commitHash)
+	cmd.Dir = o.MergedDir
+
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git show failed: %w", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) >= 4 {
+		info.Message = lines[0]
+		info.Author = lines[1]
+		info.AuthorEmail = lines[2]
+		info.Timestamp = lines[3]
+	}
+
+	// Get files changed in this commit
+	cmd = exec.Command("git", "diff-tree", "--no-commit-id", "--name-only", "-r", commitHash)
+	cmd.Dir = o.MergedDir
+
+	out, err = cmd.Output()
+	if err == nil {
+		files := strings.Split(strings.TrimSpace(string(out)), "\n")
+		for _, f := range files {
+			if f != "" {
+				info.FilesChanged = append(info.FilesChanged, f)
+			}
+		}
+	}
+
+	return info, nil
+}
+
 // extractCommitMessageFromPatch extracts the commit message from a git format-patch output
 // The patch format includes "Subject: [PATCH] <commit message>" followed by the commit body
 func extractCommitMessageFromPatch(patch string) string {

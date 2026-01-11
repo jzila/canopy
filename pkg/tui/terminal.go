@@ -171,6 +171,14 @@ func (m *TerminalModel) updateViewportContent() {
 		}
 	}
 
+	// Render git commits section if present
+	if len(m.agent.GitCommits) > 0 {
+		commitsContent := m.renderGitCommits()
+		if commitsContent != "" {
+			sections = append(sections, commitsContent)
+		}
+	}
+
 	// Get raw stdout/stderr
 	stdout, stderr := m.agent.Output.Get()
 
@@ -219,6 +227,76 @@ func (m *TerminalModel) updateViewportContent() {
 	// Set viewport content
 	content := strings.Join(sections, "\n")
 	m.viewport.SetContent(content)
+}
+
+// renderGitCommits renders the git commits section
+func (m *TerminalModel) renderGitCommits() string {
+	if len(m.agent.GitCommits) == 0 {
+		return ""
+	}
+
+	// Styles
+	headerStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("183")) // purple for git
+
+	hashStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("214")) // orange for hash
+
+	messageStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("252")) // light gray
+
+	filesStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")) // dim gray
+
+	dimStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240"))
+
+	var lines []string
+
+	// Section header
+	separator := dimStyle.Render(strings.Repeat("═", min(m.viewport.Width, 50)))
+	header := headerStyle.Render(fmt.Sprintf("⎇ Git Commits (%d)", len(m.agent.GitCommits)))
+	lines = append(lines, separator, header, "")
+
+	// Render each commit
+	for _, commit := range m.agent.GitCommits {
+		// Commit line: hash and message
+		shortHash := commit.ShortHash
+		if shortHash == "" && len(commit.Hash) >= 7 {
+			shortHash = commit.Hash[:7]
+		}
+
+		// Truncate message to fit width
+		message := commit.Message
+		maxMsgLen := m.viewport.Width - 12 // account for hash and spacing
+		if len(message) > maxMsgLen && maxMsgLen > 10 {
+			message = message[:maxMsgLen-3] + "..."
+		}
+
+		commitLine := hashStyle.Render(shortHash) + " " + messageStyle.Render(message)
+		lines = append(lines, commitLine)
+
+		// Files changed (if available)
+		if len(commit.FilesChanged) > 0 {
+			filesText := fmt.Sprintf("  %d file(s) changed", len(commit.FilesChanged))
+			// Show first few files
+			maxFiles := 3
+			if len(commit.FilesChanged) <= maxFiles {
+				filesText = "  " + strings.Join(commit.FilesChanged, ", ")
+			} else {
+				filesText = "  " + strings.Join(commit.FilesChanged[:maxFiles], ", ") +
+					fmt.Sprintf(" (+%d more)", len(commit.FilesChanged)-maxFiles)
+			}
+			// Truncate if too long
+			if len(filesText) > m.viewport.Width-2 && m.viewport.Width > 20 {
+				filesText = filesText[:m.viewport.Width-5] + "..."
+			}
+			lines = append(lines, filesStyle.Render(filesText))
+		}
+	}
+
+	return strings.Join(lines, "\n")
 }
 
 // SetAgent updates the selected agent
