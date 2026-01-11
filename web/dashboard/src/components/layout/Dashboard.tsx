@@ -84,7 +84,7 @@ export const Dashboard: React.FC = () => {
   };
 
   const handleSelectAgent = (agentId: string) => {
-    setSelectedAgent(agentId === selectedAgentId ? null : agentId);
+    setSelectedAgent(agentId);
   };
 
   const handleSelectTask = (taskId: string) => {
