@@ -172,6 +172,10 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 	// Set up filtered environment
 	env := filterEnvironment(os.Environ())
 	env = append(env, "HOME="+overlay.MergedDir)
+	// Block git SSH operations - SSH ignores $HOME and uses getpwuid() for ~/.ssh
+	// This is a belt-and-suspenders approach; gitconfig also has core.sshCommand=false
+	// Using "false" works because git uses shell to execute the command
+	env = append(env, "GIT_SSH_COMMAND=false")
 
 	// Build command - use bwrap sandbox if available and enabled
 	var cmd *exec.Cmd

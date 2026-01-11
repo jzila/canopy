@@ -229,8 +229,11 @@ func (o *Overlay) copyGitConfig() error {
 		return fmt.Errorf("git user.name or user.email not configured")
 	}
 
-	// Create minimal gitconfig with only [user] section
-	gitconfig := fmt.Sprintf("[user]\n\tname = %s\n\temail = %s\n", name, email)
+	// Create minimal gitconfig with only [user] section and SSH blocking
+	// core.sshCommand = false prevents git from using SSH for remote operations
+	// This blocks pushes even when SSH keys are accessible via getpwuid() home directory
+	// Using "false" works because git uses shell to execute the command
+	gitconfig := fmt.Sprintf("[user]\n\tname = %s\n\temail = %s\n[core]\n\tsshCommand = false\n", name, email)
 
 	dstPath := filepath.Join(o.UpperDir, ".gitconfig")
 	return os.WriteFile(dstPath, []byte(gitconfig), 0644)
