@@ -26,6 +26,12 @@ type OutputBuffer struct {
 	mu     sync.RWMutex
 }
 
+// LiveFeedEvent represents a real-time event from the Claude API
+type LiveFeedEvent struct {
+	EventType string                 `json:"event_type"` // "tool_use", "text", "file_change", etc.
+	Data      map[string]interface{} `json:"data"`       // Event-specific data
+}
+
 // Append adds new output to the buffer (thread-safe)
 func (b *OutputBuffer) Append(stdout, stderr string) {
 	b.mu.Lock()
@@ -63,24 +69,25 @@ type ModelUsageData struct {
 
 // AgentState tracks the state of a single agent execution
 type AgentState struct {
-	ID            string       `json:"id"`              // Unique agent ID
-	TaskID        string       `json:"task_id"`         // Beads task ID
-	TaskTitle     string       `json:"task_title"`      // Task title for display
-	Status        AgentStatus  `json:"status"`          // Current agent status
-	StartTime     time.Time    `json:"start_time"`      // When agent started
-	EndTime       *time.Time   `json:"end_time"`        // When agent finished (nil if running)
-	Duration      float64      `json:"duration"`        // Execution duration in seconds
-	DurationMS    int64        `json:"duration_ms"`     // Execution duration in milliseconds (from Claude)
-	DurationAPIMS int64        `json:"duration_api_ms"` // API duration in milliseconds
-	NumTurns      int          `json:"num_turns"`       // Number of agentic turns
-	Output        OutputBuffer `json:"output"`          // Stdout/stderr buffers
-	TokenUsage    TokenUsage   `json:"token_usage"`     // Token consumption stats
-	ExitCode      int          `json:"exit_code"`       // Process exit code
-	Error         string       `json:"error"`           // Error message if failed
-	Changes       int          `json:"changes"`         // Number of files changed
-	Commits       int          `json:"commits"`         // Number of git commits made
-	ResultMessage string       `json:"result_message"`  // Final result message from Claude
-	mu            sync.RWMutex
+	ID              string          `json:"id"`                // Unique agent ID
+	TaskID          string          `json:"task_id"`           // Beads task ID
+	TaskTitle       string          `json:"task_title"`        // Task title for display
+	Status          AgentStatus     `json:"status"`            // Current agent status
+	StartTime       time.Time       `json:"start_time"`        // When agent started
+	EndTime         *time.Time      `json:"end_time"`          // When agent finished (nil if running)
+	Duration        float64         `json:"duration"`          // Execution duration in seconds
+	DurationMS      int64           `json:"duration_ms"`       // Execution duration in milliseconds (from Claude)
+	DurationAPIMS   int64           `json:"duration_api_ms"`   // API duration in milliseconds
+	NumTurns        int             `json:"num_turns"`         // Number of agentic turns
+	Output          OutputBuffer    `json:"output"`            // Stdout/stderr buffers
+	LiveFeedEvents  []LiveFeedEvent `json:"live_feed_events"`  // Real-time events from Claude API
+	TokenUsage      TokenUsage      `json:"token_usage"`       // Token consumption stats
+	ExitCode        int             `json:"exit_code"`         // Process exit code
+	Error           string          `json:"error"`             // Error message if failed
+	Changes         int             `json:"changes"`           // Number of files changed
+	Commits         int             `json:"commits"`           // Number of git commits made
+	ResultMessage   string          `json:"result_message"`    // Final result message from Claude
+	mu              sync.RWMutex
 }
 
 // Update atomically updates agent state fields
@@ -294,6 +301,8 @@ func (r *RuntimeState) handleEvent(event Event) {
 		r.handleAgentStarted(payload, event.Timestamp)
 	case EventAgentOutput:
 		r.handleAgentOutput(payload)
+	case EventAgentLiveFeed:
+		r.handleAgentLiveFeed(payload)
 	case EventAgentCompleted:
 		r.handleAgentCompleted(payload, event.Timestamp)
 	case EventStatsUpdated:
@@ -348,6 +357,31 @@ func (r *RuntimeState) handleAgentOutput(payload map[string]interface{}) {
 	} else {
 		agent.Output.Append(output, "")
 	}
+}
+
+func (r *RuntimeState) handleAgentLiveFeed(payload map[string]interface{}) {
+	agentID, _ := payload["agent_id"].(string)
+	eventType, _ := payload["event_type"].(string)
+	data, _ := payload["data"].(map[string]interface{})
+
+	if agentID == "" || eventType == "" {
+		return
+	}
+
+	agent := r.GetAgent(agentID)
+	if agent == nil {
+		return
+	}
+
+	// Create and append the live feed event
+	liveFeedEvent := LiveFeedEvent{
+		EventType: eventType,
+		Data:      data,
+	}
+
+	agent.Update(func(a *AgentState) {
+		a.LiveFeedEvents = append(a.LiveFeedEvents, liveFeedEvent)
+	})
 }
 
 func (r *RuntimeState) handleAgentCompleted(payload map[string]interface{}, timestamp time.Time) {
