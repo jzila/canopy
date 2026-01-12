@@ -11,6 +11,7 @@ import (
 
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
+	"github.com/jzila/canopy/pkg/failedpatches"
 	"github.com/jzila/canopy/pkg/ipc"
 	"github.com/jzila/canopy/pkg/merge"
 	"github.com/jzila/canopy/pkg/mergequeue"
@@ -474,6 +475,26 @@ func (o *Orchestrator) mergeAndCleanupWithContext(ctx context.Context, result *a
 			} else {
 				fmt.Fprintf(os.Stderr, "[%s-resolver] Failed to resolve conflict: %s\n",
 					result.TaskID, resolverResult.Error)
+
+				// Preserve patches to persistent storage before cleanup
+				// This prevents data loss when both merge and resolution fail
+				if result.GitState != nil && len(result.GitState.Patches) > 0 {
+					preserveResult, err := failedpatches.PreservePatches(
+						result.TaskID,
+						result.GitState.Patches,
+						mergeResult.Errors,
+					)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "[%s] Warning: failed to preserve patches: %v\n",
+							result.TaskID, err)
+					} else {
+						fmt.Fprintf(os.Stderr, "\n[%s] Patches preserved to: %s\n",
+							result.TaskID, preserveResult.Dir)
+						fmt.Fprintf(os.Stderr, "[%s]    To apply manually: git am --3way %s/patch-*.patch\n\n",
+							result.TaskID, preserveResult.Dir)
+					}
+				}
+
 				// Mark the original task as failed since resolver couldn't fix it
 				o.markTaskFailed(result.TaskID, fmt.Sprintf("resolver failed: %s", resolverResult.Error))
 				o.sendMergeStatus(result.TaskID, ipc.MergeStatusFailed, 0, fmt.Sprintf("resolver failed: %s", resolverResult.Error))

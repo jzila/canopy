@@ -1,4 +1,0 @@
-=== Patch 0 Error ===
-failed to apply commits from canopy-o6kp: failed to apply patch 0: exit status 128: fatal: Dirty index: cannot apply patches (dirty: web/dashboard/src/components/layout/Dashboard.tsx)
-
-
