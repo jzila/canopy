@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/jzila/canopy/pkg/beads"
 	"github.com/jzila/canopy/pkg/ipc"
@@ -17,16 +18,18 @@ import (
 // Processor handles merge operations from the queue.
 // It processes merge requests sequentially, spawning resolver agents when conflicts occur.
 type Processor struct {
-	queue       *Queue
-	merger      *merge.SequentialMerger
-	resolver    *resolver.Resolver
-	beadsClient *beads.Client
-	outputDir   string
-	ipcClient   *ipc.Client
-	verbose     bool
+	queue           *Queue
+	merger          *merge.SequentialMerger
+	resolver        *resolver.Resolver
+	beadsClient     *beads.Client
+	outputDir       string
+	ipcClient       *ipc.Client
+	verbose         bool
+	resolverTimeout time.Duration // Timeout for resolver operations (0 = no timeout)
 }
 
 // NewProcessor creates a new merge processor.
+// If resolverTimeout is 0, a default timeout of 10 minutes is used.
 func NewProcessor(
 	queue *Queue,
 	merger *merge.SequentialMerger,
@@ -35,15 +38,22 @@ func NewProcessor(
 	outputDir string,
 	ipcClient *ipc.Client,
 	verbose bool,
+	resolverTimeout time.Duration,
 ) *Processor {
+	// Default timeout of 10 minutes if not specified
+	if resolverTimeout == 0 {
+		resolverTimeout = 10 * time.Minute
+	}
+
 	return &Processor{
-		queue:       queue,
-		merger:      merger,
-		resolver:    resolver,
-		beadsClient: beadsClient,
-		outputDir:   outputDir,
-		ipcClient:   ipcClient,
-		verbose:     verbose,
+		queue:           queue,
+		merger:          merger,
+		resolver:        resolver,
+		beadsClient:     beadsClient,
+		outputDir:       outputDir,
+		ipcClient:       ipcClient,
+		verbose:         verbose,
+		resolverTimeout: resolverTimeout,
 	}
 }
 
@@ -143,8 +153,8 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 			FileChanges:     req.Result.Changes,
 		}
 
-		// Spawn resolver agent
-		resolverResult, resolverErr := p.resolver.Resolve(ctx, conflictCtx)
+		// Spawn resolver agent asynchronously
+		resolverResult, resolverErr := p.resolveAsync(ctx, conflictCtx)
 
 		// Resume queue after resolution (regardless of outcome)
 		p.queue.SetResolverActive(false)
@@ -307,5 +317,43 @@ func (p *Processor) sendMergeStatus(taskID string, status ipc.MergeStatus, queue
 	agentID := fmt.Sprintf("agent-%s", taskID)
 	if err := p.ipcClient.SendAgentMergeStatus(agentID, status, queuePos, errMsg); err != nil && p.verbose {
 		fmt.Fprintf(os.Stderr, "warning: failed to send merge status for %s: %v\n", taskID, err)
+	}
+}
+
+// resolverResult captures the result of an async resolver operation
+type resolverResult struct {
+	result *resolver.Result
+	err    error
+}
+
+// resolveAsync spawns a resolver agent asynchronously with timeout support.
+// This prevents the merge queue from blocking while waiting for conflict resolution.
+// Returns the resolver result and any error, just like the synchronous Resolve() call.
+func (p *Processor) resolveAsync(ctx context.Context, conflict *resolver.ConflictContext) (*resolver.Result, error) {
+	// Create a channel for the resolver result
+	resultChan := make(chan resolverResult, 1)
+
+	// Spawn resolver in a goroutine
+	go func() {
+		result, err := p.resolver.Resolve(ctx, conflict)
+		resultChan <- resolverResult{result: result, err: err}
+	}()
+
+	// Wait for result with timeout
+	select {
+	case <-ctx.Done():
+		// Context cancelled
+		return nil, fmt.Errorf("resolver cancelled: %w", ctx.Err())
+
+	case res := <-resultChan:
+		// Resolver completed
+		return res.result, res.err
+
+	case <-time.After(p.resolverTimeout):
+		// Timeout exceeded
+		if p.verbose {
+			fmt.Fprintf(os.Stderr, "[%s] Resolver timeout after %v\n", conflict.TaskID, p.resolverTimeout)
+		}
+		return nil, fmt.Errorf("resolver timeout after %v", p.resolverTimeout)
 	}
 }

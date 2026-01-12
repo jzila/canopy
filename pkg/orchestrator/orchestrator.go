@@ -200,6 +200,7 @@ func New(config *Config) (*Orchestrator, error) {
 		config.OutputDir,
 		nil, // ipcClient set later via SetIPCClient
 		config.Verbose,
+		0, // Use default resolver timeout (10 minutes)
 	)
 
 	o := &Orchestrator{

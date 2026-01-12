@@ -169,6 +169,7 @@ func TestOrchestrator_MergeProcessorInitialized(t *testing.T) {
 		t.TempDir(), // outputDir
 		nil,         // ipcClient
 		false,       // verbose
+		0,           // resolverTimeout (use default)
 	)
 
 	if processor == nil {
@@ -426,6 +427,7 @@ func TestMergeQueueFlow_Integration(t *testing.T) {
 		t.TempDir(),
 		nil,   // ipcClient
 		false, // verbose
+		0,     // resolverTimeout (use default)
 	)
 
 	if processor == nil {
