@@ -396,9 +396,9 @@ func TestClientSendRunStarted(t *testing.T) {
 
 	select {
 	case event := <-receivedEvents:
-		// RunStarted is mapped to StatsUpdated by the server
-		if event.Type != daemon.EventStatsUpdated {
-			t.Errorf("Expected EventStatsUpdated, got %s", event.Type)
+		// RunStarted is mapped to EventRunStarted by the server
+		if event.Type != daemon.EventRunStarted {
+			t.Errorf("Expected EventRunStarted, got %s", event.Type)
 		}
 		payload := event.Payload.(map[string]interface{})
 		if runID := payload["run_id"].(string); runID != "run-123" {
@@ -451,9 +451,9 @@ func TestClientSendRunCompleted(t *testing.T) {
 
 	select {
 	case event := <-receivedEvents:
-		// RunCompleted is mapped to StatsUpdated by the server
-		if event.Type != daemon.EventStatsUpdated {
-			t.Errorf("Expected EventStatsUpdated, got %s", event.Type)
+		// RunCompleted is mapped to EventRunCompleted by the server
+		if event.Type != daemon.EventRunCompleted {
+			t.Errorf("Expected EventRunCompleted, got %s", event.Type)
 		}
 		payload := event.Payload.(map[string]interface{})
 		if totalTasks := payload["total_tasks"].(int); totalTasks != 10 {

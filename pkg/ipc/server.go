@@ -414,7 +414,7 @@ func (s *Server) convertToEvent(msg *Message) *daemon.Event {
 			eventPayload["repo_name"] = payload.RepoName
 		}
 		return &daemon.Event{
-			Type:      daemon.EventStatsUpdated,
+			Type:      daemon.EventRunStarted,
 			Timestamp: msg.Timestamp,
 			Payload:   eventPayload,
 		}
@@ -424,9 +424,9 @@ func (s *Server) convertToEvent(msg *Message) *daemon.Event {
 		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 			return nil
 		}
-		// Map to stats update event
+		// Map to run completed event
 		return &daemon.Event{
-			Type:      daemon.EventStatsUpdated,
+			Type:      daemon.EventRunCompleted,
 			Timestamp: msg.Timestamp,
 			Payload: map[string]interface{}{
 				"run_id":              payload.RunID,
