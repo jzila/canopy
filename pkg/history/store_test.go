@@ -351,3 +351,162 @@ func TestStore_Delete(t *testing.T) {
 		t.Error("expected error when deleting non-existent run")
 	}
 }
+
+func TestMigrateHistory(t *testing.T) {
+	// Create temp directories for old and new locations
+	oldDir, err := os.MkdirTemp("", "canopy-old-*")
+	if err != nil {
+		t.Fatalf("failed to create old temp dir: %v", err)
+	}
+	defer os.RemoveAll(oldDir)
+
+	newDir, err := os.MkdirTemp("", "canopy-new-*")
+	if err != nil {
+		t.Fatalf("failed to create new temp dir: %v", err)
+	}
+	defer os.RemoveAll(newDir)
+
+	// Create old history with some run files
+	oldHistoryDir := filepath.Join(oldDir, "history")
+	if err := os.MkdirAll(oldHistoryDir, 0755); err != nil {
+		t.Fatalf("failed to create old history dir: %v", err)
+	}
+
+	// Create test run files in old location
+	testRuns := []string{"run-abc123.json", "run-def456.json", "run-ghi789.json"}
+	for _, name := range testRuns {
+		content := []byte(`{"id": "test", "status": "completed"}`)
+		if err := os.WriteFile(filepath.Join(oldHistoryDir, name), content, 0644); err != nil {
+			t.Fatalf("failed to write old run file: %v", err)
+		}
+	}
+
+	// Run migration
+	if err := migrateHistory(oldDir, newDir); err != nil {
+		t.Fatalf("migration failed: %v", err)
+	}
+
+	// Verify files were copied to new location
+	newHistoryDir := filepath.Join(newDir, "history")
+	for _, name := range testRuns {
+		newPath := filepath.Join(newHistoryDir, name)
+		if _, err := os.Stat(newPath); os.IsNotExist(err) {
+			t.Errorf("file %s not migrated", name)
+		}
+	}
+
+	// Verify old files still exist (should be left for manual deletion)
+	for _, name := range testRuns {
+		oldPath := filepath.Join(oldHistoryDir, name)
+		if _, err := os.Stat(oldPath); os.IsNotExist(err) {
+			t.Errorf("old file %s should still exist", name)
+		}
+	}
+}
+
+func TestMigrateHistory_NoOldHistory(t *testing.T) {
+	// Create temp directories
+	oldDir, err := os.MkdirTemp("", "canopy-old-*")
+	if err != nil {
+		t.Fatalf("failed to create old temp dir: %v", err)
+	}
+	defer os.RemoveAll(oldDir)
+
+	newDir, err := os.MkdirTemp("", "canopy-new-*")
+	if err != nil {
+		t.Fatalf("failed to create new temp dir: %v", err)
+	}
+	defer os.RemoveAll(newDir)
+
+	// Don't create any old history directory
+	// Migration should succeed silently
+	if err := migrateHistory(oldDir, newDir); err != nil {
+		t.Fatalf("migration should succeed when no old history exists: %v", err)
+	}
+
+	// New history directory should not be created
+	newHistoryDir := filepath.Join(newDir, "history")
+	if _, err := os.Stat(newHistoryDir); !os.IsNotExist(err) {
+		t.Error("new history directory should not be created when no old history exists")
+	}
+}
+
+func TestMigrateHistory_NewHistoryExists(t *testing.T) {
+	// Create temp directories
+	oldDir, err := os.MkdirTemp("", "canopy-old-*")
+	if err != nil {
+		t.Fatalf("failed to create old temp dir: %v", err)
+	}
+	defer os.RemoveAll(oldDir)
+
+	newDir, err := os.MkdirTemp("", "canopy-new-*")
+	if err != nil {
+		t.Fatalf("failed to create new temp dir: %v", err)
+	}
+	defer os.RemoveAll(newDir)
+
+	// Create old history with run files
+	oldHistoryDir := filepath.Join(oldDir, "history")
+	if err := os.MkdirAll(oldHistoryDir, 0755); err != nil {
+		t.Fatalf("failed to create old history dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(oldHistoryDir, "run-old.json"), []byte(`{}`), 0644); err != nil {
+		t.Fatalf("failed to write old run file: %v", err)
+	}
+
+	// Create new history with existing run files
+	newHistoryDir := filepath.Join(newDir, "history")
+	if err := os.MkdirAll(newHistoryDir, 0755); err != nil {
+		t.Fatalf("failed to create new history dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(newHistoryDir, "run-new.json"), []byte(`{"id": "new"}`), 0644); err != nil {
+		t.Fatalf("failed to write new run file: %v", err)
+	}
+
+	// Migration should succeed but not overwrite
+	if err := migrateHistory(oldDir, newDir); err != nil {
+		t.Fatalf("migration should succeed when new history exists: %v", err)
+	}
+
+	// Old file should NOT be migrated (don't overwrite existing history)
+	if _, err := os.Stat(filepath.Join(newHistoryDir, "run-old.json")); !os.IsNotExist(err) {
+		t.Error("old file should not be migrated when new history already exists")
+	}
+
+	// New file should still exist unchanged
+	if _, err := os.Stat(filepath.Join(newHistoryDir, "run-new.json")); os.IsNotExist(err) {
+		t.Error("existing new file should not be affected")
+	}
+}
+
+func TestDefaultDataDir(t *testing.T) {
+	// Test with XDG_CACHE_HOME set
+	origCache := os.Getenv("XDG_CACHE_HOME")
+	defer os.Setenv("XDG_CACHE_HOME", origCache)
+
+	testCacheDir := "/tmp/test-cache"
+	os.Setenv("XDG_CACHE_HOME", testCacheDir)
+
+	dir, err := defaultDataDir()
+	if err != nil {
+		t.Fatalf("defaultDataDir failed: %v", err)
+	}
+
+	expected := filepath.Join(testCacheDir, "canopy")
+	if dir != expected {
+		t.Errorf("expected %s, got %s", expected, dir)
+	}
+
+	// Test with XDG_CACHE_HOME unset (falls back to ~/.cache)
+	os.Unsetenv("XDG_CACHE_HOME")
+	dir, err = defaultDataDir()
+	if err != nil {
+		t.Fatalf("defaultDataDir failed without XDG_CACHE_HOME: %v", err)
+	}
+
+	home, _ := os.UserHomeDir()
+	expected = filepath.Join(home, ".cache", "canopy")
+	if dir != expected {
+		t.Errorf("expected %s, got %s", expected, dir)
+	}
+}

@@ -138,4 +138,28 @@ export async function getStats(): Promise<Stats> {
   return fetchJson<Stats>('/api/stats');
 }
 
+// Repository types
+export interface Repository {
+  id: string;
+  path: string;
+  name: string;
+  created_at: string;
+  is_active: boolean;
+}
+
+export interface RepositoryListResponse {
+  repositories: Repository[];
+  active_repo_id: string;
+}
+
+export async function getRepositories(): Promise<RepositoryListResponse> {
+  return fetchJson<RepositoryListResponse>('/api/repositories');
+}
+
+export async function activateRepository(repoId: string): Promise<Repository> {
+  return fetchJson<Repository>(`/api/repositories/${repoId}/activate`, {
+    method: 'POST',
+  });
+}
+
 export { ApiError };

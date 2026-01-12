@@ -265,10 +265,20 @@ func copyFile(src, dst string) error {
 	return err
 }
 
+// MergeOptions configures the merge behavior
+type MergeOptions struct {
+	// SkipFileFallback skips the file-based fallback when git am fails.
+	// Use this when a resolver agent will handle the conflict instead.
+	SkipFileFallback bool
+}
+
 // MergeSingle merges and commits a single agent result atomically.
 // This should be called immediately when each agent completes.
 // The overlay must still be mounted when this is called.
-func (m *SequentialMerger) MergeSingle(result *agent.Result) (*Result, error) {
+func (m *SequentialMerger) MergeSingle(result *agent.Result, opts *MergeOptions) (*Result, error) {
+	if opts == nil {
+		opts = &MergeOptions{}
+	}
 	mergeResult := &Result{
 		PatchFailed: make(map[string]bool),
 	}
@@ -295,6 +305,14 @@ func (m *SequentialMerger) MergeSingle(result *agent.Result) (*Result, error) {
 	}
 
 	// If we get here, either there were no git patches, or patch application failed
+	// Skip file-based fallback if requested (resolver will handle it)
+	if opts.SkipFileFallback && mergeResult.PatchFailed[result.TaskID] {
+		if m.verbose {
+			fmt.Printf("Skipping file-based fallback for task %s (resolver will handle)\n", result.TaskID)
+		}
+		return mergeResult, nil
+	}
+
 	// Apply file changes from the overlay
 	if len(result.Changes) > 0 {
 		var paths []string

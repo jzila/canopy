@@ -11,12 +11,18 @@ import (
 	"github.com/jzila/canopy/pkg/beads"
 )
 
+// DaemonInterface abstracts daemon operations for handlers
+type DaemonInterface interface {
+	GetActiveRepositoryID() string
+}
+
 // Handler wraps RuntimeState and provides HTTP handlers
 type Handler struct {
 	state       *RuntimeState
 	scheduler   SchedulerInterface
 	beadsClient BeadsClientInterface
 	eventBus    *EventBus
+	daemon      DaemonInterface
 }
 
 // SchedulerInterface abstracts scheduler operations for handlers
@@ -47,6 +53,17 @@ func NewHandler(state *RuntimeState, scheduler SchedulerInterface, beadsClient B
 	}
 }
 
+// SetDaemon sets the daemon reference for handlers that need access to daemon state
+func (h *Handler) SetDaemon(daemon DaemonInterface) {
+	h.daemon = daemon
+}
+
+// StateResponse wraps RuntimeState with additional daemon-level information
+type StateResponse struct {
+	RuntimeState
+	ActiveRepoID string `json:"active_repo_id,omitempty"`
+}
+
 // HandleGetState returns the current RuntimeState as JSON
 func (h *Handler) HandleGetState(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -56,8 +73,18 @@ func (h *Handler) HandleGetState(w http.ResponseWriter, r *http.Request) {
 
 	snapshot := h.state.GetSnapshot()
 
+	// Wrap snapshot with additional daemon-level state
+	response := StateResponse{
+		RuntimeState: snapshot,
+	}
+
+	// Include active_repo_id if daemon is available
+	if h.daemon != nil {
+		response.ActiveRepoID = h.daemon.GetActiveRepositoryID()
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(snapshot); err != nil {
+	if err := json.NewEncoder(w).Encode(response); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to encode state: %v", err), http.StatusInternalServerError)
 		return
 	}

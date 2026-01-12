@@ -7,12 +7,13 @@ type MessageType string
 
 const (
 	// Agent lifecycle events
-	MessageTypeAgentStart     MessageType = "agent_start"
-	MessageTypeAgentOutput    MessageType = "agent_output"
-	MessageTypeAgentLiveFeed  MessageType = "agent_live_feed"
-	MessageTypeAgentCommit    MessageType = "agent_commit"
-	MessageTypeAgentDone      MessageType = "agent_done"
-	MessageTypeAgentFail      MessageType = "agent_fail"
+	MessageTypeAgentStart       MessageType = "agent_start"
+	MessageTypeAgentOutput      MessageType = "agent_output"
+	MessageTypeAgentLiveFeed    MessageType = "agent_live_feed"
+	MessageTypeAgentCommit      MessageType = "agent_commit"
+	MessageTypeAgentMergeStatus MessageType = "agent_merge_status"
+	MessageTypeAgentDone        MessageType = "agent_done"
+	MessageTypeAgentFail        MessageType = "agent_fail"
 
 	// Task lifecycle events
 	MessageTypeTaskUpdated MessageType = "task_updated"
@@ -35,6 +36,7 @@ type AgentStartPayload struct {
 	TaskID        string `json:"task_id"`
 	TaskTitle     string `json:"task_title"`
 	ParentAgentID string `json:"parent_agent_id,omitempty"` // ID of parent agent if spawned by another agent
+	RepoID        string `json:"repo_id,omitempty"`         // Repository ID for tracking
 }
 
 // AgentOutputPayload is sent when an agent produces output
@@ -61,6 +63,26 @@ type AgentCommitPayload struct {
 	AuthorEmail  string   `json:"author_email"`   // Author email
 	Timestamp    string   `json:"timestamp"`      // ISO 8601 timestamp
 	FilesChanged []string `json:"files_changed"`  // List of files modified in this commit
+}
+
+// MergeStatus represents the current phase of merge processing
+type MergeStatus string
+
+const (
+	MergeStatusPending   MergeStatus = "pending"   // Waiting in queue for merge slot
+	MergeStatusAcquiring MergeStatus = "acquiring" // Attempting to acquire merge slot
+	MergeStatusMerging   MergeStatus = "merging"   // Applying patches/changes
+	MergeStatusResolving MergeStatus = "resolving" // Spawned resolver for conflicts
+	MergeStatusMerged    MergeStatus = "merged"    // Successfully merged
+	MergeStatusFailed    MergeStatus = "failed"    // Merge failed
+)
+
+// AgentMergeStatusPayload is sent when an agent's merge status changes
+type AgentMergeStatusPayload struct {
+	AgentID     string      `json:"agent_id"`
+	MergeStatus MergeStatus `json:"merge_status"`
+	QueuePos    int         `json:"queue_pos,omitempty"` // Position in wait queue (0 = not waiting)
+	Error       string      `json:"error,omitempty"`     // Error message if merge failed
 }
 
 // AgentResult contains execution metrics for an agent
@@ -111,12 +133,16 @@ type TaskUpdatedPayload struct {
 	Title   string `json:"title,omitempty"`
 	Status  string `json:"status"`
 	AgentID string `json:"agent_id,omitempty"`
+	RepoID  string `json:"repo_id,omitempty"` // Repository ID for tracking
 }
 
 // RunStartedPayload is sent when a canopy run begins
 type RunStartedPayload struct {
 	RunID     string `json:"run_id"`
 	TaskCount int    `json:"task_count"`
+	RepoID    string `json:"repo_id,omitempty"`   // Repository UUID
+	RepoPath  string `json:"repo_path,omitempty"` // Absolute path to repository
+	RepoName  string `json:"repo_name,omitempty"` // Repository name (basename of path)
 }
 
 // RunStats contains aggregate statistics for a run

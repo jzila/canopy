@@ -21,9 +21,11 @@ type Server struct {
 	hub         *Hub
 	handler     *Handler
 	runsHandler *RunsHandler
+	repoHandler *RepoHandler
 	state       *RuntimeState
 	eventBus    *EventBus
 	upgrader    websocket.Upgrader
+	daemon      *Daemon
 }
 
 // NewServer creates a new HTTP server instance
@@ -33,16 +35,40 @@ func NewServer(port int, state *RuntimeState, eventBus *EventBus, scheduler Sche
 
 // NewServerWithPersistence creates a new HTTP server instance with optional persistence store
 func NewServerWithPersistence(port int, state *RuntimeState, eventBus *EventBus, scheduler SchedulerInterface, beadsClient BeadsClientInterface, persistenceStore PersistenceStoreInterface) *Server {
+	return NewServerWithDaemon(port, state, eventBus, scheduler, beadsClient, persistenceStore, nil)
+}
+
+// NewServerWithDaemon creates a new HTTP server instance with daemon reference for repository management
+func NewServerWithDaemon(port int, state *RuntimeState, eventBus *EventBus, scheduler SchedulerInterface, beadsClient BeadsClientInterface, persistenceStore PersistenceStoreInterface, daemon *Daemon) *Server {
 	// Create WebSocket hub
 	hub := NewHub(eventBus)
 
 	// Create HTTP handler
 	handler := NewHandler(state, scheduler, beadsClient, eventBus)
 
+	// Wire up daemon reference for handlers that need access to daemon state
+	if daemon != nil {
+		handler.SetDaemon(daemon)
+	}
+
 	// Create runs handler for persistence queries (may be nil if persistence disabled)
 	var runsHandler *RunsHandler
 	if persistenceStore != nil {
 		runsHandler = NewRunsHandler(persistenceStore)
+	}
+
+	// Create repo handler for repository management (requires daemon reference)
+	var repoHandler *RepoHandler
+	if daemon != nil {
+		// Cast persistence store to RepositoryStoreInterface if available
+		var repoStore RepositoryStoreInterface
+		if persistenceStore != nil {
+			// The persistence.Store implements RepositoryStoreInterface
+			if store, ok := persistenceStore.(RepositoryStoreInterface); ok {
+				repoStore = store
+			}
+		}
+		repoHandler = NewRepoHandler(daemon, repoStore)
 	}
 
 	// Configure WebSocket upgrader
@@ -60,9 +86,11 @@ func NewServerWithPersistence(port int, state *RuntimeState, eventBus *EventBus,
 		hub:         hub,
 		handler:     handler,
 		runsHandler: runsHandler,
+		repoHandler: repoHandler,
 		state:       state,
 		eventBus:    eventBus,
 		upgrader:    upgrader,
+		daemon:      daemon,
 	}
 }
 
@@ -134,6 +162,10 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/runs", s.handleRunsRoutes)       // Handles GET /api/runs
 	mux.HandleFunc("/api/runs/", s.handleRunsRoutes)      // Handles /api/runs/:id and /api/runs/:id/agents
 	mux.HandleFunc("/api/stats/history", s.handleStatsHistory) // Aggregate historical stats
+
+	// REST API routes - repository management
+	mux.HandleFunc("/api/repositories", s.handleRepositoriesRoutes)  // Handles GET /api/repositories
+	mux.HandleFunc("/api/repositories/", s.handleRepositoriesRoutes) // Handles /api/repositories/:id and /api/repositories/:id/activate
 
 	// WebSocket endpoint
 	mux.HandleFunc("/ws", s.handleWebSocket)
@@ -222,6 +254,49 @@ func (s *Server) handleStatsHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.runsHandler.HandleGetHistoricalStats(w, r)
+}
+
+// handleRepositoriesRoutes routes repository management requests
+func (s *Server) handleRepositoriesRoutes(w http.ResponseWriter, r *http.Request) {
+	if s.repoHandler == nil {
+		http.Error(w, "Repository management not available", http.StatusNotImplemented)
+		return
+	}
+
+	path := r.URL.Path
+
+	// GET /api/repositories - list all repositories
+	if path == "/api/repositories" {
+		s.repoHandler.HandleListRepositories(w, r)
+		return
+	}
+
+	// Parse repository ID from path: /api/repositories/:id or /api/repositories/:id/activate
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 3 || parts[0] != "api" || parts[1] != "repositories" {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+
+	repoID := parts[2]
+	if repoID == "" {
+		http.Error(w, "Repository ID required", http.StatusBadRequest)
+		return
+	}
+
+	// POST /api/repositories/:id/activate
+	if len(parts) == 4 && parts[3] == "activate" {
+		s.repoHandler.HandleActivateRepository(w, r, repoID)
+		return
+	}
+
+	// GET /api/repositories/:id
+	if len(parts) == 3 {
+		s.repoHandler.HandleGetRepository(w, r, repoID)
+		return
+	}
+
+	http.Error(w, "Not found", http.StatusNotFound)
 }
 
 // handleWebSocket upgrades HTTP connections to WebSocket

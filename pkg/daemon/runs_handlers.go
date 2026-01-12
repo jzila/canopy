@@ -18,6 +18,7 @@ type PersistenceStoreInterface interface {
 	ListRuns(filter persistence.RunFilter) (*persistence.RunListResult, error)
 	GetAgentsByRun(runID string) ([]persistence.Agent, error)
 	GetStats(since *time.Time) (*persistence.AggregateStats, error)
+	GetStatsByRepo(repoID string, since *time.Time) (*persistence.AggregateStats, error)
 }
 
 // RunsHandler handles HTTP requests for run history queries
@@ -171,8 +172,17 @@ func (h *RunsHandler) HandleGetHistoricalStats(w http.ResponseWriter, r *http.Re
 		since = &t
 	}
 
-	// Get stats
-	stats, err := h.store.GetStats(since)
+	// Parse repo_id parameter for filtering by repository
+	repoID := r.URL.Query().Get("repo_id")
+
+	// Get stats - filtered by repo if specified
+	var stats *persistence.AggregateStats
+	var err error
+	if repoID != "" {
+		stats, err = h.store.GetStatsByRepo(repoID, since)
+	} else {
+		stats, err = h.store.GetStats(since)
+	}
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to get stats: %v", err), http.StatusInternalServerError)
 		return
@@ -233,6 +243,11 @@ func parseRunFilter(r *http.Request) (persistence.RunFilter, error) {
 			return filter, fmt.Errorf("invalid 'offset': must be a non-negative integer")
 		}
 		filter.Offset = offset
+	}
+
+	// Parse 'repo_id' - filter by repository
+	if repoID := r.URL.Query().Get("repo_id"); repoID != "" {
+		filter.RepoID = repoID
 	}
 
 	return filter, nil

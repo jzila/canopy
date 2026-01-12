@@ -354,6 +354,32 @@ func (d *Dashboard) renderAgentList(width, height int) string {
 			commitsInfo = commitStyle.Render(fmt.Sprintf("⎇%d", commitCount))
 		}
 
+		// Merge status indicator
+		var mergeInfo string
+		if agent.MergeStatus != "" && agent.MergeStatus != daemon.MergeStatusNone {
+			mergeStyle := lipgloss.NewStyle()
+			switch agent.MergeStatus {
+			case daemon.MergeStatusPending:
+				mergeStyle = mergeStyle.Foreground(lipgloss.Color("240")) // dim
+				mergeInfo = mergeStyle.Render("⋯q")
+			case daemon.MergeStatusAcquiring:
+				mergeStyle = mergeStyle.Foreground(lipgloss.Color("214")) // orange
+				mergeInfo = mergeStyle.Render("⤻")
+			case daemon.MergeStatusMerging:
+				mergeStyle = mergeStyle.Foreground(lipgloss.Color("33")) // blue
+				mergeInfo = mergeStyle.Render("⤵")
+			case daemon.MergeStatusResolving:
+				mergeStyle = mergeStyle.Foreground(lipgloss.Color("214")) // orange
+				mergeInfo = mergeStyle.Render("⚡")
+			case daemon.MergeStatusMerged:
+				mergeStyle = mergeStyle.Foreground(lipgloss.Color("42")) // green
+				mergeInfo = mergeStyle.Render("⤴")
+			case daemon.MergeStatusFailed:
+				mergeStyle = mergeStyle.Foreground(lipgloss.Color("196")) // red
+				mergeInfo = mergeStyle.Render("⤫")
+			}
+		}
+
 		line := fmt.Sprintf("%s %s %s", status, agentID, title)
 		if duration != "" {
 			line += dimStyle.Render(" " + duration)
@@ -363,6 +389,9 @@ func (d *Dashboard) renderAgentList(width, height int) string {
 		}
 		if commitsInfo != "" {
 			line += " " + commitsInfo
+		}
+		if mergeInfo != "" {
+			line += " " + mergeInfo
 		}
 
 		// Apply selection style

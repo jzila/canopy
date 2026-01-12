@@ -201,6 +201,13 @@ func (s *Server) extractIdentifier(msg *Message) string {
 		}
 		return fmt.Sprintf(" agent=%s", payload.AgentID)
 
+	case MessageTypeAgentMergeStatus:
+		var payload AgentMergeStatusPayload
+		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+			return ""
+		}
+		return fmt.Sprintf(" agent=%s", payload.AgentID)
+
 	case MessageTypeAgentDone:
 		var payload AgentDonePayload
 		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
@@ -258,6 +265,9 @@ func (s *Server) convertToEvent(msg *Message) *daemon.Event {
 		if payload.ParentAgentID != "" {
 			eventPayload["parent_agent_id"] = payload.ParentAgentID
 		}
+		if payload.RepoID != "" {
+			eventPayload["repo_id"] = payload.RepoID
+		}
 		return &daemon.Event{
 			Type:      daemon.EventAgentStarted,
 			Timestamp: msg.Timestamp,
@@ -312,6 +322,27 @@ func (s *Server) convertToEvent(msg *Message) *daemon.Event {
 				"timestamp":     payload.Timestamp,
 				"files_changed": payload.FilesChanged,
 			},
+		}
+
+	case MessageTypeAgentMergeStatus:
+		var payload AgentMergeStatusPayload
+		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+			return nil
+		}
+		eventPayload := map[string]interface{}{
+			"agent_id":     payload.AgentID,
+			"merge_status": string(payload.MergeStatus),
+		}
+		if payload.QueuePos > 0 {
+			eventPayload["queue_pos"] = payload.QueuePos
+		}
+		if payload.Error != "" {
+			eventPayload["error"] = payload.Error
+		}
+		return &daemon.Event{
+			Type:      daemon.EventAgentMergeStatus,
+			Timestamp: msg.Timestamp,
+			Payload:   eventPayload,
 		}
 
 	case MessageTypeAgentDone:
@@ -369,13 +400,23 @@ func (s *Server) convertToEvent(msg *Message) *daemon.Event {
 			return nil
 		}
 		// Map to stats update event
+		eventPayload := map[string]interface{}{
+			"run_id":     payload.RunID,
+			"task_count": payload.TaskCount,
+		}
+		if payload.RepoID != "" {
+			eventPayload["repo_id"] = payload.RepoID
+		}
+		if payload.RepoPath != "" {
+			eventPayload["repo_path"] = payload.RepoPath
+		}
+		if payload.RepoName != "" {
+			eventPayload["repo_name"] = payload.RepoName
+		}
 		return &daemon.Event{
 			Type:      daemon.EventStatsUpdated,
 			Timestamp: msg.Timestamp,
-			Payload: map[string]interface{}{
-				"run_id":     payload.RunID,
-				"task_count": payload.TaskCount,
-			},
+			Payload:   eventPayload,
 		}
 
 	case MessageTypeRunCompleted:
@@ -406,15 +447,19 @@ func (s *Server) convertToEvent(msg *Message) *daemon.Event {
 		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 			return nil
 		}
+		eventPayload := map[string]interface{}{
+			"id":       payload.ID,
+			"title":    payload.Title,
+			"status":   payload.Status,
+			"agent_id": payload.AgentID,
+		}
+		if payload.RepoID != "" {
+			eventPayload["repo_id"] = payload.RepoID
+		}
 		return &daemon.Event{
 			Type:      daemon.EventTaskUpdated,
 			Timestamp: msg.Timestamp,
-			Payload: map[string]interface{}{
-				"id":       payload.ID,
-				"title":    payload.Title,
-				"status":   payload.Status,
-				"agent_id": payload.AgentID,
-			},
+			Payload:   eventPayload,
 		}
 
 	default:

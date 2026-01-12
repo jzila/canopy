@@ -5,9 +5,11 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"github.com/jzila/canopy/pkg/persistence"
+	"github.com/jzila/canopy/pkg/repository"
 )
 
 // Config holds configuration for the daemon
@@ -29,6 +31,10 @@ type IPCServer interface {
 // without directly importing pkg/ipc (which would create a circular dependency)
 type IPCServerFactory func(socketPath string, eventBus *EventBus) IPCServer
 
+// BeadsClientFactory creates a BeadsClientInterface for a given repository path.
+// This allows lazy creation of beads clients for different repositories.
+type BeadsClientFactory func(repoPath string) (BeadsClientInterface, error)
+
 // Daemon orchestrates all daemon components: IPC server, HTTP server, EventBus, and State
 type Daemon struct {
 	config           Config
@@ -38,12 +44,18 @@ type Daemon struct {
 	eventBus         *EventBus
 	state            *RuntimeState
 	scheduler        SchedulerInterface
-	beadsClient      BeadsClientInterface
+	beadsClient      BeadsClientInterface // Default beads client (for CWD)
+
+	// Repository management
+	repoMu            sync.RWMutex
+	activeRepoID      string                              // Currently active repository ID
+	beadsClients      map[string]BeadsClientInterface     // repoID -> client (lazy loaded)
+	beadsClientFactory BeadsClientFactory                 // Factory for creating new beads clients
 
 	// Persistence components (optional, controlled by EnablePersistence config)
-	persistenceStore           *persistence.Store
-	persistenceHandler         *PersistenceHandler
-	persistenceUnsubscribe     func()
+	persistenceStore       *persistence.Store
+	persistenceHandler     *PersistenceHandler
+	persistenceUnsubscribe func()
 }
 
 // NewDaemon creates a new daemon instance with the given configuration
@@ -54,7 +66,134 @@ func NewDaemon(config Config, ipcServerFactory IPCServerFactory, scheduler Sched
 		ipcServerFactory: ipcServerFactory,
 		scheduler:        scheduler,
 		beadsClient:      beadsClient,
+		beadsClients:     make(map[string]BeadsClientInterface),
 	}
+}
+
+// SetBeadsClientFactory sets the factory function for creating beads clients.
+// This allows lazy creation of beads clients for different repositories.
+func (d *Daemon) SetBeadsClientFactory(factory BeadsClientFactory) {
+	d.repoMu.Lock()
+	defer d.repoMu.Unlock()
+	d.beadsClientFactory = factory
+}
+
+// SetActiveRepository sets the currently active repository by ID.
+// Returns an error if the repository ID is not found in the registry.
+func (d *Daemon) SetActiveRepository(repoID string) error {
+	// Verify the repository exists
+	repo, err := repository.FromID(repoID)
+	if err != nil {
+		return fmt.Errorf("failed to lookup repository: %w", err)
+	}
+	if repo == nil {
+		return fmt.Errorf("repository not found: %s", repoID)
+	}
+
+	d.repoMu.Lock()
+	defer d.repoMu.Unlock()
+	d.activeRepoID = repoID
+
+	log.Printf("Active repository set to %s (%s)", repo.Name, repoID)
+	return nil
+}
+
+// GetActiveRepository returns the currently active repository.
+// Returns nil if no repository is active.
+func (d *Daemon) GetActiveRepository() *repository.Repository {
+	d.repoMu.RLock()
+	repoID := d.activeRepoID
+	d.repoMu.RUnlock()
+
+	if repoID == "" {
+		return nil
+	}
+
+	repo, err := repository.FromID(repoID)
+	if err != nil {
+		log.Printf("Warning: failed to lookup active repository %s: %v", repoID, err)
+		return nil
+	}
+	return repo
+}
+
+// GetActiveRepositoryID returns the ID of the currently active repository.
+// Returns empty string if no repository is active.
+func (d *Daemon) GetActiveRepositoryID() string {
+	d.repoMu.RLock()
+	defer d.repoMu.RUnlock()
+	return d.activeRepoID
+}
+
+// ListRepositories returns all registered repositories.
+func (d *Daemon) ListRepositories() ([]repository.Repository, error) {
+	return repository.List()
+}
+
+// getBeadsClient returns a beads client for the specified repository ID.
+// If no client exists for that repo, it creates one lazily using the factory.
+// Returns the default beads client if repoID is empty.
+func (d *Daemon) getBeadsClient(repoID string) (BeadsClientInterface, error) {
+	// Return default client if no repo specified
+	if repoID == "" {
+		return d.beadsClient, nil
+	}
+
+	// Check if we already have a client for this repo
+	d.repoMu.RLock()
+	client, exists := d.beadsClients[repoID]
+	d.repoMu.RUnlock()
+
+	if exists {
+		return client, nil
+	}
+
+	// Need to create a new client - lookup repo path
+	repo, err := repository.FromID(repoID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to lookup repository: %w", err)
+	}
+	if repo == nil {
+		return nil, fmt.Errorf("repository not found: %s", repoID)
+	}
+
+	// Create client using factory
+	d.repoMu.Lock()
+	defer d.repoMu.Unlock()
+
+	// Double-check after acquiring write lock
+	if client, exists := d.beadsClients[repoID]; exists {
+		return client, nil
+	}
+
+	// No factory available - return nil (no beads support for this repo)
+	if d.beadsClientFactory == nil {
+		log.Printf("Warning: no beads client factory configured, cannot create client for repo %s", repoID)
+		return nil, nil
+	}
+
+	client, err = d.beadsClientFactory(repo.Path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create beads client for repo %s: %w", repoID, err)
+	}
+
+	d.beadsClients[repoID] = client
+	log.Printf("Created beads client for repository %s (%s)", repo.Name, repoID)
+	return client, nil
+}
+
+// getActiveBeadsClient returns the beads client for the currently active repository.
+// Falls back to the default beads client if no repository is active.
+func (d *Daemon) getActiveBeadsClient() (BeadsClientInterface, error) {
+	d.repoMu.RLock()
+	repoID := d.activeRepoID
+	d.repoMu.RUnlock()
+
+	if repoID == "" {
+		return d.beadsClient, nil
+	}
+
+	return d.getBeadsClient(repoID)
 }
 
 // Init initializes daemon components without starting servers
@@ -91,12 +230,15 @@ func (d *Daemon) Init() {
 	}
 }
 
-// restoreStateFromDB loads any running run and its agents from the database
-// into the RuntimeState. This allows the daemon to resume displaying state
+// restoreStateFromDB loads the most recent run and its agents from the database
+// into the RuntimeState. This allows the daemon to display historical data
 // after a restart.
 //
 // On startup, any runs or agents that were still "running" when the daemon
 // terminated are marked as failed, since they cannot be resumed.
+//
+// The active repository is set based on the most recent run's repo context,
+// which enables proper beads client selection for task loading.
 func (d *Daemon) restoreStateFromDB() error {
 	if d.persistenceStore == nil {
 		return nil
@@ -109,17 +251,26 @@ func (d *Daemon) restoreStateFromDB() error {
 		return fmt.Errorf("failed to mark orphaned states: %w", err)
 	}
 
-	// Now get the most recent run (which will be marked as failed if it was orphaned)
-	run, err := d.persistenceStore.GetRunningRun()
+	// Get the most recent run regardless of status to display historical data
+	run, err := d.persistenceStore.GetMostRecentRun()
 	if err != nil {
-		return fmt.Errorf("failed to get running run: %w", err)
+		return fmt.Errorf("failed to get most recent run: %w", err)
 	}
 	if run == nil {
-		log.Println("No running run found in database, starting fresh")
+		log.Println("No runs found in database, starting fresh")
 		return nil
 	}
 
-	log.Printf("Restoring state from run %s (started %s)", run.ID, run.StartedAt.Format("2006-01-02 15:04:05"))
+	log.Printf("Restoring state from run %s (status: %s, started %s)", run.ID, run.Status, run.StartedAt.Format("2006-01-02 15:04:05"))
+
+	// Set the active repository based on the run's repo context
+	// This allows loadTasksFromBeads to use the correct beads client
+	if run.RepoID != "" {
+		d.repoMu.Lock()
+		d.activeRepoID = run.RepoID
+		d.repoMu.Unlock()
+		log.Printf("  Set active repository to %s (%s)", run.RepoName, run.RepoID)
+	}
 
 	// Update RuntimeState start time to match the run
 	d.state.StartTime = run.StartedAt
@@ -140,7 +291,7 @@ func (d *Daemon) restoreStateFromDB() error {
 	// Update stats after restoring all agents
 	d.state.UpdateStats()
 
-	log.Printf("Restored %d agents from previous run", len(agents))
+	log.Printf("Restored %d agents from previous run (historical data)", len(agents))
 	return nil
 }
 
@@ -172,12 +323,22 @@ func (d *Daemon) markOrphanedStatesAsFailed() error {
 
 // loadTasksFromBeads loads pending tasks from the beads database into RuntimeState.
 // This populates the UI with available work when the daemon starts.
+// Uses the active repository's beads client if one is set, otherwise falls back
+// to the default beads client.
 func (d *Daemon) loadTasksFromBeads() error {
-	if d.beadsClient == nil {
+	// Get the active beads client (repo-specific or default)
+	client, err := d.getActiveBeadsClient()
+	if err != nil {
+		return fmt.Errorf("failed to get beads client: %w", err)
+	}
+	if client == nil {
 		return nil
 	}
 
-	tasks, err := d.beadsClient.List()
+	// Get active repo ID for tagging tasks
+	repoID := d.GetActiveRepositoryID()
+
+	tasks, err := client.List()
 	if err != nil {
 		return fmt.Errorf("failed to list tasks from beads: %w", err)
 	}
@@ -187,9 +348,9 @@ func (d *Daemon) loadTasksFromBeads() error {
 		return nil
 	}
 
-	// Add each task to the RuntimeState
+	// Add each task to the RuntimeState with repo context
 	for i := range tasks {
-		d.state.AddTask(&tasks[i])
+		d.state.AddTaskWithRepo(&tasks[i], repoID)
 	}
 
 	log.Printf("Loaded %d pending task(s) from beads database", len(tasks))
@@ -202,6 +363,7 @@ func (d *Daemon) convertPersistenceAgentToState(pAgent *persistence.Agent) *Agen
 		ID:        pAgent.ID,
 		TaskID:    pAgent.TaskID,
 		TaskTitle: pAgent.TaskTitle,
+		RepoID:    pAgent.RepoID,
 		Status:    convertPersistenceStatus(pAgent.Status),
 		StartTime: pAgent.StartedAt,
 		Duration:  pAgent.DurationSeconds,
@@ -270,7 +432,7 @@ func (d *Daemon) Start() error {
 
 	// Initialize HTTP server (REST API + WebSocket)
 	// Pass persistence store if available (for /api/runs endpoints)
-	d.httpServer = NewServerWithPersistence(d.config.Port, d.state, d.eventBus, d.scheduler, d.beadsClient, d.persistenceStore)
+	d.httpServer = NewServerWithDaemon(d.config.Port, d.state, d.eventBus, d.scheduler, d.beadsClient, d.persistenceStore, d)
 
 	// Create IPC server (receives events from canopy run)
 	// The factory function creates an ipc.Server with the EventBus we just initialized

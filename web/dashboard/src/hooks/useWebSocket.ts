@@ -142,7 +142,14 @@ interface BackendRuntimeState {
 interface StateSyncEvent {
   type: 'state:sync';
   timestamp: string;
-  payload: BackendRuntimeState;
+  payload: BackendRuntimeState | RepoSyncPayload;
+}
+
+// Payload when switching repos (partial sync)
+interface RepoSyncPayload {
+  active_repo_id: string;
+  active_repo_name: string;
+  active_repo_path: string;
 }
 
 interface OrchPausedEvent {
@@ -199,7 +206,8 @@ export function useWebSocket() {
     appendOutput,
     appendLiveFeedEvent,
     syncState,
-    setIsPaused
+    setIsPaused,
+    setActiveRepo
   } = useStateStore();
 
   const connect = useCallback(() => {
@@ -234,8 +242,18 @@ export function useWebSocket() {
 
           switch (message.type) {
             case 'state:sync': {
-              // Transform backend state to frontend format
-              const backendState = message.payload;
+              // Check if this is a repo switch event (partial sync)
+              const payload = message.payload as unknown as Record<string, unknown>;
+              if ('active_repo_id' in payload && !('agents' in payload)) {
+                // This is a repo switch notification
+                const repoPayload = payload as unknown as RepoSyncPayload;
+                console.log('[WebSocket] Repo switched to:', repoPayload.active_repo_id);
+                setActiveRepo(repoPayload.active_repo_id);
+                break;
+              }
+
+              // Transform backend state to frontend format (full sync)
+              const backendState = message.payload as unknown as BackendRuntimeState;
               const transformedAgents: Record<string, import('../stores/stateStore').AgentState> = {};
 
               for (const [id, agent] of Object.entries(backendState.agents)) {
@@ -435,7 +453,7 @@ export function useWebSocket() {
         }, backoffTime);
       }
     }
-  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, syncState, setIsPaused]);
+  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, syncState, setIsPaused, setActiveRepo]);
 
   const disconnect = useCallback(() => {
     isManuallyClosedRef.current = true;

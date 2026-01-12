@@ -40,16 +40,19 @@ const (
 
 // Run represents a single canopy orchestration run
 type Run struct {
-	ID             string    `json:"id"`
-	StartedAt      time.Time `json:"started_at"`
+	ID             string     `json:"id"`
+	StartedAt      time.Time  `json:"started_at"`
 	FinishedAt     *time.Time `json:"finished_at,omitempty"`
-	Status         RunStatus `json:"status"`
-	Concurrency    int       `json:"concurrency"`
-	GitBranch      string    `json:"git_branch,omitempty"`
-	GitCommit      string    `json:"git_commit,omitempty"`
-	TotalTasks     int       `json:"total_tasks"`
-	CompletedTasks int       `json:"completed_tasks"`
-	FailedTasks    int       `json:"failed_tasks"`
+	Status         RunStatus  `json:"status"`
+	Concurrency    int        `json:"concurrency"`
+	GitBranch      string     `json:"git_branch,omitempty"`
+	GitCommit      string     `json:"git_commit,omitempty"`
+	TotalTasks     int        `json:"total_tasks"`
+	CompletedTasks int        `json:"completed_tasks"`
+	FailedTasks    int        `json:"failed_tasks"`
+	RepoID         string     `json:"repo_id,omitempty"`
+	RepoPath       string     `json:"repo_path,omitempty"`
+	RepoName       string     `json:"repo_name,omitempty"`
 }
 
 // Agent represents a single agent execution within a run
@@ -72,6 +75,7 @@ type Agent struct {
 	CostUSD           float64     `json:"cost_usd"`
 	FilesChanged      int         `json:"files_changed"`
 	GitCommitsCreated int         `json:"git_commits_created"`
+	RepoID            string      `json:"repo_id,omitempty"`
 }
 
 // RunFilter specifies criteria for querying runs
@@ -79,6 +83,7 @@ type RunFilter struct {
 	Since  *time.Time // Only runs started after this time
 	Before *time.Time // Only runs started before this time
 	Status RunStatus  // Filter by status (empty means all)
+	RepoID string     // Filter by repository ID (empty means all)
 	Limit  int        // Max results (0 means default of 50)
 	Offset int        // Pagination offset
 }
@@ -166,8 +171,8 @@ func getDefaultDBPath() string {
 // CreateRun creates a new run record
 func (s *Store) CreateRun(run *Run) error {
 	query := `
-		INSERT INTO runs (id, started_at, finished_at, status, concurrency, git_branch, git_commit, total_tasks, completed_tasks, failed_tasks)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO runs (id, started_at, finished_at, status, concurrency, git_branch, git_commit, total_tasks, completed_tasks, failed_tasks, repo_id, repo_path, repo_name)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	var finishedAt *int64
 	if run.FinishedAt != nil {
@@ -185,8 +190,19 @@ func (s *Store) CreateRun(run *Run) error {
 		run.TotalTasks,
 		run.CompletedTasks,
 		run.FailedTasks,
+		nullString(run.RepoID),
+		nullString(run.RepoPath),
+		nullString(run.RepoName),
 	)
 	return err
+}
+
+// nullString returns nil for empty strings, otherwise the string pointer
+func nullString(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 // UpdateRun updates an existing run record
@@ -197,7 +213,10 @@ func (s *Store) UpdateRun(run *Run) error {
 			status = ?,
 			total_tasks = ?,
 			completed_tasks = ?,
-			failed_tasks = ?
+			failed_tasks = ?,
+			repo_id = ?,
+			repo_path = ?,
+			repo_name = ?
 		WHERE id = ?
 	`
 	var finishedAt *int64
@@ -211,6 +230,9 @@ func (s *Store) UpdateRun(run *Run) error {
 		run.TotalTasks,
 		run.CompletedTasks,
 		run.FailedTasks,
+		nullString(run.RepoID),
+		nullString(run.RepoPath),
+		nullString(run.RepoName),
 		run.ID,
 	)
 	return err
@@ -219,7 +241,7 @@ func (s *Store) UpdateRun(run *Run) error {
 // GetRun retrieves a run by ID
 func (s *Store) GetRun(id string) (*Run, error) {
 	query := `
-		SELECT id, started_at, finished_at, status, concurrency, git_branch, git_commit, total_tasks, completed_tasks, failed_tasks
+		SELECT id, started_at, finished_at, status, concurrency, git_branch, git_commit, total_tasks, completed_tasks, failed_tasks, repo_id, repo_path, repo_name
 		FROM runs WHERE id = ?
 	`
 	row := s.db.QueryRow(query, id)
@@ -252,6 +274,10 @@ func (s *Store) ListRuns(filter RunFilter) (*RunListResult, error) {
 		baseWhere += " AND status = ?"
 		args = append(args, string(filter.Status))
 	}
+	if filter.RepoID != "" {
+		baseWhere += " AND repo_id = ?"
+		args = append(args, filter.RepoID)
+	}
 
 	// Get total count
 	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM runs WHERE %s", baseWhere)
@@ -262,7 +288,7 @@ func (s *Store) ListRuns(filter RunFilter) (*RunListResult, error) {
 
 	// Get paginated results
 	listQuery := fmt.Sprintf(`
-		SELECT id, started_at, finished_at, status, concurrency, git_branch, git_commit, total_tasks, completed_tasks, failed_tasks
+		SELECT id, started_at, finished_at, status, concurrency, git_branch, git_commit, total_tasks, completed_tasks, failed_tasks, repo_id, repo_path, repo_name
 		FROM runs WHERE %s
 		ORDER BY started_at DESC
 		LIMIT ? OFFSET ?
@@ -297,8 +323,8 @@ func (s *Store) ListRuns(filter RunFilter) (*RunListResult, error) {
 // CreateAgent creates a new agent record
 func (s *Store) CreateAgent(agent *Agent) error {
 	query := `
-		INSERT INTO agents (id, run_id, task_id, task_title, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cost_usd, files_changed, git_commits_created)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO agents (id, run_id, task_id, task_title, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cost_usd, files_changed, git_commits_created, repo_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	var finishedAt *int64
 	if agent.FinishedAt != nil {
@@ -324,6 +350,7 @@ func (s *Store) CreateAgent(agent *Agent) error {
 		agent.CostUSD,
 		agent.FilesChanged,
 		agent.GitCommitsCreated,
+		nullString(agent.RepoID),
 	)
 	return err
 }
@@ -374,7 +401,7 @@ func (s *Store) UpdateAgent(agent *Agent) error {
 // GetAgent retrieves an agent by ID
 func (s *Store) GetAgent(id string) (*Agent, error) {
 	query := `
-		SELECT id, run_id, task_id, task_title, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cost_usd, files_changed, git_commits_created
+		SELECT id, run_id, task_id, task_title, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cost_usd, files_changed, git_commits_created, repo_id
 		FROM agents WHERE id = ?
 	`
 	row := s.db.QueryRow(query, id)
@@ -384,7 +411,7 @@ func (s *Store) GetAgent(id string) (*Agent, error) {
 // GetAgentsByRun retrieves all agents for a specific run
 func (s *Store) GetAgentsByRun(runID string) ([]Agent, error) {
 	query := `
-		SELECT id, run_id, task_id, task_title, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cost_usd, files_changed, git_commits_created
+		SELECT id, run_id, task_id, task_title, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cost_usd, files_changed, git_commits_created, repo_id
 		FROM agents WHERE run_id = ?
 		ORDER BY started_at ASC
 	`
@@ -409,8 +436,21 @@ func (s *Store) GetAgentsByRun(runID string) ([]Agent, error) {
 // This is used to restore state on daemon startup.
 func (s *Store) GetRunningRun() (*Run, error) {
 	query := `
-		SELECT id, started_at, finished_at, status, concurrency, git_branch, git_commit, total_tasks, completed_tasks, failed_tasks
+		SELECT id, started_at, finished_at, status, concurrency, git_branch, git_commit, total_tasks, completed_tasks, failed_tasks, repo_id, repo_path, repo_name
 		FROM runs WHERE status = 'running'
+		ORDER BY started_at DESC
+		LIMIT 1
+	`
+	row := s.db.QueryRow(query)
+	return s.scanRun(row)
+}
+
+// GetMostRecentRun returns the most recent run regardless of status, or nil if none exists.
+// This is used to restore historical state on daemon startup for display purposes.
+func (s *Store) GetMostRecentRun() (*Run, error) {
+	query := `
+		SELECT id, started_at, finished_at, status, concurrency, git_branch, git_commit, total_tasks, completed_tasks, failed_tasks, repo_id, repo_path, repo_name
+		FROM runs
 		ORDER BY started_at DESC
 		LIMIT 1
 	`
@@ -511,12 +551,151 @@ func (s *Store) GetStats(since *time.Time) (*AggregateStats, error) {
 	return &stats, nil
 }
 
+// GetRunsByRepo retrieves all runs for a specific repository
+func (s *Store) GetRunsByRepo(repoID string) ([]Run, error) {
+	query := `
+		SELECT id, started_at, finished_at, status, concurrency, git_branch, git_commit, total_tasks, completed_tasks, failed_tasks, repo_id, repo_path, repo_name
+		FROM runs WHERE repo_id = ?
+		ORDER BY started_at DESC
+	`
+	rows, err := s.db.Query(query, repoID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query runs by repo: %w", err)
+	}
+	defer rows.Close()
+
+	runs := []Run{}
+	for rows.Next() {
+		run, err := s.scanRunFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		runs = append(runs, *run)
+	}
+	return runs, nil
+}
+
+// GetStatsByRepo returns aggregate statistics for a specific repository, optionally filtered by time range
+func (s *Store) GetStatsByRepo(repoID string, since *time.Time) (*AggregateStats, error) {
+	// Query runs
+	runsQuery := `
+		SELECT
+			COUNT(*) as total_runs,
+			SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_runs,
+			SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_runs
+		FROM runs
+		WHERE repo_id = ?
+	`
+	args := []interface{}{repoID}
+	if since != nil {
+		runsQuery += " AND started_at >= ?"
+		args = append(args, since.Unix())
+	}
+
+	var stats AggregateStats
+	err := s.db.QueryRow(runsQuery, args...).Scan(
+		&stats.TotalRuns,
+		&stats.CompletedRuns,
+		&stats.FailedRuns,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query run stats by repo: %w", err)
+	}
+
+	// Query agents
+	agentsQuery := `
+		SELECT
+			COUNT(*) as total_agents,
+			COALESCE(SUM(input_tokens), 0) as total_input_tokens,
+			COALESCE(SUM(output_tokens), 0) as total_output_tokens,
+			COALESCE(SUM(total_tokens), 0) as total_tokens,
+			COALESCE(SUM(cost_usd), 0) as total_cost_usd,
+			COALESCE(SUM(duration_seconds), 0) as total_duration_seconds
+		FROM agents
+		WHERE repo_id = ?
+	`
+	if since != nil {
+		agentsQuery += " AND started_at >= ?"
+	}
+
+	err = s.db.QueryRow(agentsQuery, args...).Scan(
+		&stats.TotalAgents,
+		&stats.TotalInputTokens,
+		&stats.TotalOutputTokens,
+		&stats.TotalTokens,
+		&stats.TotalCostUSD,
+		&stats.TotalDurationSeconds,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query agent stats by repo: %w", err)
+	}
+
+	return &stats, nil
+}
+
+// RepoIDLookupFunc is a callback function used by MigrateOrphanedRepoIDs to look up
+// repository IDs from paths. Returns (repoID, found).
+type RepoIDLookupFunc func(path string) (string, bool)
+
+// MigrateOrphanedRepoIDs attempts to populate repo_id for runs that have NULL repo_id.
+// It uses the provided lookup function to find repository IDs from paths.
+// Returns the number of runs updated.
+func (s *Store) MigrateOrphanedRepoIDs(lookupFn RepoIDLookupFunc) (int64, error) {
+	// Get runs with NULL repo_id that have a repo_path set
+	query := `SELECT id, repo_path FROM runs WHERE repo_id IS NULL AND repo_path IS NOT NULL AND repo_path != ''`
+	rows, err := s.db.Query(query)
+	if err != nil {
+		return 0, fmt.Errorf("failed to query orphaned runs: %w", err)
+	}
+
+	// Collect all data first to avoid holding open cursor during updates
+	type orphanedRun struct {
+		runID    string
+		repoPath string
+	}
+	var orphanedRuns []orphanedRun
+	for rows.Next() {
+		var runID, repoPath string
+		if err := rows.Scan(&runID, &repoPath); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("failed to scan orphaned run: %w", err)
+		}
+		orphanedRuns = append(orphanedRuns, orphanedRun{runID: runID, repoPath: repoPath})
+	}
+	rows.Close()
+
+	var updated int64
+	for _, run := range orphanedRuns {
+		repoID, found := lookupFn(run.repoPath)
+		if !found {
+			continue
+		}
+
+		// Update the run's repo_id
+		_, err := s.db.Exec(`UPDATE runs SET repo_id = ? WHERE id = ?`, repoID, run.runID)
+		if err != nil {
+			return updated, fmt.Errorf("failed to update run repo_id: %w", err)
+		}
+
+		// Also update associated agents
+		_, err = s.db.Exec(`UPDATE agents SET repo_id = ? WHERE run_id = ?`, repoID, run.runID)
+		if err != nil {
+			return updated, fmt.Errorf("failed to update agents repo_id: %w", err)
+		}
+
+		updated++
+	}
+
+	return updated, nil
+}
+
 // Helper functions for scanning rows
 
 func (s *Store) scanRun(row *sql.Row) (*Run, error) {
 	var run Run
 	var startedAt, finishedAt sql.NullInt64
 	var status string
+	var repoID, repoPath, repoName sql.NullString
 
 	err := row.Scan(
 		&run.ID,
@@ -529,6 +708,9 @@ func (s *Store) scanRun(row *sql.Row) (*Run, error) {
 		&run.TotalTasks,
 		&run.CompletedTasks,
 		&run.FailedTasks,
+		&repoID,
+		&repoPath,
+		&repoName,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -543,6 +725,9 @@ func (s *Store) scanRun(row *sql.Row) (*Run, error) {
 		t := time.Unix(finishedAt.Int64, 0)
 		run.FinishedAt = &t
 	}
+	run.RepoID = repoID.String
+	run.RepoPath = repoPath.String
+	run.RepoName = repoName.String
 
 	return &run, nil
 }
@@ -551,6 +736,7 @@ func (s *Store) scanRunFromRows(rows *sql.Rows) (*Run, error) {
 	var run Run
 	var startedAt, finishedAt sql.NullInt64
 	var status string
+	var repoID, repoPath, repoName sql.NullString
 
 	err := rows.Scan(
 		&run.ID,
@@ -563,6 +749,9 @@ func (s *Store) scanRunFromRows(rows *sql.Rows) (*Run, error) {
 		&run.TotalTasks,
 		&run.CompletedTasks,
 		&run.FailedTasks,
+		&repoID,
+		&repoPath,
+		&repoName,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan run: %w", err)
@@ -574,6 +763,9 @@ func (s *Store) scanRunFromRows(rows *sql.Rows) (*Run, error) {
 		t := time.Unix(finishedAt.Int64, 0)
 		run.FinishedAt = &t
 	}
+	run.RepoID = repoID.String
+	run.RepoPath = repoPath.String
+	run.RepoName = repoName.String
 
 	return &run, nil
 }
@@ -583,7 +775,7 @@ func (s *Store) scanAgent(row *sql.Row) (*Agent, error) {
 	var startedAt, finishedAt sql.NullInt64
 	var exitCode sql.NullInt64
 	var status string
-	var errorMessage, stdout, stderr sql.NullString
+	var errorMessage, stdout, stderr, repoID sql.NullString
 
 	err := row.Scan(
 		&agent.ID,
@@ -604,6 +796,7 @@ func (s *Store) scanAgent(row *sql.Row) (*Agent, error) {
 		&agent.CostUSD,
 		&agent.FilesChanged,
 		&agent.GitCommitsCreated,
+		&repoID,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -625,6 +818,7 @@ func (s *Store) scanAgent(row *sql.Row) (*Agent, error) {
 	agent.ErrorMessage = errorMessage.String
 	agent.Stdout = stdout.String
 	agent.Stderr = stderr.String
+	agent.RepoID = repoID.String
 
 	return &agent, nil
 }
@@ -634,7 +828,7 @@ func (s *Store) scanAgentFromRows(rows *sql.Rows) (*Agent, error) {
 	var startedAt, finishedAt sql.NullInt64
 	var exitCode sql.NullInt64
 	var status string
-	var errorMessage, stdout, stderr sql.NullString
+	var errorMessage, stdout, stderr, repoID sql.NullString
 
 	err := rows.Scan(
 		&agent.ID,
@@ -655,6 +849,7 @@ func (s *Store) scanAgentFromRows(rows *sql.Rows) (*Agent, error) {
 		&agent.CostUSD,
 		&agent.FilesChanged,
 		&agent.GitCommitsCreated,
+		&repoID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan agent: %w", err)
@@ -673,6 +868,7 @@ func (s *Store) scanAgentFromRows(rows *sql.Rows) (*Agent, error) {
 	agent.ErrorMessage = errorMessage.String
 	agent.Stdout = stdout.String
 	agent.Stderr = stderr.String
+	agent.RepoID = repoID.String
 
 	return &agent, nil
 }

@@ -6,6 +6,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/jzila/canopy/pkg/repository"
 )
 
 // Client manages IPC communication from canopy run to canopy daemon
@@ -80,12 +82,14 @@ func (c *Client) sendMessage(msgType MessageType, payload interface{}) error {
 
 // SendAgentStart notifies the daemon that an agent has started executing a task
 // parentAgentID is optional and specifies the ID of the parent agent if this agent was spawned by another
-func (c *Client) SendAgentStart(agentID, taskID, taskTitle, parentAgentID string) error {
+// repoID is optional and specifies the repository ID for tracking
+func (c *Client) SendAgentStart(agentID, taskID, taskTitle, parentAgentID, repoID string) error {
 	payload := AgentStartPayload{
 		AgentID:       agentID,
 		TaskID:        taskID,
 		TaskTitle:     taskTitle,
 		ParentAgentID: parentAgentID,
+		RepoID:        repoID,
 	}
 
 	return c.sendMessage(MessageTypeAgentStart, payload)
@@ -122,6 +126,18 @@ func (c *Client) SendAgentCommit(agentID string, commit *AgentCommitPayload) err
 
 	commit.AgentID = agentID
 	return c.sendMessage(MessageTypeAgentCommit, commit)
+}
+
+// SendAgentMergeStatus notifies the daemon of an agent's merge queue status
+func (c *Client) SendAgentMergeStatus(agentID string, status MergeStatus, queuePos int, errMsg string) error {
+	payload := AgentMergeStatusPayload{
+		AgentID:     agentID,
+		MergeStatus: status,
+		QueuePos:    queuePos,
+		Error:       errMsg,
+	}
+
+	return c.sendMessage(MessageTypeAgentMergeStatus, payload)
 }
 
 // SendAgentDone notifies the daemon that an agent completed successfully
@@ -161,22 +177,31 @@ func (c *Client) SendAgentFail(agentID, parentAgentID string, err error, result 
 }
 
 // SendTaskUpdated notifies the daemon that a task status has changed
-func (c *Client) SendTaskUpdated(taskID, title, status, agentID string) error {
+// repoID is optional and specifies the repository ID for tracking
+func (c *Client) SendTaskUpdated(taskID, title, status, agentID, repoID string) error {
 	payload := TaskUpdatedPayload{
 		ID:      taskID,
 		Title:   title,
 		Status:  status,
 		AgentID: agentID,
+		RepoID:  repoID,
 	}
 
 	return c.sendMessage(MessageTypeTaskUpdated, payload)
 }
 
 // SendRunStarted notifies the daemon that a canopy run has started
-func (c *Client) SendRunStarted(runID string, taskCount int) error {
+// repo is optional and contains repository information for tracking
+func (c *Client) SendRunStarted(runID string, taskCount int, repo *repository.Repository) error {
 	payload := RunStartedPayload{
 		RunID:     runID,
 		TaskCount: taskCount,
+	}
+
+	if repo != nil {
+		payload.RepoID = repo.ID
+		payload.RepoPath = repo.Path
+		payload.RepoName = repo.Name
 	}
 
 	return c.sendMessage(MessageTypeRunStarted, payload)

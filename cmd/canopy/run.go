@@ -18,6 +18,7 @@ import (
 	"github.com/jzila/canopy/pkg/history"
 	"github.com/jzila/canopy/pkg/ipc"
 	"github.com/jzila/canopy/pkg/orchestrator"
+	"github.com/jzila/canopy/pkg/repository"
 	sandboxpkg "github.com/jzila/canopy/pkg/sandbox"
 )
 
@@ -154,6 +155,16 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		outputDir = absWorkdir
 	}
 
+	// Initialize repository for tracking
+	repo, err := repository.GetOrCreate(absWorkdir)
+	if err != nil {
+		// Non-fatal: repository tracking is optional
+		if verbose {
+			fmt.Fprintf(os.Stderr, "warning: failed to initialize repository: %v\n", err)
+		}
+		repo = nil
+	}
+
 	// Set up IPC client unless --no-daemon is specified
 	var ipcClient *ipc.Client
 	if !noDaemon {
@@ -196,6 +207,12 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		startTime: time.Now(),
 	}
 
+	// Get repo ID for IPC calls (empty string if repo is nil)
+	repoID := ""
+	if repo != nil {
+		repoID = repo.ID
+	}
+
 	// Set up callbacks (history tracking always, IPC only if connected)
 	// Note: parentAgentID is empty for top-level orchestrated agents
 	// Child agents (e.g., resolvers) will populate this when spawned
@@ -207,7 +224,7 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 			orch.SetAgentID(taskID, agentID)
 			if ipcClient != nil {
 				parentAgentID := "" // Top-level agents have no parent
-				if err := ipcClient.SendAgentStart(agentID, taskID, task.Title, parentAgentID); err != nil && verbose {
+				if err := ipcClient.SendAgentStart(agentID, taskID, task.Title, parentAgentID, repoID); err != nil && verbose {
 					fmt.Fprintf(os.Stderr, "warning: failed to send agent start: %v\n", err)
 				}
 			}
@@ -264,13 +281,18 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		orch.SetIPCClient(ipcClient)
 	}
 
+	// Pass repo ID to orchestrator for resolver agent tracking
+	if repo != nil {
+		orch.SetRepoID(repo.ID)
+	}
+
 	// Get initial ready tasks to send task count (IPC only)
 	if ipcClient != nil {
 		beadsClient, err := beads.NewClient(absWorkdir)
 		if err == nil {
 			tasks, err := beadsClient.Ready()
 			if err == nil && len(tasks) > 0 {
-				if err := ipcClient.SendRunStarted(runID, len(tasks)); err != nil && verbose {
+				if err := ipcClient.SendRunStarted(runID, len(tasks), repo); err != nil && verbose {
 					fmt.Fprintf(os.Stderr, "warning: failed to send run started: %v\n", err)
 				}
 			}

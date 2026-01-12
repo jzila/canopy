@@ -694,6 +694,510 @@ func TestMarkOrphanedAgentsFailed_NoOrphans(t *testing.T) {
 	}
 }
 
+func TestGetMostRecentRun(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	now := time.Now()
+
+	// Create multiple runs with different statuses
+	runs := []*Run{
+		{ID: "run-old-completed", StartedAt: now.Add(-3 * time.Hour), Status: RunStatusCompleted},
+		{ID: "run-old-failed", StartedAt: now.Add(-2 * time.Hour), Status: RunStatusFailed},
+		{ID: "run-recent-completed", StartedAt: now.Add(-1 * time.Hour), Status: RunStatusCompleted},
+	}
+
+	for _, run := range runs {
+		if err := store.CreateRun(run); err != nil {
+			t.Fatalf("failed to create run: %v", err)
+		}
+	}
+
+	// Should return the most recent run regardless of status
+	mostRecent, err := store.GetMostRecentRun()
+	if err != nil {
+		t.Fatalf("failed to get most recent run: %v", err)
+	}
+
+	if mostRecent == nil {
+		t.Fatal("expected most recent run, got nil")
+	}
+
+	if mostRecent.ID != "run-recent-completed" {
+		t.Errorf("expected run-recent-completed, got %s", mostRecent.ID)
+	}
+	if mostRecent.Status != RunStatusCompleted {
+		t.Errorf("expected status completed, got %s", mostRecent.Status)
+	}
+}
+
+func TestGetMostRecentRun_Empty(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	// No runs in database
+	mostRecent, err := store.GetMostRecentRun()
+	if err != nil {
+		t.Fatalf("failed to get most recent run: %v", err)
+	}
+
+	if mostRecent != nil {
+		t.Errorf("expected nil for empty database, got %v", mostRecent)
+	}
+}
+
+func TestGetMostRecentRun_AfterMarkOrphaned(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	now := time.Now()
+
+	// Create a running run (simulates daemon crash)
+	run := &Run{ID: "run-orphaned", StartedAt: now.Add(-1 * time.Hour), Status: RunStatusRunning}
+	if err := store.CreateRun(run); err != nil {
+		t.Fatalf("failed to create run: %v", err)
+	}
+
+	// Mark orphaned runs as failed
+	_, err := store.MarkOrphanedRunsFailed()
+	if err != nil {
+		t.Fatalf("failed to mark orphaned runs: %v", err)
+	}
+
+	// GetRunningRun should return nil (no running runs)
+	runningRun, err := store.GetRunningRun()
+	if err != nil {
+		t.Fatalf("failed to get running run: %v", err)
+	}
+	if runningRun != nil {
+		t.Error("expected GetRunningRun to return nil after orphan cleanup")
+	}
+
+	// GetMostRecentRun should still return the run (now failed)
+	mostRecent, err := store.GetMostRecentRun()
+	if err != nil {
+		t.Fatalf("failed to get most recent run: %v", err)
+	}
+
+	if mostRecent == nil {
+		t.Fatal("expected GetMostRecentRun to return the orphaned (now failed) run")
+	}
+	if mostRecent.ID != "run-orphaned" {
+		t.Errorf("expected run-orphaned, got %s", mostRecent.ID)
+	}
+	if mostRecent.Status != RunStatusFailed {
+		t.Errorf("expected status failed (after orphan cleanup), got %s", mostRecent.Status)
+	}
+}
+
+func TestCreateRunWithRepoID(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	now := time.Now()
+	run := &Run{
+		ID:          "run-with-repo",
+		StartedAt:   now,
+		Status:      RunStatusRunning,
+		Concurrency: 4,
+		GitBranch:   "main",
+		GitCommit:   "abc123",
+		TotalTasks:  5,
+		RepoID:      "repo-123",
+		RepoPath:    "/path/to/repo",
+		RepoName:    "my-repo",
+	}
+
+	if err := store.CreateRun(run); err != nil {
+		t.Fatalf("failed to create run: %v", err)
+	}
+
+	retrieved, err := store.GetRun("run-with-repo")
+	if err != nil {
+		t.Fatalf("failed to get run: %v", err)
+	}
+
+	if retrieved == nil {
+		t.Fatal("run not found")
+	}
+
+	if retrieved.RepoID != "repo-123" {
+		t.Errorf("expected RepoID 'repo-123', got '%s'", retrieved.RepoID)
+	}
+	if retrieved.RepoPath != "/path/to/repo" {
+		t.Errorf("expected RepoPath '/path/to/repo', got '%s'", retrieved.RepoPath)
+	}
+	if retrieved.RepoName != "my-repo" {
+		t.Errorf("expected RepoName 'my-repo', got '%s'", retrieved.RepoName)
+	}
+}
+
+func TestListRunsFilterByRepoID(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	now := time.Now()
+
+	// Create runs with different repo IDs
+	runs := []*Run{
+		{ID: "run-1", StartedAt: now.Add(-3 * time.Hour), Status: RunStatusCompleted, RepoID: "repo-a"},
+		{ID: "run-2", StartedAt: now.Add(-2 * time.Hour), Status: RunStatusCompleted, RepoID: "repo-a"},
+		{ID: "run-3", StartedAt: now.Add(-1 * time.Hour), Status: RunStatusCompleted, RepoID: "repo-b"},
+		{ID: "run-4", StartedAt: now, Status: RunStatusRunning, RepoID: "repo-b"},
+	}
+
+	for _, run := range runs {
+		if err := store.CreateRun(run); err != nil {
+			t.Fatalf("failed to create run: %v", err)
+		}
+	}
+
+	// Filter by repo-a
+	result, err := store.ListRuns(RunFilter{RepoID: "repo-a"})
+	if err != nil {
+		t.Fatalf("failed to list runs: %v", err)
+	}
+
+	if len(result.Runs) != 2 {
+		t.Errorf("expected 2 runs for repo-a, got %d", len(result.Runs))
+	}
+
+	// Filter by repo-b
+	result, err = store.ListRuns(RunFilter{RepoID: "repo-b"})
+	if err != nil {
+		t.Fatalf("failed to list runs: %v", err)
+	}
+
+	if len(result.Runs) != 2 {
+		t.Errorf("expected 2 runs for repo-b, got %d", len(result.Runs))
+	}
+
+	// Filter by status and repo
+	result, err = store.ListRuns(RunFilter{RepoID: "repo-b", Status: RunStatusRunning})
+	if err != nil {
+		t.Fatalf("failed to list runs: %v", err)
+	}
+
+	if len(result.Runs) != 1 {
+		t.Errorf("expected 1 running run for repo-b, got %d", len(result.Runs))
+	}
+}
+
+func TestGetRunsByRepo(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	now := time.Now()
+
+	// Create runs with different repo IDs
+	runs := []*Run{
+		{ID: "run-1", StartedAt: now.Add(-3 * time.Hour), Status: RunStatusCompleted, RepoID: "repo-a"},
+		{ID: "run-2", StartedAt: now.Add(-2 * time.Hour), Status: RunStatusCompleted, RepoID: "repo-a"},
+		{ID: "run-3", StartedAt: now.Add(-1 * time.Hour), Status: RunStatusCompleted, RepoID: "repo-b"},
+	}
+
+	for _, run := range runs {
+		if err := store.CreateRun(run); err != nil {
+			t.Fatalf("failed to create run: %v", err)
+		}
+	}
+
+	// Get runs for repo-a
+	repoARuns, err := store.GetRunsByRepo("repo-a")
+	if err != nil {
+		t.Fatalf("failed to get runs by repo: %v", err)
+	}
+
+	if len(repoARuns) != 2 {
+		t.Errorf("expected 2 runs for repo-a, got %d", len(repoARuns))
+	}
+
+	// Verify ordering (most recent first)
+	if repoARuns[0].ID != "run-2" {
+		t.Errorf("expected run-2 first (most recent), got %s", repoARuns[0].ID)
+	}
+
+	// Get runs for repo-b
+	repoBRuns, err := store.GetRunsByRepo("repo-b")
+	if err != nil {
+		t.Fatalf("failed to get runs by repo: %v", err)
+	}
+
+	if len(repoBRuns) != 1 {
+		t.Errorf("expected 1 run for repo-b, got %d", len(repoBRuns))
+	}
+
+	// Get runs for non-existent repo
+	noRuns, err := store.GetRunsByRepo("repo-nonexistent")
+	if err != nil {
+		t.Fatalf("failed to get runs by repo: %v", err)
+	}
+
+	if len(noRuns) != 0 {
+		t.Errorf("expected 0 runs for nonexistent repo, got %d", len(noRuns))
+	}
+}
+
+func TestGetStatsByRepo(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	now := time.Now()
+
+	// Create runs with different repo IDs
+	runs := []*Run{
+		{ID: "run-1", StartedAt: now.Add(-time.Hour), Status: RunStatusCompleted, RepoID: "repo-a"},
+		{ID: "run-2", StartedAt: now.Add(-30 * time.Minute), Status: RunStatusCompleted, RepoID: "repo-a"},
+		{ID: "run-3", StartedAt: now, Status: RunStatusFailed, RepoID: "repo-b"},
+	}
+
+	for _, run := range runs {
+		if err := store.CreateRun(run); err != nil {
+			t.Fatalf("failed to create run: %v", err)
+		}
+	}
+
+	// Create agents with repo IDs
+	agents := []*Agent{
+		{ID: "agent-1", RunID: "run-1", TaskID: "task-1", TaskTitle: "Task 1", Status: AgentStatusCompleted, StartedAt: now, InputTokens: 1000, OutputTokens: 500, TotalTokens: 1500, CostUSD: 0.05, DurationSeconds: 60, RepoID: "repo-a"},
+		{ID: "agent-2", RunID: "run-2", TaskID: "task-2", TaskTitle: "Task 2", Status: AgentStatusCompleted, StartedAt: now, InputTokens: 2000, OutputTokens: 800, TotalTokens: 2800, CostUSD: 0.08, DurationSeconds: 120, RepoID: "repo-a"},
+		{ID: "agent-3", RunID: "run-3", TaskID: "task-3", TaskTitle: "Task 3", Status: AgentStatusFailed, StartedAt: now, InputTokens: 500, OutputTokens: 200, TotalTokens: 700, CostUSD: 0.02, DurationSeconds: 30, RepoID: "repo-b"},
+	}
+
+	for _, agent := range agents {
+		if err := store.CreateAgent(agent); err != nil {
+			t.Fatalf("failed to create agent: %v", err)
+		}
+	}
+
+	// Get stats for repo-a
+	statsA, err := store.GetStatsByRepo("repo-a", nil)
+	if err != nil {
+		t.Fatalf("failed to get stats by repo: %v", err)
+	}
+
+	if statsA.TotalRuns != 2 {
+		t.Errorf("expected 2 total runs for repo-a, got %d", statsA.TotalRuns)
+	}
+	if statsA.CompletedRuns != 2 {
+		t.Errorf("expected 2 completed runs for repo-a, got %d", statsA.CompletedRuns)
+	}
+	if statsA.TotalAgents != 2 {
+		t.Errorf("expected 2 agents for repo-a, got %d", statsA.TotalAgents)
+	}
+	if statsA.TotalInputTokens != 3000 {
+		t.Errorf("expected 3000 input tokens for repo-a, got %d", statsA.TotalInputTokens)
+	}
+
+	// Get stats for repo-b
+	statsB, err := store.GetStatsByRepo("repo-b", nil)
+	if err != nil {
+		t.Fatalf("failed to get stats by repo: %v", err)
+	}
+
+	if statsB.TotalRuns != 1 {
+		t.Errorf("expected 1 total run for repo-b, got %d", statsB.TotalRuns)
+	}
+	if statsB.FailedRuns != 1 {
+		t.Errorf("expected 1 failed run for repo-b, got %d", statsB.FailedRuns)
+	}
+}
+
+func TestGetStatsByRepo_WithSince(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	now := time.Now()
+
+	// Create runs with different times
+	runs := []*Run{
+		{ID: "run-old", StartedAt: now.Add(-7 * 24 * time.Hour), Status: RunStatusCompleted, RepoID: "repo-a"},
+		{ID: "run-recent", StartedAt: now.Add(-time.Hour), Status: RunStatusCompleted, RepoID: "repo-a"},
+	}
+
+	for _, run := range runs {
+		if err := store.CreateRun(run); err != nil {
+			t.Fatalf("failed to create run: %v", err)
+		}
+	}
+
+	// Get stats for last 24 hours only
+	since := now.Add(-24 * time.Hour)
+	stats, err := store.GetStatsByRepo("repo-a", &since)
+	if err != nil {
+		t.Fatalf("failed to get stats by repo: %v", err)
+	}
+
+	if stats.TotalRuns != 1 {
+		t.Errorf("expected 1 recent run for repo-a, got %d", stats.TotalRuns)
+	}
+}
+
+func TestMigrateOrphanedRepoIDs(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	now := time.Now()
+
+	// Create runs with NULL repo_id but with repo_path
+	runs := []*Run{
+		{ID: "run-1", StartedAt: now.Add(-2 * time.Hour), Status: RunStatusCompleted, RepoPath: "/path/to/repo-a"},
+		{ID: "run-2", StartedAt: now.Add(-1 * time.Hour), Status: RunStatusCompleted, RepoPath: "/path/to/repo-b"},
+		{ID: "run-3", StartedAt: now, Status: RunStatusCompleted, RepoPath: "/path/to/unknown"},
+	}
+
+	for _, run := range runs {
+		if err := store.CreateRun(run); err != nil {
+			t.Fatalf("failed to create run: %v", err)
+		}
+	}
+
+	// Create agents for these runs
+	agents := []*Agent{
+		{ID: "agent-1", RunID: "run-1", TaskID: "task-1", TaskTitle: "Task 1", Status: AgentStatusCompleted, StartedAt: now},
+		{ID: "agent-2", RunID: "run-2", TaskID: "task-2", TaskTitle: "Task 2", Status: AgentStatusCompleted, StartedAt: now},
+	}
+
+	for _, agent := range agents {
+		if err := store.CreateAgent(agent); err != nil {
+			t.Fatalf("failed to create agent: %v", err)
+		}
+	}
+
+	// Lookup function that knows about repo-a and repo-b
+	lookupFn := func(path string) (string, bool) {
+		switch path {
+		case "/path/to/repo-a":
+			return "repo-id-a", true
+		case "/path/to/repo-b":
+			return "repo-id-b", true
+		default:
+			return "", false
+		}
+	}
+
+	// Run migration
+	updated, err := store.MigrateOrphanedRepoIDs(lookupFn)
+	if err != nil {
+		t.Fatalf("failed to migrate orphaned repo IDs: %v", err)
+	}
+
+	if updated != 2 {
+		t.Errorf("expected 2 runs updated, got %d", updated)
+	}
+
+	// Verify run-1 has repo_id
+	run1, err := store.GetRun("run-1")
+	if err != nil {
+		t.Fatalf("failed to get run: %v", err)
+	}
+	if run1.RepoID != "repo-id-a" {
+		t.Errorf("expected run-1 RepoID 'repo-id-a', got '%s'", run1.RepoID)
+	}
+
+	// Verify run-2 has repo_id
+	run2, err := store.GetRun("run-2")
+	if err != nil {
+		t.Fatalf("failed to get run: %v", err)
+	}
+	if run2.RepoID != "repo-id-b" {
+		t.Errorf("expected run-2 RepoID 'repo-id-b', got '%s'", run2.RepoID)
+	}
+
+	// Verify run-3 still has NULL repo_id (unknown path)
+	run3, err := store.GetRun("run-3")
+	if err != nil {
+		t.Fatalf("failed to get run: %v", err)
+	}
+	if run3.RepoID != "" {
+		t.Errorf("expected run-3 RepoID to be empty, got '%s'", run3.RepoID)
+	}
+
+	// Verify agent-1 has repo_id
+	agent1, err := store.GetAgent("agent-1")
+	if err != nil {
+		t.Fatalf("failed to get agent: %v", err)
+	}
+	if agent1.RepoID != "repo-id-a" {
+		t.Errorf("expected agent-1 RepoID 'repo-id-a', got '%s'", agent1.RepoID)
+	}
+}
+
+func TestCreateAgentWithRepoID(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	now := time.Now()
+
+	// First create a run
+	run := &Run{ID: "run-for-agent", StartedAt: now, Status: RunStatusRunning, RepoID: "repo-123"}
+	if err := store.CreateRun(run); err != nil {
+		t.Fatalf("failed to create run: %v", err)
+	}
+
+	agent := &Agent{
+		ID:           "agent-with-repo",
+		RunID:        "run-for-agent",
+		TaskID:       "task-123",
+		TaskTitle:    "Test Task",
+		Status:       AgentStatusRunning,
+		StartedAt:    now,
+		InputTokens:  1000,
+		OutputTokens: 500,
+		TotalTokens:  1500,
+		CostUSD:      0.05,
+		RepoID:       "repo-123",
+	}
+
+	if err := store.CreateAgent(agent); err != nil {
+		t.Fatalf("failed to create agent: %v", err)
+	}
+
+	retrieved, err := store.GetAgent("agent-with-repo")
+	if err != nil {
+		t.Fatalf("failed to get agent: %v", err)
+	}
+
+	if retrieved == nil {
+		t.Fatal("agent not found")
+	}
+
+	if retrieved.RepoID != "repo-123" {
+		t.Errorf("expected RepoID 'repo-123', got '%s'", retrieved.RepoID)
+	}
+}
+
+func TestMigrationV2(t *testing.T) {
+	// Create a store, which runs migrations including v2
+	store := createTestStore(t)
+	defer store.Close()
+
+	// Verify the new columns exist by creating a run with repo fields
+	now := time.Now()
+	run := &Run{
+		ID:        "migration-test-run",
+		StartedAt: now,
+		Status:    RunStatusCompleted,
+		RepoID:    "test-repo-id",
+		RepoPath:  "/test/path",
+		RepoName:  "test-repo",
+	}
+
+	if err := store.CreateRun(run); err != nil {
+		t.Fatalf("failed to create run with repo fields after migration: %v", err)
+	}
+
+	// Verify by reading back
+	retrieved, err := store.GetRun("migration-test-run")
+	if err != nil {
+		t.Fatalf("failed to get run: %v", err)
+	}
+
+	if retrieved.RepoID != "test-repo-id" {
+		t.Errorf("expected RepoID 'test-repo-id', got '%s'", retrieved.RepoID)
+	}
+}
+
 // Helper function to create a test store
 func createTestStore(t *testing.T) *Store {
 	tmpDir, err := os.MkdirTemp("", "canopy-test-*")

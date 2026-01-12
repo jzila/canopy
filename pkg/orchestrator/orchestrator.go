@@ -99,6 +99,8 @@ type Orchestrator struct {
 	mergeMu       sync.Mutex     // Serializes merge operations to prevent race conditions
 	sandboxConfig *sandbox.SandboxConfig
 	agentIDMap    sync.Map       // Maps taskID -> agentID for parent-child tracking
+	ipcClient     *ipc.Client    // IPC client for sending merge status events
+	repoID        string         // Repository ID for IPC tracking
 }
 
 // New creates a new orchestrator
@@ -191,6 +193,17 @@ func New(config *Config) (*Orchestrator, error) {
 	// Set up default internal callbacks for beads updates.
 	// These will be wrapped with user callbacks if SetCallbacks is called later.
 	o.setupInternalCallbacks(nil)
+
+	// Clean up any stale merge slots from crashed orchestrators on startup.
+	// This prevents deadlocks when a previous orchestrator crashed while holding the slot.
+	if cleaned, info, err := beadsClient.MergeSlotCleanupStale(beads.DefaultSlotTimeout); err != nil {
+		if config.Verbose {
+			fmt.Fprintf(os.Stderr, "warning: failed to check for stale merge slots: %v\n", err)
+		}
+	} else if cleaned && info != nil {
+		fmt.Printf("Cleaned up stale merge slot from previous run (task: %s, PID: %d)\n",
+			info.TaskID, info.PID)
+	}
 
 	return o, nil
 }
@@ -296,9 +309,15 @@ func (o *Orchestrator) mergeAndCleanup(result *agent.Result) {
 // mergeAndCleanupWithContext performs merge with optional task context for resolver spawning.
 // The originalTask parameter is used to provide context to resolver agents when git am fails.
 func (o *Orchestrator) mergeAndCleanupWithContext(ctx context.Context, result *agent.Result, originalTask *beads.Task) {
+	// Send initial pending status
+	o.sendMergeStatus(result.TaskID, ipc.MergeStatusPending, 0, "")
+
 	// Serialize merge operations to ensure atomic commits
 	o.mergeMu.Lock()
 	defer o.mergeMu.Unlock()
+
+	// Send acquiring status
+	o.sendMergeStatus(result.TaskID, ipc.MergeStatusAcquiring, 0, "")
 
 	// Acquire merge slot before attempting git operations
 	// This prevents race conditions with other agents trying to merge simultaneously
@@ -306,6 +325,9 @@ func (o *Orchestrator) mergeAndCleanupWithContext(ctx context.Context, result *a
 		fmt.Fprintf(os.Stderr, "warning: failed to acquire merge slot for task %s: %v\n", result.TaskID, err)
 		// Continue with merge anyway - the slot mechanism is best-effort
 	}
+
+	// Send merging status now that we have the slot
+	o.sendMergeStatus(result.TaskID, ipc.MergeStatusMerging, 0, "")
 
 	// Ensure we release the merge slot when done
 	defer func() {
@@ -323,14 +345,20 @@ func (o *Orchestrator) mergeAndCleanupWithContext(ctx context.Context, result *a
 	}
 
 	// Merge the result (applies patches or file changes and commits)
-	mergeResult, err := o.merger.MergeSingle(result)
+	// When there are patches, skip file fallback since resolver will handle failures
+	mergeOpts := &merge.MergeOptions{
+		SkipFileFallback: result.GitState != nil && len(result.GitState.Patches) > 0,
+	}
+	mergeResult, err := o.merger.MergeSingle(result, mergeOpts)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to merge result for task %s: %v\n", result.TaskID, err)
+		o.sendMergeStatus(result.TaskID, ipc.MergeStatusFailed, 0, err.Error())
 	}
 
 	// Check if git am failed - if so, spawn a resolver agent
 	if mergeResult.PatchFailed[result.TaskID] && result.GitState != nil && len(result.GitState.Patches) > 0 {
 		fmt.Printf("[%s] Git patch failed, spawning resolver agent...\n", result.TaskID)
+		o.sendMergeStatus(result.TaskID, ipc.MergeStatusResolving, 0, "")
 
 		// Build conflict context for the resolver
 		conflictCtx := &resolver.ConflictContext{
@@ -368,7 +396,7 @@ func (o *Orchestrator) mergeAndCleanupWithContext(ctx context.Context, result *a
 
 				// Merge the resolver's result
 				if resolverResult.AgentResult != nil && resolverResult.AgentResult.Overlay != nil {
-					resolverMergeResult, err := o.merger.MergeSingle(resolverResult.AgentResult)
+					resolverMergeResult, err := o.merger.MergeSingle(resolverResult.AgentResult, nil)
 					if err != nil {
 						fmt.Fprintf(os.Stderr, "warning: failed to merge resolver result for %s: %v\n",
 							result.TaskID, err)
@@ -392,11 +420,7 @@ func (o *Orchestrator) mergeAndCleanupWithContext(ctx context.Context, result *a
 					result.TaskID, resolverResult.Error)
 				// Mark the original task as failed since resolver couldn't fix it
 				o.markTaskFailed(result.TaskID, fmt.Sprintf("resolver failed: %s", resolverResult.Error))
-
-				// Clean up resolver overlay on failure to prevent temp dir leaks
-				if resolverResult.AgentResult != nil && resolverResult.AgentResult.Overlay != nil {
-					resolverResult.AgentResult.Overlay.Cleanup()
-				}
+				o.sendMergeStatus(result.TaskID, ipc.MergeStatusFailed, 0, fmt.Sprintf("resolver failed: %s", resolverResult.Error))
 			}
 		}
 	} else {
@@ -408,6 +432,11 @@ func (o *Orchestrator) mergeAndCleanupWithContext(ctx context.Context, result *a
 
 	if o.config.Verbose && mergeResult.CommitsApplied > 0 {
 		fmt.Printf("Merged %d commit(s) from task %s\n", mergeResult.CommitsApplied, result.TaskID)
+	}
+
+	// Send final merged status (unless already set to failed)
+	if err == nil {
+		o.sendMergeStatus(result.TaskID, ipc.MergeStatusMerged, 0, "")
 	}
 
 	// Clean up overlay now that merge is complete
@@ -519,11 +548,36 @@ func (o *Orchestrator) WithCallbacks(callbacks *EventCallbacks) *Orchestrator {
 	return o
 }
 
-// SetIPCClient sets the IPC client for the resolver to send parent-child agent events.
-// This enables resolver agents to be tracked as children of the implementor agents.
+// SetIPCClient sets the IPC client for the orchestrator and resolver.
+// This enables sending merge status events and resolver agent tracking.
 func (o *Orchestrator) SetIPCClient(client *ipc.Client) {
+	o.ipcClient = client
 	if o.resolver != nil {
 		o.resolver.SetIPCClient(client)
+	}
+}
+
+// SetRepoID sets the repository ID for IPC tracking.
+// This ID is passed to resolver agents for parent-child tracking.
+func (o *Orchestrator) SetRepoID(repoID string) {
+	o.repoID = repoID
+	// Update resolver config with repo ID
+	if o.resolver != nil {
+		o.resolver.SetRepoID(repoID)
+	}
+}
+
+// sendMergeStatus sends a merge status update via IPC if client is connected.
+func (o *Orchestrator) sendMergeStatus(taskID string, status ipc.MergeStatus, queuePos int, errMsg string) {
+	if o.ipcClient == nil {
+		return
+	}
+	agentID := o.GetAgentID(taskID)
+	if agentID == "" {
+		agentID = fmt.Sprintf("agent-%s", taskID)
+	}
+	if err := o.ipcClient.SendAgentMergeStatus(agentID, status, queuePos, errMsg); err != nil && o.config.Verbose {
+		fmt.Fprintf(os.Stderr, "warning: failed to send merge status for %s: %v\n", taskID, err)
 	}
 }
 

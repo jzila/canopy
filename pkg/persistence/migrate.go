@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-const currentSchemaVersion = 1
+const currentSchemaVersion = 2
 
 // migrate runs all pending database migrations
 func (s *Store) migrate() error {
@@ -47,6 +47,10 @@ func (s *Store) runMigration(version int) error {
 	switch version {
 	case 1:
 		if err := s.migrateV1(tx); err != nil {
+			return err
+		}
+	case 2:
+		if err := s.migrateV2(tx); err != nil {
 			return err
 		}
 	default:
@@ -110,4 +114,27 @@ func (s *Store) migrateV1(tx *sql.Tx) error {
 
 	_, err := tx.Exec(schema)
 	return err
+}
+
+// migrateV2 adds repository ID columns to runs and agents tables
+func (s *Store) migrateV2(tx *sql.Tx) error {
+	migrations := []string{
+		// Add repo columns to runs table (nullable for migration)
+		`ALTER TABLE runs ADD COLUMN repo_id TEXT`,
+		`ALTER TABLE runs ADD COLUMN repo_path TEXT`,
+		`ALTER TABLE runs ADD COLUMN repo_name TEXT`,
+		`CREATE INDEX IF NOT EXISTS idx_runs_repo_id ON runs(repo_id)`,
+
+		// Add repo_id to agents table
+		`ALTER TABLE agents ADD COLUMN repo_id TEXT`,
+		`CREATE INDEX IF NOT EXISTS idx_agents_repo_id ON agents(repo_id)`,
+	}
+
+	for _, m := range migrations {
+		if _, err := tx.Exec(m); err != nil {
+			return fmt.Errorf("failed to execute migration: %s: %w", m, err)
+		}
+	}
+
+	return nil
 }

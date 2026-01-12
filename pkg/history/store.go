@@ -4,6 +4,8 @@ package history
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -83,13 +85,24 @@ type Store struct {
 	dataDir string
 }
 
-// NewStore creates a new history store using the default data directory
+// NewStore creates a new history store using the default data directory.
+// It will migrate history from the old location if it exists and the new
+// location is empty.
 func NewStore() (*Store, error) {
-	dataDir, err := defaultDataDir()
+	newDir, err := defaultDataDir()
 	if err != nil {
 		return nil, err
 	}
-	return NewStoreWithDir(dataDir)
+
+	// Check for old location and migrate if needed
+	oldDir, err := oldDataDir()
+	if err == nil && oldDir != newDir {
+		if err := migrateHistory(oldDir, newDir); err != nil {
+			log.Printf("Warning: failed to migrate history: %v", err)
+		}
+	}
+
+	return NewStoreWithDir(newDir)
 }
 
 // NewStoreWithDir creates a new history store with a custom data directory
@@ -101,26 +114,123 @@ func NewStoreWithDir(dataDir string) (*Store, error) {
 	return &Store{dataDir: historyDir}, nil
 }
 
-// defaultDataDir returns the platform-appropriate data directory
+// defaultDataDir returns the cache directory for canopy data.
+// Per the persistence invariant, ALL canopy persistence MUST live at
+// $XDG_CACHE_HOME/canopy/ or ~/.cache/canopy/
 func defaultDataDir() (string, error) {
-	// Try XDG_DATA_HOME first (Linux)
+	cacheDir := os.Getenv("XDG_CACHE_HOME")
+	if cacheDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("failed to get home directory: %w", err)
+		}
+		cacheDir = filepath.Join(home, ".cache")
+	}
+	return filepath.Join(cacheDir, "canopy"), nil
+}
+
+// oldDataDir returns the old data directory locations for migration purposes.
+func oldDataDir() (string, error) {
+	// Check XDG_DATA_HOME first
 	if dataHome := os.Getenv("XDG_DATA_HOME"); dataHome != "" {
 		return filepath.Join(dataHome, "canopy"), nil
 	}
 
-	// Fall back to home directory
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}
 
-	// Use platform-appropriate location
-	// On macOS: ~/Library/Application Support/canopy
-	// On Linux: ~/.local/share/canopy
+	// Check macOS location
 	if _, err := os.Stat("/Library"); err == nil {
 		return filepath.Join(home, "Library", "Application Support", "canopy"), nil
 	}
+	// Linux location
 	return filepath.Join(home, ".local", "share", "canopy"), nil
+}
+
+// migrateHistory copies history files from the old location to the new location.
+// It only migrates if the old history exists and the new history directory is empty.
+// Old files are left in place for the user to delete manually.
+func migrateHistory(oldDir, newDir string) error {
+	oldHistoryDir := filepath.Join(oldDir, dirName)
+	newHistoryDir := filepath.Join(newDir, dirName)
+
+	// Check if old history exists
+	oldEntries, err := os.ReadDir(oldHistoryDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // No old history to migrate
+		}
+		return fmt.Errorf("failed to read old history directory: %w", err)
+	}
+
+	// Count old run files
+	var oldRunFiles []os.DirEntry
+	for _, entry := range oldEntries {
+		if !entry.IsDir() && strings.HasPrefix(entry.Name(), runPrefix) && strings.HasSuffix(entry.Name(), fileSuffix) {
+			oldRunFiles = append(oldRunFiles, entry)
+		}
+	}
+	if len(oldRunFiles) == 0 {
+		return nil // No run files to migrate
+	}
+
+	// Check if new history already has files (don't overwrite existing data)
+	newEntries, err := os.ReadDir(newHistoryDir)
+	if err == nil {
+		for _, entry := range newEntries {
+			if !entry.IsDir() && strings.HasPrefix(entry.Name(), runPrefix) && strings.HasSuffix(entry.Name(), fileSuffix) {
+				return nil // New location already has history, don't migrate
+			}
+		}
+	}
+
+	// Create new history directory
+	if err := os.MkdirAll(newHistoryDir, 0755); err != nil {
+		return fmt.Errorf("failed to create new history directory: %w", err)
+	}
+
+	// Copy files
+	var copiedCount int
+	for _, entry := range oldRunFiles {
+		oldPath := filepath.Join(oldHistoryDir, entry.Name())
+		newPath := filepath.Join(newHistoryDir, entry.Name())
+
+		if err := copyFile(oldPath, newPath); err != nil {
+			return fmt.Errorf("failed to copy %s: %w", entry.Name(), err)
+		}
+		copiedCount++
+	}
+
+	// Verify migration succeeded
+	if copiedCount != len(oldRunFiles) {
+		return fmt.Errorf("migration incomplete: copied %d of %d files", copiedCount, len(oldRunFiles))
+	}
+
+	log.Printf("Migrated %d history files from %s to %s", copiedCount, oldHistoryDir, newHistoryDir)
+	return nil
+}
+
+// copyFile copies a single file from src to dst
+func copyFile(src, dst string) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	dstFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	if _, err := io.Copy(dstFile, srcFile); err != nil {
+		return err
+	}
+
+	return dstFile.Sync()
 }
 
 // Save persists a run record to disk

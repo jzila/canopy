@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { Repository } from '../api/client';
 
 // Types based on Go backend structures
 
@@ -100,6 +101,9 @@ interface StateStore {
   stats: Stats;
   isPaused: boolean;
   selectedAgentId: string | null;
+  repositories: Repository[];
+  activeRepoId: string;
+  isRepoSwitching: boolean;
 
   // Actions
   setConnected: (connected: boolean) => void;
@@ -110,6 +114,9 @@ interface StateStore {
   appendLiveFeedEvent: (agentId: string, event: LiveFeedEvent) => void;
   setSelectedAgent: (id: string | null) => void;
   setIsPaused: (paused: boolean) => void;
+  setRepositories: (repositories: Repository[], activeRepoId: string) => void;
+  setActiveRepo: (repoId: string) => void;
+  setRepoSwitching: (isSwitching: boolean) => void;
 }
 
 // Initial stats
@@ -178,6 +185,9 @@ export const useStateStore = create<StateStore>((set) => ({
   stats: initialStats,
   isPaused: false,
   selectedAgentId: null,
+  repositories: [],
+  activeRepoId: '',
+  isRepoSwitching: false,
 
   // Actions
   setConnected: (connected) => set({ connected }),
@@ -293,4 +303,21 @@ export const useStateStore = create<StateStore>((set) => ({
   setSelectedAgent: (selectedAgentId) => set({ selectedAgentId }),
 
   setIsPaused: (isPaused) => set({ isPaused }),
+
+  setRepositories: (repositories, activeRepoId) =>
+    set({
+      repositories,
+      activeRepoId,
+    }),
+
+  setActiveRepo: (repoId) =>
+    set((state) => ({
+      activeRepoId: repoId,
+      repositories: state.repositories.map((repo) => ({
+        ...repo,
+        is_active: repo.id === repoId,
+      })),
+    })),
+
+  setRepoSwitching: (isRepoSwitching) => set({ isRepoSwitching }),
 }));

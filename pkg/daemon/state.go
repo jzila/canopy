@@ -115,14 +115,31 @@ type ModelUsageData struct {
 	CostUSD                  float64 `json:"cost_usd"`
 }
 
+// MergeStatus represents the agent's merge queue status
+type MergeStatus string
+
+const (
+	MergeStatusNone      MergeStatus = ""          // Not yet in merge queue
+	MergeStatusPending   MergeStatus = "pending"   // Waiting in queue for merge slot
+	MergeStatusAcquiring MergeStatus = "acquiring" // Attempting to acquire merge slot
+	MergeStatusMerging   MergeStatus = "merging"   // Applying patches/changes
+	MergeStatusResolving MergeStatus = "resolving" // Spawned resolver for conflicts
+	MergeStatusMerged    MergeStatus = "merged"    // Successfully merged
+	MergeStatusFailed    MergeStatus = "failed"    // Merge failed
+)
+
 // AgentState tracks the state of a single agent execution
 type AgentState struct {
 	ID              string          `json:"id"`                         // Unique agent ID
 	TaskID          string          `json:"task_id"`                    // Beads task ID
 	TaskTitle       string          `json:"task_title"`                 // Task title for display
+	RepoID          string          `json:"repo_id,omitempty"`          // Repository this agent is working in
 	ParentAgentID   string          `json:"parent_agent_id,omitempty"`  // ID of parent agent if spawned by another agent
 	ChildAgentIDs   []string        `json:"child_agent_ids,omitempty"`  // IDs of child agents spawned by this agent
 	Status          AgentStatus     `json:"status"`                     // Current agent status
+	MergeStatus     MergeStatus     `json:"merge_status,omitempty"`     // Current merge queue status
+	MergeQueuePos   int             `json:"merge_queue_pos,omitempty"`  // Position in merge wait queue (0 = not waiting)
+	MergeError      string          `json:"merge_error,omitempty"`      // Error message if merge failed
 	StartTime       time.Time       `json:"start_time"`                 // When agent started
 	EndTime         *time.Time      `json:"end_time"`                   // When agent finished (nil if running)
 	Duration        float64         `json:"duration"`                   // Execution duration in seconds
@@ -164,6 +181,7 @@ type TaskState struct {
 	Priority     int      `json:"priority"`
 	Dependencies []string `json:"dependencies"` // Task IDs this task depends on
 	Archived     bool     `json:"archived"`     // Whether the task is archived
+	RepoID       string   `json:"repo_id,omitempty"` // Repository this task belongs to
 }
 
 // Stats aggregates statistics across all agents
@@ -221,6 +239,11 @@ func (r *RuntimeState) GetAgent(id string) *AgentState {
 
 // AddTask registers a task in the state
 func (r *RuntimeState) AddTask(task *beads.Task) {
+	r.AddTaskWithRepo(task, "")
+}
+
+// AddTaskWithRepo registers a task in the state with an associated repository ID
+func (r *RuntimeState) AddTaskWithRepo(task *beads.Task, repoID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.Tasks[task.ID] = &TaskState{
@@ -229,6 +252,7 @@ func (r *RuntimeState) AddTask(task *beads.Task) {
 		Status:       task.Status,
 		Priority:     task.Priority,
 		Dependencies: task.GetDependencies(),
+		RepoID:       repoID,
 	}
 }
 
@@ -352,6 +376,114 @@ func (r *RuntimeState) GetSnapshot() RuntimeState {
 	return snapshot
 }
 
+// GetTasksForRepo returns all tasks belonging to a specific repository.
+// If repoID is empty, returns all tasks.
+func (r *RuntimeState) GetTasksForRepo(repoID string) map[string]*TaskState {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	result := make(map[string]*TaskState)
+	for id, task := range r.Tasks {
+		if repoID == "" || task.RepoID == repoID {
+			taskCopy := *task
+			if task.Dependencies != nil {
+				taskCopy.Dependencies = make([]string, len(task.Dependencies))
+				copy(taskCopy.Dependencies, task.Dependencies)
+			}
+			result[id] = &taskCopy
+		}
+	}
+	return result
+}
+
+// GetSnapshotForRepo returns a snapshot of the runtime state filtered to a specific repository.
+// Agents and tasks are filtered by repo ID. Stats are recalculated for the filtered data.
+// If repoID is empty, behaves like GetSnapshot().
+func (r *RuntimeState) GetSnapshotForRepo(repoID string) RuntimeState {
+	if repoID == "" {
+		return r.GetSnapshot()
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	snapshot := RuntimeState{
+		Agents:    make(map[string]*AgentState),
+		Tasks:     make(map[string]*TaskState),
+		IsPaused:  r.IsPaused,
+		StartTime: r.StartTime,
+	}
+
+	// Filter and deep copy agents (note: agents don't have repo_id in struct yet,
+	// but they are associated with tasks that do)
+	// For now, we include all agents since agent<->repo mapping requires task lookup
+	for id, agent := range r.Agents {
+		agentCopy := agent.GetSnapshot()
+		snapshot.Agents[id] = &agentCopy
+	}
+
+	// Filter and deep copy tasks by repo
+	for id, task := range r.Tasks {
+		if task.RepoID == repoID {
+			taskCopy := *task
+			if task.Dependencies != nil {
+				taskCopy.Dependencies = make([]string, len(task.Dependencies))
+				copy(taskCopy.Dependencies, task.Dependencies)
+			}
+			snapshot.Tasks[id] = &taskCopy
+		}
+	}
+
+	// Recalculate stats for filtered data
+	snapshot.recalculateStats()
+
+	return snapshot
+}
+
+// recalculateStats calculates aggregate statistics from agents in the snapshot
+func (r *RuntimeState) recalculateStats() {
+	stats := Stats{}
+	var totalDuration float64
+	completedCount := 0
+	var allCommits []GitCommit
+
+	for _, agent := range r.Agents {
+		switch agent.Status {
+		case AgentStatusCompleted:
+			stats.CompletedTasks++
+			completedCount++
+			totalDuration += agent.Duration
+		case AgentStatusFailed, AgentStatusTimedOut:
+			stats.FailedTasks++
+		case AgentStatusRunning:
+			stats.RunningTasks++
+		}
+
+		stats.TotalInputTokens += agent.TokenUsage.InputTokens
+		stats.TotalOutputTokens += agent.TokenUsage.OutputTokens
+		stats.TotalCacheCreationTokens += agent.TokenUsage.CacheCreationInputTokens
+		stats.TotalCacheReadTokens += agent.TokenUsage.CacheReadInputTokens
+		stats.TotalTokens += agent.TokenUsage.TotalTokens
+		stats.TotalCostUSD += agent.TokenUsage.CostUSD
+		stats.TotalTurns += agent.NumTurns
+		stats.FileChanges += agent.Changes
+		stats.GitCommits += agent.Commits
+
+		if len(agent.GitCommits) > 0 {
+			allCommits = append(allCommits, agent.GitCommits...)
+		}
+	}
+
+	stats.TotalTasks = len(r.Agents)
+	stats.TotalDuration = totalDuration
+	if completedCount > 0 {
+		stats.AverageDuration = totalDuration / float64(completedCount)
+	}
+	stats.AllGitCommits = allCommits
+
+	r.Stats = stats
+}
+
 // SubscribeToEventBus subscribes to the EventBus and updates state from events.
 // Returns an unsubscribe function. This bridges IPC events to RuntimeState updates.
 func (r *RuntimeState) SubscribeToEventBus(eventBus *EventBus) func() {
@@ -377,6 +509,8 @@ func (r *RuntimeState) handleEvent(event Event) {
 		r.handleAgentLiveFeed(payload)
 	case EventAgentCommit:
 		r.handleAgentCommit(payload)
+	case EventAgentMergeStatus:
+		r.handleAgentMergeStatus(payload)
 	case EventAgentCompleted:
 		r.handleAgentCompleted(payload, event.Timestamp)
 	case EventStatsUpdated:
@@ -390,6 +524,7 @@ func (r *RuntimeState) handleAgentStarted(payload map[string]interface{}, timest
 	taskID, _ := payload["task_id"].(string)
 	taskTitle, _ := payload["task_title"].(string)
 	parentAgentID, _ := payload["parent_agent_id"].(string)
+	repoID, _ := payload["repo_id"].(string)
 
 	if agentID == "" {
 		return
@@ -399,6 +534,7 @@ func (r *RuntimeState) handleAgentStarted(payload map[string]interface{}, timest
 		ID:            agentID,
 		TaskID:        taskID,
 		TaskTitle:     taskTitle,
+		RepoID:        repoID,
 		ParentAgentID: parentAgentID,
 		Status:        AgentStatusRunning,
 		StartTime:     timestamp,
@@ -515,6 +651,29 @@ func (r *RuntimeState) handleAgentCommit(payload map[string]interface{}) {
 
 	// Update stats to include the new commit
 	r.UpdateStats()
+}
+
+func (r *RuntimeState) handleAgentMergeStatus(payload map[string]interface{}) {
+	agentID, _ := payload["agent_id"].(string)
+	if agentID == "" {
+		return
+	}
+
+	agent := r.GetAgent(agentID)
+	if agent == nil {
+		return
+	}
+
+	// Extract merge status fields
+	mergeStatus, _ := payload["merge_status"].(string)
+	queuePos, _ := getIntFromPayload(payload, "queue_pos")
+	mergeErr, _ := payload["error"].(string)
+
+	agent.Update(func(a *AgentState) {
+		a.MergeStatus = MergeStatus(mergeStatus)
+		a.MergeQueuePos = queuePos
+		a.MergeError = mergeErr
+	})
 }
 
 func (r *RuntimeState) handleAgentCompleted(payload map[string]interface{}, timestamp time.Time) {

@@ -228,7 +228,7 @@ func TestGetRuntimeState(t *testing.T) {
 }
 
 // TestRestoreStateFromDB verifies that orphaned runs/agents are marked as failed
-// and state is NOT restored (since orphaned runs are no longer "running")
+// and historical state IS restored from the most recent run for display
 func TestRestoreStateFromDB(t *testing.T) {
 	// Create temp directory for test database
 	tmpDir, err := os.MkdirTemp("", "canopy-daemon-test-*")
@@ -316,19 +316,21 @@ func TestRestoreStateFromDB(t *testing.T) {
 	}
 
 	// Manually call restoreStateFromDB - this should mark orphaned states as failed
+	// and restore historical agents for display
 	if err := daemon.restoreStateFromDB(); err != nil {
 		t.Fatalf("restoreStateFromDB failed: %v", err)
 	}
 
-	// Verify that NO agents were restored to RuntimeState
-	// (orphaned run was marked as failed, so GetRunningRun returns nil)
+	// Verify that agents WERE restored to RuntimeState for historical display
+	// (GetMostRecentRun returns the run even after it's marked as failed)
 	state := daemon.GetRuntimeState()
 	if state == nil {
 		t.Fatal("state should not be nil")
 	}
 
-	if len(state.Agents) != 0 {
-		t.Errorf("expected 0 agents (orphaned run marked as failed), got %d", len(state.Agents))
+	// All 3 agents should be restored for historical view
+	if len(state.Agents) != 3 {
+		t.Errorf("expected 3 agents (historical data), got %d", len(state.Agents))
 	}
 
 	// Verify the orphaned run and agent were marked as failed in the database
@@ -375,11 +377,28 @@ func TestRestoreStateFromDB(t *testing.T) {
 		t.Errorf("expected agent-3 error message 'test error', got %s", agent3.ErrorMessage)
 	}
 
+	// Verify the restored agents have correct status in RuntimeState
+	restoredAgent1 := state.GetAgent("agent-1")
+	if restoredAgent1 == nil {
+		t.Fatal("expected agent-1 to be in RuntimeState")
+	}
+	if restoredAgent1.Status != AgentStatusCompleted {
+		t.Errorf("expected restored agent-1 status completed, got %s", restoredAgent1.Status)
+	}
+
+	restoredAgent2 := state.GetAgent("agent-2")
+	if restoredAgent2 == nil {
+		t.Fatal("expected agent-2 to be in RuntimeState")
+	}
+	if restoredAgent2.Status != AgentStatusFailed {
+		t.Errorf("expected restored agent-2 status failed (orphaned), got %s", restoredAgent2.Status)
+	}
+
 	store2.Close()
 }
 
-// TestRestoreStateFromDB_NoRunningRun verifies no restoration happens when no running run exists
-func TestRestoreStateFromDB_NoRunningRun(t *testing.T) {
+// TestRestoreStateFromDB_CompletedRun verifies historical restoration happens from completed runs
+func TestRestoreStateFromDB_CompletedRun(t *testing.T) {
 	// Create temp directory for test database
 	tmpDir, err := os.MkdirTemp("", "canopy-daemon-test-*")
 	if err != nil {
@@ -393,7 +412,7 @@ func TestRestoreStateFromDB_NoRunningRun(t *testing.T) {
 		t.Fatalf("failed to create store: %v", err)
 	}
 
-	// Create only completed runs
+	// Create a completed run with agents
 	now := time.Now()
 	run := &persistence.Run{
 		ID:        "run-completed",
@@ -402,6 +421,31 @@ func TestRestoreStateFromDB_NoRunningRun(t *testing.T) {
 	}
 	if err := store.CreateRun(run); err != nil {
 		t.Fatalf("failed to create run: %v", err)
+	}
+
+	// Add agents to the completed run
+	agents := []*persistence.Agent{
+		{
+			ID:        "agent-1",
+			RunID:     "run-completed",
+			TaskID:    "task-1",
+			TaskTitle: "Task 1",
+			Status:    persistence.AgentStatusCompleted,
+			StartedAt: now.Add(-50 * time.Minute),
+		},
+		{
+			ID:        "agent-2",
+			RunID:     "run-completed",
+			TaskID:    "task-2",
+			TaskTitle: "Task 2",
+			Status:    persistence.AgentStatusCompleted,
+			StartedAt: now.Add(-30 * time.Minute),
+		},
+	}
+	for _, agent := range agents {
+		if err := store.CreateAgent(agent); err != nil {
+			t.Fatalf("failed to create agent: %v", err)
+		}
 	}
 
 	daemon := &Daemon{
@@ -416,11 +460,218 @@ func TestRestoreStateFromDB_NoRunningRun(t *testing.T) {
 		t.Fatalf("restoreStateFromDB failed: %v", err)
 	}
 
-	// Verify no agents were restored
+	// Verify historical agents WERE restored for display
 	state := daemon.GetRuntimeState()
-	if len(state.Agents) != 0 {
-		t.Errorf("expected 0 agents, got %d", len(state.Agents))
+	if len(state.Agents) != 2 {
+		t.Errorf("expected 2 agents (historical data), got %d", len(state.Agents))
 	}
 
 	store.Close()
+}
+
+// TestRestoreStateFromDB_EmptyDB verifies no restoration happens when database is empty
+func TestRestoreStateFromDB_EmptyDB(t *testing.T) {
+	// Create temp directory for test database
+	tmpDir, err := os.MkdirTemp("", "canopy-daemon-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dbPath := filepath.Join(tmpDir, "test.db")
+	store, err := persistence.NewStoreWithPath(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+
+	// No runs in database
+	daemon := &Daemon{
+		config:           Config{EnablePersistence: true},
+		eventBus:         NewEventBus(),
+		state:            NewRuntimeState(),
+		persistenceStore: store,
+	}
+
+	// Manually call restoreStateFromDB
+	if err := daemon.restoreStateFromDB(); err != nil {
+		t.Fatalf("restoreStateFromDB failed: %v", err)
+	}
+
+	// Verify no agents were restored (nothing in DB)
+	state := daemon.GetRuntimeState()
+	if len(state.Agents) != 0 {
+		t.Errorf("expected 0 agents (empty DB), got %d", len(state.Agents))
+	}
+
+	store.Close()
+}
+
+// TestSetActiveRepository verifies setting and getting active repository
+func TestSetActiveRepository(t *testing.T) {
+	// Create temp directory for registry
+	tmpDir, err := os.MkdirTemp("", "canopy-repo-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Set XDG_CACHE_HOME to our temp dir for registry storage
+	oldXDGCache := os.Getenv("XDG_CACHE_HOME")
+	os.Setenv("XDG_CACHE_HOME", tmpDir)
+	defer os.Setenv("XDG_CACHE_HOME", oldXDGCache)
+
+	// Create the canopy cache directory
+	cacheDir := filepath.Join(tmpDir, "canopy")
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		t.Fatalf("failed to create cache dir: %v", err)
+	}
+
+	daemon := &Daemon{
+		beadsClients: make(map[string]BeadsClientInterface),
+	}
+
+	// Initially no active repo
+	if daemon.GetActiveRepositoryID() != "" {
+		t.Error("expected empty active repo ID initially")
+	}
+	if daemon.GetActiveRepository() != nil {
+		t.Error("expected nil active repo initially")
+	}
+
+	// Try setting a non-existent repo
+	err = daemon.SetActiveRepository("non-existent-id")
+	if err == nil {
+		t.Error("expected error when setting non-existent repo")
+	}
+}
+
+// TestGetBeadsClient verifies lazy beads client creation
+func TestGetBeadsClient(t *testing.T) {
+	daemon := &Daemon{
+		beadsClient:  &mockBeadsClient{},
+		beadsClients: make(map[string]BeadsClientInterface),
+	}
+
+	// Empty repo ID should return default client
+	client, err := daemon.getBeadsClient("")
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if client != daemon.beadsClient {
+		t.Error("expected default beads client for empty repo ID")
+	}
+
+	// Non-existent repo ID should return error
+	_, err = daemon.getBeadsClient("non-existent")
+	if err == nil {
+		t.Error("expected error for non-existent repo ID")
+	}
+}
+
+// TestGetActiveBeadsClient verifies getting beads client for active repo
+func TestGetActiveBeadsClient(t *testing.T) {
+	daemon := &Daemon{
+		beadsClient:  &mockBeadsClient{},
+		beadsClients: make(map[string]BeadsClientInterface),
+	}
+
+	// No active repo should return default client
+	client, err := daemon.getActiveBeadsClient()
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if client != daemon.beadsClient {
+		t.Error("expected default beads client when no active repo")
+	}
+}
+
+// TestRestoreStateFromDB_WithRepoContext verifies repo context is restored from DB
+func TestRestoreStateFromDB_WithRepoContext(t *testing.T) {
+	// Create temp directory for test database
+	tmpDir, err := os.MkdirTemp("", "canopy-daemon-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dbPath := filepath.Join(tmpDir, "test.db")
+	store, err := persistence.NewStoreWithPath(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+
+	// Create a run with repo context
+	now := time.Now()
+	run := &persistence.Run{
+		ID:        "run-with-repo",
+		StartedAt: now.Add(-time.Hour),
+		Status:    persistence.RunStatusCompleted,
+		RepoID:    "test-repo-id",
+		RepoPath:  "/path/to/repo",
+		RepoName:  "test-repo",
+	}
+	if err := store.CreateRun(run); err != nil {
+		t.Fatalf("failed to create run: %v", err)
+	}
+
+	// Add agents with repo context
+	agent := &persistence.Agent{
+		ID:        "agent-1",
+		RunID:     "run-with-repo",
+		TaskID:    "task-1",
+		TaskTitle: "Task 1",
+		Status:    persistence.AgentStatusCompleted,
+		StartedAt: now.Add(-50 * time.Minute),
+		RepoID:    "test-repo-id",
+	}
+	if err := store.CreateAgent(agent); err != nil {
+		t.Fatalf("failed to create agent: %v", err)
+	}
+
+	daemon := &Daemon{
+		config:           Config{EnablePersistence: true},
+		eventBus:         NewEventBus(),
+		state:            NewRuntimeState(),
+		persistenceStore: store,
+		beadsClients:     make(map[string]BeadsClientInterface),
+	}
+
+	// Manually call restoreStateFromDB
+	if err := daemon.restoreStateFromDB(); err != nil {
+		t.Fatalf("restoreStateFromDB failed: %v", err)
+	}
+
+	// Verify the active repo was set from the run
+	if daemon.GetActiveRepositoryID() != "test-repo-id" {
+		t.Errorf("expected active repo ID 'test-repo-id', got '%s'", daemon.GetActiveRepositoryID())
+	}
+
+	// Verify the restored agent has repo ID
+	state := daemon.GetRuntimeState()
+	restoredAgent := state.GetAgent("agent-1")
+	if restoredAgent == nil {
+		t.Fatal("expected agent-1 to be restored")
+	}
+	if restoredAgent.RepoID != "test-repo-id" {
+		t.Errorf("expected agent repo ID 'test-repo-id', got '%s'", restoredAgent.RepoID)
+	}
+
+	store.Close()
+}
+
+// TestListRepositories verifies listing repositories
+func TestListRepositories(t *testing.T) {
+	daemon := &Daemon{}
+
+	// Should not panic even with no registry
+	repos, err := daemon.ListRepositories()
+	if err != nil {
+		// Registry might not exist, that's OK
+		t.Logf("ListRepositories returned expected error: %v", err)
+	} else {
+		// If it succeeded, repos should be a valid slice
+		if repos == nil {
+			t.Error("expected non-nil repos slice")
+		}
+	}
 }

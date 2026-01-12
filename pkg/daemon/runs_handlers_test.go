@@ -92,6 +92,26 @@ func (m *mockPersistenceStore) GetStats(since *time.Time) (*persistence.Aggregat
 	return stats, nil
 }
 
+func (m *mockPersistenceStore) GetStatsByRepo(repoID string, since *time.Time) (*persistence.AggregateStats, error) {
+	stats := &persistence.AggregateStats{
+		TotalRuns:     0,
+		CompletedRuns: 0,
+		FailedRuns:    0,
+	}
+	for _, run := range m.runs {
+		if run.RepoID != repoID {
+			continue
+		}
+		stats.TotalRuns++
+		if run.Status == persistence.RunStatusCompleted {
+			stats.CompletedRuns++
+		} else if run.Status == persistence.RunStatusFailed {
+			stats.FailedRuns++
+		}
+	}
+	return stats, nil
+}
+
 func TestHandleListRuns(t *testing.T) {
 	store := newMockPersistenceStore()
 	now := time.Now()

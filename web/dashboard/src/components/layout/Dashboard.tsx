@@ -2,12 +2,13 @@ import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import { Play, Pause, Activity, DollarSign, Zap, GitCommit, FileEdit, Sun, Moon, Terminal as TerminalIcon, List, CheckCircle, XCircle, ListTodo, GripHorizontal } from 'lucide-react';
 import { useStateStore } from '../../stores/stateStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
-import { pauseOrch, resumeOrch, getState } from '../../api/client';
+import { pauseOrch, resumeOrch, getState, getRepositories, activateRepository } from '../../api/client';
 import { AgentCard } from '../agents/AgentCard';
 import { AgentTerminal } from '../agents/AgentTerminal';
 import { LiveFeed } from '../agents/LiveFeed';
 import { CommitList } from '../agents/CommitList';
 import { BeadsPane } from '../beads/BeadsPane';
+import { RepoSelector } from './RepoSelector';
 
 type TerminalTab = 'feed' | 'terminal' | 'commits';
 type StatusFilter = 'all' | 'running' | 'completed' | 'failed';
@@ -107,20 +108,30 @@ export const Dashboard: React.FC = () => {
   const setSelectedAgent = useStateStore((state) => state.setSelectedAgent);
   const syncState = useStateStore((state) => state.syncState);
   const setIsPaused = useStateStore((state) => state.setIsPaused);
+  const repositories = useStateStore((state) => state.repositories);
+  const activeRepoId = useStateStore((state) => state.activeRepoId);
+  const isRepoSwitching = useStateStore((state) => state.isRepoSwitching);
+  const setRepositories = useStateStore((state) => state.setRepositories);
+  const setActiveRepo = useStateStore((state) => state.setActiveRepo);
+  const setRepoSwitching = useStateStore((state) => state.setRepoSwitching);
 
   // Load initial state on mount
   useEffect(() => {
     const loadInitialState = async () => {
       try {
-        const state = await getState();
+        const [state, repoResponse] = await Promise.all([
+          getState(),
+          getRepositories(),
+        ]);
         syncState(state);
+        setRepositories(repoResponse.repositories, repoResponse.active_repo_id);
       } catch (error) {
         console.error('Failed to load initial state:', error);
       }
     };
 
     loadInitialState();
-  }, [syncState]);
+  }, [syncState, setRepositories]);
 
   const handlePause = async () => {
     if (isPauseLoading) return;
@@ -147,6 +158,23 @@ export const Dashboard: React.FC = () => {
       console.error('Failed to resume orchestration:', error);
     } finally {
       setIsResumeLoading(false);
+    }
+  };
+
+  const handleRepoSelect = async (repoId: string) => {
+    if (isRepoSwitching || repoId === activeRepoId) return;
+
+    try {
+      setRepoSwitching(true);
+      await activateRepository(repoId);
+      setActiveRepo(repoId);
+      // After switching repos, reload state to get the new repo's data
+      const state = await getState();
+      syncState(state);
+    } catch (error) {
+      console.error('Failed to switch repository:', error);
+    } finally {
+      setRepoSwitching(false);
     }
   };
 
@@ -200,9 +228,16 @@ export const Dashboard: React.FC = () => {
       {/* Header */}
       <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4 flex-shrink-0">
         <div className="flex items-center justify-between">
-          {/* Title and Connection Status */}
+          {/* Title, Repository Selector, and Connection Status */}
           <div className="flex items-center gap-4">
             <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Canopy Dashboard</h1>
+            <RepoSelector
+              repositories={repositories}
+              activeRepoId={activeRepoId}
+              onSelect={handleRepoSelect}
+              isLoading={isRepoSwitching}
+              disabled={!connected}
+            />
             <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 dark:bg-gray-700 rounded-full">
               <div
                 className={`w-2 h-2 rounded-full ${

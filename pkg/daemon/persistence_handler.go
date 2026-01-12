@@ -65,6 +65,9 @@ func (h *PersistenceHandler) handleRunStarted(event Event) {
 	}
 
 	taskCount, _ := getIntFromPayload(payload, "task_count")
+	repoID, _ := payload["repo_id"].(string)
+	repoPath, _ := payload["repo_path"].(string)
+	repoName, _ := payload["repo_name"].(string)
 
 	// Store current run ID for associating agents
 	h.mu.Lock()
@@ -77,6 +80,9 @@ func (h *PersistenceHandler) handleRunStarted(event Event) {
 		StartedAt:  event.Timestamp,
 		Status:     persistence.RunStatusRunning,
 		TotalTasks: taskCount,
+		RepoID:     repoID,
+		RepoPath:   repoPath,
+		RepoName:   repoName,
 	}
 
 	if err := h.store.CreateRun(run); err != nil {
@@ -100,6 +106,7 @@ func (h *PersistenceHandler) handleAgentStarted(event Event) {
 
 	taskID, _ := payload["task_id"].(string)
 	taskTitle, _ := payload["task_title"].(string)
+	repoID, _ := payload["repo_id"].(string)
 
 	// Get current run ID
 	h.mu.RLock()
@@ -113,6 +120,7 @@ func (h *PersistenceHandler) handleAgentStarted(event Event) {
 		TaskTitle: taskTitle,
 		Status:    persistence.AgentStatusRunning,
 		StartedAt: event.Timestamp,
+		RepoID:    repoID,
 	}
 
 	if err := h.store.CreateAgent(agent); err != nil {

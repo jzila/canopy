@@ -23,6 +23,7 @@ type Config struct {
 	Verbose       bool                   // Verbose logging
 	UseBwrap      bool                   // Use bubblewrap sandbox
 	SandboxConfig *sandbox.SandboxConfig // Sandbox configuration
+	RepoID        string                 // Repository ID for IPC tracking
 }
 
 // ConflictContext provides information about the failed merge
@@ -84,6 +85,11 @@ func (r *Resolver) SetIPCClient(client *ipc.Client) {
 	r.ipcClient = client
 }
 
+// SetRepoID sets the repository ID for IPC tracking.
+func (r *Resolver) SetRepoID(repoID string) {
+	r.config.RepoID = repoID
+}
+
 // Resolve spawns a resolver agent to handle merge conflicts.
 // It creates a fresh overlay based on current HEAD and provides the failed patch
 // along with the original task context.
@@ -142,6 +148,7 @@ func (r *Resolver) Resolve(ctx context.Context, conflict *ConflictContext) (*Res
 			conflict.TaskID, // TaskID is the original task
 			resolverTask.Title,
 			conflict.ParentAgentID, // Parent is the implementor agent
+			r.config.RepoID,        // Repository ID for tracking
 		); err != nil && r.config.Verbose {
 			fmt.Fprintf(os.Stderr, "warning: failed to send resolver start event: %v\n", err)
 		}
