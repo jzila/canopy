@@ -80,6 +80,7 @@ func (d *Daemon) SetBeadsClientFactory(factory BeadsClientFactory) {
 
 // SetActiveRepository sets the currently active repository by ID.
 // Returns an error if the repository ID is not found in the registry.
+// This also reloads tasks from the new repository's beads database.
 func (d *Daemon) SetActiveRepository(repoID string) error {
 	// Verify the repository exists
 	repo, err := repository.FromID(repoID)
@@ -91,10 +92,20 @@ func (d *Daemon) SetActiveRepository(repoID string) error {
 	}
 
 	d.repoMu.Lock()
-	defer d.repoMu.Unlock()
 	d.activeRepoID = repoID
+	d.repoMu.Unlock()
 
 	log.Printf("Active repository set to %s (%s)", repo.Name, repoID)
+
+	// Reload tasks from the new repository's beads database
+	if d.state != nil {
+		// Clear existing tasks and load tasks from the new repository
+		d.state.ClearTasksForRepo("")
+		if err := d.loadTasksFromBeads(); err != nil {
+			log.Printf("Warning: failed to load tasks for repository %s: %v", repoID, err)
+		}
+	}
+
 	return nil
 }
 

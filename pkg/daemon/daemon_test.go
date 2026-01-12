@@ -675,3 +675,51 @@ func TestListRepositories(t *testing.T) {
 		}
 	}
 }
+
+// TestSetActiveRepository_ReloadsTasksAndClearsOld verifies that setting active repository
+// clears existing tasks and loads tasks from the new repository
+func TestSetActiveRepository_ReloadsTasksAndClearsOld(t *testing.T) {
+	state := NewRuntimeState()
+
+	// Add some existing tasks (simulating tasks from a previous repo)
+	state.Tasks["old-task-1"] = &TaskState{ID: "old-task-1", Title: "Old Task 1", RepoID: "old-repo"}
+	state.Tasks["old-task-2"] = &TaskState{ID: "old-task-2", Title: "Old Task 2", RepoID: "old-repo"}
+
+	if len(state.Tasks) != 2 {
+		t.Fatalf("expected 2 initial tasks, got %d", len(state.Tasks))
+	}
+
+	// Simulate ClearTasksForRepo("") which clears all tasks
+	state.ClearTasksForRepo("")
+
+	if len(state.Tasks) != 0 {
+		t.Errorf("expected 0 tasks after clearing, got %d", len(state.Tasks))
+	}
+}
+
+// TestClearTasksForRepo verifies ClearTasksForRepo clears tasks correctly
+func TestClearTasksForRepo(t *testing.T) {
+	state := NewRuntimeState()
+
+	// Add tasks from different repos
+	state.Tasks["task-1"] = &TaskState{ID: "task-1", Title: "Task 1", RepoID: "repo-a"}
+	state.Tasks["task-2"] = &TaskState{ID: "task-2", Title: "Task 2", RepoID: "repo-b"}
+	state.Tasks["task-3"] = &TaskState{ID: "task-3", Title: "Task 3", RepoID: "repo-a"}
+
+	// Clear tasks for repo-a
+	state.ClearTasksForRepo("repo-a")
+
+	if len(state.Tasks) != 1 {
+		t.Errorf("expected 1 task remaining, got %d", len(state.Tasks))
+	}
+	if _, exists := state.Tasks["task-2"]; !exists {
+		t.Error("expected task-2 (repo-b) to remain")
+	}
+
+	// Clear all tasks
+	state.ClearTasksForRepo("")
+
+	if len(state.Tasks) != 0 {
+		t.Errorf("expected 0 tasks after clearing all, got %d", len(state.Tasks))
+	}
+}

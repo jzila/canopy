@@ -160,6 +160,8 @@ func TestPersistenceHandler_AgentLifecycle(t *testing.T) {
 			"cost_usd":        0.05,
 			"files_changed":   3,
 			"commits_created": 1,
+			"stdout":          "test stdout output",
+			"stderr":          "test stderr output",
 		},
 	})
 	time.Sleep(10 * time.Millisecond)
@@ -183,6 +185,12 @@ func TestPersistenceHandler_AgentLifecycle(t *testing.T) {
 	}
 	if agent.TotalTokens != 300 {
 		t.Errorf("Expected total_tokens 300, got %d", agent.TotalTokens)
+	}
+	if agent.Stdout != "test stdout output" {
+		t.Errorf("Expected stdout 'test stdout output', got %q", agent.Stdout)
+	}
+	if agent.Stderr != "test stderr output" {
+		t.Errorf("Expected stderr 'test stderr output', got %q", agent.Stderr)
 	}
 }
 

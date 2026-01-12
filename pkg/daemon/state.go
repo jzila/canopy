@@ -256,6 +256,22 @@ func (r *RuntimeState) AddTaskWithRepo(task *beads.Task, repoID string) {
 	}
 }
 
+// ClearTasksForRepo removes all tasks associated with a specific repository.
+// If repoID is empty, clears all tasks.
+func (r *RuntimeState) ClearTasksForRepo(repoID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if repoID == "" {
+		r.Tasks = make(map[string]*TaskState)
+		return
+	}
+	for id, task := range r.Tasks {
+		if task.RepoID == repoID {
+			delete(r.Tasks, id)
+		}
+	}
+}
+
 // UpdateTaskStatus updates the status of a task
 func (r *RuntimeState) UpdateTaskStatus(taskID, status, agentID string) {
 	r.mu.Lock()

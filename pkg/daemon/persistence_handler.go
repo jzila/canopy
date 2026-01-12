@@ -162,6 +162,8 @@ func (h *PersistenceHandler) handleAgentCompleted(event Event) {
 	costUSD, _ := payload["cost_usd"].(float64)
 	filesChanged, _ := getIntFromPayload(payload, "files_changed")
 	commitsCreated, _ := getIntFromPayload(payload, "commits_created")
+	stdout, _ := payload["stdout"].(string)
+	stderr, _ := payload["stderr"].(string)
 
 	finishedAt := event.Timestamp
 	agent := &persistence.Agent{
@@ -172,6 +174,8 @@ func (h *PersistenceHandler) handleAgentCompleted(event Event) {
 		DurationSeconds:   duration,
 		ExitCode:          &exitCode,
 		ErrorMessage:      errorMsg,
+		Stdout:            stdout,
+		Stderr:            stderr,
 		InputTokens:       inputTokens,
 		OutputTokens:      outputTokens,
 		TotalTokens:       inputTokens + outputTokens,

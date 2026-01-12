@@ -101,6 +101,8 @@ type AgentResult struct {
 	CommitsCreated          int                     `json:"commits_created,omitempty"`
 	ModelUsage              map[string]ModelUsage   `json:"model_usage,omitempty"`
 	ResultMessage           string                  `json:"result_message,omitempty"`
+	Stdout                  string                  `json:"stdout,omitempty"`
+	Stderr                  string                  `json:"stderr,omitempty"`
 }
 
 // ModelUsage represents per-model token usage and cost

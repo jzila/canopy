@@ -165,6 +165,8 @@ func TestServerEventForwarding(t *testing.T) {
 					CostUSD:         0.05,
 					FilesChanged:    3,
 					CommitsCreated:  1,
+					Stdout:          "test stdout",
+					Stderr:          "test stderr",
 				},
 			},
 		}
@@ -183,6 +185,12 @@ func TestServerEventForwarding(t *testing.T) {
 			payload := event.Payload.(map[string]interface{})
 			if payload["exit_code"] != 0 {
 				t.Errorf("Expected exit_code=0, got %v", payload["exit_code"])
+			}
+			if payload["stdout"] != "test stdout" {
+				t.Errorf("Expected stdout='test stdout', got %v", payload["stdout"])
+			}
+			if payload["stderr"] != "test stderr" {
+				t.Errorf("Expected stderr='test stderr', got %v", payload["stderr"])
 			}
 		case <-time.After(time.Second):
 			t.Fatal("Timeout waiting for event")

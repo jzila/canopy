@@ -359,6 +359,8 @@ func (s *Server) convertToEvent(msg *Message) *daemon.Event {
 			"cost_usd":        payload.Result.CostUSD,
 			"files_changed":   payload.Result.FilesChanged,
 			"commits_created": payload.Result.CommitsCreated,
+			"stdout":          payload.Result.Stdout,
+			"stderr":          payload.Result.Stderr,
 		}
 		if payload.ParentAgentID != "" {
 			eventPayload["parent_agent_id"] = payload.ParentAgentID
@@ -384,6 +386,8 @@ func (s *Server) convertToEvent(msg *Message) *daemon.Event {
 			"cost_usd":        payload.Result.CostUSD,
 			"files_changed":   payload.Result.FilesChanged,
 			"commits_created": payload.Result.CommitsCreated,
+			"stdout":          payload.Result.Stdout,
+			"stderr":          payload.Result.Stderr,
 		}
 		if payload.ParentAgentID != "" {
 			eventPayload["parent_agent_id"] = payload.ParentAgentID

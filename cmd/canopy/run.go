@@ -371,6 +371,10 @@ func convertToIPCResult(result *agent.Result) *ipc.AgentResult {
 		ipcResult.CommitsCreated = len(result.GitState.NewCommits)
 	}
 
+	// Include stdout/stderr for persistence
+	ipcResult.Stdout = result.Stdout
+	ipcResult.Stderr = result.Stderr
+
 	return ipcResult
 }
 

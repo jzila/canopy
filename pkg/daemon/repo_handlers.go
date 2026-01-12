@@ -169,16 +169,14 @@ func (h *RepoHandler) HandleActivateRepository(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// Broadcast state sync event to notify WebSocket clients
+	// Broadcast full state sync event to notify WebSocket clients
+	// This includes the newly loaded tasks from the activated repository
 	if h.daemon.eventBus != nil {
+		snapshot := h.daemon.GetState()
 		h.daemon.eventBus.Publish(Event{
 			Type:      EventStateSync,
 			Timestamp: time.Now(),
-			Payload: map[string]interface{}{
-				"active_repo_id":   repoID,
-				"active_repo_name": repo.Name,
-				"active_repo_path": repo.Path,
-			},
+			Payload:   snapshot,
 		})
 	}
 
