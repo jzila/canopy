@@ -1,5 +1,8 @@
 package scheduler
 
+// Merge queue commit verification test - this comment was added by an agent
+// to verify that the merge queue properly commits and pushes changes.
+
 import (
 	"os"
 	"path/filepath"
