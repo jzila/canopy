@@ -102,6 +102,7 @@ type Orchestrator struct {
 	mergeMu        sync.Mutex     // Serializes merge operations to prevent race conditions (kept for transition)
 	sandboxConfig  *sandbox.SandboxConfig
 	agentIDMap     sync.Map    // Maps taskID -> agentID for parent-child tracking
+	taskCache      sync.Map    // Maps taskID -> *beads.Task for passing task to merge queue
 	ipcClient      *ipc.Client // IPC client for sending merge status events
 	repoID         string      // Repository ID for IPC tracking
 }
@@ -230,11 +231,16 @@ func (o *Orchestrator) SetCallbacks(callbacks *EventCallbacks) {
 	o.setupInternalCallbacks(callbacks)
 }
 
-// setupInternalCallbacks creates wrapper callbacks that include beads status updates.
-// If userCallbacks is provided, they are called after the internal beads updates.
+// setupInternalCallbacks creates wrapper callbacks that route merges through the queue.
+// If userCallbacks is provided, they are called after the merge completes.
+// CRITICAL: Task completion (beadsClient.Done/Fail) now happens in the processor,
+// not the callback. This ensures dependent agents see merged changes from predecessors.
 func (o *Orchestrator) setupInternalCallbacks(userCallbacks *EventCallbacks) {
 	wrappedCallbacks := &EventCallbacks{
 		OnAgentStartFn: func(taskID string, task *beads.Task) {
+			// Store task for later use in OnDone
+			o.taskCache.Store(taskID, task)
+
 			if userCallbacks != nil && userCallbacks.OnAgentStartFn != nil {
 				userCallbacks.OnAgentStartFn(taskID, task)
 			}
@@ -250,22 +256,57 @@ func (o *Orchestrator) setupInternalCallbacks(userCallbacks *EventCallbacks) {
 			}
 		},
 		OnDoneFn: func(taskID string, result *agent.Result) {
-			// Merge result immediately while overlay is still mounted
-			o.mergeAndCleanup(result)
+			// Retrieve task from cache (stored in OnAgentStart)
+			var task *beads.Task
+			if cached, ok := o.taskCache.Load(taskID); ok {
+				task = cached.(*beads.Task)
+				o.taskCache.Delete(taskID) // Clean up cache
+			} else {
+				// Fallback: fetch from beads if not cached
+				if fetched, err := o.beadsClient.Show(taskID); err == nil {
+					task = fetched
+				}
+			}
 
-			// Update beads immediately when task completes
-			o.markTaskDone(taskID)
+			// Create merge request and enqueue
+			req := mergequeue.NewMergeRequest(result, task)
+			if !o.mergeQueue.Enqueue(req) {
+				// Queue is full or closed - fall back to direct cleanup
+				fmt.Fprintf(os.Stderr, "warning: merge queue full for task %s, cleaning up\n", taskID)
+				o.cleanupOverlay(result)
+				// Note: Task completion not marked since we couldn't merge
+				if userCallbacks != nil && userCallbacks.OnDoneFn != nil {
+					userCallbacks.OnDoneFn(taskID, result)
+				}
+				return
+			}
 
-			// Then call user's callback
+			// Block waiting for merge response
+			// The processor handles: merge, conflict resolution, and task completion (Done/Fail)
+			resp := <-req.Response
+
+			// Cleanup overlay after merge completes
+			o.cleanupOverlay(result)
+
+			// Call user's callback with the merge outcome
 			if userCallbacks != nil && userCallbacks.OnDoneFn != nil {
 				userCallbacks.OnDoneFn(taskID, result)
 			}
+
+			// Log merge result if verbose and there was an error
+			if !resp.Success && o.config.Verbose {
+				fmt.Fprintf(os.Stderr, "[%s] merge failed: %s\n", taskID, resp.Error)
+			}
 		},
 		OnFailFn: func(taskID string, result *agent.Result) {
+			// Clean up task cache if present
+			o.taskCache.Delete(taskID)
+
 			// Clean up overlay for failed task (no merge needed)
 			o.cleanupOverlay(result)
 
 			// Update beads immediately when task fails
+			// Failed tasks don't go through merge queue since there's nothing to merge
 			o.markTaskFailed(taskID, result.Error)
 
 			// Then call user's callback
