@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -37,9 +36,9 @@ type Scheduler struct {
 	callbacks   CallbackHandler
 
 	// Pause/resume support
-	paused       atomic.Bool
-	pauseCh      chan struct{}
-	resumeCh     chan struct{}
+	pauseMu sync.Mutex
+	pauseCond *sync.Cond
+	paused  bool
 
 	// Per-agent kill support
 	agentContexts sync.Map // map[string]context.CancelFunc
@@ -66,14 +65,14 @@ func NewScheduler(beadsClient *beads.Client, executor *agent.Executor, config *C
 		config.TempDir = filepath.Join(os.TempDir(), "canopy")
 	}
 
-	return &Scheduler{
+	s := &Scheduler{
 		beadsClient: beadsClient,
 		executor:    executor,
 		config:      config,
 		callbacks:   nil, // Set via SetCallbacks
-		pauseCh:     make(chan struct{}),
-		resumeCh:    make(chan struct{}),
 	}
+	s.pauseCond = sync.NewCond(&s.pauseMu)
+	return s
 }
 
 // SetCallbacks configures event callbacks for the scheduler
@@ -98,15 +97,21 @@ func (s *Scheduler) ExecuteBatch(ctx context.Context, tasks []beads.Task) ([]*ag
 		task := task // capture for goroutine
 
 		g.Go(func() error {
-			// Check if scheduler is paused before acquiring semaphore
-			for s.paused.Load() {
+			// Wait if scheduler is paused before acquiring semaphore
+			// This uses a condition variable to avoid TOCTOU races
+			s.pauseMu.Lock()
+			for s.paused {
+				// Check if context is cancelled while waiting
 				select {
-				case <-s.resumeCh:
-					// Scheduler was resumed, continue
 				case <-gctx.Done():
+					s.pauseMu.Unlock()
 					return gctx.Err()
+				default:
 				}
+				// Atomically release lock and wait for resume signal
+				s.pauseCond.Wait()
 			}
+			s.pauseMu.Unlock()
 
 			// Acquire semaphore slot
 			if err := sem.Acquire(gctx, 1); err != nil {
@@ -351,23 +356,25 @@ func (s *Scheduler) AllResults() map[string]*agent.Result {
 
 // Pause pauses the scheduler, preventing new agents from starting
 func (s *Scheduler) Pause() {
-	if s.paused.CompareAndSwap(false, true) {
-		close(s.pauseCh)
-		s.pauseCh = make(chan struct{})
-	}
+	s.pauseMu.Lock()
+	defer s.pauseMu.Unlock()
+	s.paused = true
 }
 
 // Resume resumes the scheduler, allowing new agents to start
 func (s *Scheduler) Resume() {
-	if s.paused.CompareAndSwap(true, false) {
-		close(s.resumeCh)
-		s.resumeCh = make(chan struct{})
-	}
+	s.pauseMu.Lock()
+	defer s.pauseMu.Unlock()
+	s.paused = false
+	// Wake up all waiting goroutines
+	s.pauseCond.Broadcast()
 }
 
 // IsPaused returns whether the scheduler is currently paused
 func (s *Scheduler) IsPaused() bool {
-	return s.paused.Load()
+	s.pauseMu.Lock()
+	defer s.pauseMu.Unlock()
+	return s.paused
 }
 
 // Kill terminates a specific agent by its task ID
