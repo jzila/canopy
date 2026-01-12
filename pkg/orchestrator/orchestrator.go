@@ -143,6 +143,7 @@ func New(config *Config) (*Orchestrator, error) {
 		Verbose:       config.Verbose,
 		UseBwrap:      config.UseBwrap,
 		SandboxConfig: sandboxConfig,
+		UserPrompt:    config.Prompt, // Pass user prompt to agents for instruction precedence
 	})
 
 	// Create scheduler

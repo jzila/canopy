@@ -1,10 +1,4 @@
 === Patch 0 Error ===
-failed to apply commits from canopy-91r: failed to apply patch 0: exit status 128: fatal: Dirty index: cannot apply patches (dirty: .canopy/conflict/errors.txt .canopy/conflict/original-task.txt .canopy/conflict/patch-0.patch pkg/daemon/daemon.go pkg/daemon/daemon_test.go pkg/daemon/state.go pkg/daemon/wire_events.go pkg/history/store.go pkg/history/store_test.go pkg/ipc/client.go pkg/ipc/protocol.go pkg/ipc/server.go pkg/merge/sequential.go pkg/orchestrator/orchestrator.go pkg/persistence/store.go pkg/persistence/store_test.go pkg/tui/dashboard.go)
+failed to apply commits from canopy-o6kp: failed to apply patch 0: exit status 128: fatal: Dirty index: cannot apply patches (dirty: web/dashboard/src/components/layout/Dashboard.tsx)
 
-
-=== Patch 1 Error ===
-failed to apply .claude.json.lock from canopy-91r: open /tmp/canopy/fa57abc83072cac7/upper/.claude.json.lock: permission denied
-
-=== Patch 2 Error ===
-failed to commit changes from canopy-91r: git add failed: exit status 1
 

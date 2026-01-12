@@ -124,7 +124,21 @@ export const Dashboard: React.FC = () => {
           getRepositories(),
         ]);
         syncState(state);
-        setRepositories(repoResponse.repositories, repoResponse.active_repo_id);
+
+        // If repositories exist but no active repo is set, auto-select the first one
+        let activeId = repoResponse.active_repo_id;
+        if (!activeId && repoResponse.repositories.length > 0) {
+          const firstRepo = repoResponse.repositories[0]!;
+          activeId = firstRepo.id;
+          // Activate the first repository on the backend
+          try {
+            await activateRepository(firstRepo.id);
+          } catch (activateError) {
+            console.error('Failed to auto-activate repository:', activateError);
+          }
+        }
+
+        setRepositories(repoResponse.repositories, activeId);
       } catch (error) {
         console.error('Failed to load initial state:', error);
       }

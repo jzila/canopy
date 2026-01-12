@@ -79,6 +79,7 @@ type Config struct {
 	Verbose       bool
 	UseBwrap      bool                   // Use bubblewrap sandbox for isolation (auto-detected if not set)
 	SandboxConfig *sandbox.SandboxConfig // Sandbox configuration from .canopy/sandbox.toml
+	UserPrompt    string                 // User-provided prompt instructions (takes precedence over bead description)
 }
 
 // NewConfig creates a default agent config
@@ -352,9 +353,17 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 	return result
 }
 
-// buildPrompt constructs the prompt with task info and dependency context
+// buildPrompt constructs the prompt with task info, dependency context, and user instructions.
+// User instructions take precedence over bead/task description.
 func (e *Executor) buildPrompt(task *beads.Task, deps []DependencyContext) string {
 	var parts []string
+
+	// Add user instructions at the top if present - these take precedence
+	if e.config.UserPrompt != "" {
+		parts = append(parts, "## User Instructions (PRIORITY - follow these over task description)\n")
+		parts = append(parts, e.config.UserPrompt)
+		parts = append(parts, "\n---\n")
+	}
 
 	// Add dependency context if present
 	if len(deps) > 0 {
@@ -374,6 +383,12 @@ func (e *Executor) buildPrompt(task *beads.Task, deps []DependencyContext) strin
 	// Add description if present
 	if task.Description != "" {
 		parts = append(parts, task.Description)
+	}
+
+	// Add reminder about user instructions if they were provided
+	if e.config.UserPrompt != "" {
+		parts = append(parts, "\n---\n")
+		parts = append(parts, "**IMPORTANT**: Follow the User Instructions above. Stop when you reach the boundaries specified by the user, even if the task description suggests doing more.")
 	}
 
 	return strings.Join(parts, "\n")

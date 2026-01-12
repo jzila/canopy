@@ -1,5 +1,32 @@
-Task ID: canopy-91r
-Title: canopy-91r
+Task ID: canopy-o6kp
+Title: Orchestrator agents ignore user prompt boundaries, follow bead instructions instead
 
 Description:
+## Problem
 
+When a user provides specific instructions in a prompt like "stop after X" or "only do Y", orchestrator agents often ignore these boundaries and continue working according to the bead's description/instructions.
+
+Example: User says "implement this but stop before running tests" - agent completes the implementation AND runs tests because the bead says to run tests.
+
+## Expected Behavior
+
+User prompt instructions should take precedence over bead instructions. The agent should:
+1. Read bead description for context
+2. Follow user prompt for scope/boundaries
+3. Stop when user-specified milestone is reached
+
+## Root Cause
+
+The agent prompt construction likely puts bead instructions after/above user instructions, or doesn't clearly establish that user prompt overrides bead description.
+
+## Solution
+
+Review and update the agent prompt template in:
+- pkg/agent/ (agent prompt construction)
+- cmd/canopy/run.go (how prompts are passed)
+
+Ensure user instructions are clearly marked as taking precedence over bead descriptions.
+
+## Files
+- pkg/agent/prompt.go or similar
+- Wherever the system prompt for orchestrator agents is constructed
