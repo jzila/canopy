@@ -62,6 +62,32 @@ export async function killAgent(id: string): Promise<{ status: string; agent_id:
   });
 }
 
+export interface UpdateAgentRequest {
+  archived?: boolean;
+}
+
+export interface UpdateAgentResponse {
+  id: string;
+  archived?: boolean;
+}
+
+export async function updateAgent(
+  id: string,
+  updates: UpdateAgentRequest
+): Promise<UpdateAgentResponse> {
+  return fetchJson<UpdateAgentResponse>(`/api/agents?id=${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(updates),
+  });
+}
+
+export async function archiveAgent(
+  id: string,
+  archived: boolean
+): Promise<UpdateAgentResponse> {
+  return updateAgent(id, { archived });
+}
+
 export async function getTasks(): Promise<TaskState[]> {
   return fetchJson<TaskState[]>('/api/tasks');
 }

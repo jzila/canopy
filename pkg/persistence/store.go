@@ -76,6 +76,7 @@ type Agent struct {
 	FilesChanged      int         `json:"files_changed"`
 	GitCommitsCreated int         `json:"git_commits_created"`
 	RepoID            string      `json:"repo_id,omitempty"`
+	Archived          bool        `json:"archived"`
 }
 
 // RunFilter specifies criteria for querying runs
@@ -323,8 +324,8 @@ func (s *Store) ListRuns(filter RunFilter) (*RunListResult, error) {
 // CreateAgent creates a new agent record
 func (s *Store) CreateAgent(agent *Agent) error {
 	query := `
-		INSERT INTO agents (id, run_id, task_id, task_title, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cost_usd, files_changed, git_commits_created, repo_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO agents (id, run_id, task_id, task_title, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cost_usd, files_changed, git_commits_created, repo_id, archived)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	var finishedAt *int64
 	if agent.FinishedAt != nil {
@@ -351,8 +352,17 @@ func (s *Store) CreateAgent(agent *Agent) error {
 		agent.FilesChanged,
 		agent.GitCommitsCreated,
 		nullString(agent.RepoID),
+		boolToInt(agent.Archived),
 	)
 	return err
+}
+
+// boolToInt converts a bool to an int (0 or 1) for SQLite storage
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // UpdateAgent updates an existing agent record
@@ -371,7 +381,8 @@ func (s *Store) UpdateAgent(agent *Agent) error {
 			total_tokens = ?,
 			cost_usd = ?,
 			files_changed = ?,
-			git_commits_created = ?
+			git_commits_created = ?,
+			archived = ?
 		WHERE id = ?
 	`
 	var finishedAt *int64
@@ -393,15 +404,23 @@ func (s *Store) UpdateAgent(agent *Agent) error {
 		agent.CostUSD,
 		agent.FilesChanged,
 		agent.GitCommitsCreated,
+		boolToInt(agent.Archived),
 		agent.ID,
 	)
+	return err
+}
+
+// SetAgentArchived updates only the archived status of an agent
+func (s *Store) SetAgentArchived(agentID string, archived bool) error {
+	query := `UPDATE agents SET archived = ? WHERE id = ?`
+	_, err := s.db.Exec(query, boolToInt(archived), agentID)
 	return err
 }
 
 // GetAgent retrieves an agent by ID
 func (s *Store) GetAgent(id string) (*Agent, error) {
 	query := `
-		SELECT id, run_id, task_id, task_title, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cost_usd, files_changed, git_commits_created, repo_id
+		SELECT id, run_id, task_id, task_title, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cost_usd, files_changed, git_commits_created, repo_id, archived
 		FROM agents WHERE id = ?
 	`
 	row := s.db.QueryRow(query, id)
@@ -411,7 +430,7 @@ func (s *Store) GetAgent(id string) (*Agent, error) {
 // GetAgentsByRun retrieves all agents for a specific run
 func (s *Store) GetAgentsByRun(runID string) ([]Agent, error) {
 	query := `
-		SELECT id, run_id, task_id, task_title, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cost_usd, files_changed, git_commits_created, repo_id
+		SELECT id, run_id, task_id, task_title, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cost_usd, files_changed, git_commits_created, repo_id, archived
 		FROM agents WHERE run_id = ?
 		ORDER BY started_at ASC
 	`
@@ -776,6 +795,7 @@ func (s *Store) scanAgent(row *sql.Row) (*Agent, error) {
 	var exitCode sql.NullInt64
 	var status string
 	var errorMessage, stdout, stderr, repoID sql.NullString
+	var archived sql.NullInt64
 
 	err := row.Scan(
 		&agent.ID,
@@ -797,6 +817,7 @@ func (s *Store) scanAgent(row *sql.Row) (*Agent, error) {
 		&agent.FilesChanged,
 		&agent.GitCommitsCreated,
 		&repoID,
+		&archived,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -819,6 +840,7 @@ func (s *Store) scanAgent(row *sql.Row) (*Agent, error) {
 	agent.Stdout = stdout.String
 	agent.Stderr = stderr.String
 	agent.RepoID = repoID.String
+	agent.Archived = archived.Valid && archived.Int64 == 1
 
 	return &agent, nil
 }
@@ -829,6 +851,7 @@ func (s *Store) scanAgentFromRows(rows *sql.Rows) (*Agent, error) {
 	var exitCode sql.NullInt64
 	var status string
 	var errorMessage, stdout, stderr, repoID sql.NullString
+	var archived sql.NullInt64
 
 	err := rows.Scan(
 		&agent.ID,
@@ -850,6 +873,7 @@ func (s *Store) scanAgentFromRows(rows *sql.Rows) (*Agent, error) {
 		&agent.FilesChanged,
 		&agent.GitCommitsCreated,
 		&repoID,
+		&archived,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan agent: %w", err)
@@ -868,6 +892,7 @@ func (s *Store) scanAgentFromRows(rows *sql.Rows) (*Agent, error) {
 	agent.ErrorMessage = errorMessage.String
 	agent.Stdout = stdout.String
 	agent.Stderr = stderr.String
+	agent.Archived = archived.Valid && archived.Int64 == 1
 	agent.RepoID = repoID.String
 
 	return &agent, nil

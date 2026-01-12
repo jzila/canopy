@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-const currentSchemaVersion = 2
+const currentSchemaVersion = 3
 
 // migrate runs all pending database migrations
 func (s *Store) migrate() error {
@@ -51,6 +51,10 @@ func (s *Store) runMigration(version int) error {
 		}
 	case 2:
 		if err := s.migrateV2(tx); err != nil {
+			return err
+		}
+	case 3:
+		if err := s.migrateV3(tx); err != nil {
 			return err
 		}
 	default:
@@ -128,6 +132,22 @@ func (s *Store) migrateV2(tx *sql.Tx) error {
 		// Add repo_id to agents table
 		`ALTER TABLE agents ADD COLUMN repo_id TEXT`,
 		`CREATE INDEX IF NOT EXISTS idx_agents_repo_id ON agents(repo_id)`,
+	}
+
+	for _, m := range migrations {
+		if _, err := tx.Exec(m); err != nil {
+			return fmt.Errorf("failed to execute migration: %s: %w", m, err)
+		}
+	}
+
+	return nil
+}
+
+// migrateV3 adds archived column to agents table
+func (s *Store) migrateV3(tx *sql.Tx) error {
+	migrations := []string{
+		// Add archived column to agents table (default false)
+		`ALTER TABLE agents ADD COLUMN archived INTEGER DEFAULT 0`,
 	}
 
 	for _, m := range migrations {

@@ -51,6 +51,11 @@ func NewServerWithDaemon(port int, state *RuntimeState, eventBus *EventBus, sche
 		handler.SetDaemon(daemon)
 	}
 
+	// Wire up persistence store for handlers that need to persist state
+	if persistenceStore != nil {
+		handler.SetPersistenceStore(persistenceStore)
+	}
+
 	// Create runs handler for persistence queries (may be nil if persistence disabled)
 	var runsHandler *RunsHandler
 	if persistenceStore != nil {
@@ -186,7 +191,13 @@ func (s *Server) handleAgentsRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Otherwise, it's the main agents endpoint
+	// Handle PATCH for updating agents (e.g., archiving)
+	if r.Method == http.MethodPatch {
+		s.handler.HandleUpdateAgent(w, r)
+		return
+	}
+
+	// Otherwise, it's the main agents endpoint (GET)
 	s.handler.HandleGetAgents(w, r)
 }
 

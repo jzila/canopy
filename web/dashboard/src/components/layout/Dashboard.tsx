@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
-import { Play, Pause, Activity, DollarSign, Zap, GitCommit, FileEdit, Sun, Moon, Terminal as TerminalIcon, List, CheckCircle, XCircle, ListTodo, GripHorizontal } from 'lucide-react';
+import { Play, Pause, Activity, DollarSign, Zap, GitCommit, FileEdit, Sun, Moon, Terminal as TerminalIcon, List, CheckCircle, XCircle, ListTodo, GripHorizontal, Archive } from 'lucide-react';
 import { useStateStore } from '../../stores/stateStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { pauseOrch, resumeOrch, getState, getRepositories, activateRepository } from '../../api/client';
@@ -12,6 +12,8 @@ import { RepoSelector } from './RepoSelector';
 
 type TerminalTab = 'feed' | 'terminal' | 'commits';
 type StatusFilter = 'all' | 'running' | 'completed' | 'failed';
+
+const SHOW_ARCHIVED_AGENTS_KEY = 'canopy-show-archived-agents';
 
 export const Dashboard: React.FC = () => {
   const { connected } = useWebSocket();
@@ -28,11 +30,20 @@ export const Dashboard: React.FC = () => {
     const saved = localStorage.getItem('beadsPaneExpanded');
     return saved !== null ? saved === 'true' : true;
   });
+  const [showArchivedAgents, setShowArchivedAgents] = useState(() => {
+    const saved = localStorage.getItem(SHOW_ARCHIVED_AGENTS_KEY);
+    return saved === 'true';
+  });
 
   // Persist beads pane state
   useEffect(() => {
     localStorage.setItem('beadsPaneExpanded', String(beadsPaneExpanded));
   }, [beadsPaneExpanded]);
+
+  // Persist show archived agents state
+  useEffect(() => {
+    localStorage.setItem(SHOW_ARCHIVED_AGENTS_KEY, String(showArchivedAgents));
+  }, [showArchivedAgents]);
 
   // Resizable pane state
   const MIN_PANE_HEIGHT = 200;
@@ -108,6 +119,7 @@ export const Dashboard: React.FC = () => {
   const setSelectedAgent = useStateStore((state) => state.setSelectedAgent);
   const syncState = useStateStore((state) => state.syncState);
   const setIsPaused = useStateStore((state) => state.setIsPaused);
+  const updateAgent = useStateStore((state) => state.updateAgent);
   const repositories = useStateStore((state) => state.repositories);
   const activeRepoId = useStateStore((state) => state.activeRepoId);
   const isRepoSwitching = useStateStore((state) => state.isRepoSwitching);
@@ -213,23 +225,47 @@ export const Dashboard: React.FC = () => {
 
   const agentList = Object.values(agents);
 
-  // Filter agents based on selected status
-  const filteredAgents = useMemo(() => {
-    if (statusFilter === 'all') return agentList;
+  // Count archived agents
+  const archivedAgentCount = useMemo(() => {
+    return agentList.filter(agent => agent.archived).length;
+  }, [agentList]);
 
-    return agentList.filter(agent => {
-      switch (statusFilter) {
-        case 'running':
-          return agent.status === 'running' || agent.status === 'starting';
-        case 'completed':
-          return agent.status === 'completed';
-        case 'failed':
-          return agent.status === 'failed' || agent.status === 'timed_out' || agent.status === 'cancelled';
-        default:
-          return true;
-      }
-    });
-  }, [agentList, statusFilter]);
+  // Filter agents based on selected status and archived state
+  const filteredAgents = useMemo(() => {
+    return agentList
+      .filter(agent => {
+        // Filter by archived status first
+        if (!showArchivedAgents && agent.archived) {
+          return false;
+        }
+
+        // Then filter by status
+        if (statusFilter === 'all') return true;
+
+        switch (statusFilter) {
+          case 'running':
+            return agent.status === 'running' || agent.status === 'starting';
+          case 'completed':
+            return agent.status === 'completed';
+          case 'failed':
+            return agent.status === 'failed' || agent.status === 'timed_out' || agent.status === 'cancelled';
+          default:
+            return true;
+        }
+      })
+      .sort((a, b) => {
+        // Archived agents go to the bottom
+        if (a.archived !== b.archived) {
+          return a.archived ? 1 : -1;
+        }
+        // Sort by start time (most recent first)
+        return new Date(b.start_time).getTime() - new Date(a.start_time).getTime();
+      });
+  }, [agentList, statusFilter, showArchivedAgents]);
+
+  const handleAgentArchiveToggle = (agentId: string, archived: boolean) => {
+    updateAgent(agentId, { archived });
+  };
 
   const toggleFilter = (filter: StatusFilter) => {
     setStatusFilter(current => current === filter ? 'all' : filter);
@@ -411,6 +447,30 @@ export const Dashboard: React.FC = () => {
             <span className="text-sm text-red-600 dark:text-red-400">Failed</span>
             <span className="text-lg font-bold text-red-700 dark:text-red-300">{stats.failed_tasks}</span>
           </button>
+
+          {/* Spacer */}
+          <div className="flex-1" />
+
+          {/* Show Archived Toggle */}
+          <button
+            onClick={() => setShowArchivedAgents(!showArchivedAgents)}
+            className={`
+              flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all cursor-pointer
+              ${showArchivedAgents
+                ? 'bg-purple-100 dark:bg-purple-900/50 ring-2 ring-purple-500'
+                : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'
+              }
+            `}
+            title={showArchivedAgents ? 'Hide archived agents' : 'Show archived agents'}
+          >
+            <Archive className={`w-4 h-4 ${showArchivedAgents ? 'text-purple-600 dark:text-purple-400' : 'text-gray-600 dark:text-gray-400'}`} />
+            <span className={`text-sm ${showArchivedAgents ? 'text-purple-600 dark:text-purple-400' : 'text-gray-600 dark:text-gray-400'}`}>
+              {showArchivedAgents ? 'Hide' : 'Show'} Archived
+            </span>
+            <span className={`text-lg font-bold ${showArchivedAgents ? 'text-purple-700 dark:text-purple-300' : 'text-gray-700 dark:text-gray-300'}`}>
+              {archivedAgentCount}
+            </span>
+          </button>
         </div>
       </header>
 
@@ -449,6 +509,7 @@ export const Dashboard: React.FC = () => {
                   agent={agent}
                   onSelect={handleSelectAgent}
                   isSelected={agent.id === selectedAgentId}
+                  onArchiveToggle={handleAgentArchiveToggle}
                 />
               ))}
             </div>

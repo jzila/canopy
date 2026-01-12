@@ -19,6 +19,7 @@ type PersistenceStoreInterface interface {
 	GetAgentsByRun(runID string) ([]persistence.Agent, error)
 	GetStats(since *time.Time) (*persistence.AggregateStats, error)
 	GetStatsByRepo(repoID string, since *time.Time) (*persistence.AggregateStats, error)
+	SetAgentArchived(agentID string, archived bool) error
 }
 
 // RunsHandler handles HTTP requests for run history queries

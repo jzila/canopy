@@ -109,6 +109,7 @@ interface BackendAgentState {
   changes: number;
   commits: number;
   git_commits: BackendGitCommit[];
+  archived: boolean;
 }
 
 interface BackendRuntimeState {
@@ -286,6 +287,7 @@ export function useWebSocket() {
                   changes: agent.changes,
                   commits: agent.commits,
                   git_commits: agent.git_commits || [],
+                  archived: agent.archived || false,
                 };
               }
 

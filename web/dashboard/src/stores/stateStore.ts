@@ -58,6 +58,7 @@ export interface AgentState {
   changes: number;
   commits: number;
   git_commits: GitCommit[];
+  archived: boolean;
 }
 
 export interface TaskState {

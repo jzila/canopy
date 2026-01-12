@@ -112,6 +112,11 @@ func (m *mockPersistenceStore) GetStatsByRepo(repoID string, since *time.Time) (
 	return stats, nil
 }
 
+func (m *mockPersistenceStore) SetAgentArchived(agentID string, archived bool) error {
+	// Mock implementation - in real use, this would update the agent in storage
+	return nil
+}
+
 func TestHandleListRuns(t *testing.T) {
 	store := newMockPersistenceStore()
 	now := time.Now()

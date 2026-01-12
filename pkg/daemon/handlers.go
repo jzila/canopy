@@ -18,11 +18,12 @@ type DaemonInterface interface {
 
 // Handler wraps RuntimeState and provides HTTP handlers
 type Handler struct {
-	state       *RuntimeState
-	scheduler   SchedulerInterface
-	beadsClient BeadsClientInterface
-	eventBus    *EventBus
-	daemon      DaemonInterface
+	state            *RuntimeState
+	scheduler        SchedulerInterface
+	beadsClient      BeadsClientInterface
+	eventBus         *EventBus
+	daemon           DaemonInterface
+	persistenceStore PersistenceStoreInterface
 }
 
 // SchedulerInterface abstracts scheduler operations for handlers
@@ -56,6 +57,11 @@ func NewHandler(state *RuntimeState, scheduler SchedulerInterface, beadsClient B
 // SetDaemon sets the daemon reference for handlers that need access to daemon state
 func (h *Handler) SetDaemon(daemon DaemonInterface) {
 	h.daemon = daemon
+}
+
+// SetPersistenceStore sets the persistence store for handlers that need to persist state
+func (h *Handler) SetPersistenceStore(store PersistenceStoreInterface) {
+	h.persistenceStore = store
 }
 
 // StateResponse wraps RuntimeState with additional daemon-level information
@@ -427,4 +433,68 @@ func (h *Handler) HandleGetStats(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Failed to encode stats: %v", err), http.StatusInternalServerError)
 		return
 	}
+}
+
+// AgentUpdateRequest represents a request to update an agent
+type AgentUpdateRequest struct {
+	Archived *bool `json:"archived,omitempty"`
+}
+
+// HandleUpdateAgent updates an existing agent (archive/unarchive)
+func (h *Handler) HandleUpdateAgent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPatch {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract agent ID from query parameter
+	agentID := r.URL.Query().Get("id")
+	if agentID == "" {
+		http.Error(w, "Agent ID required", http.StatusBadRequest)
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to read request body: %v", err), http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	var req AgentUpdateRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid JSON: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Check if agent exists
+	agent := h.state.GetAgent(agentID)
+	if agent == nil {
+		http.Error(w, fmt.Sprintf("Agent %s not found", agentID), http.StatusNotFound)
+		return
+	}
+
+	// Update archived status if provided
+	if req.Archived != nil {
+		h.state.SetAgentArchived(agentID, *req.Archived)
+
+		// Persist to database if persistence store is available
+		if h.persistenceStore != nil {
+			if err := h.persistenceStore.SetAgentArchived(agentID, *req.Archived); err != nil {
+				// Log error but don't fail the request - runtime state was updated
+				// This allows archiving to work even if persistence fails
+				fmt.Printf("Warning: failed to persist agent archive status: %v\n", err)
+			}
+		}
+	}
+
+	response := map[string]interface{}{
+		"id": agentID,
+	}
+	if req.Archived != nil {
+		response["archived"] = *req.Archived
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
 }

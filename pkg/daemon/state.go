@@ -155,6 +155,7 @@ type AgentState struct {
 	Commits         int             `json:"commits"`                    // Number of git commits made (legacy, use len(GitCommits))
 	GitCommits      []GitCommit     `json:"git_commits"`                // Detailed git commit history
 	ResultMessage   string          `json:"result_message"`             // Final result message from Claude
+	Archived        bool            `json:"archived"`                   // Whether the agent is archived (hidden by default)
 	mu              sync.RWMutex
 }
 
@@ -288,6 +289,17 @@ func (r *RuntimeState) SetTaskArchived(taskID string, archived bool) {
 	defer r.mu.Unlock()
 	if task, exists := r.Tasks[taskID]; exists {
 		task.Archived = archived
+	}
+}
+
+// SetAgentArchived sets the archived status of an agent
+func (r *RuntimeState) SetAgentArchived(agentID string, archived bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if agent, exists := r.Agents[agentID]; exists {
+		agent.Update(func(a *AgentState) {
+			a.Archived = archived
+		})
 	}
 }
 
