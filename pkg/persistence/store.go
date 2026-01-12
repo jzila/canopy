@@ -451,6 +451,31 @@ func (s *Store) GetAgentsByRun(runID string) ([]Agent, error) {
 	return agents, nil
 }
 
+// GetAllNonArchivedAgents retrieves all agents where archived = 0, across all runs.
+// This is used to restore full agent history on daemon startup.
+func (s *Store) GetAllNonArchivedAgents() ([]Agent, error) {
+	query := `
+		SELECT id, run_id, task_id, task_title, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cost_usd, files_changed, git_commits_created, repo_id, archived
+		FROM agents WHERE archived = 0
+		ORDER BY started_at ASC
+	`
+	rows, err := s.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query non-archived agents: %w", err)
+	}
+	defer rows.Close()
+
+	agents := []Agent{}
+	for rows.Next() {
+		agent, err := s.scanAgentFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		agents = append(agents, *agent)
+	}
+	return agents, nil
+}
+
 // GetRunningRun returns the most recent run with status "running", or nil if none exists.
 // This is used to restore state on daemon startup.
 func (s *Store) GetRunningRun() (*Run, error) {
