@@ -18,6 +18,23 @@ func isCanopyFile(path string) bool {
 	return path == ".canopy" || strings.HasPrefix(path, ".canopy/")
 }
 
+// isOverlayWhiteout returns true if the path is an overlayfs whiteout marker
+// Whiteout files have format ".wh.<filename>" and mark deleted files in overlayfs
+func isOverlayWhiteout(path string) bool {
+	base := filepath.Base(path)
+	return strings.HasPrefix(base, ".wh.")
+}
+
+// isTransientFile returns true if the path is a transient file that shouldn't be committed
+func isTransientFile(path string) bool {
+	base := filepath.Base(path)
+	// Claude Code lock files
+	if base == ".claude.json.lock" || base == ".claude.json.backup" {
+		return true
+	}
+	return false
+}
+
 // AppliedChange records a change that was applied during merge
 type AppliedChange struct {
 	Path   string
@@ -117,6 +134,14 @@ func (m *SequentialMerger) Merge(results []*agent.Result) (*Result, error) {
 			if isCanopyFile(change.Path) {
 				continue
 			}
+			// Skip overlayfs whiteout markers
+			if isOverlayWhiteout(change.Path) {
+				continue
+			}
+			// Skip transient files (lock files, backups)
+			if isTransientFile(change.Path) {
+				continue
+			}
 
 			if change.Type != sandbox.ChangeDeleted {
 				fileModifiers[change.Path] = append(fileModifiers[change.Path], r.TaskID)
@@ -171,6 +196,14 @@ func (m *SequentialMerger) Merge(results []*agent.Result) (*Result, error) {
 			}
 			// Skip .canopy files (resolver artifacts, conflict data)
 			if isCanopyFile(change.Path) {
+				continue
+			}
+			// Skip overlayfs whiteout markers
+			if isOverlayWhiteout(change.Path) {
+				continue
+			}
+			// Skip transient files (lock files, backups)
+			if isTransientFile(change.Path) {
 				continue
 			}
 
@@ -333,6 +366,18 @@ func (m *SequentialMerger) MergeSingle(result *agent.Result, opts *MergeOptions)
 		for _, change := range result.Changes {
 			// Skip .beads files
 			if isBeadsFile(change.Path) {
+				continue
+			}
+			// Skip .canopy files (resolver artifacts, conflict data)
+			if isCanopyFile(change.Path) {
+				continue
+			}
+			// Skip overlayfs whiteout markers
+			if isOverlayWhiteout(change.Path) {
+				continue
+			}
+			// Skip transient files (lock files, backups)
+			if isTransientFile(change.Path) {
 				continue
 			}
 
