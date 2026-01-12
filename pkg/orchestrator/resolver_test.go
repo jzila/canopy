@@ -63,14 +63,6 @@ func (m *mockBeadsClient) Show(taskID string) (*beads.Task, error) {
 	return nil, nil
 }
 
-func (m *mockBeadsClient) MergeSlotAcquire(taskID string, wait bool) (*beads.MergeSlotResult, error) {
-	return &beads.MergeSlotResult{Acquired: true}, nil
-}
-
-func (m *mockBeadsClient) MergeSlotRelease(taskID string) error {
-	return nil
-}
-
 // mockResolver simulates resolver behavior for testing
 type mockResolver struct {
 	mu             sync.Mutex

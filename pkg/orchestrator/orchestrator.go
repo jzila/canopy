@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync"
 
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
+	"github.com/jzila/canopy/pkg/failedpatches"
 	"github.com/jzila/canopy/pkg/ipc"
 	"github.com/jzila/canopy/pkg/merge"
 	"github.com/jzila/canopy/pkg/mergequeue"
@@ -97,6 +99,7 @@ type Orchestrator struct {
 	failureCounts  map[string]int // Tracks how many times each task has failed
 	promptFilter   *PromptFilter  // Parsed prompt for filtering tasks
 	beadsMu        sync.Mutex     // Serializes beads updates to prevent corruption
+	mergeMu        sync.Mutex     // Serializes merge operations to prevent race conditions (kept for transition)
 	sandboxConfig  *sandbox.SandboxConfig
 	agentIDMap     sync.Map    // Maps taskID -> agentID for parent-child tracking
 	taskCache      sync.Map    // Maps taskID -> *beads.Task for passing task to merge queue
@@ -340,6 +343,201 @@ func (o *Orchestrator) markTaskFailed(taskID string, reason string) {
 	if err := o.beadsClient.Fail(taskID, reason); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: failed to mark task %s as failed: %v\n", taskID, err)
 	}
+}
+
+// mergeAndCleanup merges a single agent result and cleans up its overlay.
+// This is called immediately when each agent completes, while the overlay is still mounted.
+// This is safe to call from concurrent goroutines.
+//
+// The merge flow:
+// 1. Acquire merge slot (bd merge-slot acquire)
+// 2. Auto-commit any dirty .beads/ changes to prevent git am failures
+// 3. Apply git patches or file changes
+// 4. If git am fails, spawn resolver agent (inherits merge slot)
+// 5. Release merge slot (bd merge-slot release)
+func (o *Orchestrator) mergeAndCleanup(result *agent.Result) {
+	// Use context for resolver agent execution
+	ctx := context.Background()
+
+	o.mergeAndCleanupWithContext(ctx, result, nil)
+}
+
+// mergeAndCleanupWithContext performs merge with optional task context for resolver spawning.
+// The originalTask parameter is used to provide context to resolver agents when git am fails.
+func (o *Orchestrator) mergeAndCleanupWithContext(ctx context.Context, result *agent.Result, originalTask *beads.Task) {
+	// Send initial pending status
+	o.sendMergeStatus(result.TaskID, ipc.MergeStatusPending, 0, "")
+
+	// Serialize merge operations to ensure atomic commits
+	o.mergeMu.Lock()
+	defer o.mergeMu.Unlock()
+
+	// Send merging status
+	o.sendMergeStatus(result.TaskID, ipc.MergeStatusMerging, 0, "")
+
+	// Auto-commit any dirty .beads/ changes before git am
+	// This fixes canopy-pja: git am fails if .beads/ has uncommitted changes
+	// because 'git am' won't apply patches when local changes would be overwritten
+	if err := o.commitDirtyBeadsChanges(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to commit .beads/ changes: %v\n", err)
+		// Continue with merge - better to try than to fail completely
+	}
+
+	// Merge the result (applies patches or file changes and commits)
+	// When there are patches, skip file fallback since resolver will handle failures
+	mergeOpts := &merge.MergeOptions{
+		SkipFileFallback: result.GitState != nil && len(result.GitState.Patches) > 0,
+	}
+	mergeResult, err := o.merger.MergeSingle(result, mergeOpts)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to merge result for task %s: %v\n", result.TaskID, err)
+		o.sendMergeStatus(result.TaskID, ipc.MergeStatusFailed, 0, err.Error())
+	}
+
+	// Check if git am failed - if so, spawn a resolver agent
+	if mergeResult.PatchFailed[result.TaskID] && result.GitState != nil && len(result.GitState.Patches) > 0 {
+		fmt.Printf("[%s] Git patch failed, spawning resolver agent...\n", result.TaskID)
+		o.sendMergeStatus(result.TaskID, ipc.MergeStatusResolving, 0, "")
+
+		// Build conflict context for the resolver
+		conflictCtx := &resolver.ConflictContext{
+			TaskID:        result.TaskID,
+			TaskTitle:     result.TaskID, // Will be overridden if originalTask is available
+			FailedPatches: result.GitState.Patches,
+			PatchErrors:   mergeResult.Errors,
+			FileChanges:   result.Changes,
+			ParentAgentID: o.GetAgentID(result.TaskID), // Get parent agent ID for IPC tracking
+		}
+
+		// Add original task info if available
+		if originalTask != nil {
+			conflictCtx.TaskTitle = originalTask.Title
+			conflictCtx.TaskDescription = originalTask.Description
+		} else {
+			// Try to fetch task info from beads
+			if task, err := o.beadsClient.Show(result.TaskID); err == nil && task != nil {
+				conflictCtx.TaskTitle = task.Title
+				conflictCtx.TaskDescription = task.Description
+			}
+		}
+
+		// Spawn resolver agent (inherits the merge slot - no need to re-acquire)
+		// The resolver runs within the same merge lock, so it has exclusive access
+		resolverResult, err := o.resolver.Resolve(ctx, conflictCtx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "resolver error for %s: %v\n", result.TaskID, err)
+		}
+
+		if resolverResult != nil {
+			if resolverResult.Success {
+				fmt.Printf("[%s-resolver] Conflict resolved successfully (%.1fs)\n",
+					result.TaskID, resolverResult.Duration.Seconds())
+
+				// Merge the resolver's result
+				if resolverResult.AgentResult != nil && resolverResult.AgentResult.Overlay != nil {
+					resolverMergeResult, err := o.merger.MergeSingle(resolverResult.AgentResult, nil)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "warning: failed to merge resolver result for %s: %v\n",
+							result.TaskID, err)
+					}
+
+					// Report resolver merge errors
+					for _, errMsg := range resolverMergeResult.Errors {
+						fmt.Fprintf(os.Stderr, "resolver merge error for %s: %s\n", result.TaskID, errMsg)
+					}
+
+					if o.config.Verbose && resolverMergeResult.CommitsApplied > 0 {
+						fmt.Printf("Merged %d commit(s) from resolver for task %s\n",
+							resolverMergeResult.CommitsApplied, result.TaskID)
+					}
+
+					// Clean up resolver overlay
+					resolverResult.AgentResult.Overlay.Cleanup()
+				}
+			} else {
+				fmt.Fprintf(os.Stderr, "[%s-resolver] Failed to resolve conflict: %s\n",
+					result.TaskID, resolverResult.Error)
+
+				// Preserve patches to persistent storage before cleanup
+				// This prevents data loss when both merge and resolution fail
+				if result.GitState != nil && len(result.GitState.Patches) > 0 {
+					preserveResult, err := failedpatches.PreservePatches(
+						result.TaskID,
+						result.GitState.Patches,
+						mergeResult.Errors,
+					)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "[%s] Warning: failed to preserve patches: %v\n",
+							result.TaskID, err)
+					} else {
+						fmt.Fprintf(os.Stderr, "\n[%s] Patches preserved to: %s\n",
+							result.TaskID, preserveResult.Dir)
+						fmt.Fprintf(os.Stderr, "[%s]    To apply manually: git am --3way %s/patch-*.patch\n\n",
+							result.TaskID, preserveResult.Dir)
+					}
+				}
+
+				// Mark the original task as failed since resolver couldn't fix it
+				o.markTaskFailed(result.TaskID, fmt.Sprintf("resolver failed: %s", resolverResult.Error))
+				o.sendMergeStatus(result.TaskID, ipc.MergeStatusFailed, 0, fmt.Sprintf("resolver failed: %s", resolverResult.Error))
+			}
+		}
+	} else {
+		// Report merge errors for non-resolver cases
+		for _, errMsg := range mergeResult.Errors {
+			fmt.Fprintf(os.Stderr, "merge error for %s: %s\n", result.TaskID, errMsg)
+		}
+	}
+
+	if o.config.Verbose && mergeResult.CommitsApplied > 0 {
+		fmt.Printf("Merged %d commit(s) from task %s\n", mergeResult.CommitsApplied, result.TaskID)
+	}
+
+	// Send final merged status (unless already set to failed)
+	if err == nil {
+		o.sendMergeStatus(result.TaskID, ipc.MergeStatusMerged, 0, "")
+	}
+
+	// Clean up overlay now that merge is complete
+	o.cleanupOverlay(result)
+}
+
+// commitDirtyBeadsChanges commits any uncommitted changes in the .beads/ directory.
+// This prevents git am from failing when .beads/ files have been modified.
+func (o *Orchestrator) commitDirtyBeadsChanges() error {
+	// Check if .beads/ directory has uncommitted changes
+	statusCmd := exec.Command("git", "status", "--porcelain", ".beads/")
+	statusCmd.Dir = o.config.OutputDir
+	output, err := statusCmd.Output()
+	if err != nil {
+		return fmt.Errorf("git status failed: %w", err)
+	}
+
+	// No changes to commit
+	if len(output) == 0 {
+		return nil
+	}
+
+	if o.config.Verbose {
+		fmt.Printf("Auto-committing dirty .beads/ changes before merge\n")
+	}
+
+	// Stage .beads/ changes
+	addCmd := exec.Command("git", "add", ".beads/")
+	addCmd.Dir = o.config.OutputDir
+	if err := addCmd.Run(); err != nil {
+		return fmt.Errorf("git add .beads/ failed: %w", err)
+	}
+
+	// Commit with a clear message
+	commitCmd := exec.Command("git", "commit", "-m", "canopy: auto-commit beads changes before merge")
+	commitCmd.Dir = o.config.OutputDir
+	if err := commitCmd.Run(); err != nil {
+		// Check if there's actually nothing to commit (possible race with bd sync)
+		return fmt.Errorf("git commit failed: %w", err)
+	}
+
+	return nil
 }
 
 // cleanupOverlay cleans up the overlay for a result.
