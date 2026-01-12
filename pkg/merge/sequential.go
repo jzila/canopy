@@ -1,6 +1,7 @@
 package merge
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -358,8 +359,10 @@ func (m *SequentialMerger) commitFileChanges(result *agent.Result, paths []strin
 	addCmd := exec.Command("git", "add", "--")
 	addCmd.Args = append(addCmd.Args, paths...)
 	addCmd.Dir = m.outputDir
+	var addStderr bytes.Buffer
+	addCmd.Stderr = &addStderr
 	if err := addCmd.Run(); err != nil {
-		return fmt.Errorf("git add failed: %w", err)
+		return fmt.Errorf("git add failed: %w: %s", err, addStderr.String())
 	}
 
 	// Check if there are staged changes
@@ -381,8 +384,10 @@ func (m *SequentialMerger) commitFileChanges(result *agent.Result, paths []strin
 
 	commitCmd := exec.Command("git", "commit", "-m", commitMsg)
 	commitCmd.Dir = m.outputDir
+	var commitStderr bytes.Buffer
+	commitCmd.Stderr = &commitStderr
 	if err := commitCmd.Run(); err != nil {
-		return fmt.Errorf("git commit failed: %w", err)
+		return fmt.Errorf("git commit failed: %w: %s", err, commitStderr.String())
 	}
 
 	if m.verbose {

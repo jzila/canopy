@@ -1,6 +1,7 @@
 package mergequeue
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -247,16 +248,20 @@ func (p *Processor) commitDirtyBeadsChanges() error {
 	// Stage .beads/ changes
 	addCmd := exec.Command("git", "add", ".beads/")
 	addCmd.Dir = p.outputDir
+	var addStderr bytes.Buffer
+	addCmd.Stderr = &addStderr
 	if err := addCmd.Run(); err != nil {
-		return fmt.Errorf("git add .beads/ failed: %w", err)
+		return fmt.Errorf("git add .beads/ failed: %w: %s", err, addStderr.String())
 	}
 
 	// Commit with a clear message
 	commitCmd := exec.Command("git", "commit", "-m", "canopy: auto-commit beads changes before merge")
 	commitCmd.Dir = p.outputDir
+	var commitStderr bytes.Buffer
+	commitCmd.Stderr = &commitStderr
 	if err := commitCmd.Run(); err != nil {
 		// Check if there's actually nothing to commit (possible race with bd sync)
-		return fmt.Errorf("git commit failed: %w", err)
+		return fmt.Errorf("git commit failed: %w: %s", err, commitStderr.String())
 	}
 
 	return nil
