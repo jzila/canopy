@@ -77,16 +77,23 @@ func (h *Handler) HandleGetState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	snapshot := h.state.GetSnapshot()
+	// Get active repository ID if available
+	var activeRepoID string
+	if h.daemon != nil {
+		activeRepoID = h.daemon.GetActiveRepositoryID()
+	}
+
+	// Get snapshot filtered by active repository
+	snapshot := h.state.GetSnapshotForRepo(activeRepoID)
 
 	// Wrap snapshot with additional daemon-level state
 	response := StateResponse{
 		RuntimeState: snapshot,
 	}
 
-	// Include active_repo_id if daemon is available
-	if h.daemon != nil {
-		response.ActiveRepoID = h.daemon.GetActiveRepositoryID()
+	// Include active_repo_id in response
+	if activeRepoID != "" {
+		response.ActiveRepoID = activeRepoID
 	}
 
 	w.Header().Set("Content-Type", "application/json")
