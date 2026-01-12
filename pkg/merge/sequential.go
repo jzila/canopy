@@ -13,6 +13,11 @@ import (
 	"github.com/jzila/canopy/pkg/sandbox"
 )
 
+// isCanopyFile returns true if the path is a .canopy/ file that should be filtered out
+func isCanopyFile(path string) bool {
+	return path == ".canopy" || strings.HasPrefix(path, ".canopy/")
+}
+
 // AppliedChange records a change that was applied during merge
 type AppliedChange struct {
 	Path   string
@@ -108,6 +113,10 @@ func (m *SequentialMerger) Merge(results []*agent.Result) (*Result, error) {
 			if isBeadsFile(change.Path) {
 				continue
 			}
+			// Skip .canopy files (resolver artifacts, conflict data)
+			if isCanopyFile(change.Path) {
+				continue
+			}
 
 			if change.Type != sandbox.ChangeDeleted {
 				fileModifiers[change.Path] = append(fileModifiers[change.Path], r.TaskID)
@@ -158,6 +167,10 @@ func (m *SequentialMerger) Merge(results []*agent.Result) (*Result, error) {
 		for _, change := range r.Changes {
 			// Skip .beads files (agents don't have access to .beads)
 			if isBeadsFile(change.Path) {
+				continue
+			}
+			// Skip .canopy files (resolver artifacts, conflict data)
+			if isCanopyFile(change.Path) {
 				continue
 			}
 
