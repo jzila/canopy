@@ -220,7 +220,20 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 		return resp
 	}
 
-	// Mark task as done only if there were no errors
+	// Verify actual work was done before marking task as done
+	if mergeResult.CommitsApplied == 0 && len(mergeResult.Applied) == 0 {
+		// No commits and no file changes applied - task produced no output
+		errMsg := fmt.Sprintf("task %s completed but produced no changes (no commits, no file modifications)", taskID)
+		if p.verbose {
+			fmt.Fprintf(os.Stderr, "[%s] Warning: %s\n", taskID, errMsg)
+		}
+		p.markTaskFailed(taskID, errMsg)
+		resp.Error = errMsg
+		p.sendMergeStatus(taskID, ipc.MergeStatusFailed, 0, errMsg)
+		return resp
+	}
+
+	// Mark task as done only if there were no errors and actual work was done
 	p.markTaskDone(taskID)
 	p.sendMergeStatus(taskID, ipc.MergeStatusMerged, 0, "")
 
