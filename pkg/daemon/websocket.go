@@ -20,6 +20,12 @@ const (
 
 	// Maximum message size allowed from peer
 	maxMessageSize = 512
+
+	// Default buffer size for hub broadcast channel
+	defaultHubBroadcastBuffer = 256
+
+	// Default buffer size for client send channel
+	defaultClientSendBuffer = 256
 )
 
 // Hub maintains the set of active clients and broadcasts messages to them
@@ -41,6 +47,11 @@ type Hub struct {
 
 	// Unsubscribe function for event bus cleanup
 	unsubscribe func()
+
+	// Backpressure metrics
+	droppedBroadcastEvents int64
+	droppedClientMessages  int64
+	disconnectedSlowClients int64
 }
 
 // Client represents a single WebSocket connection
@@ -59,7 +70,7 @@ type Client struct {
 func NewHub(eventBus *EventBus) *Hub {
 	return &Hub{
 		clients:    make(map[*Client]bool),
-		broadcast:  make(chan []byte, 256),
+		broadcast:  make(chan []byte, defaultHubBroadcastBuffer),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 		eventBus:   eventBus,
@@ -82,7 +93,9 @@ func (h *Hub) Run() {
 		case h.broadcast <- data:
 		default:
 			// Drop event if broadcast channel is full
-			log.Printf("Warning: dropped event due to full broadcast channel")
+			h.droppedBroadcastEvents++
+			log.Printf("Warning: dropped event (type=%s) due to full broadcast channel (total dropped: %d)",
+				event.Type, h.droppedBroadcastEvents)
 		}
 	})
 
@@ -105,6 +118,10 @@ func (h *Hub) Run() {
 				case client.send <- message:
 				default:
 					// Client's send buffer is full, close the connection
+					h.droppedClientMessages++
+					h.disconnectedSlowClients++
+					log.Printf("Warning: disconnecting slow client due to full send buffer (total dropped messages: %d, total disconnected: %d)",
+						h.droppedClientMessages, h.disconnectedSlowClients)
 					close(client.send)
 					delete(h.clients, client)
 				}
@@ -117,6 +134,26 @@ func (h *Hub) Run() {
 func (h *Hub) Shutdown() {
 	if h.unsubscribe != nil {
 		h.unsubscribe()
+	}
+}
+
+// HubMetrics contains backpressure metrics for the hub
+type HubMetrics struct {
+	DroppedBroadcastEvents  int64
+	DroppedClientMessages   int64
+	DisconnectedSlowClients int64
+	ActiveClients           int
+}
+
+// GetMetrics returns the current backpressure metrics
+// Note: This method is not thread-safe and should only be called
+// for monitoring/debugging purposes
+func (h *Hub) GetMetrics() HubMetrics {
+	return HubMetrics{
+		DroppedBroadcastEvents:  h.droppedBroadcastEvents,
+		DroppedClientMessages:   h.droppedClientMessages,
+		DisconnectedSlowClients: h.disconnectedSlowClients,
+		ActiveClients:           len(h.clients),
 	}
 }
 

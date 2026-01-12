@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -684,6 +685,7 @@ type RepoIDLookupFunc func(path string) (string, bool)
 // MigrateOrphanedRepoIDs attempts to populate repo_id for runs that have NULL repo_id.
 // It uses the provided lookup function to find repository IDs from paths.
 // Returns the number of runs updated.
+// This operation runs in a transaction to ensure atomicity.
 func (s *Store) MigrateOrphanedRepoIDs(lookupFn RepoIDLookupFunc) (int64, error) {
 	// Get runs with NULL repo_id that have a repo_path set
 	query := `SELECT id, repo_path FROM runs WHERE repo_id IS NULL AND repo_path IS NOT NULL AND repo_path != ''`
@@ -696,6 +698,7 @@ func (s *Store) MigrateOrphanedRepoIDs(lookupFn RepoIDLookupFunc) (int64, error)
 	type orphanedRun struct {
 		runID    string
 		repoPath string
+		repoID   string
 	}
 	var orphanedRuns []orphanedRun
 	for rows.Next() {
@@ -704,30 +707,71 @@ func (s *Store) MigrateOrphanedRepoIDs(lookupFn RepoIDLookupFunc) (int64, error)
 			rows.Close()
 			return 0, fmt.Errorf("failed to scan orphaned run: %w", err)
 		}
-		orphanedRuns = append(orphanedRuns, orphanedRun{runID: runID, repoPath: repoPath})
+
+		// Look up repo ID for this path
+		repoID, found := lookupFn(repoPath)
+		if found {
+			orphanedRuns = append(orphanedRuns, orphanedRun{
+				runID:    runID,
+				repoPath: repoPath,
+				repoID:   repoID,
+			})
+		}
 	}
 	rows.Close()
 
-	var updated int64
+	if len(orphanedRuns) == 0 {
+		return 0, nil
+	}
+
+	// Begin transaction for atomic updates
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Use bulk updates to avoid N+1 queries
+	// Group runs by repo_id for efficient updates
+	repoIDToRunIDs := make(map[string][]string)
 	for _, run := range orphanedRuns {
-		repoID, found := lookupFn(run.repoPath)
-		if !found {
-			continue
+		repoIDToRunIDs[run.repoID] = append(repoIDToRunIDs[run.repoID], run.runID)
+	}
+
+	var updated int64
+	for repoID, runIDs := range repoIDToRunIDs {
+		// Build IN clause for bulk update
+		placeholders := make([]string, len(runIDs))
+		args := make([]interface{}, 0, len(runIDs)+1)
+		args = append(args, repoID)
+
+		for i, runID := range runIDs {
+			placeholders[i] = "?"
+			args = append(args, runID)
 		}
 
-		// Update the run's repo_id
-		_, err := s.db.Exec(`UPDATE runs SET repo_id = ? WHERE id = ?`, repoID, run.runID)
+		inClause := "(" + strings.Join(placeholders, ",") + ")"
+
+		// Bulk update runs
+		runQuery := fmt.Sprintf("UPDATE runs SET repo_id = ? WHERE id IN %s", inClause)
+		result, err := tx.Exec(runQuery, args...)
 		if err != nil {
-			return updated, fmt.Errorf("failed to update run repo_id: %w", err)
+			return 0, fmt.Errorf("failed to bulk update run repo_ids: %w", err)
 		}
 
-		// Also update associated agents
-		_, err = s.db.Exec(`UPDATE agents SET repo_id = ? WHERE run_id = ?`, repoID, run.runID)
+		rowsAffected, _ := result.RowsAffected()
+		updated += rowsAffected
+
+		// Bulk update associated agents
+		agentQuery := fmt.Sprintf("UPDATE agents SET repo_id = ? WHERE run_id IN %s", inClause)
+		_, err = tx.Exec(agentQuery, args...)
 		if err != nil {
-			return updated, fmt.Errorf("failed to update agents repo_id: %w", err)
+			return 0, fmt.Errorf("failed to bulk update agent repo_ids: %w", err)
 		}
+	}
 
-		updated++
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	return updated, nil

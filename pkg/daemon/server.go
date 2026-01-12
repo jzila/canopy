@@ -324,7 +324,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	client := &Client{
 		hub:  s.hub,
 		conn: conn,
-		send: make(chan []byte, 256),
+		send: make(chan []byte, defaultClientSendBuffer),
 	}
 
 	// Register client with hub

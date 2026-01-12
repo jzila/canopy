@@ -1,6 +1,7 @@
 package persistence
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -1286,6 +1287,84 @@ func TestMigrationV2(t *testing.T) {
 
 	if retrieved.RepoID != "test-repo-id" {
 		t.Errorf("expected RepoID 'test-repo-id', got '%s'", retrieved.RepoID)
+	}
+}
+
+// TestMigrateOrphanedRepoIDsTransaction tests that the migration is atomic
+func TestMigrateOrphanedRepoIDsTransaction(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	now := time.Now()
+
+	// Create multiple orphaned runs
+	numRuns := 100
+	for i := 0; i < numRuns; i++ {
+		run := &Run{
+			ID:        fmt.Sprintf("orphan-%d", i),
+			StartedAt: now,
+			Status:    RunStatusCompleted,
+			RepoPath:  fmt.Sprintf("/path/to/repo-%d", i%10), // 10 different repos
+			Concurrency: 1,
+		}
+		if err := store.CreateRun(run); err != nil {
+			t.Fatalf("failed to create run: %v", err)
+		}
+
+		// Create agents for each run
+		agent := &Agent{
+			ID:        fmt.Sprintf("agent-%d", i),
+			RunID:     fmt.Sprintf("orphan-%d", i),
+			TaskID:    fmt.Sprintf("task-%d", i),
+			TaskTitle: "Test Task",
+			Status:    AgentStatusCompleted,
+			StartedAt: now,
+		}
+		if err := store.CreateAgent(agent); err != nil {
+			t.Fatalf("failed to create agent: %v", err)
+		}
+	}
+
+	// Lookup function that maps paths to repo IDs
+	lookupFn := func(path string) (string, bool) {
+		// Extract repo number from path
+		var repoNum int
+		if _, err := fmt.Sscanf(path, "/path/to/repo-%d", &repoNum); err != nil {
+			return "", false
+		}
+		return fmt.Sprintf("repo-id-%d", repoNum), true
+	}
+
+	// Run migration
+	updated, err := store.MigrateOrphanedRepoIDs(lookupFn)
+	if err != nil {
+		t.Fatalf("failed to migrate orphaned repo IDs: %v", err)
+	}
+
+	if updated != int64(numRuns) {
+		t.Errorf("expected %d runs updated, got %d", numRuns, updated)
+	}
+
+	// Verify all runs and agents have repo_id set correctly
+	for i := 0; i < numRuns; i++ {
+		run, err := store.GetRun(fmt.Sprintf("orphan-%d", i))
+		if err != nil {
+			t.Fatalf("failed to get run: %v", err)
+		}
+
+		expectedRepoID := fmt.Sprintf("repo-id-%d", i%10)
+		if run.RepoID != expectedRepoID {
+			t.Errorf("run orphan-%d: expected repo_id %s, got %s", i, expectedRepoID, run.RepoID)
+		}
+
+		agent, err := store.GetAgent(fmt.Sprintf("agent-%d", i))
+		if err != nil {
+			t.Fatalf("failed to get agent: %v", err)
+		}
+
+		if agent.RepoID != expectedRepoID {
+			t.Errorf("agent agent-%d: expected repo_id %s, got %s", i, expectedRepoID, agent.RepoID)
+		}
 	}
 }
 
