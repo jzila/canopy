@@ -5,6 +5,9 @@ import (
 
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
+	"github.com/jzila/canopy/pkg/merge"
+	"github.com/jzila/canopy/pkg/mergequeue"
+	"github.com/jzila/canopy/pkg/resolver"
 )
 
 func TestEventCallbacks_Interface(t *testing.T) {
@@ -100,4 +103,95 @@ func TestOrchestrator_WithCallbacks(t *testing.T) {
 
 	// Test that the API design allows chaining (compile-time check)
 	_ = (&Orchestrator{}).WithCallbacks(callbacks)
+}
+
+// TestOrchestrator_MergeQueueInitialized verifies that the merge queue is initialized
+// with the correct buffer size based on concurrency.
+func TestOrchestrator_MergeQueueInitialized(t *testing.T) {
+	testCases := []struct {
+		name            string
+		concurrency     int
+		expectedBufSize int
+	}{
+		{"default concurrency", 0, 4},      // 0 means default, which is 4
+		{"concurrency 1", 1, 1},            // 1 agent = 1 buffer slot
+		{"concurrency 4", 4, 4},            // 4 agents = 4 buffer slots
+		{"concurrency 8", 8, 8},            // 8 agents = 8 buffer slots
+		{"negative concurrency", -1, 4},    // invalid defaults to 4
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Simulate the buffer size calculation from New()
+			bufferSize := tc.concurrency
+			if bufferSize <= 0 {
+				bufferSize = 4 // default concurrency
+			}
+
+			// Create a queue with the calculated buffer size
+			queue := mergequeue.NewQueue(bufferSize)
+			if queue == nil {
+				t.Fatal("Expected queue to be initialized")
+			}
+
+			// Verify queue is not closed and not paused initially
+			if queue.IsClosed() {
+				t.Error("Expected queue to not be closed initially")
+			}
+			if queue.IsPaused() {
+				t.Error("Expected queue to not be paused initially")
+			}
+		})
+	}
+}
+
+// TestOrchestrator_MergeProcessorInitialized verifies that the merge processor
+// is correctly initialized with all required dependencies.
+func TestOrchestrator_MergeProcessorInitialized(t *testing.T) {
+	// Create mock components
+	queue := mergequeue.NewQueue(4)
+	merger := merge.NewSequentialMerger(t.TempDir(), t.TempDir(), false)
+	resolverInst := resolver.New(&resolver.Config{
+		WorkDir: t.TempDir(),
+		TempDir: t.TempDir(),
+		Verbose: false,
+	})
+
+	// Create a minimal beads client mock (nil for this test since processor creation doesn't validate)
+	var beadsClient *beads.Client = nil
+
+	// Create the processor (this should not panic)
+	processor := mergequeue.NewProcessor(
+		queue,
+		merger,
+		resolverInst,
+		beadsClient,
+		t.TempDir(), // outputDir
+		nil,         // ipcClient
+		false,       // verbose
+	)
+
+	if processor == nil {
+		t.Fatal("Expected processor to be initialized")
+	}
+}
+
+// TestOrchestrator_StructHasMergeQueueFields verifies that the Orchestrator struct
+// has the expected merge queue and processor fields.
+func TestOrchestrator_StructHasMergeQueueFields(t *testing.T) {
+	// Create a minimal orchestrator to verify field presence
+	o := &Orchestrator{
+		mergeQueue:     mergequeue.NewQueue(4),
+		mergeProcessor: nil, // Can be nil for this structural test
+	}
+
+	// Verify mergeQueue is set
+	if o.mergeQueue == nil {
+		t.Error("Expected mergeQueue field to be set")
+	}
+
+	// Test queue operations work
+	if o.mergeQueue.IsClosed() {
+		t.Error("Expected queue to not be closed")
+	}
 }

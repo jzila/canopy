@@ -13,6 +13,7 @@ import (
 	"github.com/jzila/canopy/pkg/beads"
 	"github.com/jzila/canopy/pkg/ipc"
 	"github.com/jzila/canopy/pkg/merge"
+	"github.com/jzila/canopy/pkg/mergequeue"
 	"github.com/jzila/canopy/pkg/resolver"
 	"github.com/jzila/canopy/pkg/sandbox"
 	"github.com/jzila/canopy/pkg/scheduler"
@@ -86,21 +87,23 @@ type Config struct {
 
 // Orchestrator coordinates the execution of tasks from beads
 type Orchestrator struct {
-	config        *Config
-	beadsClient   *beads.Client
-	scheduler     *scheduler.Scheduler
-	merger        *merge.SequentialMerger
-	resolver      *resolver.Resolver
-	tempDir       string
-	callbacks     *EventCallbacks
-	failureCounts map[string]int // Tracks how many times each task has failed
-	promptFilter  *PromptFilter  // Parsed prompt for filtering tasks
-	beadsMu       sync.Mutex     // Serializes beads updates to prevent corruption
-	mergeMu       sync.Mutex     // Serializes merge operations to prevent race conditions
-	sandboxConfig *sandbox.SandboxConfig
-	agentIDMap    sync.Map       // Maps taskID -> agentID for parent-child tracking
-	ipcClient     *ipc.Client    // IPC client for sending merge status events
-	repoID        string         // Repository ID for IPC tracking
+	config         *Config
+	beadsClient    *beads.Client
+	scheduler      *scheduler.Scheduler
+	merger         *merge.SequentialMerger
+	resolver       *resolver.Resolver
+	mergeQueue     *mergequeue.Queue
+	mergeProcessor *mergequeue.Processor
+	tempDir        string
+	callbacks      *EventCallbacks
+	failureCounts  map[string]int // Tracks how many times each task has failed
+	promptFilter   *PromptFilter  // Parsed prompt for filtering tasks
+	beadsMu        sync.Mutex     // Serializes beads updates to prevent corruption
+	mergeMu        sync.Mutex     // Serializes merge operations to prevent race conditions (kept for transition)
+	sandboxConfig  *sandbox.SandboxConfig
+	agentIDMap     sync.Map    // Maps taskID -> agentID for parent-child tracking
+	ipcClient      *ipc.Client // IPC client for sending merge status events
+	repoID         string      // Repository ID for IPC tracking
 }
 
 // New creates a new orchestrator
@@ -177,33 +180,44 @@ func New(config *Config) (*Orchestrator, error) {
 		fmt.Printf("Prompt filter: %+v\n", promptFilter)
 	}
 
+	// Initialize merge queue with buffer size equal to concurrency
+	// This provides sufficient buffering while keeping memory bounded
+	bufferSize := config.Concurrency
+	if bufferSize <= 0 {
+		bufferSize = 4 // default concurrency
+	}
+	mergeQueue := mergequeue.NewQueue(bufferSize)
+
+	// Initialize merge processor
+	// Note: ipcClient is set via SetIPCClient after construction
+	mergeProcessor := mergequeue.NewProcessor(
+		mergeQueue,
+		merger,
+		resolverInst,
+		beadsClient,
+		config.OutputDir,
+		nil, // ipcClient set later via SetIPCClient
+		config.Verbose,
+	)
+
 	o := &Orchestrator{
-		config:        config,
-		beadsClient:   beadsClient,
-		scheduler:     sched,
-		merger:        merger,
-		resolver:      resolverInst,
-		tempDir:       tempDir,
-		callbacks:     nil, // Set via SetCallbacks
-		failureCounts: make(map[string]int),
-		promptFilter:  promptFilter,
-		sandboxConfig: sandboxConfig,
+		config:         config,
+		beadsClient:    beadsClient,
+		scheduler:      sched,
+		merger:         merger,
+		resolver:       resolverInst,
+		mergeQueue:     mergeQueue,
+		mergeProcessor: mergeProcessor,
+		tempDir:        tempDir,
+		callbacks:      nil, // Set via SetCallbacks
+		failureCounts:  make(map[string]int),
+		promptFilter:   promptFilter,
+		sandboxConfig:  sandboxConfig,
 	}
 
 	// Set up default internal callbacks for beads updates.
 	// These will be wrapped with user callbacks if SetCallbacks is called later.
 	o.setupInternalCallbacks(nil)
-
-	// Clean up any stale merge slots from crashed orchestrators on startup.
-	// This prevents deadlocks when a previous orchestrator crashed while holding the slot.
-	if cleaned, info, err := beadsClient.MergeSlotCleanupStale(beads.DefaultSlotTimeout); err != nil {
-		if config.Verbose {
-			fmt.Fprintf(os.Stderr, "warning: failed to check for stale merge slots: %v\n", err)
-		}
-	} else if cleaned && info != nil {
-		fmt.Printf("Cleaned up stale merge slot from previous run (task: %s, PID: %d)\n",
-			info.TaskID, info.PID)
-	}
 
 	return o, nil
 }
@@ -597,6 +611,10 @@ func (o *Orchestrator) GetAgentID(taskID string) string {
 
 // Run executes the orchestration loop until no ready tasks remain
 func (o *Orchestrator) Run(ctx context.Context) error {
+	// Start the merge processor goroutine
+	// It will process merge requests from the queue until context is cancelled
+	go o.mergeProcessor.Start(ctx)
+
 	iteration := 0
 
 	for {
