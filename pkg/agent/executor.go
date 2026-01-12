@@ -331,6 +331,9 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 		result.GitState = gitState
 	}
 
+	// Set overlay for merge processing
+	result.Overlay = overlay
+
 	// Determine success
 	if err != nil {
 		result.Success = false
