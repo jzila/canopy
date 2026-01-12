@@ -135,12 +135,27 @@ export const Dashboard: React.FC = () => {
             await activateRepository(firstRepo.id);
           } catch (activateError) {
             console.error('Failed to auto-activate repository:', activateError);
+            // Continue with local activeId even if backend activation fails
+            // The selector will still show the correct repo
           }
         }
 
+        // Always update state with repositories, even if activation failed
+        // This ensures the selector is visible and functional
         setRepositories(repoResponse.repositories, activeId);
       } catch (error) {
         console.error('Failed to load initial state:', error);
+        // Attempt to load repositories separately if combined fetch failed
+        try {
+          const repoResponse = await getRepositories();
+          let activeId = repoResponse.active_repo_id;
+          if (!activeId && repoResponse.repositories.length > 0) {
+            activeId = repoResponse.repositories[0]!.id;
+          }
+          setRepositories(repoResponse.repositories, activeId);
+        } catch (repoError) {
+          console.error('Failed to load repositories:', repoError);
+        }
       }
     };
 

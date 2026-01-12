@@ -45,8 +45,11 @@ describe('RepoSelector', () => {
         />
       );
 
-      expect(screen.getByText('project-alpha')).toBeInTheDocument();
-      expect(screen.getByText(/project-alpha/)).toBeInTheDocument();
+      // Check that the repo name is displayed (use getAllByText since name appears in button text)
+      const nameElements = screen.getAllByText('project-alpha');
+      expect(nameElements.length).toBeGreaterThan(0);
+      // Check the path is displayed
+      expect(screen.getByText(/\/home\/user\/projects\/project-alpha/)).toBeInTheDocument();
     });
 
     it('renders "No repositories" message when list is empty', () => {
@@ -180,7 +183,9 @@ describe('RepoSelector', () => {
       await user.click(screen.getByRole('button'));
 
       // Try to select the already active repo by clicking on it in the dropdown
-      const activeRepoInDropdown = screen.getAllByText('project-alpha')[1]; // Second one is in dropdown
+      const allActiveRepoTexts = screen.getAllByText('project-alpha');
+      // Second one is in dropdown (index 1), use non-null assertion since we expect 2 elements
+      const activeRepoInDropdown = allActiveRepoTexts[1]!;
       await user.click(activeRepoInDropdown);
 
       expect(mockOnSelect).not.toHaveBeenCalled();
