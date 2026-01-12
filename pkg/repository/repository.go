@@ -30,16 +30,17 @@ func GetOrCreate(path string) (*Repository, error) {
 	}
 
 	// Use atomic read-modify-write with exclusive lock
-	registry, unlock, err := loadRegistryWithLock()
+	lock, err := loadRegistryWithLock()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load registry: %w", err)
 	}
-	defer unlock()
 
 	// Check if repository already exists
-	for i := range registry.Repositories {
-		if registry.Repositories[i].Path == normalizedPath {
-			return &registry.Repositories[i], nil
+	for i := range lock.data.Repositories {
+		if lock.data.Repositories[i].Path == normalizedPath {
+			repo := lock.data.Repositories[i]
+			lock.Close()
+			return &repo, nil
 		}
 	}
 
@@ -51,8 +52,8 @@ func GetOrCreate(path string) (*Repository, error) {
 		CreatedAt: time.Now().UTC(),
 	}
 
-	registry.Repositories = append(registry.Repositories, repo)
-	if err := saveRegistryLocked(getRegistryPath(), registry); err != nil {
+	lock.data.Repositories = append(lock.data.Repositories, repo)
+	if err := lock.Save(); err != nil {
 		return nil, fmt.Errorf("failed to save registry: %w", err)
 	}
 

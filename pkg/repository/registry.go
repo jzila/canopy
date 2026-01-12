@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+	"time"
 )
 
 // registryData is the JSON schema for repositories.json
@@ -108,81 +109,137 @@ func saveRegistry(registry *registryData) error {
 	return nil
 }
 
-// loadRegistryWithLock loads the registry and returns it along with the file handle.
-// The caller must call the returned unlock function when done to release the exclusive lock.
+// registryLock holds an exclusive lock on the registry file for atomic read-modify-write.
+type registryLock struct {
+	file *os.File
+	data *registryData
+}
+
+// loadRegistryWithLock loads the registry and returns a lock handle.
+// The caller must call Save or Close to release the exclusive lock.
 // This is used for atomic read-modify-write operations.
-func loadRegistryWithLock() (*registryData, func(), error) {
+// Retries with exponential backoff on lock contention.
+func loadRegistryWithLock() (*registryLock, error) {
 	path := getRegistryPath()
 
 	// Ensure directory exists
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, nil, fmt.Errorf("failed to create registry directory: %w", err)
+		return nil, fmt.Errorf("failed to create registry directory: %w", err)
 	}
 
-	// Open file with exclusive lock
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to open registry: %w", err)
-	}
+	// Retry parameters for lock acquisition
+	const maxRetries = 50
+	const initialBackoff = 5 * time.Millisecond
+	const maxBackoff = 100 * time.Millisecond
 
-	// Acquire exclusive lock
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	var f *os.File
+	var err error
+
+	// Open file with retry logic
+	backoff := initialBackoff
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			time.Sleep(backoff)
+			backoff *= 2 // exponential backoff
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+		}
+
+		// Open file with exclusive lock
+		f, err = os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open registry: %w", err)
+		}
+
+		// Try to acquire exclusive lock with non-blocking mode first
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break // Lock acquired successfully
+		}
+
+		// If lock is held by another process, retry
+		if err == syscall.EWOULDBLOCK {
+			f.Close()
+			if attempt == maxRetries-1 {
+				return nil, fmt.Errorf("failed to acquire lock after %d attempts: lock held by another process", maxRetries)
+			}
+			continue
+		}
+
+		// Other errors are fatal
 		f.Close()
-		return nil, nil, fmt.Errorf("failed to acquire lock: %w", err)
-	}
-
-	unlock := func() {
-		syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		f.Close()
+		return nil, fmt.Errorf("failed to acquire lock: %w", err)
 	}
 
 	// Read file contents
 	info, err := f.Stat()
 	if err != nil {
-		unlock()
-		return nil, nil, fmt.Errorf("failed to stat registry: %w", err)
-	}
-
-	// Empty file means no repositories yet
-	if info.Size() == 0 {
-		return &registryData{Repositories: []Repository{}}, unlock, nil
-	}
-
-	data := make([]byte, info.Size())
-	if _, err := f.Read(data); err != nil {
-		unlock()
-		return nil, nil, fmt.Errorf("failed to read registry: %w", err)
+		syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+		return nil, fmt.Errorf("failed to stat registry: %w", err)
 	}
 
 	var registry registryData
-	if err := json.Unmarshal(data, &registry); err != nil {
-		unlock()
-		return nil, nil, fmt.Errorf("failed to parse registry: %w", err)
+
+	// Empty file means no repositories yet
+	if info.Size() == 0 {
+		registry.Repositories = []Repository{}
+	} else {
+		data := make([]byte, info.Size())
+		if _, err := f.Read(data); err != nil {
+			syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+			f.Close()
+			return nil, fmt.Errorf("failed to read registry: %w", err)
+		}
+
+		if err := json.Unmarshal(data, &registry); err != nil {
+			syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+			f.Close()
+			return nil, fmt.Errorf("failed to parse registry: %w", err)
+		}
 	}
 
-	return &registry, unlock, nil
+	return &registryLock{file: f, data: &registry}, nil
 }
 
-// saveRegistryLocked saves the registry while holding an exclusive lock.
-// The file should have been opened with loadRegistryWithLock.
-func saveRegistryLocked(path string, registry *registryData) error {
-	// Open file for writing (lock should already be held by caller)
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to open registry for writing: %w", err)
-	}
-	defer f.Close()
+// Save writes the registry data to disk and releases the lock.
+func (rl *registryLock) Save() error {
+	defer rl.Close()
 
 	// Serialize with pretty formatting
-	data, err := json.MarshalIndent(registry, "", "  ")
+	data, err := json.MarshalIndent(rl.data, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to serialize registry: %w", err)
 	}
 
-	if _, err := f.Write(data); err != nil {
+	// Truncate and rewind
+	if err := rl.file.Truncate(0); err != nil {
+		return fmt.Errorf("failed to truncate registry: %w", err)
+	}
+	if _, err := rl.file.Seek(0, 0); err != nil {
+		return fmt.Errorf("failed to seek registry: %w", err)
+	}
+
+	// Write data
+	if _, err := rl.file.Write(data); err != nil {
 		return fmt.Errorf("failed to write registry: %w", err)
 	}
 
+	// Sync to ensure data is written to disk
+	if err := rl.file.Sync(); err != nil {
+		return fmt.Errorf("failed to sync registry: %w", err)
+	}
+
+	return nil
+}
+
+// Close releases the lock without saving (for read-only operations or error cases).
+func (rl *registryLock) Close() error {
+	if rl.file != nil {
+		syscall.Flock(int(rl.file.Fd()), syscall.LOCK_UN)
+		return rl.file.Close()
+	}
 	return nil
 }
