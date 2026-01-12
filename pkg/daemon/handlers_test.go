@@ -448,3 +448,115 @@ func TestHandlersWithNilBeadsClient(t *testing.T) {
 		}
 	})
 }
+
+func TestHandleUpdateAgent(t *testing.T) {
+	state := NewRuntimeState()
+
+	// Add a test agent
+	agent := &AgentState{
+		ID:        "agent-1",
+		TaskID:    "task-1",
+		TaskTitle: "Test Task",
+		Status:    AgentStatusCompleted,
+		StartTime: time.Now(),
+		Archived:  false,
+	}
+	endTime := time.Now()
+	agent.EndTime = &endTime
+	state.AddAgent(agent)
+
+	scheduler := &mockScheduler{}
+	beadsClient := &mockBeadsClient{}
+	handler := NewHandler(state, scheduler, beadsClient, nil)
+
+	// Test archiving an agent
+	t.Run("ArchiveAgent", func(t *testing.T) {
+		archived := true
+		reqBody := AgentUpdateRequest{Archived: &archived}
+		body, _ := json.Marshal(reqBody)
+		req := httptest.NewRequest(http.MethodPatch, "/api/agents?id=agent-1", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+
+		handler.HandleUpdateAgent(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("Expected status 200, got %d", w.Code)
+		}
+
+		var response map[string]interface{}
+		if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+			t.Fatalf("Failed to decode response: %v", err)
+		}
+
+		if response["id"] != "agent-1" {
+			t.Errorf("Expected agent ID 'agent-1', got %v", response["id"])
+		}
+
+		if response["archived"] != true {
+			t.Errorf("Expected archived to be true, got %v", response["archived"])
+		}
+
+		// Verify the agent was actually archived in state
+		updatedAgent := state.GetAgent("agent-1")
+		if updatedAgent == nil {
+			t.Fatal("Agent not found in state")
+		}
+		if !updatedAgent.Archived {
+			t.Error("Expected agent to be archived in state")
+		}
+	})
+
+	// Test unarchiving an agent
+	t.Run("UnarchiveAgent", func(t *testing.T) {
+		archived := false
+		reqBody := AgentUpdateRequest{Archived: &archived}
+		body, _ := json.Marshal(reqBody)
+		req := httptest.NewRequest(http.MethodPatch, "/api/agents?id=agent-1", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+
+		handler.HandleUpdateAgent(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("Expected status 200, got %d", w.Code)
+		}
+
+		// Verify the agent was unarchived in state
+		updatedAgent := state.GetAgent("agent-1")
+		if updatedAgent == nil {
+			t.Fatal("Agent not found in state")
+		}
+		if updatedAgent.Archived {
+			t.Error("Expected agent to be unarchived in state")
+		}
+	})
+
+	// Test missing agent ID
+	t.Run("MissingAgentID", func(t *testing.T) {
+		archived := true
+		reqBody := AgentUpdateRequest{Archived: &archived}
+		body, _ := json.Marshal(reqBody)
+		req := httptest.NewRequest(http.MethodPatch, "/api/agents", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+
+		handler.HandleUpdateAgent(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("Expected status 400, got %d", w.Code)
+		}
+	})
+
+	// Test non-existent agent
+	t.Run("NonExistentAgent", func(t *testing.T) {
+		archived := true
+		reqBody := AgentUpdateRequest{Archived: &archived}
+		body, _ := json.Marshal(reqBody)
+		req := httptest.NewRequest(http.MethodPatch, "/api/agents?id=nonexistent", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+
+		handler.HandleUpdateAgent(w, req)
+
+		if w.Code != http.StatusNotFound {
+			t.Errorf("Expected status 404, got %d", w.Code)
+		}
+	})
+}

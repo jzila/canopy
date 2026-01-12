@@ -156,7 +156,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 
 	// REST API routes - current run state
 	mux.HandleFunc("/api/state", s.handler.HandleGetState)
-	mux.HandleFunc("/api/agents", s.handler.HandleGetAgents)
+	mux.HandleFunc("/api/agents", s.handleAgentsRoutes)  // Handles GET and PATCH
 	mux.HandleFunc("/api/agents/", s.handleAgentsRoutes) // Handles /api/agents/:id/kill
 	mux.HandleFunc("/api/tasks", s.handleTasksRoutes)    // Handles GET and POST
 	mux.HandleFunc("/api/stats", s.handler.HandleGetStats)
@@ -191,14 +191,15 @@ func (s *Server) handleAgentsRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Handle PATCH for updating agents (e.g., archiving)
-	if r.Method == http.MethodPatch {
+	// Handle method-based routing for /api/agents
+	switch r.Method {
+	case http.MethodGet:
+		s.handler.HandleGetAgents(w, r)
+	case http.MethodPatch:
 		s.handler.HandleUpdateAgent(w, r)
-		return
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
-
-	// Otherwise, it's the main agents endpoint (GET)
-	s.handler.HandleGetAgents(w, r)
 }
 
 // handleTasksRoutes routes task-related requests based on method
