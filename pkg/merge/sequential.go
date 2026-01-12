@@ -387,6 +387,13 @@ func (m *SequentialMerger) commitFileChanges(result *agent.Result, paths []strin
 	var commitStderr bytes.Buffer
 	commitCmd.Stderr = &commitStderr
 	if err := commitCmd.Run(); err != nil {
+		// Commit failed - reset staged files to prevent leaving dirty state
+		resetCmd := exec.Command("git", "reset", "HEAD", "--")
+		resetCmd.Args = append(resetCmd.Args, paths...)
+		resetCmd.Dir = m.outputDir
+		if resetErr := resetCmd.Run(); resetErr != nil && m.verbose {
+			fmt.Fprintf(os.Stderr, "warning: failed to reset staged files after commit failure: %v\n", resetErr)
+		}
 		return fmt.Errorf("git commit failed: %w: %s", err, commitStderr.String())
 	}
 

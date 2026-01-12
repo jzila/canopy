@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/jzila/canopy/pkg/beads"
 	"github.com/jzila/canopy/pkg/ipc"
@@ -207,17 +208,19 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 		return resp
 	}
 
-	// No conflicts - merge was successful
+	// No conflicts - check if merge was actually successful
 	if len(mergeResult.Errors) > 0 {
-		// Report merge errors but don't fail the task
+		// Merge errors are critical - always log them and fail the task
 		for _, errMsg := range mergeResult.Errors {
-			if p.verbose {
-				fmt.Fprintf(os.Stderr, "merge error for %s: %s\n", taskID, errMsg)
-			}
+			fmt.Fprintf(os.Stderr, "merge error for %s: %s\n", taskID, errMsg)
 		}
+		resp.Error = fmt.Sprintf("merge had errors: %s", strings.Join(mergeResult.Errors, "; "))
+		p.markTaskFailed(taskID, resp.Error)
+		p.sendMergeStatus(taskID, ipc.MergeStatusFailed, 0, resp.Error)
+		return resp
 	}
 
-	// Mark task as done
+	// Mark task as done only if there were no errors
 	p.markTaskDone(taskID)
 	p.sendMergeStatus(taskID, ipc.MergeStatusMerged, 0, "")
 
