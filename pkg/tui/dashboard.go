@@ -27,7 +27,7 @@ type Dashboard struct {
 	quitting      bool
 }
 
-// NewDashboard creates a new dashboard TUI
+// NewDashboard creates a new dashboard TUI with in-process state and event bus
 func NewDashboard(state *daemon.RuntimeState, eventBus *daemon.EventBus) *Dashboard {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
@@ -39,6 +39,30 @@ func NewDashboard(state *daemon.RuntimeState, eventBus *daemon.EventBus) *Dashbo
 		terminal: NewTerminalModel(),
 		spinner:  s,
 	}
+}
+
+// NewRemoteDashboard creates a dashboard that connects to a remote daemon
+// via WebSocket. The addr can be a port number, host:port, or full URL.
+func NewRemoteDashboard(addr string) (*Dashboard, *RemoteClient, error) {
+	client := NewRemoteClient(addr)
+
+	if err := client.Connect(); err != nil {
+		return nil, nil, fmt.Errorf("failed to connect to daemon at %s: %w", addr, err)
+	}
+
+	dashboard := NewDashboard(client.GetState(), client.GetEventBus())
+	return dashboard, client, nil
+}
+
+// RunRemote starts a dashboard that connects to a remote daemon
+func RunRemote(addr string) error {
+	dashboard, client, err := NewRemoteDashboard(addr)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+
+	return dashboard.Run()
 }
 
 // Init initializes the dashboard

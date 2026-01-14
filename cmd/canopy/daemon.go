@@ -1,12 +1,10 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -21,6 +19,7 @@ var (
 	daemonSocket    string
 	daemonDevMode   bool
 	daemonTUIMode   bool
+	daemonAddr      string // explicit daemon address for remote TUI connection
 )
 
 var daemonCmd = &cobra.Command{
@@ -43,8 +42,14 @@ Example:
   # Start in development mode
   canopy daemon --dev
 
-  # Start with TUI dashboard
+  # Start with TUI dashboard (starts new daemon if not running)
   canopy daemon --tui
+
+  # Connect TUI to existing daemon (auto-detects if running)
+  canopy daemon --tui
+
+  # Connect TUI to daemon at specific address
+  canopy daemon --tui --daemon-addr localhost:8080
 
   # Check if daemon is running
   canopy daemon status`,
@@ -64,28 +69,14 @@ Exit codes:
 	RunE: runDaemonStatus,
 }
 
-var daemonStopCmd = &cobra.Command{
-	Use:   "stop",
-	Short: "Stop running daemon",
-	Long: `Stop the canopy daemon gracefully.
-
-Sends SIGTERM to the daemon process and waits for it to exit.
-Cleans up the pidfile after the daemon stops.
-
-Exit codes:
-  0 - Daemon stopped successfully
-  1 - Daemon is not running or error occurred`,
-	RunE: runDaemonStop,
-}
-
 func init() {
 	daemonCmd.Flags().IntVar(&daemonPort, "port", 8080, "HTTP server port")
 	daemonCmd.Flags().StringVar(&daemonSocket, "ipc-socket", "", "Unix socket path for IPC (default: runtime dir)")
 	daemonCmd.Flags().BoolVar(&daemonDevMode, "dev", false, "Enable development mode")
 	daemonCmd.Flags().BoolVar(&daemonTUIMode, "tui", false, "Enable TUI dashboard view")
+	daemonCmd.Flags().StringVar(&daemonAddr, "daemon-addr", "", "Connect TUI to daemon at specified address (e.g., localhost:8080)")
 
 	daemonCmd.AddCommand(daemonStatusCmd)
-	daemonCmd.AddCommand(daemonStopCmd)
 	rootCmd.AddCommand(daemonCmd)
 }
 
@@ -95,11 +86,30 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 		daemonSocket = runtime.SocketPath("")
 	}
 
+	// If --daemon-addr is specified with --tui, connect directly to that daemon
+	if daemonAddr != "" {
+		if !daemonTUIMode {
+			return fmt.Errorf("--daemon-addr requires --tui flag")
+		}
+		return runRemoteTUI(daemonAddr)
+	}
+
 	// Check if daemon is already running
 	running, pid, err := daemon.IsRunning()
 	if err != nil {
 		return fmt.Errorf("failed to check daemon status: %w", err)
 	}
+
+	// If daemon is running and --tui is specified, connect to existing daemon
+	if running && daemonTUIMode {
+		addr := fmt.Sprintf("localhost:%d", daemonPort)
+		if verbose {
+			fmt.Printf("Daemon is already running (pid %d), connecting to %s...\n", pid, addr)
+		}
+		return runRemoteTUI(addr)
+	}
+
+	// If daemon is running without --tui, error out
 	if running {
 		return fmt.Errorf("daemon is already running (pid %d)", pid)
 	}
@@ -141,6 +151,11 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// runRemoteTUI starts the TUI dashboard connected to a remote daemon via WebSocket
+func runRemoteTUI(addr string) error {
+	return tui.RunRemote(addr)
 }
 
 // runDaemonWithTUI starts the daemon and TUI dashboard concurrently
@@ -204,35 +219,4 @@ func runDaemonStatus(cmd *cobra.Command, args []string) error {
 	fmt.Println("Daemon is not running")
 	os.Exit(1)
 	return nil // unreachable, but satisfies compiler
-}
-
-// runDaemonStop stops the running daemon gracefully
-func runDaemonStop(cmd *cobra.Command, args []string) error {
-	// Get PID first for reporting
-	running, pid, err := daemon.IsRunning()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error checking daemon status: %v\n", err)
-		os.Exit(1)
-	}
-
-	if !running {
-		fmt.Println("Daemon is not running")
-		os.Exit(1)
-	}
-
-	fmt.Printf("Stopping daemon (pid %d)...\n", pid)
-
-	// Stop with 5 second timeout
-	if err := daemon.StopDaemon(5 * time.Second); err != nil {
-		if errors.Is(err, daemon.ErrDaemonNotRunning) {
-			// Race condition: daemon exited between check and stop
-			fmt.Println("Daemon stopped")
-			return nil
-		}
-		fmt.Fprintf(os.Stderr, "Error stopping daemon: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Println("Daemon stopped")
-	return nil
 }
