@@ -17,7 +17,6 @@ import (
 	"github.com/jzila/canopy/pkg/beads"
 	"github.com/jzila/canopy/pkg/ipc"
 	"github.com/jzila/canopy/pkg/orchestrator"
-	"github.com/jzila/canopy/pkg/persistence"
 	"github.com/jzila/canopy/pkg/repository"
 	sandboxpkg "github.com/jzila/canopy/pkg/sandbox"
 )
@@ -278,30 +277,15 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Save run to persistence and send IPC completion after orchestration finishes
+	// Send IPC completion after orchestration finishes
+	// Note: Run persistence is handled by the daemon via the IPC events
+	// (run_started creates the run, run_completed updates it with final stats)
 	defer func() {
-		// Skip saving for dry runs
-		if !dryRun {
-			// Save to persistence store
-			store, err := persistence.NewStore()
-			if err != nil {
-				if verbose {
-					fmt.Fprintf(os.Stderr, "warning: failed to create persistence store: %v\n", err)
-				}
-			} else {
-				defer store.Close()
-				runRecord := runStats.getRunRecord(repo)
-				if err := store.CreateRun(runRecord); err != nil {
-					if verbose {
-						fmt.Fprintf(os.Stderr, "warning: failed to save run: %v\n", err)
-					}
-				} else if verbose {
-					fmt.Fprintf(os.Stderr, "Run saved: %s\n", runID)
-				}
-			}
+		if dryRun {
+			return
 		}
 
-		// Send IPC completion
+		// Send IPC completion - daemon will persist the run stats
 		stats := runStats.getStats()
 		if err := ipcClient.SendRunCompleted(runID, stats); err != nil && verbose {
 			fmt.Fprintf(os.Stderr, "warning: failed to send run completed: %v\n", err)
@@ -492,54 +476,8 @@ func (r *runStatsCollector) getStats() *ipc.RunStats {
 		TotalCostUSD:                 r.costUSD,
 		TotalTurns:                   r.totalTurns,
 		FilesChanged:                 r.filesChanged,
+		GitCommits:                   r.gitCommits,
 		ConflictsResolved:            r.conflictsRes,
 	}
 }
 
-func (r *runStatsCollector) getRunRecord(repo *repository.Repository) *persistence.Run {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	endTime := time.Now()
-	duration := endTime.Sub(r.startTime).Seconds()
-
-	// Determine overall run status
-	var status persistence.RunStatus
-	if r.failed == 0 && r.succeeded > 0 {
-		status = persistence.RunStatusCompleted
-	} else if r.succeeded == 0 && r.failed > 0 {
-		status = persistence.RunStatusFailed
-	} else if r.succeeded > 0 && r.failed > 0 {
-		status = persistence.RunStatusPartial
-	} else {
-		status = persistence.RunStatusCompleted // No tasks ran
-	}
-
-	run := &persistence.Run{
-		ID:                   r.runID,
-		StartedAt:            r.startTime,
-		FinishedAt:           &endTime,
-		Status:               status,
-		TotalTasks:           r.totalTasks,
-		CompletedTasks:       r.succeeded,
-		FailedTasks:          r.failed,
-		DurationSeconds:      duration,
-		TotalInputTokens:     r.inputTokens,
-		TotalOutputTokens:    r.outputTokens,
-		CacheCreationTokens:  r.cacheCreationTokens,
-		CacheReadTokens:      r.cacheReadTokens,
-		TotalCostUSD:         r.costUSD,
-		TotalTurns:           r.totalTurns,
-		FilesChanged:         r.filesChanged,
-		GitCommits:           r.gitCommits,
-		RepoPath:             r.workDir,
-	}
-
-	// Add repo metadata if available
-	if repo != nil {
-		run.RepoID = repo.ID
-		run.RepoName = repo.Name
-	}
-
-	return run
-}

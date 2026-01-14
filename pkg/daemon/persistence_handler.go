@@ -217,30 +217,60 @@ func (h *PersistenceHandler) handleRunCompleted(event Event) {
 		return
 	}
 
-	totalTasks, _ := getIntFromPayload(payload, "total_tasks")
-	succeededTasks, _ := getIntFromPayload(payload, "succeeded_tasks")
-	failedTasks, _ := getIntFromPayload(payload, "failed_tasks")
+	// Extract stats from nested payload structure
+	// The IPC protocol sends stats as a nested object under "stats"
+	stats, _ := payload["stats"].(map[string]interface{})
+	if stats == nil {
+		// Fallback: stats might be at top level (backwards compatibility)
+		stats = payload
+	}
+
+	totalTasks, _ := getIntFromPayload(stats, "total_tasks")
+	succeededTasks, _ := getIntFromPayload(stats, "succeeded_tasks")
+	failedTasks, _ := getIntFromPayload(stats, "failed_tasks")
+
+	// Extract additional metrics from RunStats
+	totalDuration, _ := stats["total_duration_seconds"].(float64)
+	totalInputTokens, _ := getIntFromPayload(stats, "total_input_tokens")
+	totalOutputTokens, _ := getIntFromPayload(stats, "total_output_tokens")
+	cacheCreationTokens, _ := getIntFromPayload(stats, "total_cache_creation_input_tokens")
+	cacheReadTokens, _ := getIntFromPayload(stats, "total_cache_read_input_tokens")
+	totalCostUSD, _ := stats["total_cost_usd"].(float64)
+	totalTurns, _ := getIntFromPayload(stats, "total_turns")
+	filesChanged, _ := getIntFromPayload(stats, "files_changed")
+	gitCommits, _ := getIntFromPayload(stats, "git_commits")
 
 	// Determine overall status
 	status := persistence.RunStatusCompleted
-	if failedTasks > 0 {
+	if failedTasks > 0 && succeededTasks > 0 {
+		status = persistence.RunStatusPartial
+	} else if failedTasks > 0 {
 		status = persistence.RunStatusFailed
 	}
 
 	finishedAt := event.Timestamp
 	run := &persistence.Run{
-		ID:             runID,
-		FinishedAt:     &finishedAt,
-		Status:         status,
-		TotalTasks:     totalTasks,
-		CompletedTasks: succeededTasks,
-		FailedTasks:    failedTasks,
+		ID:                  runID,
+		FinishedAt:          &finishedAt,
+		Status:              status,
+		TotalTasks:          totalTasks,
+		CompletedTasks:      succeededTasks,
+		FailedTasks:         failedTasks,
+		DurationSeconds:     totalDuration,
+		TotalInputTokens:    totalInputTokens,
+		TotalOutputTokens:   totalOutputTokens,
+		CacheCreationTokens: cacheCreationTokens,
+		CacheReadTokens:     cacheReadTokens,
+		TotalCostUSD:        totalCostUSD,
+		TotalTurns:          totalTurns,
+		FilesChanged:        filesChanged,
+		GitCommits:          gitCommits,
 	}
 
 	if err := h.store.UpdateRun(run); err != nil {
 		log.Printf("PersistenceHandler: failed to update run %s: %v", runID, err)
 	} else {
-		log.Printf("PersistenceHandler: updated run %s (status=%s, succeeded=%d, failed=%d)", runID, status, succeededTasks, failedTasks)
+		log.Printf("PersistenceHandler: updated run %s (status=%s, succeeded=%d, failed=%d, cost=$%.4f)", runID, status, succeededTasks, failedTasks, totalCostUSD)
 	}
 
 	// Clear current run ID

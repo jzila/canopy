@@ -292,6 +292,7 @@ type RunStats struct {
 	TotalCostUSD                 float64 `json:"total_cost_usd"`
 	TotalTurns                   int     `json:"total_turns"`
 	FilesChanged                 int     `json:"files_changed"`
+	GitCommits                   int     `json:"git_commits"`
 	ConflictsResolved            int     `json:"conflicts_resolved"`
 }
 

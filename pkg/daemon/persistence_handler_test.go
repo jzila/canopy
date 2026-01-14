@@ -72,8 +72,8 @@ func TestPersistenceHandler_RunLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get run: %v", err)
 	}
-	if run.Status != persistence.RunStatusFailed {
-		t.Errorf("Expected status failed (due to failed tasks), got %s", run.Status)
+	if run.Status != persistence.RunStatusPartial {
+		t.Errorf("Expected status partial (some succeeded, some failed), got %s", run.Status)
 	}
 	if run.CompletedTasks != 4 {
 		t.Errorf("Expected 4 completed tasks, got %d", run.CompletedTasks)
