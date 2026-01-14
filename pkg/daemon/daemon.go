@@ -250,8 +250,11 @@ func (d *Daemon) Init() {
 // which enables proper beads client selection for task loading.
 func (d *Daemon) restoreStateFromDB() error {
 	if d.persistenceStore == nil {
+		log.Println("State restoration: persistence store is nil, skipping")
 		return nil
 	}
+
+	log.Println("State restoration: beginning database state restoration")
 
 	// First, mark any orphaned runs/agents as failed.
 	// These are runs/agents that were still "running" when the daemon crashed or was killed.
@@ -266,7 +269,7 @@ func (d *Daemon) restoreStateFromDB() error {
 		return fmt.Errorf("failed to get most recent run: %w", err)
 	}
 	if run != nil {
-		log.Printf("Most recent run: %s (status: %s, started %s)", run.ID, run.Status, run.StartedAt.Format("2006-01-02 15:04:05"))
+		log.Printf("State restoration: most recent run: %s (status: %s, started %s)", run.ID, run.Status, run.StartedAt.Format("2006-01-02 15:04:05"))
 
 		// Set the active repository based on the most recent run's repo context
 		// This allows loadTasksFromBeads to use the correct beads client
@@ -274,35 +277,40 @@ func (d *Daemon) restoreStateFromDB() error {
 			d.repoMu.Lock()
 			d.activeRepoID = run.RepoID
 			d.repoMu.Unlock()
-			log.Printf("  Set active repository to %s (%s)", run.RepoName, run.RepoID)
+			log.Printf("State restoration: set active repository to %s (%s)", run.RepoName, run.RepoID)
 		}
 
 		// Update RuntimeState start time to match the most recent run
 		d.state.StartTime = run.StartedAt
+	} else {
+		log.Println("State restoration: no previous runs found in database")
 	}
 
 	// Load ALL non-archived agents across all runs (not just the most recent run)
+	log.Println("State restoration: querying non-archived agents from database")
 	agents, err := d.persistenceStore.GetAllNonArchivedAgents()
 	if err != nil {
 		return fmt.Errorf("failed to get non-archived agents: %w", err)
 	}
 
 	if len(agents) == 0 {
-		log.Println("No agents found in database, starting fresh")
+		log.Println("State restoration: no agents found in database, starting fresh")
 		return nil
 	}
+
+	log.Printf("State restoration: found %d non-archived agents to restore", len(agents))
 
 	// Convert persistence.Agent to daemon.AgentState and add to RuntimeState
 	for _, pAgent := range agents {
 		agentState := d.convertPersistenceAgentToState(&pAgent)
 		d.state.AddAgent(agentState)
-		log.Printf("  Restored agent %s (%s): %s", pAgent.ID, pAgent.TaskID, pAgent.Status)
+		log.Printf("State restoration: restored agent %s (task=%s, status=%s, run=%s)", pAgent.ID, pAgent.TaskID, pAgent.Status, pAgent.RunID)
 	}
 
 	// Update stats after restoring all agents
 	d.state.UpdateStats()
 
-	log.Printf("Restored %d non-archived agents from all runs (historical data)", len(agents))
+	log.Printf("State restoration: successfully restored %d agents from database", len(agents))
 	return nil
 }
 

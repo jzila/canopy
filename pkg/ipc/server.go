@@ -122,24 +122,52 @@ func (s *Server) handleConnection(conn net.Conn) {
 		conn.Close()
 	}()
 
-	// Create buffered reader for efficient line reading
-	reader := bufio.NewReader(conn)
+	// Create limited reader to enforce message size limits
+	// bufio.Scanner handles line reading more safely than ReadBytes for size limits
+	scanner := bufio.NewScanner(conn)
+	scanner.Buffer(make([]byte, 64*1024), MaxMessageSize) // Start with 64KB, max 1MB
 
-	for {
-		// Read line-delimited JSON
-		line, err := reader.ReadBytes('\n')
-		if err != nil {
-			if err != io.EOF {
-				// TODO: Consider logging parse errors
-			}
-			return
+	for scanner.Scan() {
+		line := scanner.Bytes()
+
+		// Enforce message size limit
+		if len(line) > MaxMessageSize {
+			log.Printf("IPC: message size %d exceeds maximum %d, dropping", len(line), MaxMessageSize)
+			continue
 		}
 
-		// Parse message
-		var msg Message
-		if err := json.Unmarshal(line, &msg); err != nil {
+		// Parse as RawMessage first to check version and payload size
+		var rawMsg RawMessage
+		if err := json.Unmarshal(line, &rawMsg); err != nil {
 			log.Printf("IPC: failed to parse message: %v", err)
 			continue
+		}
+
+		// Enforce payload size limit
+		if len(rawMsg.Payload) > MaxPayloadSize {
+			log.Printf("IPC: payload size %d exceeds maximum %d, dropping", len(rawMsg.Payload), MaxPayloadSize)
+			continue
+		}
+
+		// Log protocol version for debugging (only for non-v1 messages)
+		version := rawMsg.ProtocolVersion()
+		if version > ProtocolVersion1 {
+			log.Printf("IPC: received v%d message type=%s", version, rawMsg.Type)
+		}
+
+		// Convert RawMessage to Message for processing
+		msg := Message{
+			Version:   rawMsg.Version,
+			Type:      rawMsg.Type,
+			Timestamp: rawMsg.Timestamp,
+		}
+
+		// Unmarshal payload into interface{} for convertToEvent
+		if len(rawMsg.Payload) > 0 {
+			if err := json.Unmarshal(rawMsg.Payload, &msg.Payload); err != nil {
+				log.Printf("IPC: failed to parse payload: %v", err)
+				continue
+			}
 		}
 
 		// Extract identifier for logging
@@ -159,6 +187,12 @@ func (s *Server) handleConnection(conn net.Conn) {
 			s.eventBus.Publish(*event)
 		} else {
 			log.Printf("IPC: warning - failed to convert message type=%s%s to event", msg.Type, identifier)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		if err != io.EOF {
+			log.Printf("IPC: connection error: %v", err)
 		}
 	}
 }

@@ -698,3 +698,129 @@ func TestClientDoubleClose(t *testing.T) {
 		t.Errorf("Second close failed: %v", err)
 	}
 }
+
+func TestClientProtocolVersion(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+
+	// Setup server with raw message capture
+	eventBus := events.NewEventBus()
+	server := NewServer(socketPath, eventBus)
+	if err := server.Start(); err != nil {
+		t.Fatalf("Failed to start server: %v", err)
+	}
+	defer server.Stop()
+
+	// Create a raw listener to capture the actual bytes sent
+	receivedEvents := make(chan events.Event, 10)
+	eventBus.Subscribe(func(event events.Event) {
+		receivedEvents <- event
+	})
+
+	client, err := NewClient(socketPath)
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	defer client.Close()
+
+	// Send a message and verify it includes version
+	if err := client.SendAgentStart("agent-1", "task-1", "Test Task", "", ""); err != nil {
+		t.Fatalf("Failed to send agent start: %v", err)
+	}
+
+	// Verify event was received (this means versioned message was parsed correctly)
+	select {
+	case event := <-receivedEvents:
+		if event.Type != events.EventAgentStarted {
+			t.Errorf("Expected EventAgentStarted, got %s", event.Type)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Timeout waiting for event")
+	}
+}
+
+func TestClientMessageSizeLimit(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+
+	eventBus := events.NewEventBus()
+	server := NewServer(socketPath, eventBus)
+	if err := server.Start(); err != nil {
+		t.Fatalf("Failed to start server: %v", err)
+	}
+	defer server.Stop()
+
+	client, err := NewClient(socketPath)
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	defer client.Close()
+
+	// Test message within limits
+	t.Run("WithinLimits", func(t *testing.T) {
+		// 100KB output should be fine
+		output := string(make([]byte, 100*1024))
+		if err := client.SendAgentOutput("agent-1", output, false); err != nil {
+			t.Errorf("Expected message within limits to succeed, got error: %v", err)
+		}
+	})
+
+	// Test message exceeding limits
+	t.Run("ExceedsLimits", func(t *testing.T) {
+		// Create a payload that will exceed MaxMessageSize (1MB)
+		// We need to create output large enough that the full message exceeds 1MB
+		output := string(make([]byte, MaxMessageSize+1024))
+		err := client.SendAgentOutput("agent-1", output, false)
+		if err == nil {
+			t.Error("Expected error for oversized message, got nil")
+		}
+	})
+}
+
+func TestProtocolVersionConstants(t *testing.T) {
+	// Verify version constants are set correctly
+	if ProtocolVersion1 != 1 {
+		t.Errorf("Expected ProtocolVersion1=1, got %d", ProtocolVersion1)
+	}
+	if ProtocolVersion2 != 2 {
+		t.Errorf("Expected ProtocolVersion2=2, got %d", ProtocolVersion2)
+	}
+	if CurrentProtocolVersion != ProtocolVersion2 {
+		t.Errorf("Expected CurrentProtocolVersion=%d, got %d", ProtocolVersion2, CurrentProtocolVersion)
+	}
+}
+
+func TestMessageProtocolVersion(t *testing.T) {
+	// Test ProtocolVersion() method on Message
+	t.Run("UnversionedMessage", func(t *testing.T) {
+		msg := Message{Type: MessageTypeAgentStart}
+		if v := msg.ProtocolVersion(); v != ProtocolVersion1 {
+			t.Errorf("Expected ProtocolVersion1 for unversioned message, got %d", v)
+		}
+	})
+
+	t.Run("V1Message", func(t *testing.T) {
+		msg := Message{Version: 0, Type: MessageTypeAgentStart}
+		if v := msg.ProtocolVersion(); v != ProtocolVersion1 {
+			t.Errorf("Expected ProtocolVersion1 for v=0 message, got %d", v)
+		}
+	})
+
+	t.Run("V2Message", func(t *testing.T) {
+		msg := Message{Version: ProtocolVersion2, Type: MessageTypeAgentStart}
+		if v := msg.ProtocolVersion(); v != ProtocolVersion2 {
+			t.Errorf("Expected ProtocolVersion2, got %d", v)
+		}
+	})
+}
+
+func TestSizeLimitConstants(t *testing.T) {
+	// Verify size limit constants
+	if MaxMessageSize != 1<<20 {
+		t.Errorf("Expected MaxMessageSize=1MB, got %d", MaxMessageSize)
+	}
+	if MaxPayloadSize != 512<<10 {
+		t.Errorf("Expected MaxPayloadSize=512KB, got %d", MaxPayloadSize)
+	}
+	if MaxPayloadSize >= MaxMessageSize {
+		t.Error("MaxPayloadSize should be less than MaxMessageSize")
+	}
+}

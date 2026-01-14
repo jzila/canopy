@@ -58,7 +58,8 @@ func (c *Client) Connect() error {
 }
 
 // sendMessage sends a message with the given type and payload
-// Automatically adds timestamp and encodes as newline-delimited JSON
+// Automatically adds version, timestamp and encodes as newline-delimited JSON
+// Enforces message size limits to prevent oversized messages
 func (c *Client) sendMessage(msgType MessageType, payload interface{}) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -68,12 +69,25 @@ func (c *Client) sendMessage(msgType MessageType, payload interface{}) error {
 	}
 
 	msg := Message{
+		Version:   CurrentProtocolVersion,
 		Type:      msgType,
 		Timestamp: time.Now(),
 		Payload:   payload,
 	}
 
-	if err := c.encoder.Encode(msg); err != nil {
+	// Pre-encode to check size limits before sending
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("failed to encode message: %w", err)
+	}
+
+	if len(data) > MaxMessageSize {
+		return fmt.Errorf("message size %d exceeds maximum %d", len(data), MaxMessageSize)
+	}
+
+	// Write with newline delimiter
+	data = append(data, '\n')
+	if _, err := c.conn.Write(data); err != nil {
 		return fmt.Errorf("failed to send message: %w", err)
 	}
 

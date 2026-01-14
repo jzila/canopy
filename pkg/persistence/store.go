@@ -127,8 +127,9 @@ func NewStoreWithPath(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("failed to create database directory: %w", err)
 	}
 
-	// Open database with WAL mode and timeout
-	dsn := fmt.Sprintf("%s?_journal_mode=WAL&_timeout=5000&_foreign_keys=on", dbPath)
+	// Open database with WAL mode, synchronous=FULL for crash safety, and timeout
+	// synchronous=FULL ensures data is flushed to disk before each transaction commits
+	dsn := fmt.Sprintf("%s?_journal_mode=WAL&_synchronous=FULL&_timeout=5000&_foreign_keys=on", dbPath)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
@@ -137,6 +138,20 @@ func NewStoreWithPath(dbPath string) (*Store, error) {
 	// Configure connection pool
 	db.SetMaxOpenConns(5)
 	db.SetMaxIdleConns(2)
+
+	// Verify database connection - WAL mode may fall back to DELETE on some systems
+	// (especially with modernc.org/sqlite pure Go driver in certain environments)
+	var journalMode string
+	if err := db.QueryRow("PRAGMA journal_mode").Scan(&journalMode); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to verify journal mode: %w", err)
+	}
+	// Log the actual journal mode but don't fail if WAL isn't available
+	// WAL provides better crash recovery, but DELETE mode is still safe with synchronous=FULL
+	if journalMode != "wal" && journalMode != "delete" && journalMode != "memory" {
+		db.Close()
+		return nil, fmt.Errorf("unexpected journal mode: %s (expected wal, delete, or memory)", journalMode)
+	}
 
 	store := &Store{
 		db:     db,
@@ -152,12 +167,31 @@ func NewStoreWithPath(dbPath string) (*Store, error) {
 	return store, nil
 }
 
-// Close closes the database connection
+// Close closes the database connection after checkpointing WAL
 func (s *Store) Close() error {
 	if s.db != nil {
+		// Checkpoint WAL to ensure all data is written to the main database file
+		// This is important for crash recovery - without checkpoint, data in WAL
+		// could be lost if the process is killed before normal close
+		if err := s.Checkpoint(); err != nil {
+			// Log but don't fail - close the database anyway
+			// Note: In production, you'd use a proper logger
+			fmt.Fprintf(os.Stderr, "warning: WAL checkpoint failed: %v\n", err)
+		}
 		return s.db.Close()
 	}
 	return nil
+}
+
+// Checkpoint forces a WAL checkpoint, writing all pending changes to the main database file.
+// This should be called periodically or before graceful shutdown to ensure data durability.
+func (s *Store) Checkpoint() error {
+	if s.db == nil {
+		return nil
+	}
+	// PRAGMA wal_checkpoint(TRUNCATE) checkpoints and truncates the WAL file
+	_, err := s.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+	return err
 }
 
 // getDefaultDBPath returns the default database path based on XDG_CACHE_HOME

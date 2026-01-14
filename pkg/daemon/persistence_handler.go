@@ -87,6 +87,8 @@ func (h *PersistenceHandler) handleRunStarted(event Event) {
 
 	if err := h.store.CreateRun(run); err != nil {
 		log.Printf("PersistenceHandler: failed to create run %s: %v", runID, err)
+	} else {
+		log.Printf("PersistenceHandler: persisted run %s (tasks=%d)", runID, taskCount)
 	}
 }
 
@@ -125,6 +127,8 @@ func (h *PersistenceHandler) handleAgentStarted(event Event) {
 
 	if err := h.store.CreateAgent(agent); err != nil {
 		log.Printf("PersistenceHandler: failed to create agent %s: %v", agentID, err)
+	} else {
+		log.Printf("PersistenceHandler: persisted agent %s (task=%s, run=%s)", agentID, taskID, runID)
 	}
 }
 
@@ -186,6 +190,8 @@ func (h *PersistenceHandler) handleAgentCompleted(event Event) {
 
 	if err := h.store.UpdateAgent(agent); err != nil {
 		log.Printf("PersistenceHandler: failed to update agent %s: %v", agentID, err)
+	} else {
+		log.Printf("PersistenceHandler: updated agent %s (status=%s)", agentID, status)
 	}
 }
 
@@ -225,6 +231,8 @@ func (h *PersistenceHandler) handleRunCompleted(event Event) {
 
 	if err := h.store.UpdateRun(run); err != nil {
 		log.Printf("PersistenceHandler: failed to update run %s: %v", runID, err)
+	} else {
+		log.Printf("PersistenceHandler: updated run %s (status=%s, succeeded=%d, failed=%d)", runID, status, succeededTasks, failedTasks)
 	}
 
 	// Clear current run ID
