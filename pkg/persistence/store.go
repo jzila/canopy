@@ -157,9 +157,13 @@ func NewStoreWithPath(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	// Configure connection pool
-	db.SetMaxOpenConns(5)
-	db.SetMaxIdleConns(2)
+	// Configure connection pool for SQLite
+	// SQLite performs best with a single writer connection. With WAL mode,
+	// multiple readers are supported but writes are still serialized.
+	// Using 1 connection avoids SQLITE_BUSY errors and connection contention.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0) // Connections don't expire
 
 	store := &Store{
 		db:     db,
@@ -175,18 +179,29 @@ func NewStoreWithPath(dbPath string) (*Store, error) {
 	return store, nil
 }
 
-// Close closes the database connection
+// Close closes the database connection, performing a final checkpoint first
 func (s *Store) Close() error {
 	if s.db != nil {
+		// Run a TRUNCATE checkpoint to merge WAL into main database file
+		// This ensures clean shutdown with no WAL files left behind
+		_, _ = s.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
 		return s.db.Close()
 	}
 	return nil
 }
 
-// DB returns the underlying database connection for direct access.
-// This is primarily used for migration operations that need raw SQL access.
-func (s *Store) DB() *sql.DB {
-	return s.db
+// Checkpoint runs a WAL checkpoint to merge the write-ahead log into the main database.
+// This should be called periodically to prevent unbounded WAL growth.
+// mode can be: PASSIVE (non-blocking), FULL (waits for readers), TRUNCATE (resets WAL)
+func (s *Store) Checkpoint(mode string) error {
+	if mode == "" {
+		mode = "PASSIVE"
+	}
+	_, err := s.db.Exec(fmt.Sprintf("PRAGMA wal_checkpoint(%s)", mode))
+	if err != nil {
+		return fmt.Errorf("checkpoint failed: %w", err)
+	}
+	return nil
 }
 
 // getDefaultDBPath returns the default database path based on XDG_CACHE_HOME
@@ -797,6 +812,42 @@ func (s *Store) GetStatsByRepo(repoID string, since *time.Time) (*AggregateStats
 // RepoIDLookupFunc is a callback function used by MigrateOrphanedRepoIDs to look up
 // repository IDs from paths. Returns (repoID, found).
 type RepoIDLookupFunc func(path string) (string, bool)
+
+// DeleteRun deletes a run and all its associated agents by run ID.
+// Returns an error if the run does not exist.
+func (s *Store) DeleteRun(runID string) error {
+	// First check if the run exists
+	run, err := s.GetRun(runID)
+	if err != nil {
+		return err
+	}
+	if run == nil {
+		return fmt.Errorf("run not found: %s", runID)
+	}
+
+	// Delete in a transaction for atomicity
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Delete associated agents first
+	if _, err := tx.Exec("DELETE FROM agents WHERE run_id = ?", runID); err != nil {
+		return fmt.Errorf("failed to delete agents: %w", err)
+	}
+
+	// Delete the run
+	if _, err := tx.Exec("DELETE FROM runs WHERE id = ?", runID); err != nil {
+		return fmt.Errorf("failed to delete run: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
 
 // MigrateOrphanedRepoIDs attempts to populate repo_id for runs that have NULL repo_id.
 // It uses the provided lookup function to find repository IDs from paths.

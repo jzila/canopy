@@ -1539,6 +1539,79 @@ func TestMigrateOrphanedRepoIDsTransaction(t *testing.T) {
 	}
 }
 
+func TestCheckpoint(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	// Create some data to ensure WAL has something to checkpoint
+	now := time.Now()
+	run := &Run{
+		ID:        "checkpoint-test",
+		StartedAt: now,
+		Status:    RunStatusCompleted,
+	}
+	if err := store.CreateRun(run); err != nil {
+		t.Fatalf("failed to create run: %v", err)
+	}
+
+	// Test PASSIVE checkpoint (default)
+	if err := store.Checkpoint(""); err != nil {
+		t.Errorf("PASSIVE checkpoint failed: %v", err)
+	}
+
+	// Test explicit PASSIVE checkpoint
+	if err := store.Checkpoint("PASSIVE"); err != nil {
+		t.Errorf("explicit PASSIVE checkpoint failed: %v", err)
+	}
+
+	// Test FULL checkpoint
+	if err := store.Checkpoint("FULL"); err != nil {
+		t.Errorf("FULL checkpoint failed: %v", err)
+	}
+
+	// Test TRUNCATE checkpoint
+	if err := store.Checkpoint("TRUNCATE"); err != nil {
+		t.Errorf("TRUNCATE checkpoint failed: %v", err)
+	}
+
+	// Verify data is still accessible after checkpoints
+	retrieved, err := store.GetRun("checkpoint-test")
+	if err != nil {
+		t.Fatalf("failed to get run after checkpoints: %v", err)
+	}
+	if retrieved == nil {
+		t.Error("run not found after checkpoints")
+	}
+}
+
+func TestConnectionPoolSettings(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	// With single connection, concurrent writes should still work
+	// (they'll just be serialized)
+	now := time.Now()
+	for i := 0; i < 10; i++ {
+		run := &Run{
+			ID:        fmt.Sprintf("pool-test-%d", i),
+			StartedAt: now,
+			Status:    RunStatusCompleted,
+		}
+		if err := store.CreateRun(run); err != nil {
+			t.Fatalf("failed to create run %d: %v", i, err)
+		}
+	}
+
+	// Verify all runs were created
+	result, err := store.ListRuns(RunFilter{})
+	if err != nil {
+		t.Fatalf("failed to list runs: %v", err)
+	}
+	if len(result.Runs) != 10 {
+		t.Errorf("expected 10 runs, got %d", len(result.Runs))
+	}
+}
+
 // Helper function to create a test store
 func createTestStore(t *testing.T) *Store {
 	tmpDir, err := os.MkdirTemp("", "canopy-test-*")
