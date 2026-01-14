@@ -55,8 +55,9 @@ canopy version
 Canopy uses [beads](https://github.com/jzila/beads) for task management:
 
 ```bash
-# Initialize beads in your project
-bd init
+# Initialize beads with a separate sync branch
+# IMPORTANT: Must use --branch to avoid overlay conflicts
+bd init --branch beads-sync
 
 # Create some tasks
 bd create --title "Implement user authentication" --type feature --priority 1

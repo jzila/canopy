@@ -82,8 +82,10 @@ Let's walk through a complete example of using Canopy.
 mkdir myproject && cd myproject
 git init
 
-# Initialize beads
-bd init
+# Initialize beads with a separate sync branch
+# IMPORTANT: beads MUST use a separate branch, not main
+# Overlays will corrupt beads state if it's on the main branch
+bd init --branch beads-sync
 
 # Create a simple file
 echo "# My Project" > README.md
