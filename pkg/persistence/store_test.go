@@ -1350,6 +1350,86 @@ func TestCreateAgentWithRepoID(t *testing.T) {
 	}
 }
 
+func TestDeleteRun(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	now := time.Now()
+
+	// Create a run
+	run := &Run{
+		ID:        "run-to-delete",
+		StartedAt: now,
+		Status:    RunStatusCompleted,
+	}
+	if err := store.CreateRun(run); err != nil {
+		t.Fatalf("failed to create run: %v", err)
+	}
+
+	// Create agents for the run
+	agents := []*Agent{
+		{ID: "agent-1", RunID: "run-to-delete", TaskID: "task-1", TaskTitle: "Task 1", Status: AgentStatusCompleted, StartedAt: now},
+		{ID: "agent-2", RunID: "run-to-delete", TaskID: "task-2", TaskTitle: "Task 2", Status: AgentStatusCompleted, StartedAt: now},
+	}
+
+	for _, agent := range agents {
+		if err := store.CreateAgent(agent); err != nil {
+			t.Fatalf("failed to create agent: %v", err)
+		}
+	}
+
+	// Verify run and agents exist
+	retrieved, err := store.GetRun("run-to-delete")
+	if err != nil {
+		t.Fatalf("failed to get run: %v", err)
+	}
+	if retrieved == nil {
+		t.Fatal("run should exist before deletion")
+	}
+
+	retrievedAgents, err := store.GetAgentsByRun("run-to-delete")
+	if err != nil {
+		t.Fatalf("failed to get agents: %v", err)
+	}
+	if len(retrievedAgents) != 2 {
+		t.Errorf("expected 2 agents before deletion, got %d", len(retrievedAgents))
+	}
+
+	// Delete the run
+	if err := store.DeleteRun("run-to-delete"); err != nil {
+		t.Fatalf("failed to delete run: %v", err)
+	}
+
+	// Verify run is deleted
+	retrieved, err = store.GetRun("run-to-delete")
+	if err != nil {
+		t.Fatalf("failed to get run: %v", err)
+	}
+	if retrieved != nil {
+		t.Error("run should not exist after deletion")
+	}
+
+	// Verify agents are deleted
+	retrievedAgents, err = store.GetAgentsByRun("run-to-delete")
+	if err != nil {
+		t.Fatalf("failed to get agents: %v", err)
+	}
+	if len(retrievedAgents) != 0 {
+		t.Errorf("expected 0 agents after deletion, got %d", len(retrievedAgents))
+	}
+}
+
+func TestDeleteRun_NotFound(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	// Try to delete non-existent run
+	err := store.DeleteRun("nonexistent")
+	if err == nil {
+		t.Error("expected error when deleting non-existent run")
+	}
+}
+
 func TestMigrationV2(t *testing.T) {
 	// Create a store, which runs migrations including v2
 	store := createTestStore(t)

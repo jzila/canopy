@@ -694,6 +694,39 @@ func (s *Store) GetStats(since *time.Time) (*AggregateStats, error) {
 	return &stats, nil
 }
 
+// DeleteRun deletes a run and all its associated agents by ID
+func (s *Store) DeleteRun(runID string) error {
+	// Begin transaction to ensure atomicity
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Delete agents first (due to foreign key constraint)
+	_, err = tx.Exec("DELETE FROM agents WHERE run_id = ?", runID)
+	if err != nil {
+		return fmt.Errorf("failed to delete agents for run: %w", err)
+	}
+
+	// Delete the run
+	result, err := tx.Exec("DELETE FROM runs WHERE id = ?", runID)
+	if err != nil {
+		return fmt.Errorf("failed to delete run: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("run not found: %s", runID)
+	}
+
+	return tx.Commit()
+}
+
 // GetRunsByRepo retrieves all runs for a specific repository
 func (s *Store) GetRunsByRepo(repoID string) ([]Run, error) {
 	query := `SELECT ` + runColumns + ` FROM runs WHERE repo_id = ? ORDER BY started_at DESC`
