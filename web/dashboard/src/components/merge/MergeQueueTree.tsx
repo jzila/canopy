@@ -19,9 +19,18 @@ const DEFAULT_LAYOUT: TreeLayout = {
   padding: 40,
 };
 
-// Truncate ID for display
-const truncateId = (id: string, length: number = 7): string => {
-  return id.length > length ? id.slice(0, length) : id;
+// Extract short bead ID from task ID (e.g., 'abc1' from 'canopy-abc1')
+const extractShortId = (taskId: string): string => {
+  // Handle 'canopy-xxx' format
+  if (taskId.startsWith('canopy-')) {
+    return taskId.slice(7); // Remove 'canopy-' prefix
+  }
+  // Handle 'beads-xxx' format
+  if (taskId.startsWith('beads-')) {
+    return taskId.slice(6); // Remove 'beads-' prefix
+  }
+  // Fallback: return last 4 characters if ID is long
+  return taskId.length > 8 ? taskId.slice(-4) : taskId;
 };
 
 // Node component for rendering individual nodes
@@ -139,7 +148,7 @@ const TreeNodeComponent: React.FC<NodeProps> = ({
         </text>
       )}
 
-      {/* Label below node */}
+      {/* Label below node - shows short bead ID */}
       <text
         x={x}
         y={y + nodeRadius + 16}
@@ -148,7 +157,7 @@ const TreeNodeComponent: React.FC<NodeProps> = ({
         fill="#9ca3af"
         className="font-mono"
       >
-        {truncateId(node.taskId)}
+        {extractShortId(node.taskId)}
       </text>
 
       {/* Hover tooltip */}
