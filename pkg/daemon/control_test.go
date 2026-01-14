@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 )
 
 func TestGetCacheDir(t *testing.T) {
@@ -296,5 +297,39 @@ func TestWritePidFileCreatesDirectory(t *testing.T) {
 	// Now it should exist
 	if _, err := os.Stat(cacheDir); os.IsNotExist(err) {
 		t.Error("cache dir should exist after WritePidFile")
+	}
+}
+
+func TestStopDaemonNotRunning(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+
+	// No daemon running - should return ErrDaemonNotRunning
+	err := StopDaemon(1 * time.Second)
+	if err != ErrDaemonNotRunning {
+		t.Errorf("expected ErrDaemonNotRunning, got %v", err)
+	}
+}
+
+func TestStopDaemonStaleProcess(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", tmpDir)
+
+	// Create pidfile with non-existent process
+	cacheDir := filepath.Join(tmpDir, "canopy")
+	os.MkdirAll(cacheDir, 0755)
+	pidPath := filepath.Join(cacheDir, "daemon.pid")
+	os.WriteFile(pidPath, []byte("999999999\n"), 0644)
+
+	// StopDaemon should handle the stale pidfile gracefully
+	// IsRunning will clean up the stale file, so StopDaemon returns ErrDaemonNotRunning
+	err := StopDaemon(1 * time.Second)
+	if err != ErrDaemonNotRunning {
+		t.Errorf("expected ErrDaemonNotRunning for stale pidfile, got %v", err)
+	}
+
+	// Pidfile should be cleaned up by IsRunning
+	if _, err := os.Stat(pidPath); !os.IsNotExist(err) {
+		t.Error("stale pidfile should be cleaned up")
 	}
 }

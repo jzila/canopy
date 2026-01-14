@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 const (
@@ -166,4 +167,48 @@ func CleanStalePidFile() (bool, error) {
 	}
 
 	return false, nil
+}
+
+// StopDaemon sends SIGTERM to the running daemon and waits for it to exit.
+// Returns ErrDaemonNotRunning if no daemon is running.
+// The timeout specifies how long to wait for graceful shutdown before returning.
+func StopDaemon(timeout time.Duration) error {
+	running, pid, err := IsRunning()
+	if err != nil {
+		return fmt.Errorf("failed to check daemon status: %w", err)
+	}
+	if !running {
+		return ErrDaemonNotRunning
+	}
+
+	// Find the process
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return fmt.Errorf("failed to find process %d: %w", pid, err)
+	}
+
+	// Send SIGTERM for graceful shutdown
+	if err := process.Signal(syscall.SIGTERM); err != nil {
+		// Process might have already exited
+		if !processExists(pid) {
+			// Clean up stale pidfile
+			_ = RemovePidFile()
+			return nil
+		}
+		return fmt.Errorf("failed to send SIGTERM to process %d: %w", pid, err)
+	}
+
+	// Wait for process to exit with timeout
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if !processExists(pid) {
+			// Process has exited, clean up pidfile if still present
+			_ = RemovePidFile()
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Process didn't exit within timeout
+	return fmt.Errorf("daemon (pid %d) did not exit within %v", pid, timeout)
 }
