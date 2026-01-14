@@ -380,3 +380,164 @@ func runGit(t *testing.T, dir string, args ...string) {
 		t.Fatalf("git %v failed: %v\n%s", args, err, output)
 	}
 }
+
+func TestBuildMergeCommitMessage(t *testing.T) {
+	tests := []struct {
+		name     string
+		result   *agent.Result
+		expected string
+	}{
+		{
+			name: "single commit message - uses original with bead ID",
+			result: &agent.Result{
+				TaskID: "canopy-abc1",
+				GitState: &sandbox.GitState{
+					CommitMessages: []string{"feat(dashboard): add dark mode toggle"},
+				},
+			},
+			expected: "feat(dashboard): add dark mode toggle (canopy-abc1)",
+		},
+		{
+			name: "single commit message already has bead ID - no duplicate",
+			result: &agent.Result{
+				TaskID: "canopy-xyz9",
+				GitState: &sandbox.GitState{
+					CommitMessages: []string{"fix(api): handle timeout errors (canopy-xyz9)"},
+				},
+			},
+			expected: "fix(api): handle timeout errors (canopy-xyz9)",
+		},
+		{
+			name: "multiple commits - first in title, all in body",
+			result: &agent.Result{
+				TaskID: "canopy-mult",
+				GitState: &sandbox.GitState{
+					CommitMessages: []string{
+						"feat(core): implement new feature",
+						"test(core): add unit tests",
+					},
+				},
+			},
+			expected: "feat(core): implement new feature (canopy-mult)\n\n[1] feat(core): implement new feature\n[2] test(core): add unit tests\n",
+		},
+		{
+			name: "no commits from agent - uses generic message",
+			result: &agent.Result{
+				TaskID:   "canopy-none",
+				GitState: nil,
+			},
+			expected: "canopy: apply changes from canopy-none",
+		},
+		{
+			name: "empty commit messages - uses generic message",
+			result: &agent.Result{
+				TaskID: "canopy-empt",
+				GitState: &sandbox.GitState{
+					CommitMessages: []string{},
+				},
+			},
+			expected: "canopy: apply changes from canopy-empt",
+		},
+		{
+			name: "multi-line commit message - bead ID on first line",
+			result: &agent.Result{
+				TaskID: "canopy-body",
+				GitState: &sandbox.GitState{
+					CommitMessages: []string{"fix(auth): resolve session bug\n\nThis fixes the issue where sessions would expire prematurely."},
+				},
+			},
+			expected: "fix(auth): resolve session bug (canopy-body)\n\nThis fixes the issue where sessions would expire prematurely.",
+		},
+		{
+			name: "bead ID in commit body but not title - adds to title",
+			result: &agent.Result{
+				TaskID: "canopy-ref",
+				GitState: &sandbox.GitState{
+					CommitMessages: []string{"refactor: clean up code"},
+				},
+			},
+			expected: "refactor: clean up code (canopy-ref)",
+		},
+	}
+
+	tempDir := t.TempDir()
+	merger := NewSequentialMerger(tempDir, tempDir, false)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := merger.buildMergeCommitMessage(tt.result)
+			if got != tt.expected {
+				t.Errorf("buildMergeCommitMessage() = %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestAppendBeadID(t *testing.T) {
+	tests := []struct {
+		name     string
+		msg      string
+		beadID   string
+		expected string
+	}{
+		{
+			name:     "simple message",
+			msg:      "feat: add feature",
+			beadID:   "canopy-1234",
+			expected: "feat: add feature (canopy-1234)",
+		},
+		{
+			name:     "already has bead ID in parens",
+			msg:      "feat: add feature (canopy-1234)",
+			beadID:   "canopy-1234",
+			expected: "feat: add feature (canopy-1234)",
+		},
+		{
+			name:     "already contains bead ID without parens",
+			msg:      "feat: add feature canopy-1234",
+			beadID:   "canopy-1234",
+			expected: "feat: add feature canopy-1234",
+		},
+		{
+			name:     "multi-line message",
+			msg:      "fix: bug fix\n\nDetailed description here.",
+			beadID:   "canopy-abcd",
+			expected: "fix: bug fix (canopy-abcd)\n\nDetailed description here.",
+		},
+		{
+			name:     "message with trailing whitespace",
+			msg:      "chore: cleanup  ",
+			beadID:   "canopy-trim",
+			expected: "chore: cleanup (canopy-trim)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := appendBeadID(tt.msg, tt.beadID)
+			if got != tt.expected {
+				t.Errorf("appendBeadID(%q, %q) = %q, want %q", tt.msg, tt.beadID, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestGetFirstLine(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"single line", "single line"},
+		{"first\nsecond", "first"},
+		{"first\nsecond\nthird", "first"},
+		{"", ""},
+		{"\nsecond", ""},
+	}
+
+	for _, tt := range tests {
+		got := getFirstLine(tt.input)
+		if got != tt.expected {
+			t.Errorf("getFirstLine(%q) = %q, want %q", tt.input, got, tt.expected)
+		}
+	}
+}

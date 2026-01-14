@@ -439,23 +439,65 @@ func (m *SequentialMerger) resetToHead(headCommit string, paths []string) error 
 	return nil
 }
 
-// buildMergeCommitMessage creates a descriptive commit message for merged changes.
-// If the agent made commits, their messages are included in the body for context.
+// buildMergeCommitMessage creates a commit message for merged changes.
+// Uses the agent's original commit message(s) with bead ID appended.
+// Format: "<original message> (<bead-id>)" or combined messages if multiple commits.
 func (m *SequentialMerger) buildMergeCommitMessage(result *agent.Result) string {
-	// Title: always indicate this is a canopy merge commit
-	title := fmt.Sprintf("canopy: apply changes from %s", result.TaskID)
+	beadID := result.TaskID
 
-	// Body: include original commit messages if any
-	var body string
+	// If agent made commits, use their message(s) as the primary content
 	if result.GitState != nil && len(result.GitState.CommitMessages) > 0 {
-		body = "\nOriginal commits:\n"
-		for i, msg := range result.GitState.CommitMessages {
-			// Add indentation to distinguish from merge commit message
-			body += fmt.Sprintf("  [%d] %s\n", i+1, strings.TrimSpace(msg))
+		if len(result.GitState.CommitMessages) == 1 {
+			// Single commit: use its message directly with bead ID
+			msg := strings.TrimSpace(result.GitState.CommitMessages[0])
+			return appendBeadID(msg, beadID)
 		}
+
+		// Multiple commits: combine with primary (first) in title, rest in body
+		firstMsg := strings.TrimSpace(result.GitState.CommitMessages[0])
+		title := appendBeadID(getFirstLine(firstMsg), beadID)
+
+		var body strings.Builder
+		body.WriteString("\n\n")
+		// Include all commit messages for context
+		for i, msg := range result.GitState.CommitMessages {
+			body.WriteString(fmt.Sprintf("[%d] %s\n", i+1, strings.TrimSpace(msg)))
+		}
+
+		return title + body.String()
 	}
 
-	return title + body
+	// No commits from agent - use generic message (should be rare)
+	return fmt.Sprintf("canopy: apply changes from %s", beadID)
+}
+
+// appendBeadID appends the bead ID to a commit message if not already present.
+// Handles both single-line and multi-line messages.
+func appendBeadID(msg string, beadID string) string {
+	// Check if bead ID is already present anywhere in the message
+	if strings.Contains(msg, "("+beadID+")") || strings.Contains(msg, beadID) {
+		return msg
+	}
+
+	// For multi-line messages, append to first line only
+	lines := strings.SplitN(msg, "\n", 2)
+	firstLine := strings.TrimSpace(lines[0])
+
+	// Append bead ID to first line
+	firstLine = firstLine + " (" + beadID + ")"
+
+	if len(lines) > 1 {
+		return firstLine + "\n" + lines[1]
+	}
+	return firstLine
+}
+
+// getFirstLine returns the first line of a potentially multi-line string
+func getFirstLine(s string) string {
+	if idx := strings.Index(s, "\n"); idx != -1 {
+		return s[:idx]
+	}
+	return s
 }
 
 // commitFileChanges stages and commits file changes for a single task.
