@@ -79,6 +79,7 @@ type Config struct {
 	MaxRetries  int    // Maximum number of times to retry failed tasks (0 = no retries, -1 = infinite)
 	Prompt      string // Prompt to filter/direct work selection
 	MaxPriority int    // Hard filter: only run tasks with priority <= this value (-1 = no filter)
+	StopAtGate  bool   // Stop orchestration when encountering a task marked as a gate
 }
 
 // Orchestrator coordinates the execution of tasks from beads
@@ -324,6 +325,25 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			}
 		}
 
+		// Apply gate-based stopping: exclude gate tasks and stop if only gates remain
+		if o.config.StopAtGate {
+			nonGateTasks, gateTasks := filterOutGateTasks(tasks)
+			if len(gateTasks) > 0 && len(nonGateTasks) == 0 {
+				// Only gate tasks remain - stop orchestration
+				if o.config.Verbose {
+					fmt.Printf("Stopping at gate: %d gate task(s) found, no non-gate tasks ready\n", len(gateTasks))
+					for _, t := range gateTasks {
+						fmt.Printf("  Gate task: %s: %s\n", t.ID, t.Title)
+					}
+				}
+				return nil
+			}
+			tasks = nonGateTasks
+			if o.config.Verbose && len(gateTasks) > 0 {
+				fmt.Printf("Filtered out %d gate task(s), %d non-gate tasks remaining\n", len(gateTasks), len(tasks))
+			}
+		}
+
 		// Check stop condition
 		if o.promptFilter != nil && o.promptFilter.ShouldStop(len(tasks)) {
 			if o.config.Verbose {
@@ -431,4 +451,19 @@ func filterTasksByMaxPriority(tasks []beads.Task, maxPriority int) []beads.Task 
 		}
 	}
 	return filtered
+}
+
+// filterOutGateTasks separates tasks into non-gate tasks and gate tasks.
+// Returns (nonGateTasks, gateTasks).
+func filterOutGateTasks(tasks []beads.Task) ([]beads.Task, []beads.Task) {
+	nonGate := make([]beads.Task, 0, len(tasks))
+	gate := make([]beads.Task, 0)
+	for _, task := range tasks {
+		if task.Gate {
+			gate = append(gate, task)
+		} else {
+			nonGate = append(nonGate, task)
+		}
+	}
+	return nonGate, gate
 }

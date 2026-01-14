@@ -30,6 +30,7 @@ var (
 	maxRetries  int
 	prompt      string
 	maxPriority int
+	stopAtGate  bool
 )
 
 var runCmd = &cobra.Command{
@@ -91,7 +92,10 @@ Example:
 
   # Hard filter by maximum priority (P0-P4, only tasks at or below this priority)
   canopy run --max-priority 2   # Only P0, P1, P2 tasks (excludes P3, P4)
-  canopy run --max-priority 0   # Only P0 tasks (critical only)`,
+  canopy run --max-priority 0   # Only P0 tasks (critical only)
+
+  # Stop at gate tasks (tasks marked with gate=true)
+  canopy run --stop-at-gate     # Stop before executing any gate task`,
 	RunE: runOrchestrator,
 }
 
@@ -103,6 +107,7 @@ func init() {
 	runCmd.Flags().IntVar(&maxRetries, "max-retries", 3, "Maximum retry attempts for failed tasks (0=no retries, -1=infinite)")
 	runCmd.Flags().StringVar(&prompt, "prompt", "", "Prompt to filter/direct work selection (e.g., 'Only work on P0 issues', 'Stop after completing all P1s')")
 	runCmd.Flags().IntVar(&maxPriority, "max-priority", -1, "Hard filter: only run tasks with priority <= this value (0-4, -1=no filter)")
+	runCmd.Flags().BoolVar(&stopAtGate, "stop-at-gate", false, "Stop orchestration when encountering a task marked as a gate")
 
 	rootCmd.AddCommand(runCmd)
 }
@@ -181,6 +186,7 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		MaxRetries:  maxRetries,
 		Prompt:      prompt,
 		MaxPriority: maxPriority,
+		StopAtGate:  stopAtGate,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create orchestrator: %w", err)

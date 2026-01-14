@@ -19,6 +19,7 @@ type Task struct {
 	Blockers    []string `json:"blockers,omitempty"`    // Tasks this task depends on
 	BlockedBy   []string `json:"blocked_by,omitempty"`  // Alias for blockers
 	Timeout     string   `json:"timeout,omitempty"`     // Per-task timeout (e.g., "5m", "30m", "1h")
+	Gate        bool     `json:"gate,omitempty"`        // If true, orchestrator stops before this task when --stop-at-gate is set
 }
 
 // BeadsClient defines the interface for interacting with the beads task tracker.
