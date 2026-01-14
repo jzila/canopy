@@ -83,8 +83,9 @@ func (h *Handler) HandleGetState(w http.ResponseWriter, r *http.Request) {
 		activeRepoID = h.daemon.GetActiveRepositoryID()
 	}
 
-	// Get snapshot filtered by active repository
-	snapshot := h.state.GetSnapshotForRepo(activeRepoID)
+	// Get full snapshot (don't filter tasks by repo - tasks may have been loaded
+	// with a different or empty RepoID, and filtering would hide them from the UI)
+	snapshot := h.state.GetSnapshot()
 
 	// Wrap snapshot with additional daemon-level state
 	response := StateResponse{
