@@ -1,0 +1,296 @@
+# Canopy
+
+**Parallel agent orchestrator for Claude Code**
+
+Canopy coordinates multiple Claude Code agents working on different tasks simultaneously, each in an isolated sandbox. It handles task scheduling, workspace isolation, change merging, and conflict resolution automatically.
+
+```
+Human (You)
+  └── Claude Code (Root Agent)
+        └── canopy run
+              ├── Worker 1 (isolated sandbox) → task A
+              ├── Worker 2 (isolated sandbox) → task B
+              ├── Worker 3 (isolated sandbox) → task C
+              └── ... up to N concurrent workers
+```
+
+## Why Canopy?
+
+Without Canopy, Claude Code processes tasks sequentially. A 10-task project takes 10x the time of a single task. Canopy enables:
+
+- **Parallel execution**: Run N tasks simultaneously (default: 4 agents)
+- **Workspace isolation**: Each agent works in a copy-on-write OverlayFS clone
+- **Automatic merging**: Changes merge back to the main repo after completion
+- **Conflict resolution**: Spawns resolver agents when merge conflicts occur
+- **Retry logic**: Automatically retries failed tasks (configurable)
+- **Real-time monitoring**: TUI dashboard and WebSocket API for observability
+
+## Requirements
+
+- **Linux** (OverlayFS is Linux-only; macOS support is limited)
+- **Go 1.24+** for building
+- **Claude Code CLI** (`claude`) installed and authenticated
+- **beads** (`bd`) for task tracking ([github.com/jzila/beads](https://github.com/jzila/beads))
+- **bubblewrap** (`bwrap`) optional, for full sandbox isolation
+
+## Installation
+
+```bash
+# Clone and build
+git clone https://github.com/jzila/canopy
+cd canopy
+go build -o canopy ./cmd/canopy
+
+# Add to PATH (or move to /usr/local/bin)
+export PATH="$PATH:$(pwd)"
+
+# Verify installation
+canopy version
+```
+
+## Quick Start
+
+### 1. Set up task tracking
+
+Canopy uses [beads](https://github.com/jzila/beads) for task management:
+
+```bash
+# Initialize beads in your project
+bd init
+
+# Create some tasks
+bd create --title "Implement user authentication" --type feature --priority 1
+bd create --title "Add input validation" --type task --priority 2
+bd create --title "Write unit tests" --type task --priority 2
+
+# View ready tasks (no blockers)
+bd ready
+```
+
+### 2. Run parallel agents
+
+```bash
+# Execute all ready tasks with 4 concurrent agents (default)
+canopy run
+
+# Or with more concurrency
+canopy run -c 8
+
+# Dry run to preview what would execute
+canopy run --dry-run
+
+# With full sandbox isolation (requires bwrap)
+canopy run --sandbox
+```
+
+### 3. Monitor progress
+
+```bash
+# Start the daemon with TUI dashboard
+canopy daemon --tui
+
+# Or check daemon status
+canopy daemon status
+
+# View logs
+canopy daemon logs -f
+```
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `canopy run` | Execute ready tasks in parallel |
+| `canopy daemon` | Start HTTP/IPC server for monitoring |
+| `canopy daemon --tui` | Start daemon with TUI dashboard |
+| `canopy daemon status` | Check if daemon is running |
+| `canopy daemon logs` | View daemon logs |
+| `canopy init` | Interactive sandbox configuration |
+| `canopy history` | View past run records |
+| `canopy stats` | Show run statistics |
+| `canopy help --agent` | Detailed workflow for AI agents |
+
+### `canopy run` Options
+
+```bash
+canopy run [flags]
+  -c, --concurrency N     Max concurrent agents (default: 4)
+  -o, --output DIR        Output directory for merged results
+  --sandbox               Enable bubblewrap isolation (requires bwrap)
+  --no-daemon             Disable daemon connection
+  --max-retries N         Retry limit (default: 3, -1 for infinite)
+  --dry-run               Preview without executing
+  --prompt TEXT           Soft guidance for task selection
+  --max-priority N        Hard filter by priority (0-4)
+  -v, --verbose           Verbose output
+```
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      Canopy Orchestrator                        │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  bd ready ────┬──────────────────────────────────────────────── │
+│               │                                                 │
+│               ▼                                                 │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │                     Scheduler                           │    │
+│  │  - Bounded concurrency (semaphore)                      │    │
+│  │  - Per-agent contexts for kill support                  │    │
+│  └──────────────┬──────────────────────────────────────────┘    │
+│                 │                                               │
+│    ┌────────────┼────────────┐                                  │
+│    ▼            ▼            ▼                                  │
+│ ┌──────┐    ┌──────┐    ┌──────┐                                │
+│ │Agent1│    │Agent2│    │Agent3│   ... up to N                  │
+│ │Overlay│   │Overlay│   │Overlay│                               │
+│ └──┬───┘    └──┬───┘    └──┬───┘                                │
+│    │           │           │                                    │
+│    └───────────┴───────────┘                                    │
+│                │                                                │
+│                ▼                                                │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │              Merge Queue (Sequential)                   │    │
+│  │  - Last-writer-wins for non-conflicting changes         │    │
+│  │  - Spawns resolver agents for conflicts                 │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│                │                                                │
+│                ▼                                                │
+│           bd done (mark tasks complete)                         │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### OverlayFS Isolation
+
+Each agent operates in a copy-on-write filesystem:
+
+```
+┌────────────────────────────────────────────────┐
+│          MergedDir (Agent's View)              │
+│  /tmp/canopy-overlay-{id}/merged               │
+├────────────────────────────────────────────────┤
+│          UpperDir (Agent's Changes)            │
+│  /tmp/canopy-overlay-{id}/upper                │
+├────────────────────────────────────────────────┤
+│          LowerDir (Original Repo)              │
+│  /home/user/project (read-only)                │
+└────────────────────────────────────────────────┘
+```
+
+Agents cannot see each other's changes until merge.
+
+## Configuration
+
+### Sandbox Configuration (`.canopy/sandbox.toml`)
+
+Run `canopy init` to generate an interactive configuration:
+
+```toml
+[sandbox]
+enabled = true
+network = "allow"
+
+[resources]
+max_memory = "4GB"
+max_processes = 100
+max_open_files = 1024
+
+[paths]
+# Tool paths (read-only)
+read_only = ["~/.cargo", "~/.nvm", "~/.rustup"]
+
+# Config files (copied to overlay)
+copy_configs = ["~/.gitconfig", "~/.npmrc"]
+
+# Shared caches (read-write)
+cache_mounts = ["~/.npm", "~/.cargo/registry"]
+
+[security]
+# Always blocked (in addition to built-in blocklist)
+blocked = ["~/.ssh", "~/.aws", "~/.gnupg"]
+```
+
+### Security
+
+**Default protections (always on):**
+- Environment filtering: only `ANTHROPIC_*`, `PATH`, `LANG`, `LC_*`, `TERM`, `TMPDIR`, `TZ`
+- `.claude/` directory hidden from workers
+- Process groups: workers die if orchestrator dies
+
+**With `--sandbox` flag (requires bwrap):**
+- Full namespace isolation (user, PID, IPC, UTS)
+- All capabilities dropped
+- Resource limits: 4GB memory, 100 processes, 1024 file descriptors
+- Read-only system mounts
+- Security blocklist: `~/.ssh`, `~/.aws`, `~/.gnupg`, etc. never exposed
+
+## Daemon and Monitoring
+
+The daemon provides real-time monitoring:
+
+```bash
+# Start daemon (foreground)
+canopy daemon
+
+# Start daemon with TUI
+canopy daemon --tui
+
+# Start in background
+canopy daemon start
+
+# Connect TUI to running daemon
+canopy daemon --tui --daemon-addr localhost:8080
+
+# View logs
+canopy daemon logs -f
+```
+
+### HTTP API
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/state` | Full state snapshot |
+| `GET /api/agents` | List all agents |
+| `GET /api/agents/:id` | Get specific agent |
+| `GET /ws` | WebSocket for real-time updates |
+
+## Persistence
+
+All state lives in `~/.cache/canopy/`:
+
+```
+~/.cache/canopy/
+├── runs.db           # SQLite database for run history
+├── repositories.json # Repository identity registry
+├── daemon.log        # Daemon log file
+└── history/          # JSON run records (backup)
+```
+
+## Documentation
+
+- [Architecture](docs/ARCHITECTURE.md) - Detailed system design
+- [Getting Started](docs/GETTING-STARTED.md) - Step-by-step tutorial
+- [Commands](docs/COMMANDS.md) - Complete CLI reference
+- [Configuration](docs/CONFIGURATION.md) - Configuration options
+- [Sandbox Design](docs/SANDBOX-DESIGN.md) - Security architecture
+
+## Integration with Beads
+
+Canopy integrates with [beads](https://github.com/jzila/beads) for task tracking:
+
+```bash
+# Create tasks with dependencies
+bd create --title "Design API" --type task --priority 0     # → canopy-a1b2
+bd create --title "Implement API" --type task --priority 1  # → canopy-c3d4
+bd dep add canopy-c3d4 canopy-a1b2  # Implement depends on Design
+
+# Canopy respects dependencies
+canopy run  # Design runs first, then Implement
+```
+
+## License
+
+MIT License - see [LICENSE](LICENSE) for details.
