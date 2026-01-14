@@ -29,7 +29,6 @@ canopy run [flags]
 | `--concurrency` | `-c` | `4` | Maximum concurrent agents |
 | `--output` | `-o` | workdir | Output directory for merged results |
 | `--sandbox` | | `false` | Enable bubblewrap isolation |
-| `--no-daemon` | | `false` | Disable daemon connection |
 | `--max-retries` | | `3` | Retry limit (-1 for infinite) |
 | `--dry-run` | | `false` | Preview without executing |
 | `--prompt` | | | Soft guidance for task selection |
@@ -58,14 +57,11 @@ canopy run --max-priority 1
 
 # Soft filter with prompt
 canopy run --prompt "Only work on frontend tasks"
-
-# Standalone mode (no daemon)
-canopy run --no-daemon -v
 ```
 
 #### Behavior
 
-1. Connects to daemon (unless `--no-daemon`)
+1. Connects to daemon (auto-starts if not running)
 2. Fetches ready tasks from `bd ready`
 3. Spawns agents in isolated OverlayFS sandboxes
 4. Executes `claude --print --output-format json`

@@ -118,13 +118,14 @@ canopy run [flags]
   -c, --concurrency N     Max concurrent agents (default: 4)
   -o, --output DIR        Output directory for merged results
   --sandbox               Enable bubblewrap isolation (requires bwrap)
-  --no-daemon             Disable daemon connection
   --max-retries N         Retry limit (default: 3, -1 for infinite)
   --dry-run               Preview without executing
   --prompt TEXT           Soft guidance for task selection
   --max-priority N        Hard filter by priority (0-4)
   -v, --verbose           Verbose output
 ```
+
+The daemon is automatically started if not running. The run command requires daemon connectivity for monitoring and real-time updates.
 
 ## Architecture
 
