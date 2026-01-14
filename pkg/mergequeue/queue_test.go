@@ -1,6 +1,7 @@
 package mergequeue
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -371,5 +372,123 @@ func TestNewMergeRequest(t *testing.T) {
 	}
 	if req.EnqueuedAt.Before(before) || req.EnqueuedAt.After(after) {
 		t.Error("EnqueuedAt should be set to current time")
+	}
+}
+
+func TestDequeueCtxCancellation(t *testing.T) {
+	q := NewQueue(10)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan *MergeRequest)
+
+	go func() {
+		done <- q.DequeueCtx(ctx)
+	}()
+
+	// Give time for goroutine to start blocking
+	time.Sleep(50 * time.Millisecond)
+
+	// Cancel the context
+	cancel()
+
+	select {
+	case got := <-done:
+		if got != nil {
+			t.Error("DequeueCtx should return nil when context is cancelled")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("DequeueCtx should return after context cancellation")
+	}
+}
+
+func TestDequeueCtxCancelledBeforeCall(t *testing.T) {
+	q := NewQueue(10)
+	req := NewMergeRequest(&agent.Result{TaskID: "1"}, nil)
+	q.Enqueue(req)
+
+	// Cancel context before calling DequeueCtx
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	got := q.DequeueCtx(ctx)
+	if got != nil {
+		t.Error("DequeueCtx should return nil for already-cancelled context")
+	}
+
+	// Original request should still be in queue
+	if q.Len() != 1 {
+		t.Errorf("expected queue len=1, got %d", q.Len())
+	}
+}
+
+func TestDequeueCtxSuccessBeforeCancellation(t *testing.T) {
+	q := NewQueue(10)
+	req := NewMergeRequest(&agent.Result{TaskID: "test"}, nil)
+	q.Enqueue(req)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	got := q.DequeueCtx(ctx)
+	if got == nil {
+		t.Fatal("DequeueCtx should return the request")
+	}
+	if got.Result.TaskID != "test" {
+		t.Errorf("expected task 'test', got %s", got.Result.TaskID)
+	}
+}
+
+func TestDequeueCtxCancelWhilePaused(t *testing.T) {
+	q := NewQueue(10)
+	req := NewMergeRequest(&agent.Result{TaskID: "1"}, nil)
+	q.Enqueue(req)
+
+	q.Pause()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan *MergeRequest)
+
+	go func() {
+		done <- q.DequeueCtx(ctx)
+	}()
+
+	// Give time for goroutine to start blocking on pause
+	time.Sleep(50 * time.Millisecond)
+
+	// Cancel while paused
+	cancel()
+
+	select {
+	case got := <-done:
+		if got != nil {
+			t.Error("DequeueCtx should return nil when cancelled while paused")
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("DequeueCtx should return after cancellation while paused")
+	}
+
+	// Request should still be in queue
+	if q.Len() != 1 {
+		t.Errorf("expected queue len=1, got %d", q.Len())
+	}
+}
+
+func TestDequeueCtxWithTimeout(t *testing.T) {
+	q := NewQueue(10)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	got := q.DequeueCtx(ctx)
+	elapsed := time.Since(start)
+
+	if got != nil {
+		t.Error("DequeueCtx should return nil on timeout")
+	}
+
+	// Should have waited approximately the timeout duration
+	if elapsed < 40*time.Millisecond || elapsed > 150*time.Millisecond {
+		t.Errorf("expected ~50ms wait, got %v", elapsed)
 	}
 }

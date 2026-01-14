@@ -1,6 +1,7 @@
 package mergequeue
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 )
@@ -65,30 +66,60 @@ func (q *Queue) Enqueue(req *MergeRequest) bool {
 // Blocks if the queue is paused, waiting until Resume() is called.
 // Returns nil if the queue is closed.
 func (q *Queue) Dequeue() *MergeRequest {
-	// Wait if paused
-	q.mu.Lock()
-	for q.paused.Load() && !q.closed.Load() {
-		q.pauseCond.Wait()
+	return q.DequeueCtx(context.Background())
+}
+
+// DequeueCtx retrieves the next merge request from the queue with context support.
+// Blocks if the queue is paused, waiting until Resume() is called.
+// Returns nil if the queue is closed or the context is cancelled.
+func (q *Queue) DequeueCtx(ctx context.Context) *MergeRequest {
+	// Check context early
+	select {
+	case <-ctx.Done():
+		return nil
+	default:
 	}
-	q.mu.Unlock()
+
+	// Wait if paused, with context cancellation support
+	for {
+		q.mu.Lock()
+		if !q.paused.Load() || q.closed.Load() {
+			q.mu.Unlock()
+			break
+		}
+
+		// Create a channel that will be closed when condition is signaled
+		// This allows us to select on both the condition and the context
+		waitCh := make(chan struct{})
+		go func() {
+			q.mu.Lock()
+			q.pauseCond.Wait()
+			q.mu.Unlock()
+			close(waitCh)
+		}()
+		q.mu.Unlock()
+
+		select {
+		case <-ctx.Done():
+			// Context cancelled - broadcast to wake the waiting goroutine
+			q.mu.Lock()
+			q.pauseCond.Broadcast()
+			q.mu.Unlock()
+			<-waitCh // Wait for goroutine to complete
+			return nil
+		case <-waitCh:
+			// Condition was signaled, loop to check if still paused
+		}
+	}
 
 	if q.closed.Load() {
 		return nil
 	}
 
 	select {
+	case <-ctx.Done():
+		return nil
 	case req, ok := <-q.requests:
-		if !ok {
-			return nil
-		}
-		return req
-	default:
-		// Non-blocking check for closed state
-		if q.closed.Load() {
-			return nil
-		}
-		// Block waiting for next request
-		req, ok := <-q.requests
 		if !ok {
 			return nil
 		}
