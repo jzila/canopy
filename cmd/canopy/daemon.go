@@ -200,7 +200,9 @@ func runDaemonStatus(cmd *cobra.Command, args []string) error {
 	}
 
 	if running {
-		fmt.Printf("Daemon is running (pid %d)\n", pid)
+		fmt.Printf("Daemon is running (PID %d)\n", pid)
+		fmt.Printf("Socket: %s\n", runtime.SocketPath(""))
+		fmt.Printf("HTTP: http://localhost:%d\n", 8080)
 		return nil
 	}
 
