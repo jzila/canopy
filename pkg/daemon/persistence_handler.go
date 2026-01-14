@@ -163,29 +163,37 @@ func (h *PersistenceHandler) handleAgentCompleted(event Event) {
 	duration, _ := payload["duration"].(float64)
 	inputTokens, _ := getIntFromPayload(payload, "input_tokens")
 	outputTokens, _ := getIntFromPayload(payload, "output_tokens")
+	cacheCreationTokens, _ := getIntFromPayload(payload, "cache_creation_tokens")
+	cacheReadTokens, _ := getIntFromPayload(payload, "cache_read_tokens")
 	costUSD, _ := payload["cost_usd"].(float64)
 	filesChanged, _ := getIntFromPayload(payload, "files_changed")
 	commitsCreated, _ := getIntFromPayload(payload, "commits_created")
+	numTurns, _ := getIntFromPayload(payload, "num_turns")
+	resultMessage, _ := payload["result_message"].(string)
 	stdout, _ := payload["stdout"].(string)
 	stderr, _ := payload["stderr"].(string)
 
 	finishedAt := event.Timestamp
 	agent := &persistence.Agent{
-		ID:                agentID,
-		RunID:             runID,
-		Status:            status,
-		FinishedAt:        &finishedAt,
-		DurationSeconds:   duration,
-		ExitCode:          &exitCode,
-		ErrorMessage:      errorMsg,
-		Stdout:            stdout,
-		Stderr:            stderr,
-		InputTokens:       inputTokens,
-		OutputTokens:      outputTokens,
-		TotalTokens:       inputTokens + outputTokens,
-		CostUSD:           costUSD,
-		FilesChanged:      filesChanged,
-		GitCommitsCreated: commitsCreated,
+		ID:                  agentID,
+		RunID:               runID,
+		Status:              status,
+		FinishedAt:          &finishedAt,
+		DurationSeconds:     duration,
+		ExitCode:            &exitCode,
+		ErrorMessage:        errorMsg,
+		Stdout:              stdout,
+		Stderr:              stderr,
+		InputTokens:         inputTokens,
+		OutputTokens:        outputTokens,
+		TotalTokens:         inputTokens + outputTokens,
+		CacheCreationTokens: cacheCreationTokens,
+		CacheReadTokens:     cacheReadTokens,
+		CostUSD:             costUSD,
+		FilesChanged:        filesChanged,
+		GitCommitsCreated:   commitsCreated,
+		NumTurns:            numTurns,
+		ResultMessage:       resultMessage,
 	}
 
 	if err := h.store.UpdateAgent(agent); err != nil {

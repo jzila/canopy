@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-const currentSchemaVersion = 4
+const currentSchemaVersion = 5
 
 // migrate runs all pending database migrations
 func (s *Store) migrate() error {
@@ -59,6 +59,10 @@ func (s *Store) runMigration(version int) error {
 		}
 	case 4:
 		if err := s.migrateV4(tx); err != nil {
+			return err
+		}
+	case 5:
+		if err := s.migrateV5(tx); err != nil {
 			return err
 		}
 	default:
@@ -176,6 +180,26 @@ func (s *Store) migrateV4(tx *sql.Tx) error {
 		`ALTER TABLE runs ADD COLUMN files_changed INTEGER DEFAULT 0`,
 		`ALTER TABLE runs ADD COLUMN git_commits INTEGER DEFAULT 0`,
 		`ALTER TABLE runs ADD COLUMN duration_seconds REAL DEFAULT 0.0`,
+	}
+
+	for _, m := range migrations {
+		if _, err := tx.Exec(m); err != nil {
+			return fmt.Errorf("failed to execute migration: %s: %w", m, err)
+		}
+	}
+
+	return nil
+}
+
+// migrateV5 adds cache token fields, num_turns, and result_message to agents table
+func (s *Store) migrateV5(tx *sql.Tx) error {
+	migrations := []string{
+		// Add cache token fields to agents table
+		`ALTER TABLE agents ADD COLUMN cache_creation_tokens INTEGER DEFAULT 0`,
+		`ALTER TABLE agents ADD COLUMN cache_read_tokens INTEGER DEFAULT 0`,
+		// Add num_turns and result_message
+		`ALTER TABLE agents ADD COLUMN num_turns INTEGER DEFAULT 0`,
+		`ALTER TABLE agents ADD COLUMN result_message TEXT`,
 	}
 
 	for _, m := range migrations {
