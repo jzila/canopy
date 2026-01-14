@@ -1,4 +1,20 @@
 // Package history provides persistent storage for canopy run history.
+//
+// Deprecated: This package is deprecated in favor of pkg/persistence which
+// provides SQLite-based storage with better performance, transaction support,
+// and unified data management. Use the 'canopy migrate-history' command to
+// migrate existing JSON history files to the SQLite database.
+//
+// The pkg/persistence package provides:
+//   - Single unified persistence approach (SQLite)
+//   - Proper transaction boundaries via BeginTx/Commit/Rollback
+//   - Thread-safe concurrent access with WAL mode
+//   - Clear data ownership (runs own agents)
+//
+// Migration path:
+//  1. Run 'canopy migrate-history' to import JSON files into SQLite
+//  2. Update code to use pkg/persistence.Store instead of pkg/history.Store
+//  3. Remove references to this package
 package history
 
 import (

@@ -190,6 +190,133 @@ func (s *Store) Close() error {
 	return nil
 }
 
+// DB returns the underlying database connection for advanced operations.
+// This is primarily used by migration tools that need direct database access.
+// Most code should use the Store methods rather than accessing the DB directly.
+func (s *Store) DB() *sql.DB {
+	return s.db
+}
+
+// Tx represents an active database transaction.
+// Use Store.BeginTx() to start a transaction, then call Commit() or Rollback().
+type Tx struct {
+	tx    *sql.Tx
+	store *Store
+}
+
+// BeginTx starts a new database transaction.
+// The returned Tx must be committed with Commit() or rolled back with Rollback().
+// Example usage:
+//
+//	tx, err := store.BeginTx()
+//	if err != nil { return err }
+//	defer tx.Rollback() // no-op if already committed
+//
+//	// perform operations...
+//	if err := tx.CreateRun(run); err != nil { return err }
+//	if err := tx.CreateAgent(agent); err != nil { return err }
+//
+//	return tx.Commit()
+func (s *Store) BeginTx() (*Tx, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	return &Tx{tx: tx, store: s}, nil
+}
+
+// Commit commits the transaction.
+func (t *Tx) Commit() error {
+	if err := t.tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+	return nil
+}
+
+// Rollback rolls back the transaction.
+// Rollback is a no-op if the transaction has already been committed.
+func (t *Tx) Rollback() error {
+	return t.tx.Rollback()
+}
+
+// CreateRun creates a new run record within the transaction.
+func (t *Tx) CreateRun(run *Run) error {
+	query := `
+		INSERT INTO runs (id, started_at, finished_at, status, concurrency, git_branch, git_commit, total_tasks, completed_tasks, failed_tasks, repo_id, repo_path, repo_name, total_input_tokens, total_output_tokens, cache_creation_tokens, cache_read_tokens, total_cost_usd, total_turns, files_changed, git_commits, duration_seconds)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+	var finishedAt *int64
+	if run.FinishedAt != nil {
+		ts := run.FinishedAt.Unix()
+		finishedAt = &ts
+	}
+	_, err := t.tx.Exec(query,
+		run.ID,
+		run.StartedAt.Unix(),
+		finishedAt,
+		string(run.Status),
+		run.Concurrency,
+		run.GitBranch,
+		run.GitCommit,
+		run.TotalTasks,
+		run.CompletedTasks,
+		run.FailedTasks,
+		nullString(run.RepoID),
+		nullString(run.RepoPath),
+		nullString(run.RepoName),
+		run.TotalInputTokens,
+		run.TotalOutputTokens,
+		run.CacheCreationTokens,
+		run.CacheReadTokens,
+		run.TotalCostUSD,
+		run.TotalTurns,
+		run.FilesChanged,
+		run.GitCommits,
+		run.DurationSeconds,
+	)
+	return err
+}
+
+// CreateAgent creates a new agent record within the transaction.
+func (t *Tx) CreateAgent(agent *Agent) error {
+	query := `
+		INSERT INTO agents (id, run_id, task_id, task_title, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+	var finishedAt *int64
+	if agent.FinishedAt != nil {
+		ts := agent.FinishedAt.Unix()
+		finishedAt = &ts
+	}
+	_, err := t.tx.Exec(query,
+		agent.ID,
+		agent.RunID,
+		agent.TaskID,
+		agent.TaskTitle,
+		string(agent.Status),
+		agent.StartedAt.Unix(),
+		finishedAt,
+		agent.DurationSeconds,
+		agent.ExitCode,
+		agent.ErrorMessage,
+		agent.Stdout,
+		agent.Stderr,
+		agent.InputTokens,
+		agent.OutputTokens,
+		agent.TotalTokens,
+		agent.CacheCreationTokens,
+		agent.CacheReadTokens,
+		agent.CostUSD,
+		agent.FilesChanged,
+		agent.GitCommitsCreated,
+		agent.NumTurns,
+		agent.ResultMessage,
+		nullString(agent.RepoID),
+		boolToInt(agent.Archived),
+	)
+	return err
+}
+
 // Checkpoint runs a WAL checkpoint to merge the write-ahead log into the main database.
 // This should be called periodically to prevent unbounded WAL growth.
 // mode can be: PASSIVE (non-blocking), FULL (waits for readers), TRUNCATE (resets WAL)

@@ -1612,6 +1612,186 @@ func TestConnectionPoolSettings(t *testing.T) {
 	}
 }
 
+func TestDB(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	// Verify DB() returns a non-nil database connection
+	db := store.DB()
+	if db == nil {
+		t.Fatal("expected non-nil database connection")
+	}
+
+	// Verify we can execute queries on the returned connection
+	var count int
+	err := db.QueryRow("SELECT COUNT(*) FROM runs").Scan(&count)
+	if err != nil {
+		t.Fatalf("failed to query via DB(): %v", err)
+	}
+}
+
+func TestBeginTx(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	now := time.Now()
+
+	// Start a transaction
+	tx, err := store.BeginTx()
+	if err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+
+	// Create a run within the transaction
+	run := &Run{
+		ID:          "tx-test-run",
+		StartedAt:   now,
+		Status:      RunStatusRunning,
+		Concurrency: 2,
+	}
+	if err := tx.CreateRun(run); err != nil {
+		t.Fatalf("failed to create run in transaction: %v", err)
+	}
+
+	// Create an agent within the transaction
+	agent := &Agent{
+		ID:        "tx-test-agent",
+		RunID:     "tx-test-run",
+		TaskID:    "task-1",
+		TaskTitle: "Test Task",
+		Status:    AgentStatusRunning,
+		StartedAt: now,
+	}
+	if err := tx.CreateAgent(agent); err != nil {
+		t.Fatalf("failed to create agent in transaction: %v", err)
+	}
+
+	// Commit the transaction
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("failed to commit transaction: %v", err)
+	}
+
+	// Verify data was persisted
+	retrievedRun, err := store.GetRun("tx-test-run")
+	if err != nil {
+		t.Fatalf("failed to get run: %v", err)
+	}
+	if retrievedRun == nil {
+		t.Fatal("run not found after commit")
+	}
+
+	retrievedAgent, err := store.GetAgent("tx-test-agent")
+	if err != nil {
+		t.Fatalf("failed to get agent: %v", err)
+	}
+	if retrievedAgent == nil {
+		t.Fatal("agent not found after commit")
+	}
+}
+
+func TestBeginTx_Rollback(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	now := time.Now()
+
+	// Start a transaction
+	tx, err := store.BeginTx()
+	if err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+
+	// Create a run within the transaction
+	run := &Run{
+		ID:          "rollback-test-run",
+		StartedAt:   now,
+		Status:      RunStatusRunning,
+		Concurrency: 2,
+	}
+	if err := tx.CreateRun(run); err != nil {
+		t.Fatalf("failed to create run in transaction: %v", err)
+	}
+
+	// Rollback the transaction
+	if err := tx.Rollback(); err != nil {
+		t.Fatalf("failed to rollback transaction: %v", err)
+	}
+
+	// Verify data was NOT persisted
+	retrievedRun, err := store.GetRun("rollback-test-run")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if retrievedRun != nil {
+		t.Error("run should not exist after rollback")
+	}
+}
+
+func TestBeginTx_Atomicity(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	now := time.Now()
+
+	// First create a run that we'll reference
+	existingRun := &Run{
+		ID:          "existing-run",
+		StartedAt:   now,
+		Status:      RunStatusCompleted,
+		Concurrency: 1,
+	}
+	if err := store.CreateRun(existingRun); err != nil {
+		t.Fatalf("failed to create existing run: %v", err)
+	}
+
+	// Start a transaction
+	tx, err := store.BeginTx()
+	if err != nil {
+		t.Fatalf("failed to begin transaction: %v", err)
+	}
+	defer tx.Rollback()
+
+	// Create a new run
+	newRun := &Run{
+		ID:          "atomic-test-run",
+		StartedAt:   now,
+		Status:      RunStatusRunning,
+		Concurrency: 2,
+	}
+	if err := tx.CreateRun(newRun); err != nil {
+		t.Fatalf("failed to create run in transaction: %v", err)
+	}
+
+	// Create multiple agents
+	for i := 0; i < 5; i++ {
+		agent := &Agent{
+			ID:        fmt.Sprintf("atomic-agent-%d", i),
+			RunID:     "atomic-test-run",
+			TaskID:    fmt.Sprintf("task-%d", i),
+			TaskTitle: fmt.Sprintf("Task %d", i),
+			Status:    AgentStatusCompleted,
+			StartedAt: now,
+		}
+		if err := tx.CreateAgent(agent); err != nil {
+			t.Fatalf("failed to create agent %d: %v", i, err)
+		}
+	}
+
+	// Commit the transaction
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("failed to commit transaction: %v", err)
+	}
+
+	// Verify all data was persisted atomically
+	agents, err := store.GetAgentsByRun("atomic-test-run")
+	if err != nil {
+		t.Fatalf("failed to get agents: %v", err)
+	}
+	if len(agents) != 5 {
+		t.Errorf("expected 5 agents, got %d", len(agents))
+	}
+}
+
 // Helper function to create a test store
 func createTestStore(t *testing.T) *Store {
 	tmpDir, err := os.MkdirTemp("", "canopy-test-*")
