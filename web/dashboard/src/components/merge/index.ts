@@ -9,4 +9,7 @@ export type {
   TreeNode,
   TreeConnection,
   TreeLayout,
+  TokenUsage,
+  GitCommit,
+  NodeDetails,
 } from './types';

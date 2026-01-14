@@ -45,6 +45,7 @@ export interface MergeQueueTreeProps {
   activeWorkers: ActiveWorker[];
   onNodeClick?: (taskId: string) => void;
   onNodeHover?: (taskId: string | null) => void;
+  getNodeDetails?: (taskId: string) => NodeDetails | null;
 }
 
 // Internal node representation for rendering
@@ -80,4 +81,37 @@ export interface TreeLayout {
   trunkY: number;
   branchOffset: number;
   padding: number;
+}
+
+// Token usage information
+export interface TokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+}
+
+// Git commit information
+export interface GitCommit {
+  hash: string;
+  short_hash: string;
+  message: string;
+  author: string;
+  author_email: string;
+  timestamp: string;
+  files_changed: string[];
+}
+
+// Detailed information for a node (from agent state)
+export interface NodeDetails {
+  title?: string;
+  duration?: number;
+  tokenUsage?: TokenUsage;
+  filesChanged?: number;
+  commitCount?: number;
+  commits?: GitCommit[];
+  output?: {
+    stdout: string;
+    stderr: string;
+  };
 }

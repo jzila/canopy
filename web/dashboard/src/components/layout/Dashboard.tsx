@@ -11,6 +11,7 @@ import { CommitList } from '../agents/CommitList';
 import { BeadsPane } from '../beads/BeadsPane';
 import { RepoSelector } from './RepoSelector';
 import { MergeQueueTree } from '../merge';
+import type { NodeDetails } from '../merge/types';
 
 type TerminalTab = 'feed' | 'terminal' | 'commits';
 type StatusFilter = 'all' | 'running' | 'completed' | 'failed';
@@ -356,6 +357,22 @@ export const Dashboard: React.FC = () => {
     mergeQueueData.pending.length > 0 ||
     mergeQueueData.activeWorkers.length > 0;
 
+  // Get node details from agent state for tooltips
+  const getNodeDetails = useCallback((taskId: string): NodeDetails | null => {
+    const agent = Object.values(agents).find(a => a.task_id === taskId);
+    if (!agent) return null;
+
+    return {
+      title: agent.task_title,
+      duration: agent.duration,
+      tokenUsage: agent.token_usage,
+      filesChanged: agent.changes,
+      commitCount: agent.commits,
+      commits: agent.git_commits,
+      output: agent.output,
+    };
+  }, [agents]);
+
   const formatCost = (cost: number): string => {
     if (cost < 0.01) {
       return `$${(cost * 100).toFixed(2)}c`;
@@ -602,6 +619,7 @@ export const Dashboard: React.FC = () => {
                     resolvers={mergeQueueData.resolvers}
                     pending={mergeQueueData.pending}
                     activeWorkers={mergeQueueData.activeWorkers}
+                    getNodeDetails={getNodeDetails}
                     onNodeClick={(taskId) => {
                       // Find agent by task ID and select it
                       const agent = Object.values(agents).find(a => a.task_id === taskId);
