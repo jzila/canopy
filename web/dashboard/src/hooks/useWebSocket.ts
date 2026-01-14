@@ -67,6 +67,20 @@ interface TaskUpdatedEvent {
   };
 }
 
+// Merge status types matching Go backend (ipc/protocol.go)
+type MergeStatus = 'pending' | 'acquiring' | 'merging' | 'resolving' | 'merged' | 'failed';
+
+interface AgentMergeStatusEvent {
+  type: 'agent:merge_status';
+  timestamp: string;
+  payload: {
+    agent_id: string;
+    merge_status: MergeStatus;
+    queue_pos?: number;
+    error?: string;
+  };
+}
+
 interface StatsUpdatedEvent {
   type: 'stats:updated';
   timestamp: string;
@@ -174,6 +188,7 @@ type EventType =
   | AgentOutputEvent
   | AgentLiveFeedEvent
   | AgentCompletedEvent
+  | AgentMergeStatusEvent
   | TaskUpdatedEvent
   | StatsUpdatedEvent
   | OrchPausedEvent
@@ -208,7 +223,8 @@ export function useWebSocket() {
     appendLiveFeedEvent,
     syncState,
     setIsPaused,
-    setActiveRepo
+    setActiveRepo,
+    updateAgentMergeStatus,
   } = useStateStore();
 
   const connect = useCallback(() => {
@@ -384,6 +400,13 @@ export function useWebSocket() {
               break;
             }
 
+            case 'agent:merge_status': {
+              const { agent_id, merge_status, queue_pos, error } = message.payload;
+              console.log('[WebSocket] Agent merge status:', agent_id, merge_status, 'pos:', queue_pos);
+              updateAgentMergeStatus(agent_id, merge_status, queue_pos, error);
+              break;
+            }
+
             case 'task:updated': {
               const { id, title, status, agent_id, priority } = message.payload;
               console.log('[WebSocket] Task updated:', id, status);
@@ -455,7 +478,7 @@ export function useWebSocket() {
         }, backoffTime);
       }
     }
-  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, syncState, setIsPaused, setActiveRepo]);
+  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, syncState, setIsPaused, setActiveRepo, updateAgentMergeStatus]);
 
   const disconnect = useCallback(() => {
     isManuallyClosedRef.current = true;

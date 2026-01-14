@@ -11,6 +11,9 @@ export type AgentStatus =
   | 'timed_out'
   | 'cancelled';
 
+// Merge status types matching Go backend (ipc/protocol.go)
+export type MergeStatus = 'pending' | 'acquiring' | 'merging' | 'resolving' | 'merged' | 'failed';
+
 export interface OutputBuffer {
   stdout: string;
   stderr: string;
@@ -59,6 +62,10 @@ export interface AgentState {
   commits: number;
   git_commits: GitCommit[];
   archived: boolean;
+  // Merge queue state
+  merge_status?: MergeStatus;
+  merge_queue_pos?: number;
+  merge_error?: string;
 }
 
 export interface TaskState {
@@ -120,6 +127,12 @@ interface StateStore {
   setActiveRepo: (repoId: string) => void;
   setRepoSwitching: (isSwitching: boolean) => void;
   setMergeQueue: (queue: MergeQueueState) => void;
+  updateAgentMergeStatus: (
+    agentId: string,
+    mergeStatus: MergeStatus,
+    queuePos?: number,
+    error?: string
+  ) => void;
 }
 
 // Initial stats
@@ -326,4 +339,36 @@ export const useStateStore = create<StateStore>((set) => ({
   setRepoSwitching: (isRepoSwitching) => set({ isRepoSwitching }),
 
   setMergeQueue: (mergeQueue) => set({ mergeQueue }),
+
+  updateAgentMergeStatus: (agentId, mergeStatus, queuePos, error) =>
+    set((state) => {
+      const agent = state.agents[agentId];
+      if (!agent) {
+        // Agent may not exist yet - this can happen if merge status arrives
+        // before agent:started. Log and skip silently.
+        console.debug('[StateStore] Agent not found for merge status update:', agentId);
+        return state;
+      }
+
+      // Build update object with proper handling of optional fields
+      const updatedAgent: AgentState = {
+        ...agent,
+        merge_status: mergeStatus,
+      };
+
+      // Only set queue_pos and error if provided (exactOptionalPropertyTypes compliance)
+      if (queuePos !== undefined) {
+        updatedAgent.merge_queue_pos = queuePos;
+      }
+      if (error !== undefined) {
+        updatedAgent.merge_error = error;
+      }
+
+      return {
+        agents: {
+          ...state.agents,
+          [agentId]: updatedAgent,
+        },
+      };
+    }),
 }));
