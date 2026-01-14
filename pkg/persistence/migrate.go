@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-const currentSchemaVersion = 3
+const currentSchemaVersion = 4
 
 // migrate runs all pending database migrations
 func (s *Store) migrate() error {
@@ -55,6 +55,10 @@ func (s *Store) runMigration(version int) error {
 		}
 	case 3:
 		if err := s.migrateV3(tx); err != nil {
+			return err
+		}
+	case 4:
+		if err := s.migrateV4(tx); err != nil {
 			return err
 		}
 	default:
@@ -148,6 +152,30 @@ func (s *Store) migrateV3(tx *sql.Tx) error {
 	migrations := []string{
 		// Add archived column to agents table (default false)
 		`ALTER TABLE agents ADD COLUMN archived INTEGER DEFAULT 0`,
+	}
+
+	for _, m := range migrations {
+		if _, err := tx.Exec(m); err != nil {
+			return fmt.Errorf("failed to execute migration: %s: %w", m, err)
+		}
+	}
+
+	return nil
+}
+
+// migrateV4 adds aggregate token/cost fields to runs table (for history deprecation)
+func (s *Store) migrateV4(tx *sql.Tx) error {
+	migrations := []string{
+		// Add aggregate fields to runs table
+		`ALTER TABLE runs ADD COLUMN total_input_tokens INTEGER DEFAULT 0`,
+		`ALTER TABLE runs ADD COLUMN total_output_tokens INTEGER DEFAULT 0`,
+		`ALTER TABLE runs ADD COLUMN cache_creation_tokens INTEGER DEFAULT 0`,
+		`ALTER TABLE runs ADD COLUMN cache_read_tokens INTEGER DEFAULT 0`,
+		`ALTER TABLE runs ADD COLUMN total_cost_usd REAL DEFAULT 0.0`,
+		`ALTER TABLE runs ADD COLUMN total_turns INTEGER DEFAULT 0`,
+		`ALTER TABLE runs ADD COLUMN files_changed INTEGER DEFAULT 0`,
+		`ALTER TABLE runs ADD COLUMN git_commits INTEGER DEFAULT 0`,
+		`ALTER TABLE runs ADD COLUMN duration_seconds REAL DEFAULT 0.0`,
 	}
 
 	for _, m := range migrations {

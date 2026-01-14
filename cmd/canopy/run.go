@@ -15,9 +15,9 @@ import (
 
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
-	"github.com/jzila/canopy/pkg/history"
 	"github.com/jzila/canopy/pkg/ipc"
 	"github.com/jzila/canopy/pkg/orchestrator"
+	"github.com/jzila/canopy/pkg/persistence"
 	"github.com/jzila/canopy/pkg/repository"
 	sandboxpkg "github.com/jzila/canopy/pkg/sandbox"
 )
@@ -299,24 +299,25 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Save run to history and send IPC completion after orchestration finishes
+	// Save run to persistence and send IPC completion after orchestration finishes
 	defer func() {
-		// Skip saving history for dry runs
+		// Skip saving for dry runs
 		if !dryRun {
-			// Save to persistent history
-			store, err := history.NewStore()
+			// Save to persistence store
+			store, err := persistence.NewStore()
 			if err != nil {
 				if verbose {
-					fmt.Fprintf(os.Stderr, "warning: failed to create history store: %v\n", err)
+					fmt.Fprintf(os.Stderr, "warning: failed to create persistence store: %v\n", err)
 				}
 			} else {
-				runRecord := runStats.getRunRecord()
-				if err := store.Save(runRecord); err != nil {
+				defer store.Close()
+				runRecord := runStats.getRunRecord(repo)
+				if err := store.CreateRun(runRecord); err != nil {
 					if verbose {
-						fmt.Fprintf(os.Stderr, "warning: failed to save run history: %v\n", err)
+						fmt.Fprintf(os.Stderr, "warning: failed to save run: %v\n", err)
 					}
 				} else if verbose {
-					fmt.Fprintf(os.Stderr, "Run saved to history: %s\n", runID)
+					fmt.Fprintf(os.Stderr, "Run saved: %s\n", runID)
 				}
 			}
 		}
@@ -463,20 +464,12 @@ type runStatsCollector struct {
 	filesChanged        int
 	gitCommits          int
 	conflictsRes        int
-	taskRecords         []history.TaskRecord
 	mu                  sync.Mutex
 }
 
 func (r *runStatsCollector) recordTaskStart(taskID string, task *beads.Task) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	r.taskRecords = append(r.taskRecords, history.TaskRecord{
-		ID:        taskID,
-		Title:     task.Title,
-		Status:    "running",
-		StartTime: time.Now(),
-	})
+	// Task start is tracked via IPC to daemon for real-time UI
+	// Individual agent records are persisted by the daemon
 }
 
 func (r *runStatsCollector) recordResult(taskID string, result *agent.Result, success bool) {
@@ -490,12 +483,6 @@ func (r *runStatsCollector) recordResult(taskID string, result *agent.Result, su
 		r.failed++
 	}
 
-	var taskInputTokens, taskOutputTokens int
-	var taskCostUSD float64
-	var taskDurationMS int64
-	var taskResultMessage string
-	var taskModelUsage map[string]history.ModelUsage
-
 	if result.Output != nil {
 		r.inputTokens += result.Output.TotalInputTokens
 		r.outputTokens += result.Output.TotalOutputTokens
@@ -503,55 +490,12 @@ func (r *runStatsCollector) recordResult(taskID string, result *agent.Result, su
 		r.cacheReadTokens += result.Output.CacheReadInputTokens
 		r.costUSD += result.Output.CostUSD
 		r.totalTurns += result.Output.NumTurns
-
-		taskInputTokens = result.Output.TotalInputTokens
-		taskOutputTokens = result.Output.TotalOutputTokens
-		taskCostUSD = result.Output.CostUSD
-		taskDurationMS = result.Output.DurationMS
-		taskResultMessage = result.Output.ResultMessage
-
-		if result.Output.ModelUsage != nil {
-			taskModelUsage = make(map[string]history.ModelUsage)
-			for model, usage := range result.Output.ModelUsage {
-				taskModelUsage[model] = history.ModelUsage{
-					InputTokens:              usage.InputTokens,
-					OutputTokens:             usage.OutputTokens,
-					CacheReadInputTokens:     usage.CacheReadInputTokens,
-					CacheCreationInputTokens: usage.CacheCreationInputTokens,
-					CostUSD:                  usage.CostUSD,
-				}
-			}
-		}
 	}
 
 	r.filesChanged += len(result.Changes)
 
-	commits := 0
 	if result.GitState != nil {
-		commits = len(result.GitState.NewCommits)
-		r.gitCommits += commits
-	}
-
-	// Update task record
-	for i := range r.taskRecords {
-		if r.taskRecords[i].ID == taskID {
-			r.taskRecords[i].EndTime = time.Now()
-			r.taskRecords[i].DurationMS = taskDurationMS
-			r.taskRecords[i].InputTokens = taskInputTokens
-			r.taskRecords[i].OutputTokens = taskOutputTokens
-			r.taskRecords[i].CostUSD = taskCostUSD
-			r.taskRecords[i].FilesChanged = len(result.Changes)
-			r.taskRecords[i].Commits = commits
-			r.taskRecords[i].ResultMessage = taskResultMessage
-			r.taskRecords[i].ModelUsage = taskModelUsage
-			if success {
-				r.taskRecords[i].Status = "completed"
-			} else {
-				r.taskRecords[i].Status = "failed"
-				r.taskRecords[i].Error = result.Error
-			}
-			break
-		}
+		r.gitCommits += len(result.GitState.NewCommits)
 	}
 }
 
@@ -575,7 +519,7 @@ func (r *runStatsCollector) getStats() *ipc.RunStats {
 	}
 }
 
-func (r *runStatsCollector) getRunRecord() *history.RunRecord {
+func (r *runStatsCollector) getRunRecord(repo *repository.Repository) *persistence.Run {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -583,35 +527,42 @@ func (r *runStatsCollector) getRunRecord() *history.RunRecord {
 	duration := endTime.Sub(r.startTime).Seconds()
 
 	// Determine overall run status
-	var status history.RunStatus
+	var status persistence.RunStatus
 	if r.failed == 0 && r.succeeded > 0 {
-		status = history.RunStatusCompleted
+		status = persistence.RunStatusCompleted
 	} else if r.succeeded == 0 && r.failed > 0 {
-		status = history.RunStatusFailed
+		status = persistence.RunStatusFailed
 	} else if r.succeeded > 0 && r.failed > 0 {
-		status = history.RunStatusPartial
+		status = persistence.RunStatusPartial
 	} else {
-		status = history.RunStatusCompleted // No tasks ran
+		status = persistence.RunStatusCompleted // No tasks ran
 	}
 
-	return &history.RunRecord{
-		ID:                       r.runID,
-		StartTime:                r.startTime,
-		EndTime:                  endTime,
-		Status:                   status,
-		WorkDir:                  r.workDir,
-		TotalTasks:               r.totalTasks,
-		CompletedTasks:           r.succeeded,
-		FailedTasks:              r.failed,
-		DurationSeconds:          duration,
-		TotalInputTokens:         r.inputTokens,
-		TotalOutputTokens:        r.outputTokens,
-		TotalCacheCreationTokens: r.cacheCreationTokens,
-		TotalCacheReadTokens:     r.cacheReadTokens,
-		TotalCostUSD:             r.costUSD,
-		TotalTurns:               r.totalTurns,
-		FilesChanged:             r.filesChanged,
-		GitCommits:               r.gitCommits,
-		Tasks:                    r.taskRecords,
+	run := &persistence.Run{
+		ID:                   r.runID,
+		StartedAt:            r.startTime,
+		FinishedAt:           &endTime,
+		Status:               status,
+		TotalTasks:           r.totalTasks,
+		CompletedTasks:       r.succeeded,
+		FailedTasks:          r.failed,
+		DurationSeconds:      duration,
+		TotalInputTokens:     r.inputTokens,
+		TotalOutputTokens:    r.outputTokens,
+		CacheCreationTokens:  r.cacheCreationTokens,
+		CacheReadTokens:      r.cacheReadTokens,
+		TotalCostUSD:         r.costUSD,
+		TotalTurns:           r.totalTurns,
+		FilesChanged:         r.filesChanged,
+		GitCommits:           r.gitCommits,
+		RepoPath:             r.workDir,
 	}
+
+	// Add repo metadata if available
+	if repo != nil {
+		run.RepoID = repo.ID
+		run.RepoName = repo.Name
+	}
+
+	return run
 }

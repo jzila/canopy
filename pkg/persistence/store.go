@@ -25,6 +25,7 @@ const (
 	RunStatusCompleted RunStatus = "completed"
 	RunStatusFailed    RunStatus = "failed"
 	RunStatusCancelled RunStatus = "cancelled"
+	RunStatusPartial   RunStatus = "partial" // Some tasks succeeded, some failed
 )
 
 // AgentStatus represents the status of an agent
@@ -54,6 +55,16 @@ type Run struct {
 	RepoID         string     `json:"repo_id,omitempty"`
 	RepoPath       string     `json:"repo_path,omitempty"`
 	RepoName       string     `json:"repo_name,omitempty"`
+	// Aggregate statistics (populated at run completion)
+	TotalInputTokens     int     `json:"total_input_tokens"`
+	TotalOutputTokens    int     `json:"total_output_tokens"`
+	CacheCreationTokens  int     `json:"cache_creation_tokens"`
+	CacheReadTokens      int     `json:"cache_read_tokens"`
+	TotalCostUSD         float64 `json:"total_cost_usd"`
+	TotalTurns           int     `json:"total_turns"`
+	FilesChanged         int     `json:"files_changed"`
+	GitCommits           int     `json:"git_commits"`
+	DurationSeconds      float64 `json:"duration_seconds"`
 }
 
 // Agent represents a single agent execution within a run
@@ -102,15 +113,23 @@ type RunListResult struct {
 
 // AggregateStats contains overall statistics across runs
 type AggregateStats struct {
-	TotalRuns      int     `json:"total_runs"`
-	CompletedRuns  int     `json:"completed_runs"`
-	FailedRuns     int     `json:"failed_runs"`
-	TotalAgents    int     `json:"total_agents"`
-	TotalTokens    int     `json:"total_tokens"`
-	TotalInputTokens  int  `json:"total_input_tokens"`
-	TotalOutputTokens int  `json:"total_output_tokens"`
-	TotalCostUSD   float64 `json:"total_cost_usd"`
-	TotalDurationSeconds float64 `json:"total_duration_seconds"`
+	TotalRuns                int     `json:"total_runs"`
+	CompletedRuns            int     `json:"completed_runs"`
+	FailedRuns               int     `json:"failed_runs"`
+	PartialRuns              int     `json:"partial_runs"`
+	TotalAgents              int     `json:"total_agents"`
+	TotalTasks               int     `json:"total_tasks"`
+	CompletedTasks           int     `json:"completed_tasks"`
+	FailedTasks              int     `json:"failed_tasks"`
+	TotalTokens              int     `json:"total_tokens"`
+	TotalInputTokens         int     `json:"total_input_tokens"`
+	TotalOutputTokens        int     `json:"total_output_tokens"`
+	TotalCacheCreationTokens int     `json:"total_cache_creation_tokens"`
+	TotalCacheReadTokens     int     `json:"total_cache_read_tokens"`
+	TotalCostUSD             float64 `json:"total_cost_usd"`
+	TotalDurationSeconds     float64 `json:"total_duration_seconds"`
+	FilesChanged             int     `json:"files_changed"`
+	GitCommits               int     `json:"git_commits"`
 }
 
 // NewStore creates a new Store with the default database path
@@ -127,9 +146,8 @@ func NewStoreWithPath(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("failed to create database directory: %w", err)
 	}
 
-	// Open database with WAL mode, synchronous=FULL for crash safety, and timeout
-	// synchronous=FULL ensures data is flushed to disk before each transaction commits
-	dsn := fmt.Sprintf("%s?_journal_mode=WAL&_synchronous=FULL&_timeout=5000&_foreign_keys=on", dbPath)
+	// Open database with WAL mode and timeout
+	dsn := fmt.Sprintf("%s?_journal_mode=WAL&_timeout=5000&_foreign_keys=on", dbPath)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
@@ -138,20 +156,6 @@ func NewStoreWithPath(dbPath string) (*Store, error) {
 	// Configure connection pool
 	db.SetMaxOpenConns(5)
 	db.SetMaxIdleConns(2)
-
-	// Verify database connection - WAL mode may fall back to DELETE on some systems
-	// (especially with modernc.org/sqlite pure Go driver in certain environments)
-	var journalMode string
-	if err := db.QueryRow("PRAGMA journal_mode").Scan(&journalMode); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to verify journal mode: %w", err)
-	}
-	// Log the actual journal mode but don't fail if WAL isn't available
-	// WAL provides better crash recovery, but DELETE mode is still safe with synchronous=FULL
-	if journalMode != "wal" && journalMode != "delete" && journalMode != "memory" {
-		db.Close()
-		return nil, fmt.Errorf("unexpected journal mode: %s (expected wal, delete, or memory)", journalMode)
-	}
 
 	store := &Store{
 		db:     db,
@@ -167,31 +171,12 @@ func NewStoreWithPath(dbPath string) (*Store, error) {
 	return store, nil
 }
 
-// Close closes the database connection after checkpointing WAL
+// Close closes the database connection
 func (s *Store) Close() error {
 	if s.db != nil {
-		// Checkpoint WAL to ensure all data is written to the main database file
-		// This is important for crash recovery - without checkpoint, data in WAL
-		// could be lost if the process is killed before normal close
-		if err := s.Checkpoint(); err != nil {
-			// Log but don't fail - close the database anyway
-			// Note: In production, you'd use a proper logger
-			fmt.Fprintf(os.Stderr, "warning: WAL checkpoint failed: %v\n", err)
-		}
 		return s.db.Close()
 	}
 	return nil
-}
-
-// Checkpoint forces a WAL checkpoint, writing all pending changes to the main database file.
-// This should be called periodically or before graceful shutdown to ensure data durability.
-func (s *Store) Checkpoint() error {
-	if s.db == nil {
-		return nil
-	}
-	// PRAGMA wal_checkpoint(TRUNCATE) checkpoints and truncates the WAL file
-	_, err := s.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
-	return err
 }
 
 // getDefaultDBPath returns the default database path based on XDG_CACHE_HOME
@@ -207,8 +192,8 @@ func getDefaultDBPath() string {
 // CreateRun creates a new run record
 func (s *Store) CreateRun(run *Run) error {
 	query := `
-		INSERT INTO runs (id, started_at, finished_at, status, concurrency, git_branch, git_commit, total_tasks, completed_tasks, failed_tasks, repo_id, repo_path, repo_name)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO runs (id, started_at, finished_at, status, concurrency, git_branch, git_commit, total_tasks, completed_tasks, failed_tasks, repo_id, repo_path, repo_name, total_input_tokens, total_output_tokens, cache_creation_tokens, cache_read_tokens, total_cost_usd, total_turns, files_changed, git_commits, duration_seconds)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	var finishedAt *int64
 	if run.FinishedAt != nil {
@@ -229,6 +214,15 @@ func (s *Store) CreateRun(run *Run) error {
 		nullString(run.RepoID),
 		nullString(run.RepoPath),
 		nullString(run.RepoName),
+		run.TotalInputTokens,
+		run.TotalOutputTokens,
+		run.CacheCreationTokens,
+		run.CacheReadTokens,
+		run.TotalCostUSD,
+		run.TotalTurns,
+		run.FilesChanged,
+		run.GitCommits,
+		run.DurationSeconds,
 	)
 	return err
 }
@@ -252,7 +246,16 @@ func (s *Store) UpdateRun(run *Run) error {
 			failed_tasks = ?,
 			repo_id = ?,
 			repo_path = ?,
-			repo_name = ?
+			repo_name = ?,
+			total_input_tokens = ?,
+			total_output_tokens = ?,
+			cache_creation_tokens = ?,
+			cache_read_tokens = ?,
+			total_cost_usd = ?,
+			total_turns = ?,
+			files_changed = ?,
+			git_commits = ?,
+			duration_seconds = ?
 		WHERE id = ?
 	`
 	var finishedAt *int64
@@ -269,19 +272,57 @@ func (s *Store) UpdateRun(run *Run) error {
 		nullString(run.RepoID),
 		nullString(run.RepoPath),
 		nullString(run.RepoName),
+		run.TotalInputTokens,
+		run.TotalOutputTokens,
+		run.CacheCreationTokens,
+		run.CacheReadTokens,
+		run.TotalCostUSD,
+		run.TotalTurns,
+		run.FilesChanged,
+		run.GitCommits,
+		run.DurationSeconds,
 		run.ID,
 	)
 	return err
 }
 
+// runColumns lists all columns for run queries
+const runColumns = `id, started_at, finished_at, status, concurrency, git_branch, git_commit, total_tasks, completed_tasks, failed_tasks, repo_id, repo_path, repo_name, total_input_tokens, total_output_tokens, cache_creation_tokens, cache_read_tokens, total_cost_usd, total_turns, files_changed, git_commits, duration_seconds`
+
 // GetRun retrieves a run by ID
 func (s *Store) GetRun(id string) (*Run, error) {
-	query := `
-		SELECT id, started_at, finished_at, status, concurrency, git_branch, git_commit, total_tasks, completed_tasks, failed_tasks, repo_id, repo_path, repo_name
-		FROM runs WHERE id = ?
-	`
+	query := `SELECT ` + runColumns + ` FROM runs WHERE id = ?`
 	row := s.db.QueryRow(query, id)
 	return s.scanRun(row)
+}
+
+// FindRunByPrefix finds a run by ID prefix (for short ID lookup).
+// Returns an error if no matches found or if the prefix is ambiguous (matches multiple runs).
+func (s *Store) FindRunByPrefix(prefix string) (*Run, error) {
+	query := `SELECT ` + runColumns + ` FROM runs WHERE id LIKE ? ORDER BY started_at DESC`
+	rows, err := s.db.Query(query, prefix+"%")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query runs by prefix: %w", err)
+	}
+	defer rows.Close()
+
+	var matches []*Run
+	for rows.Next() {
+		run, err := s.scanRunFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		matches = append(matches, run)
+	}
+
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("run not found: %s", prefix)
+	}
+	if len(matches) > 1 {
+		return nil, fmt.Errorf("ambiguous run ID prefix: %s (matches %d runs)", prefix, len(matches))
+	}
+
+	return matches[0], nil
 }
 
 // ListRuns queries runs with optional filtering and pagination
@@ -323,12 +364,7 @@ func (s *Store) ListRuns(filter RunFilter) (*RunListResult, error) {
 	}
 
 	// Get paginated results
-	listQuery := fmt.Sprintf(`
-		SELECT id, started_at, finished_at, status, concurrency, git_branch, git_commit, total_tasks, completed_tasks, failed_tasks, repo_id, repo_path, repo_name
-		FROM runs WHERE %s
-		ORDER BY started_at DESC
-		LIMIT ? OFFSET ?
-	`, baseWhere)
+	listQuery := fmt.Sprintf(`SELECT `+runColumns+` FROM runs WHERE %s ORDER BY started_at DESC LIMIT ? OFFSET ?`, baseWhere)
 	args = append(args, filter.Limit, filter.Offset)
 
 	rows, err := s.db.Query(listQuery, args...)
@@ -540,12 +576,7 @@ func (s *Store) GetAllAgents() ([]Agent, error) {
 // GetRunningRun returns the most recent run with status "running", or nil if none exists.
 // This is used to restore state on daemon startup.
 func (s *Store) GetRunningRun() (*Run, error) {
-	query := `
-		SELECT id, started_at, finished_at, status, concurrency, git_branch, git_commit, total_tasks, completed_tasks, failed_tasks, repo_id, repo_path, repo_name
-		FROM runs WHERE status = 'running'
-		ORDER BY started_at DESC
-		LIMIT 1
-	`
+	query := `SELECT ` + runColumns + ` FROM runs WHERE status = 'running' ORDER BY started_at DESC LIMIT 1`
 	row := s.db.QueryRow(query)
 	return s.scanRun(row)
 }
@@ -553,12 +584,7 @@ func (s *Store) GetRunningRun() (*Run, error) {
 // GetMostRecentRun returns the most recent run regardless of status, or nil if none exists.
 // This is used to restore historical state on daemon startup for display purposes.
 func (s *Store) GetMostRecentRun() (*Run, error) {
-	query := `
-		SELECT id, started_at, finished_at, status, concurrency, git_branch, git_commit, total_tasks, completed_tasks, failed_tasks, repo_id, repo_path, repo_name
-		FROM runs
-		ORDER BY started_at DESC
-		LIMIT 1
-	`
+	query := `SELECT ` + runColumns + ` FROM runs ORDER BY started_at DESC LIMIT 1`
 	row := s.db.QueryRow(query)
 	return s.scanRun(row)
 }
@@ -602,12 +628,18 @@ func (s *Store) MarkOrphanedAgentsFailed() (int64, error) {
 
 // GetStats returns aggregate statistics, optionally filtered by time range
 func (s *Store) GetStats(since *time.Time) (*AggregateStats, error) {
-	// Query runs
+	// Query runs for run-level stats
 	runsQuery := `
 		SELECT
 			COUNT(*) as total_runs,
 			SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_runs,
-			SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_runs
+			SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_runs,
+			SUM(CASE WHEN status = 'partial' THEN 1 ELSE 0 END) as partial_runs,
+			COALESCE(SUM(total_tasks), 0) as total_tasks,
+			COALESCE(SUM(completed_tasks), 0) as completed_tasks,
+			COALESCE(SUM(failed_tasks), 0) as failed_tasks,
+			COALESCE(SUM(files_changed), 0) as files_changed,
+			COALESCE(SUM(git_commits), 0) as git_commits
 		FROM runs
 	`
 	args := []interface{}{}
@@ -621,12 +653,18 @@ func (s *Store) GetStats(since *time.Time) (*AggregateStats, error) {
 		&stats.TotalRuns,
 		&stats.CompletedRuns,
 		&stats.FailedRuns,
+		&stats.PartialRuns,
+		&stats.TotalTasks,
+		&stats.CompletedTasks,
+		&stats.FailedTasks,
+		&stats.FilesChanged,
+		&stats.GitCommits,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query run stats: %w", err)
 	}
 
-	// Query agents
+	// Query agents for token/cost stats (agents have the authoritative data)
 	agentsQuery := `
 		SELECT
 			COUNT(*) as total_agents,
@@ -658,11 +696,7 @@ func (s *Store) GetStats(since *time.Time) (*AggregateStats, error) {
 
 // GetRunsByRepo retrieves all runs for a specific repository
 func (s *Store) GetRunsByRepo(repoID string) ([]Run, error) {
-	query := `
-		SELECT id, started_at, finished_at, status, concurrency, git_branch, git_commit, total_tasks, completed_tasks, failed_tasks, repo_id, repo_path, repo_name
-		FROM runs WHERE repo_id = ?
-		ORDER BY started_at DESC
-	`
+	query := `SELECT ` + runColumns + ` FROM runs WHERE repo_id = ? ORDER BY started_at DESC`
 	rows, err := s.db.Query(query, repoID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query runs by repo: %w", err)
@@ -682,12 +716,18 @@ func (s *Store) GetRunsByRepo(repoID string) ([]Run, error) {
 
 // GetStatsByRepo returns aggregate statistics for a specific repository, optionally filtered by time range
 func (s *Store) GetStatsByRepo(repoID string, since *time.Time) (*AggregateStats, error) {
-	// Query runs
+	// Query runs for run-level stats
 	runsQuery := `
 		SELECT
 			COUNT(*) as total_runs,
 			SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_runs,
-			SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_runs
+			SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_runs,
+			SUM(CASE WHEN status = 'partial' THEN 1 ELSE 0 END) as partial_runs,
+			COALESCE(SUM(total_tasks), 0) as total_tasks,
+			COALESCE(SUM(completed_tasks), 0) as completed_tasks,
+			COALESCE(SUM(failed_tasks), 0) as failed_tasks,
+			COALESCE(SUM(files_changed), 0) as files_changed,
+			COALESCE(SUM(git_commits), 0) as git_commits
 		FROM runs
 		WHERE repo_id = ?
 	`
@@ -702,12 +742,18 @@ func (s *Store) GetStatsByRepo(repoID string, since *time.Time) (*AggregateStats
 		&stats.TotalRuns,
 		&stats.CompletedRuns,
 		&stats.FailedRuns,
+		&stats.PartialRuns,
+		&stats.TotalTasks,
+		&stats.CompletedTasks,
+		&stats.FailedTasks,
+		&stats.FilesChanged,
+		&stats.GitCommits,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query run stats by repo: %w", err)
 	}
 
-	// Query agents
+	// Query agents for token/cost stats (agents have the authoritative data)
 	agentsQuery := `
 		SELECT
 			COUNT(*) as total_agents,
@@ -859,6 +905,15 @@ func (s *Store) scanRun(row *sql.Row) (*Run, error) {
 		&repoID,
 		&repoPath,
 		&repoName,
+		&run.TotalInputTokens,
+		&run.TotalOutputTokens,
+		&run.CacheCreationTokens,
+		&run.CacheReadTokens,
+		&run.TotalCostUSD,
+		&run.TotalTurns,
+		&run.FilesChanged,
+		&run.GitCommits,
+		&run.DurationSeconds,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -900,6 +955,15 @@ func (s *Store) scanRunFromRows(rows *sql.Rows) (*Run, error) {
 		&repoID,
 		&repoPath,
 		&repoName,
+		&run.TotalInputTokens,
+		&run.TotalOutputTokens,
+		&run.CacheCreationTokens,
+		&run.CacheReadTokens,
+		&run.TotalCostUSD,
+		&run.TotalTurns,
+		&run.FilesChanged,
+		&run.GitCommits,
+		&run.DurationSeconds,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan run: %w", err)

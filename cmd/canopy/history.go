@@ -9,15 +9,14 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/jzila/canopy/pkg/history"
+	"github.com/jzila/canopy/pkg/persistence"
 )
 
 var (
-	historySince   string
-	historyStatus  string
-	historyJSON    bool
-	historyLimit   int
-	historyVerbose bool
+	historySince  string
+	historyStatus string
+	historyJSON   bool
+	historyLimit  int
 )
 
 var historyCmd = &cobra.Command{
@@ -31,9 +30,6 @@ With a run ID, shows detailed information about that specific run.
 EXAMPLES
   # Show recent runs (default: last 20)
   canopy history
-
-  # Show runs with task details
-  canopy history -v
 
   # Show runs from the last 7 days
   canopy history --since=7d
@@ -57,16 +53,16 @@ func init() {
 	historyCmd.Flags().StringVar(&historyStatus, "status", "", "Filter by status (completed, failed, partial)")
 	historyCmd.Flags().BoolVar(&historyJSON, "json", false, "Output as JSON")
 	historyCmd.Flags().IntVar(&historyLimit, "limit", 20, "Maximum number of runs to show")
-	historyCmd.Flags().BoolVarP(&historyVerbose, "verbose", "v", false, "Show task details for each run")
 
 	rootCmd.AddCommand(historyCmd)
 }
 
 func runHistory(cmd *cobra.Command, args []string) error {
-	store, err := history.NewStore()
+	store, err := persistence.NewStore()
 	if err != nil {
 		return fmt.Errorf("failed to open history store: %w", err)
 	}
+	defer store.Close()
 
 	// If a run ID is provided, show details for that run
 	if len(args) > 0 {
@@ -77,8 +73,8 @@ func runHistory(cmd *cobra.Command, args []string) error {
 	return listRuns(store)
 }
 
-func listRuns(store *history.Store) error {
-	opts := history.ListOptions{
+func listRuns(store *persistence.Store) error {
+	filter := persistence.RunFilter{
 		Limit: historyLimit,
 	}
 
@@ -88,46 +84,50 @@ func listRuns(store *history.Store) error {
 		if err != nil {
 			return fmt.Errorf("invalid duration: %w", err)
 		}
-		opts.Since = time.Now().Add(-duration)
+		since := time.Now().Add(-duration)
+		filter.Since = &since
 	}
 
 	// Parse --status filter
 	if historyStatus != "" {
 		switch strings.ToLower(historyStatus) {
 		case "completed":
-			opts.Status = history.RunStatusCompleted
+			filter.Status = persistence.RunStatusCompleted
 		case "failed":
-			opts.Status = history.RunStatusFailed
+			filter.Status = persistence.RunStatusFailed
 		case "partial":
-			opts.Status = history.RunStatusPartial
+			filter.Status = persistence.RunStatusPartial
 		default:
 			return fmt.Errorf("invalid status: %s (use: completed, failed, partial)", historyStatus)
 		}
 	}
 
-	runs, err := store.List(opts)
+	result, err := store.ListRuns(filter)
 	if err != nil {
 		return fmt.Errorf("failed to list runs: %w", err)
 	}
 
-	if len(runs) == 0 {
+	if len(result.Runs) == 0 {
 		fmt.Println("No runs found.")
 		return nil
 	}
 
 	if historyJSON {
-		return outputJSON(runs)
+		return outputJSON(result.Runs)
 	}
 
-	return outputTable(runs, historyVerbose)
+	return outputTable(result.Runs)
 }
 
-func showRunDetails(store *history.Store, runID string) error {
+func showRunDetails(store *persistence.Store, runID string) error {
 	// Try exact match first, then prefix match
-	run, err := store.Get(runID)
+	run, err := store.GetRun(runID)
 	if err != nil {
+		return err
+	}
+	if run == nil {
 		// Try prefix match
-		run, err = store.FindByPrefix(runID)
+		run, err = store.FindRunByPrefix(runID)
 		if err != nil {
 			return err
 		}
@@ -137,10 +137,17 @@ func showRunDetails(store *history.Store, runID string) error {
 		return outputJSON(run)
 	}
 
-	return outputRunDetails(run)
+	// Get agents for this run to show task details
+	agents, err := store.GetAgentsByRun(run.ID)
+	if err != nil {
+		// Non-fatal, just show run without agent details
+		agents = nil
+	}
+
+	return outputRunDetails(run, agents)
 }
 
-func outputTable(runs []*history.RunRecord, verbose bool) error {
+func outputTable(runs []persistence.Run) error {
 	// Print header
 	fmt.Printf("%-12s  %-20s  %-10s  %-7s  %-10s  %s\n",
 		"ID", "STARTED", "STATUS", "TASKS", "DURATION", "COST")
@@ -153,7 +160,7 @@ func outputTable(runs []*history.RunRecord, verbose bool) error {
 		}
 
 		// Format timestamp
-		started := run.StartTime.Format("2006-01-02 15:04:05")
+		started := run.StartedAt.Format("2006-01-02 15:04:05")
 
 		// Format status with color hints
 		status := string(run.Status)
@@ -169,60 +176,20 @@ func outputTable(runs []*history.RunRecord, verbose bool) error {
 
 		fmt.Printf("%-12s  %-20s  %-10s  %-7s  %-10s  %s\n",
 			shortID, started, status, tasks, duration, cost)
-
-		// Show task details in verbose mode
-		if verbose && len(run.Tasks) > 0 {
-			outputTaskTree(run.Tasks)
-		}
 	}
 
 	return nil
 }
 
-// outputTaskTree prints a tree view of tasks under a run
-func outputTaskTree(tasks []history.TaskRecord) {
-	for i, task := range tasks {
-		// Determine tree connector
-		var connector string
-		if i == len(tasks)-1 {
-			connector = "  └─"
-		} else {
-			connector = "  ├─"
-		}
-
-		// Format task ID (truncate if needed)
-		taskID := task.ID
-		if len(taskID) > 12 {
-			taskID = taskID[:12]
-		}
-
-		// Format status (short form)
-		status := task.Status
-		if status == "completed" {
-			status = "done"
-		}
-
-		// Format duration
-		duration := formatDuration(time.Duration(task.DurationMS) * time.Millisecond)
-
-		// Format title (truncate if needed)
-		title := task.Title
-		if len(title) > 40 {
-			title = title[:37] + "..."
-		}
-
-		fmt.Printf("%s %-12s  %-8s  %-6s  %s\n",
-			connector, taskID, status, duration, title)
-	}
-}
-
-func outputRunDetails(run *history.RunRecord) error {
+func outputRunDetails(run *persistence.Run, agents []persistence.Agent) error {
 	fmt.Printf("Run: %s\n", run.ID)
 	fmt.Printf("Status: %s\n", run.Status)
-	fmt.Printf("Started: %s\n", run.StartTime.Format(time.RFC3339))
-	fmt.Printf("Ended: %s\n", run.EndTime.Format(time.RFC3339))
+	fmt.Printf("Started: %s\n", run.StartedAt.Format(time.RFC3339))
+	if run.FinishedAt != nil {
+		fmt.Printf("Ended: %s\n", run.FinishedAt.Format(time.RFC3339))
+	}
 	fmt.Printf("Duration: %s\n", formatDuration(time.Duration(run.DurationSeconds*float64(time.Second))))
-	fmt.Printf("Working Directory: %s\n", run.WorkDir)
+	fmt.Printf("Working Directory: %s\n", run.RepoPath)
 	fmt.Println()
 
 	fmt.Println("Tasks:")
@@ -234,32 +201,32 @@ func outputRunDetails(run *history.RunRecord) error {
 	fmt.Println("Tokens:")
 	fmt.Printf("  Input: %s\n", formatTokens(run.TotalInputTokens))
 	fmt.Printf("  Output: %s\n", formatTokens(run.TotalOutputTokens))
-	fmt.Printf("  Cache Read: %s\n", formatTokens(run.TotalCacheReadTokens))
-	fmt.Printf("  Cache Creation: %s\n", formatTokens(run.TotalCacheCreationTokens))
+	fmt.Printf("  Cache Read: %s\n", formatTokens(run.CacheReadTokens))
+	fmt.Printf("  Cache Creation: %s\n", formatTokens(run.CacheCreationTokens))
 	fmt.Println()
 
 	fmt.Printf("Cost: %s\n", formatCost(run.TotalCostUSD))
 	fmt.Printf("Files Changed: %d\n", run.FilesChanged)
 	fmt.Printf("Git Commits: %d\n", run.GitCommits)
 
-	// Show individual tasks if available
-	if len(run.Tasks) > 0 {
+	// Show individual agents/tasks if available
+	if len(agents) > 0 {
 		fmt.Println()
 		fmt.Println("Task Details:")
 		fmt.Printf("%-20s  %-10s  %-10s  %-10s  %s\n",
 			"ID", "STATUS", "DURATION", "COST", "TITLE")
 
-		for _, task := range run.Tasks {
-			taskID := task.ID
+		for _, agent := range agents {
+			taskID := agent.TaskID
 			if len(taskID) > 18 {
 				taskID = taskID[:18]
 			}
 
-			status := task.Status
-			duration := formatDuration(time.Duration(task.DurationMS) * time.Millisecond)
-			cost := formatCost(task.CostUSD)
+			status := string(agent.Status)
+			duration := formatDuration(time.Duration(agent.DurationSeconds * float64(time.Second)))
+			cost := formatCost(agent.CostUSD)
 
-			title := task.Title
+			title := agent.TaskTitle
 			if len(title) > 40 {
 				title = title[:37] + "..."
 			}

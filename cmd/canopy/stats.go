@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/jzila/canopy/pkg/history"
+	"github.com/jzila/canopy/pkg/persistence"
 )
 
 var (
@@ -48,12 +48,13 @@ func init() {
 }
 
 func runStats(cmd *cobra.Command, args []string) error {
-	store, err := history.NewStore()
+	store, err := persistence.NewStore()
 	if err != nil {
 		return fmt.Errorf("failed to open history store: %w", err)
 	}
+	defer store.Close()
 
-	opts := history.ListOptions{}
+	var since *time.Time
 
 	// Parse --since duration
 	if statsSince != "" {
@@ -61,10 +62,11 @@ func runStats(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("invalid duration: %w", err)
 		}
-		opts.Since = time.Now().Add(-duration)
+		t := time.Now().Add(-duration)
+		since = &t
 	}
 
-	stats, err := store.Stats(opts)
+	stats, err := store.GetStats(since)
 	if err != nil {
 		return fmt.Errorf("failed to calculate stats: %w", err)
 	}
@@ -85,48 +87,13 @@ func runStats(cmd *cobra.Command, args []string) error {
 	return outputStatsTable(stats, statsSince)
 }
 
-func outputStatsJSON(stats *history.AggregateStats) error {
-	// Create a JSON-friendly version with duration as seconds
-	jsonStats := struct {
-		TotalRuns                int     `json:"total_runs"`
-		CompletedRuns            int     `json:"completed_runs"`
-		FailedRuns               int     `json:"failed_runs"`
-		PartialRuns              int     `json:"partial_runs"`
-		TotalTasks               int     `json:"total_tasks"`
-		CompletedTasks           int     `json:"completed_tasks"`
-		FailedTasks              int     `json:"failed_tasks"`
-		TotalInputTokens         int     `json:"total_input_tokens"`
-		TotalOutputTokens        int     `json:"total_output_tokens"`
-		TotalCacheCreationTokens int     `json:"total_cache_creation_tokens"`
-		TotalCacheReadTokens     int     `json:"total_cache_read_tokens"`
-		TotalCostUSD             float64 `json:"total_cost_usd"`
-		TotalDurationSeconds     float64 `json:"total_duration_seconds"`
-		FilesChanged             int     `json:"files_changed"`
-		GitCommits               int     `json:"git_commits"`
-	}{
-		TotalRuns:                stats.TotalRuns,
-		CompletedRuns:            stats.CompletedRuns,
-		FailedRuns:               stats.FailedRuns,
-		PartialRuns:              stats.PartialRuns,
-		TotalTasks:               stats.TotalTasks,
-		CompletedTasks:           stats.CompletedTasks,
-		FailedTasks:              stats.FailedTasks,
-		TotalInputTokens:         stats.TotalInputTokens,
-		TotalOutputTokens:        stats.TotalOutputTokens,
-		TotalCacheCreationTokens: stats.TotalCacheCreationTokens,
-		TotalCacheReadTokens:     stats.TotalCacheReadTokens,
-		TotalCostUSD:             stats.TotalCostUSD,
-		TotalDurationSeconds:     stats.TotalDuration.Seconds(),
-		FilesChanged:             stats.FilesChanged,
-		GitCommits:               stats.GitCommits,
-	}
-
+func outputStatsJSON(stats *persistence.AggregateStats) error {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
-	return encoder.Encode(jsonStats)
+	return encoder.Encode(stats)
 }
 
-func outputStatsTable(stats *history.AggregateStats, since string) error {
+func outputStatsTable(stats *persistence.AggregateStats, since string) error {
 	// Build period description
 	period := "All time"
 	if since != "" {
@@ -166,7 +133,7 @@ func outputStatsTable(stats *history.AggregateStats, since string) error {
 	fmt.Printf("Cost: %s\n", formatCost(stats.TotalCostUSD))
 
 	// Duration section
-	fmt.Printf("Total Duration: %s\n", formatDuration(stats.TotalDuration))
+	fmt.Printf("Total Duration: %s\n", formatDuration(time.Duration(stats.TotalDurationSeconds*float64(time.Second))))
 
 	// Files and commits section
 	if stats.FilesChanged > 0 || stats.GitCommits > 0 {
