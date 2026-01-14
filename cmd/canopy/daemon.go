@@ -1,10 +1,12 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -69,6 +71,58 @@ Exit codes:
 	RunE: runDaemonStatus,
 }
 
+var daemonStartCmd = &cobra.Command{
+	Use:   "start",
+	Short: "Start daemon in background",
+	Long: `Start the canopy daemon as a background process.
+
+The daemon will be started in detached mode with output redirected
+to the log file at ~/.cache/canopy/daemon.log.
+
+If the daemon is already running, this command will report an error.
+
+Example:
+  # Start daemon in background
+  canopy daemon start
+
+  # Check status after starting
+  canopy daemon status`,
+	RunE: runDaemonStart,
+}
+
+var daemonStopCmd = &cobra.Command{
+	Use:   "stop",
+	Short: "Stop running daemon",
+	Long: `Stop the canopy daemon gracefully.
+
+Sends SIGTERM to the daemon process and waits for it to exit.
+Cleans up the pidfile after the daemon stops.
+
+Exit codes:
+  0 - Daemon stopped successfully
+  1 - Daemon is not running or error occurred`,
+	RunE: runDaemonStop,
+}
+
+var daemonRestartCmd = &cobra.Command{
+	Use:   "restart",
+	Short: "Restart daemon (stop + start)",
+	Long: `Restart the canopy daemon by stopping any running instance and starting fresh.
+
+If the daemon is running, sends SIGTERM and waits for it to exit.
+Then starts a new daemon process in the background.
+
+If no daemon is running, simply starts a new daemon.
+
+Example:
+  # Restart daemon
+  canopy daemon restart
+
+  # Check status after restart
+  canopy daemon status`,
+	RunE: runDaemonRestart,
+}
+
 func init() {
 	daemonCmd.Flags().IntVar(&daemonPort, "port", 8080, "HTTP server port")
 	daemonCmd.Flags().StringVar(&daemonSocket, "ipc-socket", "", "Unix socket path for IPC (default: runtime dir)")
@@ -77,6 +131,9 @@ func init() {
 	daemonCmd.Flags().StringVar(&daemonAddr, "daemon-addr", "", "Connect TUI to daemon at specified address (e.g., localhost:8080)")
 
 	daemonCmd.AddCommand(daemonStatusCmd)
+	daemonCmd.AddCommand(daemonStartCmd)
+	daemonCmd.AddCommand(daemonStopCmd)
+	daemonCmd.AddCommand(daemonRestartCmd)
 	rootCmd.AddCommand(daemonCmd)
 }
 
@@ -219,4 +276,89 @@ func runDaemonStatus(cmd *cobra.Command, args []string) error {
 	fmt.Println("Daemon is not running")
 	os.Exit(1)
 	return nil // unreachable, but satisfies compiler
+}
+
+// runDaemonStart starts the daemon in background mode
+func runDaemonStart(cmd *cobra.Command, args []string) error {
+	// Check if daemon is already running
+	running, pid, err := daemon.IsRunning()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error checking daemon status: %v\n", err)
+		os.Exit(1)
+	}
+	if running {
+		fmt.Fprintf(os.Stderr, "Daemon is already running (pid %d)\n", pid)
+		os.Exit(1)
+	}
+
+	// Spawn daemon in background
+	if err := ipc.SpawnDaemon(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error starting daemon: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("Daemon started")
+	return nil
+}
+
+// runDaemonStop stops the running daemon gracefully
+func runDaemonStop(cmd *cobra.Command, args []string) error {
+	// Get PID first for reporting
+	running, pid, err := daemon.IsRunning()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error checking daemon status: %v\n", err)
+		os.Exit(1)
+	}
+
+	if !running {
+		fmt.Println("Daemon is not running")
+		os.Exit(1)
+	}
+
+	fmt.Printf("Stopping daemon (pid %d)...\n", pid)
+
+	// Stop with 5 second timeout
+	if err := daemon.StopDaemon(5 * time.Second); err != nil {
+		if errors.Is(err, daemon.ErrDaemonNotRunning) {
+			// Race condition: daemon exited between check and stop
+			fmt.Println("Daemon stopped")
+			return nil
+		}
+		fmt.Fprintf(os.Stderr, "Error stopping daemon: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("Daemon stopped")
+	return nil
+}
+
+// runDaemonRestart stops any running daemon and starts a fresh one
+func runDaemonRestart(cmd *cobra.Command, args []string) error {
+	// Check if daemon is running
+	running, pid, err := daemon.IsRunning()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error checking daemon status: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Stop if running
+	if running {
+		fmt.Printf("Stopping daemon (pid %d)...\n", pid)
+		if err := daemon.StopDaemon(5 * time.Second); err != nil {
+			if !errors.Is(err, daemon.ErrDaemonNotRunning) {
+				fmt.Fprintf(os.Stderr, "Error stopping daemon: %v\n", err)
+				os.Exit(1)
+			}
+		}
+		fmt.Println("Daemon stopped")
+	}
+
+	// Start daemon
+	if err := ipc.SpawnDaemon(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error starting daemon: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Println("Daemon started")
+	return nil
 }
