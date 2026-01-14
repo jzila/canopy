@@ -8,6 +8,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/jzila/canopy/pkg/logging"
 	"github.com/jzila/canopy/pkg/persistence"
 	"github.com/jzila/canopy/pkg/repository"
 )
@@ -431,7 +432,17 @@ func convertPersistenceStatus(status persistence.AgentStatus) AgentStatus {
 // Start initializes and starts all daemon components
 // Blocks until a termination signal is received
 func (d *Daemon) Start() error {
-	log.Println("Starting Canopy daemon...")
+	// Setup file logging (writes to $XDG_CACHE_HOME/canopy/daemon.log)
+	cleanupLogging, err := logging.SetupFileLogging()
+	if err != nil {
+		// Non-fatal: continue with stderr-only logging
+		log.Printf("Warning: failed to setup file logging: %v", err)
+	} else {
+		defer cleanupLogging()
+		log.Printf("Logging to %s", logging.LogPath())
+	}
+
+	log.Printf("Starting Canopy daemon (PID %d)...", os.Getpid())
 
 	// Initialize components if not already done (allows pre-initialization via Init())
 	d.Init()

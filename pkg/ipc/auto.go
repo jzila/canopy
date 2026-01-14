@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/jzila/canopy/pkg/logging"
 	"github.com/jzila/canopy/pkg/runtime"
 )
 
@@ -59,10 +60,16 @@ func spawnDaemon() error {
 	// Detach from parent process
 	cmd.SysProcAttr = getSysProcAttr()
 
-	// Redirect output to /dev/null for now
-	// TODO: Consider redirecting to runtime.LogPath() when that's available
-	cmd.Stdout = nil
-	cmd.Stderr = nil
+	// Redirect output to daemon log file
+	logFile, err := logging.OpenLogFile()
+	if err != nil {
+		// Fall back to /dev/null if log file can't be opened
+		cmd.Stdout = nil
+		cmd.Stderr = nil
+	} else {
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+	}
 	cmd.Stdin = nil
 
 	if err := cmd.Start(); err != nil {
