@@ -41,6 +41,13 @@ type Overlay struct {
 	bindMounts []string // Paths that are bind-mounted through the overlay
 }
 
+// StaleMountInfo contains information about a stale overlay mount
+type StaleMountInfo struct {
+	MergedDir string // Full path to the merged directory mount point
+	ID        string // Overlay ID (directory name under baseDir)
+	IsFuse    bool   // True if this is a FUSE mount (vs kernel overlay)
+}
+
 // DefaultPassthroughPaths are directories that should bypass the overlay
 // and write directly to the original filesystem
 var DefaultPassthroughPaths = []string{

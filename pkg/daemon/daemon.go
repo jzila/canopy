@@ -283,10 +283,10 @@ func (d *Daemon) restoreStateFromDB() error {
 		d.state.StartTime = run.StartedAt
 	}
 
-	// Load ALL non-archived agents across all runs (not just the most recent run)
-	agents, err := d.persistenceStore.GetAllNonArchivedAgents()
+	// Load ALL agents across all runs (including archived) so that users can un-archive them
+	agents, err := d.persistenceStore.GetAllAgents()
 	if err != nil {
-		return fmt.Errorf("failed to get non-archived agents: %w", err)
+		return fmt.Errorf("failed to get all agents: %w", err)
 	}
 
 	if len(agents) == 0 {
@@ -304,7 +304,7 @@ func (d *Daemon) restoreStateFromDB() error {
 	// Update stats after restoring all agents
 	d.state.UpdateStats()
 
-	log.Printf("Restored %d non-archived agents from all runs (historical data)", len(agents))
+	log.Printf("Restored %d agents from all runs (including archived)", len(agents))
 	return nil
 }
 

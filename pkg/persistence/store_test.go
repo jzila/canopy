@@ -362,6 +362,97 @@ func TestGetAllNonArchivedAgents(t *testing.T) {
 	}
 }
 
+func TestGetAllAgents(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	now := time.Now()
+
+	// Create multiple runs
+	runs := []*Run{
+		{ID: "run-1", StartedAt: now.Add(-2 * time.Hour), Status: RunStatusCompleted},
+		{ID: "run-2", StartedAt: now.Add(-time.Hour), Status: RunStatusCompleted},
+	}
+
+	for _, run := range runs {
+		if err := store.CreateRun(run); err != nil {
+			t.Fatalf("failed to create run: %v", err)
+		}
+	}
+
+	// Create agents across multiple runs with mixed archived status
+	agents := []*Agent{
+		// Run 1: 2 non-archived, 1 archived
+		{ID: "agent-1-1", RunID: "run-1", TaskID: "task-1-1", TaskTitle: "Task 1.1", Status: AgentStatusCompleted, StartedAt: now.Add(-2 * time.Hour), Archived: false},
+		{ID: "agent-1-2", RunID: "run-1", TaskID: "task-1-2", TaskTitle: "Task 1.2", Status: AgentStatusCompleted, StartedAt: now.Add(-2*time.Hour + time.Minute), Archived: true},
+		{ID: "agent-1-3", RunID: "run-1", TaskID: "task-1-3", TaskTitle: "Task 1.3", Status: AgentStatusCompleted, StartedAt: now.Add(-2*time.Hour + 2*time.Minute), Archived: false},
+		// Run 2: 1 non-archived, 1 archived
+		{ID: "agent-2-1", RunID: "run-2", TaskID: "task-2-1", TaskTitle: "Task 2.1", Status: AgentStatusCompleted, StartedAt: now.Add(-time.Hour), Archived: false},
+		{ID: "agent-2-2", RunID: "run-2", TaskID: "task-2-2", TaskTitle: "Task 2.2", Status: AgentStatusFailed, StartedAt: now.Add(-time.Hour + time.Minute), Archived: true},
+	}
+
+	for _, agent := range agents {
+		if err := store.CreateAgent(agent); err != nil {
+			t.Fatalf("failed to create agent: %v", err)
+		}
+	}
+
+	// Test GetAllAgents - should return ALL agents (including archived)
+	retrieved, err := store.GetAllAgents()
+	if err != nil {
+		t.Fatalf("failed to get all agents: %v", err)
+	}
+
+	// Should get all 5 agents (both archived and non-archived)
+	expectedCount := 5
+	if len(retrieved) != expectedCount {
+		t.Errorf("expected %d agents, got %d", expectedCount, len(retrieved))
+	}
+
+	// Verify agents are ordered by started_at
+	for i := 1; i < len(retrieved); i++ {
+		if retrieved[i].StartedAt.Before(retrieved[i-1].StartedAt) {
+			t.Errorf("agents not ordered by started_at: %s (%v) before %s (%v)",
+				retrieved[i-1].ID, retrieved[i-1].StartedAt,
+				retrieved[i].ID, retrieved[i].StartedAt)
+		}
+	}
+
+	// Verify all expected agent IDs are present
+	expectedIDs := map[string]bool{
+		"agent-1-1": false,
+		"agent-1-2": false, // archived
+		"agent-1-3": false,
+		"agent-2-1": false,
+		"agent-2-2": false, // archived
+	}
+
+	for _, agent := range retrieved {
+		if _, ok := expectedIDs[agent.ID]; ok {
+			expectedIDs[agent.ID] = true
+		} else {
+			t.Errorf("unexpected agent ID in results: %s", agent.ID)
+		}
+	}
+
+	for id, found := range expectedIDs {
+		if !found {
+			t.Errorf("expected agent %s not found in results", id)
+		}
+	}
+
+	// Verify archived status is correctly preserved
+	archivedCount := 0
+	for _, agent := range retrieved {
+		if agent.Archived {
+			archivedCount++
+		}
+	}
+	if archivedCount != 2 {
+		t.Errorf("expected 2 archived agents, got %d", archivedCount)
+	}
+}
+
 func TestGetStats(t *testing.T) {
 	store := createTestStore(t)
 	defer store.Close()

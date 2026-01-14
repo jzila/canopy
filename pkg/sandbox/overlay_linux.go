@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -20,7 +21,12 @@ func IsStub() bool {
 // Tries kernel overlayfs first, falls back to fuse-overlayfs for rootless operation
 func (o *Overlay) Mount() error {
 	if o.mounted {
-		return fmt.Errorf("overlay %s already mounted", o.ID)
+		return fmt.Errorf("overlay %s already mounted (flag)", o.ID)
+	}
+
+	// Check actual mount state to handle stale state from crashes
+	if o.isMounted() {
+		return fmt.Errorf("overlay %s already mounted (detected in /proc/mounts)", o.ID)
 	}
 
 	// Setup passthrough symlinks in upperdir BEFORE mounting
@@ -166,8 +172,13 @@ func (o *Overlay) Unmount() error {
 
 // isMounted checks if the overlay is currently mounted by checking /proc/mounts
 func (o *Overlay) isMounted() bool {
+	return IsMountPoint(o.MergedDir)
+}
+
+// IsMountPoint checks if a path is currently a mount point
+func IsMountPoint(path string) bool {
 	// Use findmnt to check if the path is a mount point
-	cmd := exec.Command("findmnt", "-n", "-o", "TARGET", o.MergedDir)
+	cmd := exec.Command("findmnt", "-n", "-o", "TARGET", path)
 	output, err := cmd.Output()
 	if err != nil {
 		// findmnt returns non-zero if not found, which means not mounted
@@ -175,4 +186,112 @@ func (o *Overlay) isMounted() bool {
 	}
 	// If findmnt found it, it's mounted
 	return len(output) > 0
+}
+
+// DetectStaleMounts finds overlay mounts under baseDir that may be leftover from crashes.
+// Returns a list of stale mount info that can be cleaned up.
+func DetectStaleMounts(baseDir string) ([]StaleMountInfo, error) {
+	var stale []StaleMountInfo
+
+	// List potential overlay directories
+	entries, err := os.ReadDir(baseDir)
+	if os.IsNotExist(err) {
+		return nil, nil // No base directory, no stale mounts
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read base dir: %w", err)
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		id := entry.Name()
+		mergedDir := filepath.Join(baseDir, id, "merged")
+
+		// Check if this merged directory is a mount point
+		if IsMountPoint(mergedDir) {
+			info := StaleMountInfo{
+				MergedDir: mergedDir,
+				ID:        id,
+			}
+			// Check if it's a FUSE mount by looking at mount type
+			cmd := exec.Command("findmnt", "-n", "-o", "FSTYPE", mergedDir)
+			output, err := cmd.Output()
+			if err == nil {
+				fsType := strings.TrimSpace(string(output))
+				info.IsFuse = fsType == "fuse.fuse-overlayfs"
+			}
+			stale = append(stale, info)
+		}
+	}
+
+	return stale, nil
+}
+
+// CleanupStaleMounts unmounts and removes stale overlay mounts found by DetectStaleMounts.
+// Returns the number of successfully cleaned mounts and any errors encountered.
+func CleanupStaleMounts(baseDir string) (int, []error) {
+	stale, err := DetectStaleMounts(baseDir)
+	if err != nil {
+		return 0, []error{err}
+	}
+
+	var errors []error
+	cleaned := 0
+
+	for _, info := range stale {
+		// Try to unmount
+		var unmountErr error
+		if info.IsFuse {
+			unmountErr = exec.Command("fusermount", "-u", info.MergedDir).Run()
+		} else {
+			unmountErr = syscall.Unmount(info.MergedDir, syscall.MNT_DETACH)
+		}
+
+		if unmountErr != nil {
+			// Try lazy unmount as fallback
+			unmountErr = exec.Command("umount", "-l", info.MergedDir).Run()
+		}
+
+		if unmountErr != nil {
+			errors = append(errors, fmt.Errorf("unmount %s: %w", info.MergedDir, unmountErr))
+			continue
+		}
+
+		// Verify unmount succeeded
+		if IsMountPoint(info.MergedDir) {
+			errors = append(errors, fmt.Errorf("%s still mounted after unmount attempt", info.MergedDir))
+			continue
+		}
+
+		// Remove the overlay directory tree
+		overlayDir := filepath.Join(baseDir, info.ID)
+		if err := os.RemoveAll(overlayDir); err != nil {
+			errors = append(errors, fmt.Errorf("remove %s: %w", overlayDir, err))
+			continue
+		}
+
+		cleaned++
+	}
+
+	return cleaned, errors
+}
+
+// RecoverFromCrash performs cleanup operations needed after a crash.
+// It detects stale mounts, cleans them up, and returns a summary.
+func RecoverFromCrash(baseDir string) (cleaned int, stale int, errors []error) {
+	staleMounts, err := DetectStaleMounts(baseDir)
+	if err != nil {
+		return 0, 0, []error{err}
+	}
+
+	stale = len(staleMounts)
+	if stale == 0 {
+		return 0, 0, nil
+	}
+
+	cleaned, errors = CleanupStaleMounts(baseDir)
+	return cleaned, stale, errors
 }
