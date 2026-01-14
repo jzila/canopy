@@ -228,6 +228,87 @@ func TestAddGoCacheEnv(t *testing.T) {
 	})
 }
 
+func TestTimeoutConfiguration(t *testing.T) {
+	t.Run("default timeout when nothing configured", func(t *testing.T) {
+		task := &beads.Task{ID: "task-1", Title: "Test"}
+
+		// No timeout set anywhere
+		timeout := task.GetTimeout()
+		if timeout != 0 {
+			t.Errorf("Expected 0 for unset task timeout, got %v", timeout)
+		}
+	})
+
+	t.Run("per-task timeout is parsed correctly", func(t *testing.T) {
+		task := &beads.Task{
+			ID:      "task-1",
+			Title:   "Test",
+			Timeout: "5m",
+		}
+
+		timeout := task.GetTimeout()
+		if timeout != 5*time.Minute {
+			t.Errorf("Expected 5m, got %v", timeout)
+		}
+	})
+
+	t.Run("per-task timeout with hours", func(t *testing.T) {
+		task := &beads.Task{
+			ID:      "task-1",
+			Title:   "Test",
+			Timeout: "1h30m",
+		}
+
+		timeout := task.GetTimeout()
+		expected := 90 * time.Minute
+		if timeout != expected {
+			t.Errorf("Expected %v, got %v", expected, timeout)
+		}
+	})
+
+	t.Run("invalid task timeout returns zero", func(t *testing.T) {
+		task := &beads.Task{
+			ID:      "task-1",
+			Title:   "Test",
+			Timeout: "invalid",
+		}
+
+		timeout := task.GetTimeout()
+		if timeout != 0 {
+			t.Errorf("Expected 0 for invalid timeout, got %v", timeout)
+		}
+	})
+
+	t.Run("sandbox config timeout is parsed correctly", func(t *testing.T) {
+		config := &sandbox.SandboxConfig{
+			Resources: sandbox.ResourceSettings{
+				Timeout: "30m",
+			},
+		}
+
+		timeout := config.GetTimeout()
+		if timeout != 30*time.Minute {
+			t.Errorf("Expected 30m, got %v", timeout)
+		}
+	})
+
+	t.Run("nil sandbox config returns zero timeout", func(t *testing.T) {
+		var config *sandbox.SandboxConfig
+		timeout := config.GetTimeout()
+		if timeout != 0 {
+			t.Errorf("Expected 0 for nil config, got %v", timeout)
+		}
+	})
+
+	t.Run("empty sandbox config timeout returns zero", func(t *testing.T) {
+		config := &sandbox.SandboxConfig{}
+		timeout := config.GetTimeout()
+		if timeout != 0 {
+			t.Errorf("Expected 0 for empty timeout, got %v", timeout)
+		}
+	})
+}
+
 func TestBuildPrompt(t *testing.T) {
 	t.Run("basic task without user prompt", func(t *testing.T) {
 		executor := &Executor{

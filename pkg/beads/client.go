@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Task represents a beads task returned from bd ready
@@ -17,6 +18,7 @@ type Task struct {
 	Status      string   `json:"status,omitempty"`
 	Blockers    []string `json:"blockers,omitempty"`    // Tasks this task depends on
 	BlockedBy   []string `json:"blocked_by,omitempty"`  // Alias for blockers
+	Timeout     string   `json:"timeout,omitempty"`     // Per-task timeout (e.g., "5m", "30m", "1h")
 }
 
 // BeadsClient defines the interface for interacting with the beads task tracker.
@@ -237,6 +239,19 @@ func (t *Task) GetDependencies() []string {
 		return t.Blockers
 	}
 	return t.BlockedBy
+}
+
+// GetTimeout parses and returns the timeout duration for the task.
+// Returns 0 if not set (caller should use default).
+func (t *Task) GetTimeout() time.Duration {
+	if t == nil || t.Timeout == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(t.Timeout)
+	if err != nil {
+		return 0
+	}
+	return d
 }
 
 // Sync runs bd sync to commit and push beads changes

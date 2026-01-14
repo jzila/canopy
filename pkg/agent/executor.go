@@ -161,8 +161,14 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 		prompt,
 	}
 
-	// Create command with timeout
-	timeout := e.config.Timeout
+	// Determine timeout: per-task > sandbox config > executor config > default
+	timeout := task.GetTimeout()
+	if timeout <= 0 && e.config.SandboxConfig != nil {
+		timeout = e.config.SandboxConfig.GetTimeout()
+	}
+	if timeout <= 0 {
+		timeout = e.config.Timeout
+	}
 	if timeout <= 0 {
 		timeout = DefaultTimeout
 	}

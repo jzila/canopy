@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -35,6 +36,9 @@ type ResourceSettings struct {
 	MaxOpenFiles int `toml:"max_open_files"`
 	// MaxDisk limits disk usage (future feature)
 	MaxDisk string `toml:"max_disk"`
+	// Timeout is the default execution timeout for agents (e.g., "10m", "30m", "1h")
+	// If not set, defaults to 10 minutes
+	Timeout string `toml:"timeout"`
 }
 
 // PathSettings contains paths to expose to agents
@@ -238,6 +242,19 @@ func (c *SandboxConfig) isBlocked(path string) bool {
 	}
 
 	return false
+}
+
+// GetTimeout parses and returns the timeout duration from config.
+// Returns 0 if not set (caller should use default).
+func (c *SandboxConfig) GetTimeout() time.Duration {
+	if c == nil || c.Resources.Timeout == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(c.Resources.Timeout)
+	if err != nil {
+		return 0
+	}
+	return d
 }
 
 // ParseMemoryLimit parses a memory string like "4GB" into bytes
