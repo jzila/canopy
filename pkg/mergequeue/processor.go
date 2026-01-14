@@ -129,10 +129,35 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 
 	resp.CommitsApplied = mergeResult.CommitsApplied
 
-	// Check if git am failed - if so, spawn a resolver agent
+	// Determine if we need to spawn a resolver agent
+	needsResolver := false
+	resolverReason := ""
+
+	// Case 1: git am failed (patch application failed)
 	if mergeResult.PatchFailed[taskID] && req.Result.GitState != nil && len(req.Result.GitState.Patches) > 0 {
+		needsResolver = true
+		resolverReason = "git patch failed"
+	}
+
+	// Case 2: Merge had errors (git add/commit failed)
+	if !needsResolver && len(mergeResult.Errors) > 0 {
+		needsResolver = true
+		resolverReason = "merge errors: " + strings.Join(mergeResult.Errors, "; ")
+	}
+
+	// Case 3: No actual changes applied (might be filtering issue)
+	if !needsResolver && mergeResult.CommitsApplied == 0 && len(mergeResult.Applied) == 0 {
+		// Only spawn resolver if the agent actually produced something
+		if len(req.Result.Changes) > 0 || (req.Result.GitState != nil && len(req.Result.GitState.Patches) > 0) {
+			needsResolver = true
+			resolverReason = "no changes applied despite agent output"
+		}
+	}
+
+	// Spawn resolver if any merge issue was detected
+	if needsResolver {
 		if p.verbose {
-			fmt.Printf("[%s] Git patch failed, spawning resolver agent...\n", taskID)
+			fmt.Printf("[%s] Merge issue detected (%s), spawning resolver agent...\n", taskID, resolverReason)
 		}
 
 		// Pause queue during conflict resolution
@@ -144,11 +169,17 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 		resp.ResolverSpawned = true
 
 		// Build conflict context for the resolver
+		// Include patches if available, otherwise use file changes
+		var patches []string
+		if req.Result.GitState != nil && len(req.Result.GitState.Patches) > 0 {
+			patches = req.Result.GitState.Patches
+		}
+
 		conflictCtx := &resolver.ConflictContext{
 			TaskID:          taskID,
 			TaskTitle:       req.Task.Title,
 			TaskDescription: req.Task.Description,
-			FailedPatches:   req.Result.GitState.Patches,
+			FailedPatches:   patches,
 			PatchErrors:     mergeResult.Errors,
 			FileChanges:     req.Result.Changes,
 		}
@@ -237,32 +268,8 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 		return resp
 	}
 
-	// No conflicts - check if merge was actually successful
-	if len(mergeResult.Errors) > 0 {
-		// Merge errors are critical - always log them and fail the task
-		for _, errMsg := range mergeResult.Errors {
-			fmt.Fprintf(os.Stderr, "merge error for %s: %s\n", taskID, errMsg)
-		}
-		resp.Error = fmt.Sprintf("merge had errors: %s", strings.Join(mergeResult.Errors, "; "))
-		p.markTaskFailed(taskID, resp.Error)
-		p.sendMergeStatus(taskID, ipc.MergeStatusFailed, 0, resp.Error)
-		return resp
-	}
-
-	// Verify actual work was done before marking task as done
-	if mergeResult.CommitsApplied == 0 && len(mergeResult.Applied) == 0 {
-		// No commits and no file changes applied - task produced no output
-		errMsg := fmt.Sprintf("task %s completed but produced no changes (no commits, no file modifications)", taskID)
-		if p.verbose {
-			fmt.Fprintf(os.Stderr, "[%s] Warning: %s\n", taskID, errMsg)
-		}
-		p.markTaskFailed(taskID, errMsg)
-		resp.Error = errMsg
-		p.sendMergeStatus(taskID, ipc.MergeStatusFailed, 0, errMsg)
-		return resp
-	}
-
-	// Mark task as done only if there were no errors and actual work was done
+	// No conflicts and no errors - mark task as done
+	// (Error cases and no-change cases are handled by resolver above)
 	p.markTaskDone(taskID)
 	p.sendMergeStatus(taskID, ipc.MergeStatusMerged, 0, "")
 
