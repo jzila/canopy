@@ -123,6 +123,33 @@ Example:
 	RunE: runDaemonRestart,
 }
 
+var daemonLogsCmd = &cobra.Command{
+	Use:   "logs",
+	Short: "Show daemon logs",
+	Long: `Show daemon log output.
+
+Displays log entries from the daemon log file at ~/.cache/canopy/daemon.log.
+
+Example:
+  # Show last 50 lines (default)
+  canopy daemon logs
+
+  # Show last 100 lines
+  canopy daemon logs -n 100
+
+  # Follow log output (like tail -f)
+  canopy daemon logs -f
+
+  # Follow with last 20 lines of context
+  canopy daemon logs -f -n 20`,
+	RunE: runDaemonLogs,
+}
+
+var (
+	logsFollow bool
+	logsLines  int
+)
+
 func init() {
 	daemonCmd.Flags().IntVar(&daemonPort, "port", 8080, "HTTP server port")
 	daemonCmd.Flags().StringVar(&daemonSocket, "ipc-socket", "", "Unix socket path for IPC (default: runtime dir)")
@@ -130,10 +157,14 @@ func init() {
 	daemonCmd.Flags().BoolVar(&daemonTUIMode, "tui", false, "Enable TUI dashboard view")
 	daemonCmd.Flags().StringVar(&daemonAddr, "daemon-addr", "", "Connect TUI to daemon at specified address (e.g., localhost:8080)")
 
+	daemonLogsCmd.Flags().BoolVarP(&logsFollow, "follow", "f", false, "Follow log file (like tail -f)")
+	daemonLogsCmd.Flags().IntVarP(&logsLines, "lines", "n", 50, "Number of lines to show")
+
 	daemonCmd.AddCommand(daemonStatusCmd)
 	daemonCmd.AddCommand(daemonStartCmd)
 	daemonCmd.AddCommand(daemonStopCmd)
 	daemonCmd.AddCommand(daemonRestartCmd)
+	daemonCmd.AddCommand(daemonLogsCmd)
 	rootCmd.AddCommand(daemonCmd)
 }
 
@@ -361,4 +392,12 @@ func runDaemonRestart(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("Daemon started")
 	return nil
+}
+
+// runDaemonLogs shows daemon log output
+func runDaemonLogs(cmd *cobra.Command, args []string) error {
+	if logsFollow {
+		return daemon.TailFollow(logsLines)
+	}
+	return daemon.TailLines(logsLines)
 }
