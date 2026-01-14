@@ -62,6 +62,25 @@ Exit codes:
 	RunE: runDaemonStatus,
 }
 
+var daemonStartCmd = &cobra.Command{
+	Use:   "start",
+	Short: "Start daemon in background",
+	Long: `Start the canopy daemon as a background process.
+
+The daemon will be started in detached mode with output redirected
+to the log file at ~/.cache/canopy/daemon.log.
+
+If the daemon is already running, this command will report an error.
+
+Example:
+  # Start daemon in background
+  canopy daemon start
+
+  # Check status after starting
+  canopy daemon status`,
+	RunE: runDaemonStart,
+}
+
 func init() {
 	daemonCmd.Flags().IntVar(&daemonPort, "port", 8080, "HTTP server port")
 	daemonCmd.Flags().StringVar(&daemonSocket, "ipc-socket", "", "Unix socket path for IPC (default: runtime dir)")
@@ -69,6 +88,7 @@ func init() {
 	daemonCmd.Flags().BoolVar(&daemonTUIMode, "tui", false, "Enable TUI dashboard view")
 
 	daemonCmd.AddCommand(daemonStatusCmd)
+	daemonCmd.AddCommand(daemonStartCmd)
 	rootCmd.AddCommand(daemonCmd)
 }
 
@@ -187,4 +207,24 @@ func runDaemonStatus(cmd *cobra.Command, args []string) error {
 	fmt.Println("Daemon is not running")
 	os.Exit(1)
 	return nil // unreachable, but satisfies compiler
+}
+
+// runDaemonStart starts the daemon in the background
+func runDaemonStart(cmd *cobra.Command, args []string) error {
+	// Check if daemon is already running
+	running, pid, err := daemon.IsRunning()
+	if err != nil {
+		return fmt.Errorf("failed to check daemon status: %w", err)
+	}
+	if running {
+		return fmt.Errorf("daemon already running (pid %d)", pid)
+	}
+
+	// Spawn daemon in background
+	if err := ipc.SpawnDaemon(); err != nil {
+		return fmt.Errorf("failed to start daemon: %w", err)
+	}
+
+	fmt.Println("Daemon started in background")
+	return nil
 }

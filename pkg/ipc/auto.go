@@ -23,7 +23,7 @@ func GetClient() (*Client, error) {
 	}
 
 	// Daemon not running, try to start it
-	if err := spawnDaemon(); err != nil {
+	if err := SpawnDaemon(); err != nil {
 		return nil, fmt.Errorf("failed to start daemon: %w", err)
 	}
 
@@ -41,8 +41,8 @@ func GetClient() (*Client, error) {
 	return client, nil
 }
 
-// spawnDaemon starts the canopy daemon in the background
-func spawnDaemon() error {
+// SpawnDaemon starts the canopy daemon in the background
+func SpawnDaemon() error {
 	// Ensure runtime directory exists
 	if err := runtime.EnsureDir(); err != nil {
 		return fmt.Errorf("failed to create runtime directory: %w", err)
