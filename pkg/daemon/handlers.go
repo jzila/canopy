@@ -506,3 +506,159 @@ func (h *Handler) HandleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(response)
 }
+
+// MergeQueueState represents the current state of the merge queue
+type MergeQueueState struct {
+	Completed     []MergeCompletedItem `json:"completed"`
+	Resolvers     []MergeResolverItem  `json:"resolvers"`
+	Pending       []MergePendingItem   `json:"pending"`
+	ActiveWorkers []MergeWorkerItem    `json:"activeWorkers"`
+	IsPaused      bool                 `json:"isPaused"`
+	QueueLength   int                  `json:"queueLength"`
+}
+
+// MergeCompletedItem represents a completed merge
+type MergeCompletedItem struct {
+	TaskID    string    `json:"taskId"`
+	AgentID   string    `json:"agentId"`
+	Timestamp time.Time `json:"timestamp"`
+	Success   bool      `json:"success"`
+	Error     string    `json:"error,omitempty"`
+}
+
+// MergeResolverItem represents an active resolver for merge conflicts
+type MergeResolverItem struct {
+	ParentTaskID    string `json:"parentTaskId"`
+	ResolverTaskID  string `json:"resolverTaskId"`
+	ParentAgentID   string `json:"parentAgentId"`
+	ResolverAgentID string `json:"resolverAgentId"`
+	Status          string `json:"status"`
+}
+
+// MergePendingItem represents a task waiting in the merge queue
+type MergePendingItem struct {
+	TaskID   string `json:"taskId"`
+	AgentID  string `json:"agentId"`
+	Position int    `json:"position"`
+}
+
+// MergeWorkerItem represents an agent actively working on a task
+type MergeWorkerItem struct {
+	AgentID string `json:"agentId"`
+	TaskID  string `json:"taskId"`
+	Status  string `json:"status"`
+}
+
+// HandleGetMergeQueue returns the current merge queue state
+func (h *Handler) HandleGetMergeQueue(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	snapshot := h.state.GetSnapshot()
+
+	// Build merge queue state from agent states
+	state := MergeQueueState{
+		Completed:     make([]MergeCompletedItem, 0),
+		Resolvers:     make([]MergeResolverItem, 0),
+		Pending:       make([]MergePendingItem, 0),
+		ActiveWorkers: make([]MergeWorkerItem, 0),
+		IsPaused:      snapshot.IsPaused,
+	}
+
+	// Track resolver relationships for building resolver items
+	resolverAgents := make(map[string]*AgentState) // parentAgentID -> resolver agent
+
+	// Categorize agents by their merge status
+	for _, agent := range snapshot.Agents {
+		switch agent.MergeStatus {
+		case MergeStatusMerged:
+			// Successfully merged
+			var timestamp time.Time
+			if agent.EndTime != nil {
+				timestamp = *agent.EndTime
+			}
+			state.Completed = append(state.Completed, MergeCompletedItem{
+				TaskID:    agent.TaskID,
+				AgentID:   agent.ID,
+				Timestamp: timestamp,
+				Success:   true,
+			})
+		case MergeStatusFailed:
+			// Failed merge
+			var timestamp time.Time
+			if agent.EndTime != nil {
+				timestamp = *agent.EndTime
+			}
+			state.Completed = append(state.Completed, MergeCompletedItem{
+				TaskID:    agent.TaskID,
+				AgentID:   agent.ID,
+				Timestamp: timestamp,
+				Success:   false,
+				Error:     agent.MergeError,
+			})
+		case MergeStatusResolving:
+			// Agent is waiting for resolver - track for resolver items
+			// Find the resolver child agent
+			for _, childID := range agent.ChildAgentIDs {
+				if child, exists := snapshot.Agents[childID]; exists {
+					resolverAgents[agent.ID] = child
+					break
+				}
+			}
+		case MergeStatusPending, MergeStatusAcquiring:
+			// Waiting in queue
+			state.Pending = append(state.Pending, MergePendingItem{
+				TaskID:   agent.TaskID,
+				AgentID:  agent.ID,
+				Position: agent.MergeQueuePos,
+			})
+		case MergeStatusMerging:
+			// Currently merging - this counts as active work
+			state.ActiveWorkers = append(state.ActiveWorkers, MergeWorkerItem{
+				AgentID: agent.ID,
+				TaskID:  agent.TaskID,
+				Status:  string(agent.MergeStatus),
+			})
+		}
+
+		// Also track running agents as active workers
+		if agent.Status == AgentStatusRunning && agent.MergeStatus == MergeStatusNone {
+			state.ActiveWorkers = append(state.ActiveWorkers, MergeWorkerItem{
+				AgentID: agent.ID,
+				TaskID:  agent.TaskID,
+				Status:  string(agent.Status),
+			})
+		}
+	}
+
+	// Build resolver items from tracked relationships
+	for parentID, resolver := range resolverAgents {
+		parent := snapshot.Agents[parentID]
+		if parent != nil {
+			status := "running"
+			if resolver.Status == AgentStatusCompleted {
+				status = "completed"
+			} else if resolver.Status == AgentStatusFailed {
+				status = "failed"
+			}
+			state.Resolvers = append(state.Resolvers, MergeResolverItem{
+				ParentTaskID:    parent.TaskID,
+				ResolverTaskID:  resolver.TaskID,
+				ParentAgentID:   parent.ID,
+				ResolverAgentID: resolver.ID,
+				Status:          status,
+			})
+		}
+	}
+
+	// Calculate queue length from pending items
+	state.QueueLength = len(state.Pending)
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(state); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to encode merge queue state: %v", err), http.StatusInternalServerError)
+		return
+	}
+}

@@ -560,3 +560,177 @@ func TestHandleUpdateAgent(t *testing.T) {
 		}
 	})
 }
+
+func TestHandleGetMergeQueue(t *testing.T) {
+	state := NewRuntimeState()
+	scheduler := &mockScheduler{}
+	beadsClient := &mockBeadsClient{}
+	handler := NewHandler(state, scheduler, beadsClient, nil)
+
+	t.Run("EmptyState", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/merge-queue", nil)
+		w := httptest.NewRecorder()
+
+		handler.HandleGetMergeQueue(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("Expected status 200, got %d", w.Code)
+		}
+
+		var result MergeQueueState
+		if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+			t.Fatalf("Failed to decode response: %v", err)
+		}
+
+		if len(result.Completed) != 0 {
+			t.Errorf("Expected 0 completed, got %d", len(result.Completed))
+		}
+		if len(result.Pending) != 0 {
+			t.Errorf("Expected 0 pending, got %d", len(result.Pending))
+		}
+		if len(result.Resolvers) != 0 {
+			t.Errorf("Expected 0 resolvers, got %d", len(result.Resolvers))
+		}
+		if len(result.ActiveWorkers) != 0 {
+			t.Errorf("Expected 0 active workers, got %d", len(result.ActiveWorkers))
+		}
+	})
+
+	t.Run("WithAgentsInVariousMergeStates", func(t *testing.T) {
+		// Clear existing agents
+		state = NewRuntimeState()
+		handler = NewHandler(state, scheduler, beadsClient, nil)
+
+		endTime := time.Now()
+
+		// Add agent with merged status
+		mergedAgent := &AgentState{
+			ID:          "agent-merged",
+			TaskID:      "task-merged",
+			TaskTitle:   "Merged Task",
+			Status:      AgentStatusCompleted,
+			MergeStatus: MergeStatusMerged,
+			StartTime:   time.Now().Add(-10 * time.Second),
+			EndTime:     &endTime,
+		}
+		state.AddAgent(mergedAgent)
+
+		// Add agent with failed merge status
+		failedAgent := &AgentState{
+			ID:          "agent-failed",
+			TaskID:      "task-failed",
+			TaskTitle:   "Failed Task",
+			Status:      AgentStatusFailed,
+			MergeStatus: MergeStatusFailed,
+			MergeError:  "conflict in file.go",
+			StartTime:   time.Now().Add(-5 * time.Second),
+			EndTime:     &endTime,
+		}
+		state.AddAgent(failedAgent)
+
+		// Add agent pending in queue
+		pendingAgent := &AgentState{
+			ID:            "agent-pending",
+			TaskID:        "task-pending",
+			TaskTitle:     "Pending Task",
+			Status:        AgentStatusRunning,
+			MergeStatus:   MergeStatusPending,
+			MergeQueuePos: 1,
+			StartTime:     time.Now(),
+		}
+		state.AddAgent(pendingAgent)
+
+		// Add running agent (no merge status)
+		runningAgent := &AgentState{
+			ID:        "agent-running",
+			TaskID:    "task-running",
+			TaskTitle: "Running Task",
+			Status:    AgentStatusRunning,
+			StartTime: time.Now(),
+		}
+		state.AddAgent(runningAgent)
+
+		// Add agent currently merging
+		mergingAgent := &AgentState{
+			ID:          "agent-merging",
+			TaskID:      "task-merging",
+			TaskTitle:   "Merging Task",
+			Status:      AgentStatusRunning,
+			MergeStatus: MergeStatusMerging,
+			StartTime:   time.Now(),
+		}
+		state.AddAgent(mergingAgent)
+
+		// Add parent agent with resolving status and child resolver
+		resolvingAgent := &AgentState{
+			ID:            "agent-resolving",
+			TaskID:        "task-resolving",
+			TaskTitle:     "Resolving Task",
+			Status:        AgentStatusRunning,
+			MergeStatus:   MergeStatusResolving,
+			StartTime:     time.Now(),
+			ChildAgentIDs: []string{"agent-resolver"},
+		}
+		state.AddAgent(resolvingAgent)
+
+		resolverAgent := &AgentState{
+			ID:            "agent-resolver",
+			TaskID:        "task-resolver",
+			TaskTitle:     "Resolver Task",
+			Status:        AgentStatusRunning,
+			ParentAgentID: "agent-resolving",
+			StartTime:     time.Now(),
+		}
+		state.AddAgent(resolverAgent)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/merge-queue", nil)
+		w := httptest.NewRecorder()
+
+		handler.HandleGetMergeQueue(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("Expected status 200, got %d", w.Code)
+		}
+
+		var result MergeQueueState
+		if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+			t.Fatalf("Failed to decode response: %v", err)
+		}
+
+		// Should have 2 completed (1 merged, 1 failed)
+		if len(result.Completed) != 2 {
+			t.Errorf("Expected 2 completed, got %d", len(result.Completed))
+		}
+
+		// Should have 1 pending
+		if len(result.Pending) != 1 {
+			t.Errorf("Expected 1 pending, got %d", len(result.Pending))
+		}
+
+		// Should have 1 resolver
+		if len(result.Resolvers) != 1 {
+			t.Errorf("Expected 1 resolver, got %d", len(result.Resolvers))
+		}
+
+		// Should have 3 active workers: running agent, merging agent, resolver agent (running with no merge status)
+		if len(result.ActiveWorkers) != 3 {
+			t.Errorf("Expected 3 active workers, got %d", len(result.ActiveWorkers))
+		}
+
+		// Check the queue length
+		if result.QueueLength != 1 {
+			t.Errorf("Expected queue length 1, got %d", result.QueueLength)
+		}
+	})
+
+	t.Run("MethodNotAllowed", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/merge-queue", nil)
+		w := httptest.NewRecorder()
+
+		handler.HandleGetMergeQueue(w, req)
+
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("Expected status 405, got %d", w.Code)
+		}
+	})
+}

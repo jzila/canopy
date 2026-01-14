@@ -162,6 +162,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/stats", s.handler.HandleGetStats)
 	mux.HandleFunc("/api/orch/pause", s.handler.HandlePauseOrch)
 	mux.HandleFunc("/api/orch/resume", s.handler.HandleResumeOrch)
+	mux.HandleFunc("/api/merge-queue", s.handler.HandleGetMergeQueue)
 
 	// REST API routes - historical run data (persistence)
 	mux.HandleFunc("/api/runs", s.handleRunsRoutes)       // Handles GET /api/runs
