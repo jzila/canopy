@@ -395,10 +395,11 @@ func (m *SequentialMerger) MergeSingle(result *agent.Result, opts *MergeOptions)
 
 		// Commit the file changes
 		if len(paths) > 0 {
-			if err := m.commitFileChanges(result, paths, mergeResult.PatchFailed[result.TaskID]); err != nil {
+			committed, err := m.commitFileChanges(result, paths, mergeResult.PatchFailed[result.TaskID])
+			if err != nil {
 				mergeResult.Errors = append(mergeResult.Errors,
 					fmt.Sprintf("failed to commit changes from %s: %v", result.TaskID, err))
-			} else {
+			} else if committed {
 				mergeResult.CommitsApplied++
 			}
 		}
@@ -407,10 +408,12 @@ func (m *SequentialMerger) MergeSingle(result *agent.Result, opts *MergeOptions)
 	return mergeResult, nil
 }
 
-// commitFileChanges stages and commits file changes for a single task
-func (m *SequentialMerger) commitFileChanges(result *agent.Result, paths []string, patchFailed bool) error {
+// commitFileChanges stages and commits file changes for a single task.
+// Returns (true, nil) if a commit was made, (false, nil) if no changes to commit,
+// or (false, error) if an error occurred.
+func (m *SequentialMerger) commitFileChanges(result *agent.Result, paths []string, patchFailed bool) (bool, error) {
 	if len(paths) == 0 {
-		return nil
+		return false, nil
 	}
 
 	// Stage the files
@@ -420,7 +423,7 @@ func (m *SequentialMerger) commitFileChanges(result *agent.Result, paths []strin
 	var addStderr bytes.Buffer
 	addCmd.Stderr = &addStderr
 	if err := addCmd.Run(); err != nil {
-		return fmt.Errorf("git add failed: %w: %s", err, addStderr.String())
+		return false, fmt.Errorf("git add failed: %w: %s", err, addStderr.String())
 	}
 
 	// Check if there are staged changes
@@ -431,7 +434,7 @@ func (m *SequentialMerger) commitFileChanges(result *agent.Result, paths []strin
 		if m.verbose {
 			fmt.Printf("No changes to commit for task %s (files may have been committed via git am)\n", result.TaskID)
 		}
-		return nil
+		return false, nil
 	}
 
 	// Create commit message
@@ -452,7 +455,7 @@ func (m *SequentialMerger) commitFileChanges(result *agent.Result, paths []strin
 		if resetErr := resetCmd.Run(); resetErr != nil && m.verbose {
 			fmt.Fprintf(os.Stderr, "warning: failed to reset staged files after commit failure: %v\n", resetErr)
 		}
-		return fmt.Errorf("git commit failed: %w: %s", err, commitStderr.String())
+		return false, fmt.Errorf("git commit failed: %w: %s", err, commitStderr.String())
 	}
 
 	if m.verbose {
@@ -463,5 +466,5 @@ func (m *SequentialMerger) commitFileChanges(result *agent.Result, paths []strin
 		}
 	}
 
-	return nil
+	return true, nil
 }
