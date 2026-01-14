@@ -112,7 +112,8 @@ func DefaultSandboxConfig() *SandboxConfig {
 }
 
 // LoadConfig loads sandbox configuration from .canopy/sandbox.toml
-// Returns the default config if the file doesn't exist
+// Returns nil if the file doesn't exist.
+// Returns an error if the file exists but cannot be read, parsed, or is invalid.
 func LoadConfig(workDir string) (*SandboxConfig, error) {
 	configPath := filepath.Join(workDir, ".canopy", "sandbox.toml")
 
@@ -129,7 +130,110 @@ func LoadConfig(workDir string) (*SandboxConfig, error) {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
+	// Validate the loaded configuration
+	if err := config.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid config: %w", err)
+	}
+
 	return &config, nil
+}
+
+// LoadConfigWithoutValidation loads sandbox configuration without validating paths.
+// Use this when you need to load config in contexts where paths may not exist yet
+// (e.g., during setup or migration).
+func LoadConfigWithoutValidation(workDir string) (*SandboxConfig, error) {
+	configPath := filepath.Join(workDir, ".canopy", "sandbox.toml")
+
+	data, err := os.ReadFile(configPath)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read config: %w", err)
+	}
+
+	var config SandboxConfig
+	if err := toml.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("parse config: %w", err)
+	}
+
+	return &config, nil
+}
+
+// ValidateWithoutPaths validates the configuration but skips path existence checks.
+// Useful for validating config structure before paths are created.
+func (c *SandboxConfig) ValidateWithoutPaths() error {
+	if c == nil {
+		return nil
+	}
+
+	var errs ValidationErrors
+
+	// Validate network policy
+	if c.Sandbox.Network != "" {
+		validNetwork := false
+		for _, valid := range ValidNetworkPolicies {
+			if c.Sandbox.Network == valid {
+				validNetwork = true
+				break
+			}
+		}
+		if !validNetwork {
+			errs = append(errs, ValidationError{
+				Field:   "sandbox.network",
+				Message: fmt.Sprintf("invalid value %q, must be one of: %s", c.Sandbox.Network, strings.Join(ValidNetworkPolicies, ", ")),
+			})
+		}
+	}
+
+	// Validate memory limit format
+	if c.Resources.MaxMemory != "" {
+		if _, err := ParseMemoryLimit(c.Resources.MaxMemory); err != nil {
+			errs = append(errs, ValidationError{
+				Field:   "resources.max_memory",
+				Message: fmt.Sprintf("invalid format %q (expected e.g., \"4GB\", \"512MB\")", c.Resources.MaxMemory),
+			})
+		}
+	}
+
+	// Validate disk limit format
+	if c.Resources.MaxDisk != "" {
+		if _, err := ParseMemoryLimit(c.Resources.MaxDisk); err != nil {
+			errs = append(errs, ValidationError{
+				Field:   "resources.max_disk",
+				Message: fmt.Sprintf("invalid format %q (expected e.g., \"10GB\", \"500MB\")", c.Resources.MaxDisk),
+			})
+		}
+	}
+
+	// Validate timeout format
+	if c.Resources.Timeout != "" {
+		if _, err := time.ParseDuration(c.Resources.Timeout); err != nil {
+			errs = append(errs, ValidationError{
+				Field:   "resources.timeout",
+				Message: fmt.Sprintf("invalid duration %q (expected e.g., \"10m\", \"1h\", \"30s\")", c.Resources.Timeout),
+			})
+		}
+	}
+
+	// Validate resource limits are positive
+	if c.Resources.MaxProcesses < 0 {
+		errs = append(errs, ValidationError{
+			Field:   "resources.max_processes",
+			Message: "must be non-negative",
+		})
+	}
+	if c.Resources.MaxOpenFiles < 0 {
+		errs = append(errs, ValidationError{
+			Field:   "resources.max_open_files",
+			Message: "must be non-negative",
+		})
+	}
+
+	if len(errs) > 0 {
+		return errs
+	}
+	return nil
 }
 
 // SaveConfig saves sandbox configuration to .canopy/sandbox.toml
@@ -255,6 +359,148 @@ func (c *SandboxConfig) GetTimeout() time.Duration {
 		return 0
 	}
 	return d
+}
+
+// Valid network policy values
+const (
+	NetworkAllow = "allow"
+	NetworkDeny  = "deny"
+	NetworkProxy = "proxy" // Future feature
+)
+
+// ValidNetworkPolicies lists all valid network policy values
+var ValidNetworkPolicies = []string{NetworkAllow, NetworkDeny, NetworkProxy}
+
+// ValidationError contains details about a configuration validation failure
+type ValidationError struct {
+	Field   string
+	Message string
+}
+
+func (e *ValidationError) Error() string {
+	return fmt.Sprintf("%s: %s", e.Field, e.Message)
+}
+
+// ValidationErrors is a collection of validation errors
+type ValidationErrors []ValidationError
+
+func (e ValidationErrors) Error() string {
+	if len(e) == 0 {
+		return "no validation errors"
+	}
+	if len(e) == 1 {
+		return e[0].Error()
+	}
+	var msgs []string
+	for _, err := range e {
+		msgs = append(msgs, err.Error())
+	}
+	return fmt.Sprintf("multiple validation errors:\n  - %s", strings.Join(msgs, "\n  - "))
+}
+
+// Validate checks the configuration for errors and returns all validation issues found.
+// Returns nil if the configuration is valid.
+func (c *SandboxConfig) Validate() error {
+	if c == nil {
+		return nil
+	}
+
+	var errs ValidationErrors
+
+	// Validate network policy
+	if c.Sandbox.Network != "" {
+		validNetwork := false
+		for _, valid := range ValidNetworkPolicies {
+			if c.Sandbox.Network == valid {
+				validNetwork = true
+				break
+			}
+		}
+		if !validNetwork {
+			errs = append(errs, ValidationError{
+				Field:   "sandbox.network",
+				Message: fmt.Sprintf("invalid value %q, must be one of: %s", c.Sandbox.Network, strings.Join(ValidNetworkPolicies, ", ")),
+			})
+		}
+	}
+
+	// Validate memory limit format
+	if c.Resources.MaxMemory != "" {
+		if _, err := ParseMemoryLimit(c.Resources.MaxMemory); err != nil {
+			errs = append(errs, ValidationError{
+				Field:   "resources.max_memory",
+				Message: fmt.Sprintf("invalid format %q (expected e.g., \"4GB\", \"512MB\")", c.Resources.MaxMemory),
+			})
+		}
+	}
+
+	// Validate disk limit format (same format as memory)
+	if c.Resources.MaxDisk != "" {
+		if _, err := ParseMemoryLimit(c.Resources.MaxDisk); err != nil {
+			errs = append(errs, ValidationError{
+				Field:   "resources.max_disk",
+				Message: fmt.Sprintf("invalid format %q (expected e.g., \"10GB\", \"500MB\")", c.Resources.MaxDisk),
+			})
+		}
+	}
+
+	// Validate timeout format
+	if c.Resources.Timeout != "" {
+		if _, err := time.ParseDuration(c.Resources.Timeout); err != nil {
+			errs = append(errs, ValidationError{
+				Field:   "resources.timeout",
+				Message: fmt.Sprintf("invalid duration %q (expected e.g., \"10m\", \"1h\", \"30s\")", c.Resources.Timeout),
+			})
+		}
+	}
+
+	// Validate resource limits are positive
+	if c.Resources.MaxProcesses < 0 {
+		errs = append(errs, ValidationError{
+			Field:   "resources.max_processes",
+			Message: "must be non-negative",
+		})
+	}
+	if c.Resources.MaxOpenFiles < 0 {
+		errs = append(errs, ValidationError{
+			Field:   "resources.max_open_files",
+			Message: "must be non-negative",
+		})
+	}
+
+	// Validate paths exist (with warnings for non-existent paths)
+	errs = append(errs, c.validatePaths("paths.read_only", c.Paths.ReadOnly)...)
+	errs = append(errs, c.validatePaths("paths.copy_configs", c.Paths.CopyConfigs)...)
+	errs = append(errs, c.validatePaths("paths.cache_mounts", c.Paths.CacheMounts)...)
+	errs = append(errs, c.validatePaths("paths.extra.read_only", c.Paths.Extra.ReadOnly)...)
+	errs = append(errs, c.validatePaths("paths.extra.copy_configs", c.Paths.Extra.CopyConfigs)...)
+
+	if len(errs) > 0 {
+		return errs
+	}
+	return nil
+}
+
+// validatePaths checks that paths exist and are accessible
+func (c *SandboxConfig) validatePaths(fieldName string, paths []string) ValidationErrors {
+	var errs ValidationErrors
+	for _, p := range paths {
+		expanded := ExpandPath(p)
+		if _, err := os.Stat(expanded); err != nil {
+			if os.IsNotExist(err) {
+				errs = append(errs, ValidationError{
+					Field:   fieldName,
+					Message: fmt.Sprintf("path does not exist: %s", p),
+				})
+			} else if os.IsPermission(err) {
+				errs = append(errs, ValidationError{
+					Field:   fieldName,
+					Message: fmt.Sprintf("path not accessible (permission denied): %s", p),
+				})
+			}
+		}
+	}
+	return errs
 }
 
 // ParseMemoryLimit parses a memory string like "4GB" into bytes
