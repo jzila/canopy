@@ -84,7 +84,7 @@ type Config struct {
 // Orchestrator coordinates the execution of tasks from beads
 type Orchestrator struct {
 	config           *Config
-	beadsClient      *beads.Client
+	beadsClient      beads.BeadsClient
 	scheduler        *scheduler.Scheduler
 	mergeCoordinator *mergecoordinator.MergeCoordinator
 	tempDir          string

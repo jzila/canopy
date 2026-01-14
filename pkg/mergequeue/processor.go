@@ -21,7 +21,7 @@ type Processor struct {
 	queue           *Queue
 	merger          *merge.SequentialMerger
 	resolver        *resolver.Resolver
-	beadsClient     *beads.Client
+	beadsClient     beads.BeadsClient
 	outputDir       string
 	ipcClient       *ipc.Client
 	verbose         bool
@@ -34,7 +34,7 @@ func NewProcessor(
 	queue *Queue,
 	merger *merge.SequentialMerger,
 	resolver *resolver.Resolver,
-	beadsClient *beads.Client,
+	beadsClient beads.BeadsClient,
 	outputDir string,
 	ipcClient *ipc.Client,
 	verbose bool,

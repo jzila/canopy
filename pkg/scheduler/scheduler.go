@@ -29,7 +29,7 @@ type CallbackHandler interface {
 
 // Scheduler executes tasks from beads in parallel with bounded concurrency
 type Scheduler struct {
-	beadsClient *beads.Client
+	beadsClient beads.BeadsClient
 	executor    *agent.Executor
 	config      *Config
 	results     sync.Map // map[string]*agent.Result
@@ -57,7 +57,7 @@ type Config struct {
 }
 
 // NewScheduler creates a new task scheduler
-func NewScheduler(beadsClient *beads.Client, executor *agent.Executor, config *Config) *Scheduler {
+func NewScheduler(beadsClient beads.BeadsClient, executor *agent.Executor, config *Config) *Scheduler {
 	if config.Concurrency <= 0 {
 		config.Concurrency = 4
 	}

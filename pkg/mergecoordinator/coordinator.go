@@ -53,7 +53,7 @@ type MergeCoordinator struct {
 	processor   *mergequeue.Processor
 	merger      *merge.SequentialMerger
 	resolver    *resolver.Resolver
-	beadsClient *beads.Client
+	beadsClient beads.BeadsClient
 	ipcClient   *ipc.Client
 	repoID      string
 
@@ -68,7 +68,7 @@ type MergeCoordinator struct {
 }
 
 // New creates a new MergeCoordinator.
-func New(config *Config, beadsClient *beads.Client) (*MergeCoordinator, error) {
+func New(config *Config, beadsClient beads.BeadsClient) (*MergeCoordinator, error) {
 	if config == nil {
 		return nil, fmt.Errorf("config is required")
 	}

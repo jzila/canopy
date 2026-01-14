@@ -19,11 +19,52 @@ type Task struct {
 	BlockedBy   []string `json:"blocked_by,omitempty"`  // Alias for blockers
 }
 
-// Client wraps the bd CLI for programmatic access
+// BeadsClient defines the interface for interacting with the beads task tracker.
+// This interface enables dependency injection and mocking for tests.
+type BeadsClient interface {
+	// Ready returns all tasks with no open blockers
+	Ready() ([]Task, error)
+
+	// List returns all open tasks (status: open, in_progress, blocked)
+	List() ([]Task, error)
+
+	// ReadyWithArgs returns tasks with no open blockers using custom bd ready arguments
+	ReadyWithArgs(args ...string) ([]Task, error)
+
+	// Show returns detailed information about a task
+	Show(taskID string) (*Task, error)
+
+	// Start marks a task as in-progress
+	Start(taskID string) error
+
+	// Done marks a task as completed
+	Done(taskID string) error
+
+	// Fail marks a task as failed by closing it with a failure reason
+	Fail(taskID string, reason string) error
+
+	// Create creates a new task and returns its ID
+	Create(title string, priority int) (string, error)
+
+	// AddDep adds a dependency: child is blocked by parent
+	AddDep(child, parent string) error
+
+	// GetDeps returns the task IDs that the given task depends on (its blockers)
+	GetDeps(taskID string) ([]string, error)
+
+	// Sync runs bd sync to commit and push beads changes
+	Sync() error
+}
+
+// Client wraps the bd CLI for programmatic access.
+// It implements the BeadsClient interface.
 type Client struct {
 	bdPath  string
 	workDir string
 }
+
+// Ensure Client implements BeadsClient
+var _ BeadsClient = (*Client)(nil)
 
 // NewClient creates a new beads client
 func NewClient(workDir string) (*Client, error) {
@@ -122,12 +163,12 @@ func (c *Client) Done(taskID string) error {
 	return err
 }
 
-// Fail marks a task as failed by resetting it to open status.
-// Tasks are only closed when successfully committed and pushed by the merge queue.
+// Fail marks a task as failed by closing it with a failure reason
 func (c *Client) Fail(taskID string, reason string) error {
-	// Reset to open so the task can be retried
-	// The failure is logged but doesn't close the task
-	_, err := c.run("update", taskID, "--status", "open")
+	// beads doesn't have a "failed" status - valid statuses are:
+	// open, in_progress, blocked, deferred, closed
+	// We close the task and record the failure reason in notes
+	_, err := c.run("close", taskID, "--reason", "FAILED: "+reason)
 	return err
 }
 

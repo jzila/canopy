@@ -6,6 +6,7 @@
 
   # https://devenv.sh/packages/
   packages = [
+    pkgs.sqlite
     pkgs.git
     pkgs.claude-code
     pkgs.fuse-overlayfs  # Rootless OverlayFS fallback
