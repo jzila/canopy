@@ -176,24 +176,43 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 			// Merge the resolver's result
 			if resolverResult.AgentResult != nil && resolverResult.AgentResult.Overlay != nil {
 				resolverMergeResult, mergeErr := p.merger.MergeSingle(resolverResult.AgentResult, nil)
+
+				// Clean up resolver overlay regardless of merge outcome
+				defer resolverResult.AgentResult.Overlay.Cleanup()
+
 				if mergeErr != nil {
-					if p.verbose {
-						fmt.Fprintf(os.Stderr, "warning: failed to merge resolver result for %s: %v\n",
-							taskID, mergeErr)
-					}
-				} else {
-					resp.CommitsApplied += resolverMergeResult.CommitsApplied
+					errMsg := fmt.Sprintf("failed to merge resolver result: %v", mergeErr)
+					resp.Error = errMsg
+					p.markTaskFailed(taskID, errMsg)
+					p.sendMergeStatus(taskID, ipc.MergeStatusFailed, 0, errMsg)
+					return resp
 				}
 
-				// Report resolver merge errors
-				for _, errMsg := range resolverMergeResult.Errors {
-					if p.verbose {
+				// Check for merge errors (e.g., commit failures)
+				if len(resolverMergeResult.Errors) > 0 {
+					for _, errMsg := range resolverMergeResult.Errors {
 						fmt.Fprintf(os.Stderr, "resolver merge error for %s: %s\n", taskID, errMsg)
 					}
+					errMsg := fmt.Sprintf("resolver merge had errors: %s", strings.Join(resolverMergeResult.Errors, "; "))
+					resp.Error = errMsg
+					p.markTaskFailed(taskID, errMsg)
+					p.sendMergeStatus(taskID, ipc.MergeStatusFailed, 0, errMsg)
+					return resp
 				}
 
-				// Clean up resolver overlay
-				resolverResult.AgentResult.Overlay.Cleanup()
+				// Verify commits were actually applied
+				if resolverMergeResult.CommitsApplied == 0 && len(resolverMergeResult.Applied) == 0 {
+					errMsg := fmt.Sprintf("resolver completed but produced no changes for %s", taskID)
+					if p.verbose {
+						fmt.Fprintf(os.Stderr, "[%s] Warning: %s\n", taskID, errMsg)
+					}
+					resp.Error = errMsg
+					p.markTaskFailed(taskID, errMsg)
+					p.sendMergeStatus(taskID, ipc.MergeStatusFailed, 0, errMsg)
+					return resp
+				}
+
+				resp.CommitsApplied += resolverMergeResult.CommitsApplied
 			}
 
 			// Mark task as done after successful resolution
