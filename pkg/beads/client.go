@@ -167,10 +167,10 @@ func (c *Client) Done(taskID string) error {
 
 // Fail marks a task as failed by closing it with a failure reason
 func (c *Client) Fail(taskID string, reason string) error {
-	// beads doesn't have a "failed" status - valid statuses are:
-	// open, in_progress, blocked, deferred, closed
-	// We close the task and record the failure reason in notes
-	_, err := c.run("close", taskID, "--reason", "FAILED: "+reason)
+	// Reset to open so the task can be retried.
+	// Tasks are only closed when successfully committed and pushed.
+	// DO NOT CHANGE THIS TO CLOSE - it was intentionally changed to reset.
+	_, err := c.run("update", taskID, "--status", "open")
 	return err
 }
 
