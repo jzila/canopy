@@ -416,15 +416,11 @@ func TestEventBus_CircuitBreakerRecovers(t *testing.T) {
 	}
 	subID := subMetrics[0].ID
 
-	// Artificially open circuit breaker
-	bus.mu.RLock()
-	sub := bus.subscriptions[subID]
-	bus.mu.RUnlock()
-
-	sub.mu.Lock()
-	sub.state = CircuitOpen
-	sub.lastDropTime = time.Now().Add(-CircuitBreakerResetDuration - time.Second)
-	sub.mu.Unlock()
+	// Artificially open circuit breaker with expired lastDropTime
+	// Use SetCircuitBreakerState helper since internal fields are unexported
+	if !bus.SetCircuitBreakerState(subID, CircuitOpen, -CircuitBreakerResetDuration-time.Second) {
+		t.Fatal("failed to set circuit breaker state")
+	}
 
 	// Publish event - should trigger half-open and recover
 	bus.Publish(Event{Type: EventStatsUpdated, Timestamp: time.Now()})
@@ -454,14 +450,10 @@ func TestEventBus_ResetCircuitBreaker(t *testing.T) {
 	}
 	subID := subMetrics[0].ID
 
-	// Manually open circuit
-	bus.mu.RLock()
-	sub := bus.subscriptions[subID]
-	bus.mu.RUnlock()
-
-	sub.mu.Lock()
-	sub.state = CircuitOpen
-	sub.mu.Unlock()
+	// Manually open circuit using the helper
+	if !bus.SetCircuitBreakerState(subID, CircuitOpen, 0) {
+		t.Fatal("failed to set circuit breaker state")
+	}
 
 	// Verify it's open
 	subMetrics = bus.GetSubscriberMetrics()

@@ -448,7 +448,10 @@ func (o *Orchestrator) mergeAndCleanupWithContext(ctx context.Context, result *a
 					}
 
 					// Clean up resolver overlay
-					resolverResult.AgentResult.Overlay.Cleanup()
+					// Cleanup errors are logged but don't affect the merge result
+					if cleanupErr := resolverResult.AgentResult.Overlay.Cleanup(); cleanupErr != nil && o.config.Verbose {
+						fmt.Fprintf(os.Stderr, "warning: failed to cleanup resolver overlay for %s: %v\n", result.TaskID, cleanupErr)
+					}
 				}
 			} else {
 				fmt.Fprintf(os.Stderr, "[%s-resolver] Failed to resolve conflict: %s\n",

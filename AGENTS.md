@@ -17,6 +17,62 @@ If missing, check `~/.gitconfig` or set locally for this repo.
 - Run `go test ./...` before committing code changes
 - Run `go build ./...` to verify compilation
 
+## Error Handling Guidelines
+
+See `pkg/errors/errors.go` for defined error types and full guidelines.
+
+### Core Rules
+
+1. **Always wrap errors with context** using `fmt.Errorf("context: %w", err)`:
+   ```go
+   // Good
+   if err := doSomething(); err != nil {
+       return fmt.Errorf("failed to do something: %w", err)
+   }
+
+   // Bad - loses context
+   if err := doSomething(); err != nil {
+       return err
+   }
+   ```
+
+2. **Never silently swallow errors**. If you can't return an error, log it:
+   ```go
+   // Good - explicit about ignoring
+   _ = optionalCleanup() // Non-fatal: cleanup is best-effort
+
+   // Good - log non-fatal errors
+   if err := cleanup(); err != nil && verbose {
+       fmt.Fprintf(os.Stderr, "warning: cleanup failed: %v\n", err)
+   }
+
+   // Bad - silent failure
+   cleanup()
+   ```
+
+3. **Use sentinel errors** for programmatic handling:
+   ```go
+   import "github.com/jzila/canopy/pkg/errors"
+
+   if errors.Is(err, errors.ErrMergeConflict) {
+       // Handle conflict specifically
+   }
+   ```
+
+4. **Use typed errors** for detailed information:
+   ```go
+   var mergeErr *errors.MergeError
+   if errors.As(err, &mergeErr) {
+       fmt.Printf("Merge failed for task %s\n", mergeErr.TaskID)
+   }
+   ```
+
+### When to Return vs Log
+
+- **Return errors** when the caller can handle them or needs to know
+- **Log errors** only for truly non-fatal side effects (cleanup, telemetry, etc.)
+- Use `warning:` prefix for non-fatal errors in verbose output
+
 ## Persistence Invariant
 
 **ALL canopy persistence MUST live at `$XDG_CACHE_HOME/canopy/` or `~/.cache/canopy/`.**

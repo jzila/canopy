@@ -72,7 +72,6 @@ var HomeExcludedPaths = []string{
 	".bash_history", // Shell history
 	".viminfo",      // Vim state
 	".lesshst",      // Less history
-	"go",            // Go module cache (GOPATH/pkg/mod)
 }
 
 // NewOverlay creates a new overlay filesystem structure
@@ -102,16 +101,12 @@ func NewOverlay(baseDir, lowerDir string) (*Overlay, error) {
 	}
 
 	// Copy Claude credentials to upper dir so agents can authenticate
-	if err := overlay.copyClaudeCredentials(); err != nil {
-		// Non-fatal - agent might work with env vars
-		_ = err
-	}
+	// Non-fatal: agent might work with env vars or repo-level config
+	_ = overlay.copyClaudeCredentials()
 
 	// Copy git config so agents have correct authorship
-	if err := overlay.copyGitConfig(); err != nil {
-		// Non-fatal - agents can still commit with repo-local config
-		_ = err
-	}
+	// Non-fatal: agents can still commit with repo-local config
+	_ = overlay.copyGitConfig()
 
 	return overlay, nil
 }
@@ -202,13 +197,11 @@ func (o *Overlay) copyClaudeCredentials() error {
 	}
 
 	// Also copy the entire statsig directory if it exists
+	// Non-fatal: statsig is just for telemetry
 	statsigSrc := filepath.Join(homeDir, ".claude", "statsig")
 	statsigDst := filepath.Join(claudeDir, "statsig")
 	if _, err := os.Stat(statsigSrc); err == nil {
-		if err := copyDir(statsigSrc, statsigDst); err != nil {
-			// Non-fatal, statsig is just for telemetry
-			_ = err
-		}
+		_ = copyDir(statsigSrc, statsigDst)
 	}
 
 	return nil
