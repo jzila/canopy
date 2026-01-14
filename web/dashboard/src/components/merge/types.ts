@@ -66,7 +66,7 @@ export interface TreeConnection {
   id: string;
   fromNode: string;
   toNode: string;
-  type: 'trunk' | 'branch' | 'merge';
+  type: 'trunk' | 'branch' | 'merge' | 'worker';
   fromX: number;
   fromY: number;
   toX: number;
