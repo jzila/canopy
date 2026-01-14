@@ -23,14 +23,13 @@ import (
 )
 
 var (
-	concurrency   int
-	outputDir     string
-	dryRun        bool
-	useSandbox    bool
-	noDaemon      bool
-	maxRetries    int
-	prompt        string
-	maxPriority   int
+	concurrency int
+	outputDir   string
+	dryRun      bool
+	useSandbox  bool
+	maxRetries  int
+	prompt      string
+	maxPriority int
 )
 
 var runCmd = &cobra.Command{
@@ -42,11 +41,10 @@ Each task runs in an isolated OverlayFS sandbox with its own copy
 of the working directory. Changes are merged back after completion.
 
 DAEMON CONNECTION
-  By default, canopy run connects to the canopy daemon for monitoring
-  and real-time updates. If the daemon is not running, it will be
-  started automatically.
+  The canopy daemon is required for monitoring and real-time updates.
+  If the daemon is not running, it will be started automatically.
 
-  Use --no-daemon to disable daemon connection and run standalone.
+  The run command will fail if the daemon cannot be started or connected.
 
 RETRY BEHAVIOR
   By default, failed tasks are retried up to 3 times. This prevents
@@ -71,11 +69,8 @@ SECURITY
   - Only /workspace writable
 
 Example:
-  # Run with default settings (auto-connects to daemon)
+  # Run with default settings (auto-starts daemon if needed)
   canopy run
-
-  # Run without daemon connection
-  canopy run --no-daemon
 
   # Run with 8 concurrent agents
   canopy run --concurrency 8
@@ -105,7 +100,6 @@ func init() {
 	runCmd.Flags().StringVarP(&outputDir, "output", "o", "", "Output directory for merged results (default: workdir)")
 	runCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show execution plan without running")
 	runCmd.Flags().BoolVar(&useSandbox, "sandbox", false, "Use bubblewrap (bwrap) for full process/filesystem isolation")
-	runCmd.Flags().BoolVar(&noDaemon, "no-daemon", false, "Disable automatic daemon connection (run without daemon)")
 	runCmd.Flags().IntVar(&maxRetries, "max-retries", 3, "Maximum retry attempts for failed tasks (0=no retries, -1=infinite)")
 	runCmd.Flags().StringVar(&prompt, "prompt", "", "Prompt to filter/direct work selection (e.g., 'Only work on P0 issues', 'Stop after completing all P1s')")
 	runCmd.Flags().IntVar(&maxPriority, "max-priority", -1, "Hard filter: only run tasks with priority <= this value (0-4, -1=no filter)")
@@ -165,22 +159,15 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		repo = nil
 	}
 
-	// Set up IPC client unless --no-daemon is specified
-	var ipcClient *ipc.Client
-	if !noDaemon {
-		client, err := ipc.GetClient()
-		if err != nil {
-			// Warn about daemon connection/startup failures
-			if verbose {
-				fmt.Fprintf(os.Stderr, "warning: failed to connect to daemon: %v\n", err)
-			}
-		} else {
-			ipcClient = client
-			defer ipcClient.Close()
-			if verbose {
-				fmt.Println("Connected to canopy daemon")
-			}
-		}
+	// Connect to daemon (required for canopy run)
+	ipcClient, err := ipc.GetClient()
+	if err != nil {
+		return fmt.Errorf("daemon required: %w\n\nThe canopy daemon is required for orchestration. "+
+			"If the daemon failed to start, check the logs at ~/.cache/canopy/daemon.log", err)
+	}
+	defer ipcClient.Close()
+	if verbose {
+		fmt.Println("Connected to canopy daemon")
 	}
 
 	// Create and run orchestrator
@@ -213,7 +200,7 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		repoID = repo.ID
 	}
 
-	// Set up callbacks (history tracking always, IPC only if connected)
+	// Set up callbacks for history tracking and IPC
 	// Note: parentAgentID is empty for top-level orchestrated agents
 	// Child agents (e.g., resolvers) will populate this when spawned
 	callbacks := &orchestrator.EventCallbacks{
@@ -222,54 +209,44 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 			agentID := fmt.Sprintf("agent-%s", taskID)
 			// Record agent ID for parent-child tracking (resolver agents need this)
 			orch.SetAgentID(taskID, agentID)
-			if ipcClient != nil {
-				parentAgentID := "" // Top-level agents have no parent
-				if err := ipcClient.SendAgentStart(agentID, taskID, task.Title, parentAgentID, repoID); err != nil && verbose {
-					fmt.Fprintf(os.Stderr, "warning: failed to send agent start: %v\n", err)
-				}
+			parentAgentID := "" // Top-level agents have no parent
+			if err := ipcClient.SendAgentStart(agentID, taskID, task.Title, parentAgentID, repoID); err != nil && verbose {
+				fmt.Fprintf(os.Stderr, "warning: failed to send agent start: %v\n", err)
 			}
 		},
 		OnOutputFn: func(taskID string, output string, isError bool) {
-			if ipcClient != nil {
-				agentID := fmt.Sprintf("agent-%s", taskID)
-				if err := ipcClient.SendAgentOutput(agentID, output, isError); err != nil && verbose {
-					fmt.Fprintf(os.Stderr, "warning: failed to send agent output: %v\n", err)
-				}
+			agentID := fmt.Sprintf("agent-%s", taskID)
+			if err := ipcClient.SendAgentOutput(agentID, output, isError); err != nil && verbose {
+				fmt.Fprintf(os.Stderr, "warning: failed to send agent output: %v\n", err)
 			}
 		},
 		OnLiveFeedFn: func(taskID string, event *agent.LiveFeedEvent) {
-			if ipcClient != nil {
-				agentID := fmt.Sprintf("agent-%s", taskID)
-				if err := ipcClient.SendAgentLiveFeed(agentID, event.EventType, event.Data); err != nil && verbose {
-					fmt.Fprintf(os.Stderr, "warning: failed to send agent live feed: %v\n", err)
-				}
+			agentID := fmt.Sprintf("agent-%s", taskID)
+			if err := ipcClient.SendAgentLiveFeed(agentID, event.EventType, event.Data); err != nil && verbose {
+				fmt.Fprintf(os.Stderr, "warning: failed to send agent live feed: %v\n", err)
 			}
 		},
 		OnDoneFn: func(taskID string, result *agent.Result) {
 			runStats.recordResult(taskID, result, true)
-			if ipcClient != nil {
-				agentID := fmt.Sprintf("agent-%s", taskID)
-				parentAgentID := "" // Top-level agents have no parent
-				// Send individual commit events before completion
-				sendAgentCommits(ipcClient, agentID, result, verbose)
-				ipcResult := convertToIPCResult(result)
-				if err := ipcClient.SendAgentDone(agentID, parentAgentID, ipcResult); err != nil && verbose {
-					fmt.Fprintf(os.Stderr, "warning: failed to send agent done: %v\n", err)
-				}
+			agentID := fmt.Sprintf("agent-%s", taskID)
+			parentAgentID := "" // Top-level agents have no parent
+			// Send individual commit events before completion
+			sendAgentCommits(ipcClient, agentID, result, verbose)
+			ipcResult := convertToIPCResult(result)
+			if err := ipcClient.SendAgentDone(agentID, parentAgentID, ipcResult); err != nil && verbose {
+				fmt.Fprintf(os.Stderr, "warning: failed to send agent done: %v\n", err)
 			}
 		},
 		OnFailFn: func(taskID string, result *agent.Result) {
 			runStats.recordResult(taskID, result, false)
-			if ipcClient != nil {
-				agentID := fmt.Sprintf("agent-%s", taskID)
-				parentAgentID := "" // Top-level agents have no parent
-				// Send individual commit events before failure (agent may have committed before failing)
-				sendAgentCommits(ipcClient, agentID, result, verbose)
-				ipcResult := convertToIPCResult(result)
-				execErr := fmt.Errorf("%s", result.Error)
-				if err := ipcClient.SendAgentFail(agentID, parentAgentID, execErr, ipcResult); err != nil && verbose {
-					fmt.Fprintf(os.Stderr, "warning: failed to send agent fail: %v\n", err)
-				}
+			agentID := fmt.Sprintf("agent-%s", taskID)
+			parentAgentID := "" // Top-level agents have no parent
+			// Send individual commit events before failure (agent may have committed before failing)
+			sendAgentCommits(ipcClient, agentID, result, verbose)
+			ipcResult := convertToIPCResult(result)
+			execErr := fmt.Errorf("%s", result.Error)
+			if err := ipcClient.SendAgentFail(agentID, parentAgentID, execErr, ipcResult); err != nil && verbose {
+				fmt.Fprintf(os.Stderr, "warning: failed to send agent fail: %v\n", err)
 			}
 		},
 	}
@@ -277,24 +254,20 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 	orch.SetCallbacks(callbacks)
 
 	// Pass IPC client to orchestrator for resolver agent events
-	if ipcClient != nil {
-		orch.SetIPCClient(ipcClient)
-	}
+	orch.SetIPCClient(ipcClient)
 
 	// Pass repo ID to orchestrator for resolver agent tracking
 	if repo != nil {
 		orch.SetRepoID(repo.ID)
 	}
 
-	// Get initial ready tasks to send task count (IPC only)
-	if ipcClient != nil {
-		beadsClient, err := beads.NewClient(absWorkdir)
-		if err == nil {
-			tasks, err := beadsClient.Ready()
-			if err == nil && len(tasks) > 0 {
-				if err := ipcClient.SendRunStarted(runID, len(tasks), repo); err != nil && verbose {
-					fmt.Fprintf(os.Stderr, "warning: failed to send run started: %v\n", err)
-				}
+	// Get initial ready tasks to send task count
+	beadsClient, err := beads.NewClient(absWorkdir)
+	if err == nil {
+		tasks, err := beadsClient.Ready()
+		if err == nil && len(tasks) > 0 {
+			if err := ipcClient.SendRunStarted(runID, len(tasks), repo); err != nil && verbose {
+				fmt.Fprintf(os.Stderr, "warning: failed to send run started: %v\n", err)
 			}
 		}
 	}
@@ -322,12 +295,10 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		// Send IPC completion if connected
-		if ipcClient != nil {
-			stats := runStats.getStats()
-			if err := ipcClient.SendRunCompleted(runID, stats); err != nil && verbose {
-				fmt.Fprintf(os.Stderr, "warning: failed to send run completed: %v\n", err)
-			}
+		// Send IPC completion
+		stats := runStats.getStats()
+		if err := ipcClient.SendRunCompleted(runID, stats); err != nil && verbose {
+			fmt.Fprintf(os.Stderr, "warning: failed to send run completed: %v\n", err)
 		}
 	}()
 

@@ -10,8 +10,17 @@ import (
 	"github.com/jzila/canopy/pkg/runtime"
 )
 
+const (
+	// Daemon startup configuration
+	daemonStartupTimeout = 10 * time.Second // Total time to wait for daemon
+	maxConnectionRetries = 5                // Number of connection attempts after socket appears
+	initialRetryDelay    = 100 * time.Millisecond
+	maxRetryDelay        = 2 * time.Second
+)
+
 // GetClient returns an IPC client connected to the canopy daemon.
 // If the daemon is not running, it attempts to start it automatically.
+// Uses exponential backoff for connection retries after daemon startup.
 // Returns an error if the daemon cannot be started or connection fails.
 func GetClient() (*Client, error) {
 	socketPath := runtime.SocketPath("")
@@ -27,18 +36,44 @@ func GetClient() (*Client, error) {
 		return nil, fmt.Errorf("failed to start daemon: %w", err)
 	}
 
-	// Wait for socket to appear
-	if err := waitForSocket(socketPath, 5*time.Second); err != nil {
+	// Wait for socket to appear with longer timeout
+	if err := waitForSocket(socketPath, daemonStartupTimeout); err != nil {
 		return nil, fmt.Errorf("daemon started but socket not available: %w", err)
 	}
 
-	// Connect to the newly started daemon
-	client, err = NewClient(socketPath)
+	// Connect with exponential backoff retry
+	client, err = connectWithRetry(socketPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to daemon after start: %w", err)
 	}
 
 	return client, nil
+}
+
+// connectWithRetry attempts to connect to the daemon with exponential backoff
+func connectWithRetry(socketPath string) (*Client, error) {
+	var lastErr error
+	delay := initialRetryDelay
+
+	for attempt := 1; attempt <= maxConnectionRetries; attempt++ {
+		client, err := NewClient(socketPath)
+		if err == nil {
+			return client, nil
+		}
+		lastErr = err
+
+		// Don't sleep after the last attempt
+		if attempt < maxConnectionRetries {
+			time.Sleep(delay)
+			// Exponential backoff with cap
+			delay *= 2
+			if delay > maxRetryDelay {
+				delay = maxRetryDelay
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("failed after %d attempts: %w", maxConnectionRetries, lastErr)
 }
 
 // SpawnDaemon starts the canopy daemon in the background
