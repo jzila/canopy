@@ -62,17 +62,28 @@ func NewProcessor(
 // The loop runs until the context is cancelled or the queue is closed.
 func (p *Processor) Start(ctx context.Context) {
 	for {
-		select {
-		case <-ctx.Done():
+		// DequeueCtx respects context cancellation
+		req := p.queue.DequeueCtx(ctx)
+		if req == nil {
+			// Queue is closed or context cancelled
 			return
-		default:
 		}
 
-		// Dequeue blocks until a request is available or queue is closed/paused
-		req := p.queue.Dequeue()
-		if req == nil {
-			// Queue is closed
+		// Check context again after dequeue (in case it was cancelled while processing previous request)
+		select {
+		case <-ctx.Done():
+			// Send cancellation response and return
+			if req.Response != nil {
+				select {
+				case req.Response <- &MergeResponse{
+					Success: false,
+					Error:   "processor shutdown: " + ctx.Err().Error(),
+				}:
+				default:
+				}
+			}
 			return
+		default:
 		}
 
 		// Process the merge request
@@ -95,9 +106,16 @@ func (p *Processor) Start(ctx context.Context) {
 // processMerge handles a single merge request.
 // It commits dirty beads changes, applies the merge, spawns resolver on conflict,
 // marks the task as done/failed, and sends IPC status updates.
+// Returns early with an error response if the context is cancelled.
 func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeResponse {
 	resp := &MergeResponse{}
 	taskID := req.Task.ID
+
+	// Check context at start
+	if err := ctx.Err(); err != nil {
+		resp.Error = fmt.Sprintf("cancelled: %v", err)
+		return resp
+	}
 
 	// Send initial pending status
 	p.sendMergeStatus(taskID, ipc.MergeStatusPending, 0, "")
@@ -109,6 +127,12 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 			fmt.Fprintf(os.Stderr, "warning: failed to commit .beads/ changes: %v\n", err)
 		}
 		// Continue with merge - better to try than to fail completely
+	}
+
+	// Check context before merge operation
+	if err := ctx.Err(); err != nil {
+		resp.Error = fmt.Sprintf("cancelled before merge: %v", err)
+		return resp
 	}
 
 	// Send merging status
@@ -142,6 +166,14 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 			needsResolver = true
 			resolverReason = "no changes applied despite agent output"
 		}
+	}
+
+	// Check context before spawning resolver
+	if err := ctx.Err(); err != nil {
+		resp.Error = fmt.Sprintf("cancelled before resolver: %v", err)
+		p.markTaskFailed(taskID, resp.Error)
+		p.sendMergeStatus(taskID, ipc.MergeStatusFailed, 0, resp.Error)
+		return resp
 	}
 
 	// Spawn resolver if any merge issue was detected

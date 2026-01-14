@@ -72,6 +72,7 @@ var HomeExcludedPaths = []string{
 	".bash_history", // Shell history
 	".viminfo",      // Vim state
 	".lesshst",      // Less history
+	"go",            // Go module cache (GOPATH/pkg/mod)
 }
 
 // NewOverlay creates a new overlay filesystem structure

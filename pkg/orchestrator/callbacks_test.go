@@ -6,6 +6,7 @@ import (
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
 	"github.com/jzila/canopy/pkg/merge"
+	"github.com/jzila/canopy/pkg/mergecoordinator"
 	"github.com/jzila/canopy/pkg/mergequeue"
 	"github.com/jzila/canopy/pkg/resolver"
 )
@@ -177,42 +178,37 @@ func TestOrchestrator_MergeProcessorInitialized(t *testing.T) {
 	}
 }
 
-// TestOrchestrator_StructHasMergeQueueFields verifies that the Orchestrator struct
-// has the expected merge queue and processor fields.
-func TestOrchestrator_StructHasMergeQueueFields(t *testing.T) {
-	// Create a minimal orchestrator to verify field presence
+// TestOrchestrator_StructHasMergeCoordinator verifies that the Orchestrator struct
+// has the expected mergeCoordinator field.
+func TestOrchestrator_StructHasMergeCoordinator(t *testing.T) {
+	// Create a minimal merge coordinator for testing
+	mc := &mergecoordinator.MergeCoordinator{}
+
+	// Create orchestrator with coordinator
 	o := &Orchestrator{
-		mergeQueue:     mergequeue.NewQueue(4),
-		mergeProcessor: nil, // Can be nil for this structural test
+		mergeCoordinator: mc,
+		config:           &Config{Verbose: false},
 	}
 
-	// Verify mergeQueue is set
-	if o.mergeQueue == nil {
-		t.Error("Expected mergeQueue field to be set")
-	}
-
-	// Test queue operations work
-	if o.mergeQueue.IsClosed() {
-		t.Error("Expected queue to not be closed")
+	// Verify mergeCoordinator is set
+	if o.mergeCoordinator == nil {
+		t.Error("Expected mergeCoordinator field to be set")
 	}
 }
 
 // TestOnDoneFn_EnqueuesMergeRequest verifies that OnDoneFn enqueues a MergeRequest
-// rather than calling mergeAndCleanup directly. This ensures task completion
-// (beadsClient.Done) happens in the processor after merge succeeds, not in the callback.
+// via the MergeCoordinator rather than calling mergeAndCleanup directly.
+// This ensures task completion (beadsClient.Done) happens in the processor
+// after merge succeeds, not in the callback.
 func TestOnDoneFn_EnqueuesMergeRequest(t *testing.T) {
-	// Create merge queue and orchestrator
+	// Create merge queue for direct testing of the queue flow
 	queue := mergequeue.NewQueue(10)
-	o := &Orchestrator{
-		mergeQueue: queue,
-		config:     &Config{Verbose: false},
-	}
 
 	// Track whether user callback was invoked
 	var userCallbackInvoked bool
 	var userCallbackTaskID string
 
-	// Set up internal callbacks with a user callback
+	// Set up user callbacks
 	userCallbacks := &EventCallbacks{
 		OnDoneFn: func(taskID string, result *agent.Result) {
 			userCallbackInvoked = true
@@ -223,16 +219,6 @@ func TestOnDoneFn_EnqueuesMergeRequest(t *testing.T) {
 	// Create a test task and result
 	testTask := &beads.Task{ID: "test-task-1", Title: "Test Task"}
 	testResult := &agent.Result{TaskID: "test-task-1", Success: true}
-
-	// Build wrapped callbacks
-	o.setupInternalCallbacks(userCallbacks)
-
-	// Simulate OnAgentStart being called first (caches the task)
-	wrappedCallbacks := o.scheduler
-	if wrappedCallbacks == nil {
-		// Manually invoke the start callback logic to cache the task
-		o.taskCache.Store(testTask.ID, testTask)
-	}
 
 	// Start a goroutine to simulate the processor reading from queue
 	// and sending a response
@@ -254,18 +240,10 @@ func TestOnDoneFn_EnqueuesMergeRequest(t *testing.T) {
 		}
 	}()
 
-	// Now simulate the wrapped OnDoneFn being called
-	// This should enqueue a request and block until response
+	// Simulate the MergeCoordinator's EnqueueMerge flow
 	wrappedOnDone := func(taskID string, result *agent.Result) {
-		// Retrieve task from cache
-		var task *beads.Task
-		if cached, ok := o.taskCache.Load(taskID); ok {
-			task = cached.(*beads.Task)
-			o.taskCache.Delete(taskID)
-		}
-
-		// Create merge request and enqueue
-		req := mergequeue.NewMergeRequest(result, task)
+		// Create merge request and enqueue (as MergeCoordinator.EnqueueMerge does)
+		req := mergequeue.NewMergeRequest(result, testTask)
 		if !queue.Enqueue(req) {
 			t.Fatal("failed to enqueue merge request")
 		}

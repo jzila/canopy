@@ -4,17 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sync"
 
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
-	"github.com/jzila/canopy/pkg/failedpatches"
 	"github.com/jzila/canopy/pkg/ipc"
-	"github.com/jzila/canopy/pkg/merge"
-	"github.com/jzila/canopy/pkg/mergequeue"
-	"github.com/jzila/canopy/pkg/resolver"
+	"github.com/jzila/canopy/pkg/mergecoordinator"
 	"github.com/jzila/canopy/pkg/sandbox"
 	"github.com/jzila/canopy/pkg/scheduler"
 )
@@ -87,24 +83,16 @@ type Config struct {
 
 // Orchestrator coordinates the execution of tasks from beads
 type Orchestrator struct {
-	config         *Config
-	beadsClient    *beads.Client
-	scheduler      *scheduler.Scheduler
-	merger         *merge.SequentialMerger
-	resolver       *resolver.Resolver
-	mergeQueue     *mergequeue.Queue
-	mergeProcessor *mergequeue.Processor
-	tempDir        string
-	callbacks      *EventCallbacks
-	failureCounts  map[string]int // Tracks how many times each task has failed
-	promptFilter   *PromptFilter  // Parsed prompt for filtering tasks
-	beadsMu        sync.Mutex     // Serializes beads updates to prevent corruption
-	mergeMu        sync.Mutex     // Serializes merge operations to prevent race conditions (kept for transition)
-	sandboxConfig  *sandbox.SandboxConfig
-	agentIDMap     sync.Map    // Maps taskID -> agentID for parent-child tracking
-	taskCache      sync.Map    // Maps taskID -> *beads.Task for passing task to merge queue
-	ipcClient      *ipc.Client // IPC client for sending merge status events
-	repoID         string      // Repository ID for IPC tracking
+	config           *Config
+	beadsClient      *beads.Client
+	scheduler        *scheduler.Scheduler
+	mergeCoordinator *mergecoordinator.MergeCoordinator
+	tempDir          string
+	callbacks        *EventCallbacks
+	failureCounts    map[string]int // Tracks how many times each task has failed
+	promptFilter     *PromptFilter  // Parsed prompt for filtering tasks
+	beadsMu          sync.Mutex     // Serializes beads updates to prevent corruption
+	sandboxConfig    *sandbox.SandboxConfig
 }
 
 // New creates a new orchestrator
@@ -155,18 +143,6 @@ func New(config *Config) (*Orchestrator, error) {
 		SandboxConfig: sandboxConfig,
 	})
 
-	// Create merger
-	merger := merge.NewSequentialMerger(config.OutputDir, tempDir, config.Verbose)
-
-	// Create resolver for handling merge conflicts
-	resolverInst := resolver.New(&resolver.Config{
-		WorkDir:       config.WorkDir,
-		TempDir:       tempDir,
-		Verbose:       config.Verbose,
-		UseBwrap:      config.UseBwrap,
-		SandboxConfig: sandboxConfig,
-	})
-
 	// Set default MaxRetries if not specified (default: 3 retries)
 	if config.MaxRetries == 0 {
 		config.MaxRetries = 3
@@ -182,41 +158,34 @@ func New(config *Config) (*Orchestrator, error) {
 		fmt.Printf("Prompt filter: %+v\n", promptFilter)
 	}
 
-	// Initialize merge queue with buffer size equal to concurrency
-	// This provides sufficient buffering while keeping memory bounded
-	bufferSize := config.Concurrency
-	if bufferSize <= 0 {
-		bufferSize = 4 // default concurrency
+	// Create merge coordinator to handle all merge operations
+	mc, err := mergecoordinator.New(&mergecoordinator.Config{
+		WorkDir:       config.WorkDir,
+		OutputDir:     config.OutputDir,
+		TempDir:       tempDir,
+		Concurrency:   config.Concurrency,
+		Verbose:       config.Verbose,
+		UseBwrap:      config.UseBwrap,
+		SandboxConfig: sandboxConfig,
+	}, beadsClient)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create merge coordinator: %w", err)
 	}
-	mergeQueue := mergequeue.NewQueue(bufferSize)
-
-	// Initialize merge processor
-	// Note: ipcClient is set via SetIPCClient after construction
-	mergeProcessor := mergequeue.NewProcessor(
-		mergeQueue,
-		merger,
-		resolverInst,
-		beadsClient,
-		config.OutputDir,
-		nil, // ipcClient set later via SetIPCClient
-		config.Verbose,
-		0, // Use default resolver timeout (10 minutes)
-	)
 
 	o := &Orchestrator{
-		config:         config,
-		beadsClient:    beadsClient,
-		scheduler:      sched,
-		merger:         merger,
-		resolver:       resolverInst,
-		mergeQueue:     mergeQueue,
-		mergeProcessor: mergeProcessor,
-		tempDir:        tempDir,
-		callbacks:      nil, // Set via SetCallbacks
-		failureCounts:  make(map[string]int),
-		promptFilter:   promptFilter,
-		sandboxConfig:  sandboxConfig,
+		config:           config,
+		beadsClient:      beadsClient,
+		scheduler:        sched,
+		mergeCoordinator: mc,
+		tempDir:          tempDir,
+		callbacks:        nil, // Set via SetCallbacks
+		failureCounts:    make(map[string]int),
+		promptFilter:     promptFilter,
+		sandboxConfig:    sandboxConfig,
 	}
+
+	// Set cleanup callback for merge coordinator
+	mc.SetCleanupCallback(o.cleanupOverlay)
 
 	// Set up default internal callbacks for beads updates.
 	// These will be wrapped with user callbacks if SetCallbacks is called later.
@@ -233,15 +202,15 @@ func (o *Orchestrator) SetCallbacks(callbacks *EventCallbacks) {
 	o.setupInternalCallbacks(callbacks)
 }
 
-// setupInternalCallbacks creates wrapper callbacks that route merges through the queue.
+// setupInternalCallbacks creates wrapper callbacks that route merges through the coordinator.
 // If userCallbacks is provided, they are called after the merge completes.
-// CRITICAL: Task completion (beadsClient.Done/Fail) now happens in the processor,
+// CRITICAL: Task completion (beadsClient.Done/Fail) now happens in the merge coordinator,
 // not the callback. This ensures dependent agents see merged changes from predecessors.
 func (o *Orchestrator) setupInternalCallbacks(userCallbacks *EventCallbacks) {
 	wrappedCallbacks := &EventCallbacks{
 		OnAgentStartFn: func(taskID string, task *beads.Task) {
-			// Store task for later use in OnDone
-			o.taskCache.Store(taskID, task)
+			// Store task in merge coordinator for later use in OnDone
+			o.mergeCoordinator.CacheTask(taskID, task)
 
 			if userCallbacks != nil && userCallbacks.OnAgentStartFn != nil {
 				userCallbacks.OnAgentStartFn(taskID, task)
@@ -258,37 +227,8 @@ func (o *Orchestrator) setupInternalCallbacks(userCallbacks *EventCallbacks) {
 			}
 		},
 		OnDoneFn: func(taskID string, result *agent.Result) {
-			// Retrieve task from cache (stored in OnAgentStart)
-			var task *beads.Task
-			if cached, ok := o.taskCache.Load(taskID); ok {
-				task = cached.(*beads.Task)
-				o.taskCache.Delete(taskID) // Clean up cache
-			} else {
-				// Fallback: fetch from beads if not cached
-				if fetched, err := o.beadsClient.Show(taskID); err == nil {
-					task = fetched
-				}
-			}
-
-			// Create merge request and enqueue
-			req := mergequeue.NewMergeRequest(result, task)
-			if !o.mergeQueue.Enqueue(req) {
-				// Queue is full or closed - fall back to direct cleanup
-				fmt.Fprintf(os.Stderr, "warning: merge queue full for task %s, cleaning up\n", taskID)
-				o.cleanupOverlay(result)
-				// Note: Task completion not marked since we couldn't merge
-				if userCallbacks != nil && userCallbacks.OnDoneFn != nil {
-					userCallbacks.OnDoneFn(taskID, result)
-				}
-				return
-			}
-
-			// Block waiting for merge response
-			// The processor handles: merge, conflict resolution, and task completion (Done/Fail)
-			resp := <-req.Response
-
-			// Cleanup overlay after merge completes
-			o.cleanupOverlay(result)
+			// Delegate merge to coordinator - it handles queueing, merge, and task completion
+			resp := o.mergeCoordinator.EnqueueMerge(result)
 
 			// Call user's callback with the merge outcome
 			if userCallbacks != nil && userCallbacks.OnDoneFn != nil {
@@ -296,20 +236,13 @@ func (o *Orchestrator) setupInternalCallbacks(userCallbacks *EventCallbacks) {
 			}
 
 			// Log merge result if verbose and there was an error
-			if !resp.Success && o.config.Verbose {
+			if resp != nil && !resp.Success && o.config.Verbose {
 				fmt.Fprintf(os.Stderr, "[%s] merge failed: %s\n", taskID, resp.Error)
 			}
 		},
 		OnFailFn: func(taskID string, result *agent.Result) {
-			// Clean up task cache if present
-			o.taskCache.Delete(taskID)
-
-			// Clean up overlay for failed task (no merge needed)
-			o.cleanupOverlay(result)
-
-			// Update beads immediately when task fails
-			// Failed tasks don't go through merge queue since there's nothing to merge
-			o.markTaskFailed(taskID, result.Error)
+			// Delegate failure handling to coordinator
+			o.mergeCoordinator.HandleFailure(taskID, result, result.Error)
 
 			// Then call user's callback
 			if userCallbacks != nil && userCallbacks.OnFailFn != nil {
@@ -322,221 +255,6 @@ func (o *Orchestrator) setupInternalCallbacks(userCallbacks *EventCallbacks) {
 	if o.scheduler != nil {
 		o.scheduler.SetCallbacks(wrappedCallbacks)
 	}
-}
-
-// markTaskDone marks a task as completed in beads with proper synchronization.
-// This is safe to call from concurrent goroutines.
-func (o *Orchestrator) markTaskDone(taskID string) {
-	o.beadsMu.Lock()
-	defer o.beadsMu.Unlock()
-
-	if err := o.beadsClient.Done(taskID); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to mark task %s done: %v\n", taskID, err)
-	}
-}
-
-// markTaskFailed marks a task as failed in beads with proper synchronization.
-// This is safe to call from concurrent goroutines.
-func (o *Orchestrator) markTaskFailed(taskID string, reason string) {
-	o.beadsMu.Lock()
-	defer o.beadsMu.Unlock()
-
-	if err := o.beadsClient.Fail(taskID, reason); err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: failed to mark task %s as failed: %v\n", taskID, err)
-	}
-}
-
-// mergeAndCleanup merges a single agent result and cleans up its overlay.
-// This is called immediately when each agent completes, while the overlay is still mounted.
-// This is safe to call from concurrent goroutines.
-//
-// The merge flow:
-// 1. Acquire merge slot (bd merge-slot acquire)
-// 2. Auto-commit any dirty .beads/ changes to prevent git am failures
-// 3. Apply git patches or file changes
-// 4. If git am fails, spawn resolver agent (inherits merge slot)
-// 5. Release merge slot (bd merge-slot release)
-func (o *Orchestrator) mergeAndCleanup(result *agent.Result) {
-	// Use context for resolver agent execution
-	ctx := context.Background()
-
-	o.mergeAndCleanupWithContext(ctx, result, nil)
-}
-
-// mergeAndCleanupWithContext performs merge with optional task context for resolver spawning.
-// The originalTask parameter is used to provide context to resolver agents when git am fails.
-func (o *Orchestrator) mergeAndCleanupWithContext(ctx context.Context, result *agent.Result, originalTask *beads.Task) {
-	// Send initial pending status
-	o.sendMergeStatus(result.TaskID, ipc.MergeStatusPending, 0, "")
-
-	// Serialize merge operations to ensure atomic commits
-	o.mergeMu.Lock()
-	defer o.mergeMu.Unlock()
-
-	// Send merging status
-	o.sendMergeStatus(result.TaskID, ipc.MergeStatusMerging, 0, "")
-
-	// Auto-commit any dirty .beads/ changes before git am
-	// This fixes canopy-pja: git am fails if .beads/ has uncommitted changes
-	// because 'git am' won't apply patches when local changes would be overwritten
-	if err := o.commitDirtyBeadsChanges(); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to commit .beads/ changes: %v\n", err)
-		// Continue with merge - better to try than to fail completely
-	}
-
-	// Merge the result (applies file changes and commits)
-	mergeResult, err := o.merger.MergeSingle(result, nil)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to merge result for task %s: %v\n", result.TaskID, err)
-		o.sendMergeStatus(result.TaskID, ipc.MergeStatusFailed, 0, err.Error())
-	}
-
-	// Check if merge had errors - if so, spawn a resolver agent
-	if len(mergeResult.Errors) > 0 {
-		fmt.Printf("[%s] Merge errors detected, spawning resolver agent...\n", result.TaskID)
-		o.sendMergeStatus(result.TaskID, ipc.MergeStatusResolving, 0, "")
-
-		// Build conflict context for the resolver
-		conflictCtx := &resolver.ConflictContext{
-			TaskID:        result.TaskID,
-			TaskTitle:     result.TaskID, // Will be overridden if originalTask is available
-			PatchErrors:   mergeResult.Errors,
-			FileChanges:   result.Changes,
-			ParentAgentID: o.GetAgentID(result.TaskID), // Get parent agent ID for IPC tracking
-		}
-
-		// Add original task info if available
-		if originalTask != nil {
-			conflictCtx.TaskTitle = originalTask.Title
-			conflictCtx.TaskDescription = originalTask.Description
-		} else {
-			// Try to fetch task info from beads
-			if task, err := o.beadsClient.Show(result.TaskID); err == nil && task != nil {
-				conflictCtx.TaskTitle = task.Title
-				conflictCtx.TaskDescription = task.Description
-			}
-		}
-
-		// Spawn resolver agent (inherits the merge slot - no need to re-acquire)
-		// The resolver runs within the same merge lock, so it has exclusive access
-		resolverResult, err := o.resolver.Resolve(ctx, conflictCtx)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "resolver error for %s: %v\n", result.TaskID, err)
-		}
-
-		if resolverResult != nil {
-			if resolverResult.Success {
-				fmt.Printf("[%s-resolver] Conflict resolved successfully (%.1fs)\n",
-					result.TaskID, resolverResult.Duration.Seconds())
-
-				// Merge the resolver's result
-				if resolverResult.AgentResult != nil && resolverResult.AgentResult.Overlay != nil {
-					resolverMergeResult, err := o.merger.MergeSingle(resolverResult.AgentResult, nil)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "warning: failed to merge resolver result for %s: %v\n",
-							result.TaskID, err)
-					}
-
-					// Report resolver merge errors
-					for _, errMsg := range resolverMergeResult.Errors {
-						fmt.Fprintf(os.Stderr, "resolver merge error for %s: %s\n", result.TaskID, errMsg)
-					}
-
-					if o.config.Verbose && resolverMergeResult.CommitsApplied > 0 {
-						fmt.Printf("Merged %d commit(s) from resolver for task %s\n",
-							resolverMergeResult.CommitsApplied, result.TaskID)
-					}
-
-					// Clean up resolver overlay
-					// Cleanup errors are logged but don't affect the merge result
-					if cleanupErr := resolverResult.AgentResult.Overlay.Cleanup(); cleanupErr != nil && o.config.Verbose {
-						fmt.Fprintf(os.Stderr, "warning: failed to cleanup resolver overlay for %s: %v\n", result.TaskID, cleanupErr)
-					}
-				}
-			} else {
-				fmt.Fprintf(os.Stderr, "[%s-resolver] Failed to resolve conflict: %s\n",
-					result.TaskID, resolverResult.Error)
-
-				// Preserve patches to persistent storage before cleanup
-				// This prevents data loss when both merge and resolution fail
-				if result.GitState != nil && len(result.GitState.Patches) > 0 {
-					preserveResult, err := failedpatches.PreservePatches(
-						result.TaskID,
-						result.GitState.Patches,
-						mergeResult.Errors,
-					)
-					if err != nil {
-						fmt.Fprintf(os.Stderr, "[%s] Warning: failed to preserve patches: %v\n",
-							result.TaskID, err)
-					} else {
-						fmt.Fprintf(os.Stderr, "\n[%s] Patches preserved to: %s\n",
-							result.TaskID, preserveResult.Dir)
-						fmt.Fprintf(os.Stderr, "[%s]    To apply manually: git am --3way %s/patch-*.patch\n\n",
-							result.TaskID, preserveResult.Dir)
-					}
-				}
-
-				// Mark the original task as failed since resolver couldn't fix it
-				o.markTaskFailed(result.TaskID, fmt.Sprintf("resolver failed: %s", resolverResult.Error))
-				o.sendMergeStatus(result.TaskID, ipc.MergeStatusFailed, 0, fmt.Sprintf("resolver failed: %s", resolverResult.Error))
-			}
-		}
-	} else {
-		// Report merge errors for non-resolver cases
-		for _, errMsg := range mergeResult.Errors {
-			fmt.Fprintf(os.Stderr, "merge error for %s: %s\n", result.TaskID, errMsg)
-		}
-	}
-
-	if o.config.Verbose && mergeResult.CommitsApplied > 0 {
-		fmt.Printf("Merged %d commit(s) from task %s\n", mergeResult.CommitsApplied, result.TaskID)
-	}
-
-	// Send final merged status (unless already set to failed)
-	if err == nil {
-		o.sendMergeStatus(result.TaskID, ipc.MergeStatusMerged, 0, "")
-	}
-
-	// Clean up overlay now that merge is complete
-	o.cleanupOverlay(result)
-}
-
-// commitDirtyBeadsChanges commits any uncommitted changes in the .beads/ directory.
-// This prevents git am from failing when .beads/ files have been modified.
-func (o *Orchestrator) commitDirtyBeadsChanges() error {
-	// Check if .beads/ directory has uncommitted changes
-	statusCmd := exec.Command("git", "status", "--porcelain", ".beads/")
-	statusCmd.Dir = o.config.OutputDir
-	output, err := statusCmd.Output()
-	if err != nil {
-		return fmt.Errorf("git status failed: %w", err)
-	}
-
-	// No changes to commit
-	if len(output) == 0 {
-		return nil
-	}
-
-	if o.config.Verbose {
-		fmt.Printf("Auto-committing dirty .beads/ changes before merge\n")
-	}
-
-	// Stage .beads/ changes
-	addCmd := exec.Command("git", "add", ".beads/")
-	addCmd.Dir = o.config.OutputDir
-	if err := addCmd.Run(); err != nil {
-		return fmt.Errorf("git add .beads/ failed: %w", err)
-	}
-
-	// Commit with a clear message
-	commitCmd := exec.Command("git", "commit", "-m", "canopy: auto-commit beads changes before merge")
-	commitCmd.Dir = o.config.OutputDir
-	if err := commitCmd.Run(); err != nil {
-		// Check if there's actually nothing to commit (possible race with bd sync)
-		return fmt.Errorf("git commit failed: %w", err)
-	}
-
-	return nil
 }
 
 // cleanupOverlay cleans up the overlay for a result.
@@ -555,58 +273,34 @@ func (o *Orchestrator) WithCallbacks(callbacks *EventCallbacks) *Orchestrator {
 	return o
 }
 
-// SetIPCClient sets the IPC client for the orchestrator and resolver.
+// SetIPCClient sets the IPC client for the orchestrator and merge coordinator.
 // This enables sending merge status events and resolver agent tracking.
 func (o *Orchestrator) SetIPCClient(client *ipc.Client) {
-	o.ipcClient = client
-	if o.resolver != nil {
-		o.resolver.SetIPCClient(client)
-	}
+	o.mergeCoordinator.SetIPCClient(client)
 }
 
 // SetRepoID sets the repository ID for IPC tracking.
 // This ID is passed to resolver agents for parent-child tracking.
 func (o *Orchestrator) SetRepoID(repoID string) {
-	o.repoID = repoID
-	// Update resolver config with repo ID
-	if o.resolver != nil {
-		o.resolver.SetRepoID(repoID)
-	}
-}
-
-// sendMergeStatus sends a merge status update via IPC if client is connected.
-func (o *Orchestrator) sendMergeStatus(taskID string, status ipc.MergeStatus, queuePos int, errMsg string) {
-	if o.ipcClient == nil {
-		return
-	}
-	agentID := o.GetAgentID(taskID)
-	if agentID == "" {
-		agentID = fmt.Sprintf("agent-%s", taskID)
-	}
-	if err := o.ipcClient.SendAgentMergeStatus(agentID, status, queuePos, errMsg); err != nil && o.config.Verbose {
-		fmt.Fprintf(os.Stderr, "warning: failed to send merge status for %s: %v\n", taskID, err)
-	}
+	o.mergeCoordinator.SetRepoID(repoID)
 }
 
 // SetAgentID records the agentID for a taskID, enabling parent-child tracking for resolvers.
 // This should be called when an agent starts execution.
 func (o *Orchestrator) SetAgentID(taskID, agentID string) {
-	o.agentIDMap.Store(taskID, agentID)
+	o.mergeCoordinator.SetAgentID(taskID, agentID)
 }
 
 // GetAgentID retrieves the agentID for a taskID.
 func (o *Orchestrator) GetAgentID(taskID string) string {
-	if val, ok := o.agentIDMap.Load(taskID); ok {
-		return val.(string)
-	}
-	return ""
+	return o.mergeCoordinator.GetAgentID(taskID)
 }
 
 // Run executes the orchestration loop until no ready tasks remain
 func (o *Orchestrator) Run(ctx context.Context) error {
-	// Start the merge processor goroutine
+	// Start the merge coordinator's processor goroutine
 	// It will process merge requests from the queue until context is cancelled
-	go o.mergeProcessor.Start(ctx)
+	o.mergeCoordinator.Start(ctx)
 
 	iteration := 0
 

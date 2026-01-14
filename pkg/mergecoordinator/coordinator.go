@@ -1,0 +1,232 @@
+// Package mergecoordinator provides centralized coordination of merge operations.
+// It encapsulates the merge queue, processor, merger, and resolver into a single
+// component that the orchestrator can delegate to.
+package mergecoordinator
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"sync"
+
+	"github.com/jzila/canopy/pkg/agent"
+	"github.com/jzila/canopy/pkg/beads"
+	"github.com/jzila/canopy/pkg/ipc"
+	"github.com/jzila/canopy/pkg/merge"
+	"github.com/jzila/canopy/pkg/mergequeue"
+	"github.com/jzila/canopy/pkg/resolver"
+	"github.com/jzila/canopy/pkg/sandbox"
+)
+
+// Config holds configuration for the MergeCoordinator.
+type Config struct {
+	// WorkDir is the working directory for the repository.
+	WorkDir string
+
+	// OutputDir is where merged changes are written.
+	OutputDir string
+
+	// TempDir is for temporary files during merge operations.
+	TempDir string
+
+	// Concurrency determines the merge queue buffer size.
+	Concurrency int
+
+	// Verbose enables detailed logging.
+	Verbose bool
+
+	// UseBwrap enables bubblewrap sandboxing for resolver agents.
+	UseBwrap bool
+
+	// SandboxConfig is the sandbox configuration for resolver agents.
+	SandboxConfig *sandbox.SandboxConfig
+}
+
+// MergeCoordinator coordinates all merge operations including:
+// - Sequential merge queue processing
+// - Conflict resolution via resolver agents
+// - IPC status updates
+// - Beads task status updates
+type MergeCoordinator struct {
+	config      *Config
+	queue       *mergequeue.Queue
+	processor   *mergequeue.Processor
+	merger      *merge.SequentialMerger
+	resolver    *resolver.Resolver
+	beadsClient *beads.Client
+	ipcClient   *ipc.Client
+	repoID      string
+
+	// agentIDMap maps taskID -> agentID for parent-child tracking
+	agentIDMap sync.Map
+
+	// taskCache maps taskID -> *beads.Task for passing task to merge queue
+	taskCache sync.Map
+
+	// cleanupCallback is called after merge completes to cleanup overlay
+	cleanupCallback func(*agent.Result)
+}
+
+// New creates a new MergeCoordinator.
+func New(config *Config, beadsClient *beads.Client) (*MergeCoordinator, error) {
+	if config == nil {
+		return nil, fmt.Errorf("config is required")
+	}
+	if beadsClient == nil {
+		return nil, fmt.Errorf("beadsClient is required")
+	}
+
+	// Create merger
+	merger := merge.NewSequentialMerger(config.OutputDir, config.TempDir, config.Verbose)
+
+	// Create resolver for handling merge conflicts
+	resolverInst := resolver.New(&resolver.Config{
+		WorkDir:       config.WorkDir,
+		TempDir:       config.TempDir,
+		Verbose:       config.Verbose,
+		UseBwrap:      config.UseBwrap,
+		SandboxConfig: config.SandboxConfig,
+	})
+
+	// Initialize merge queue with buffer size equal to concurrency
+	bufferSize := config.Concurrency
+	if bufferSize <= 0 {
+		bufferSize = 4 // default concurrency
+	}
+	queue := mergequeue.NewQueue(bufferSize)
+
+	// Initialize merge processor
+	// Note: ipcClient is set via SetIPCClient after construction
+	processor := mergequeue.NewProcessor(
+		queue,
+		merger,
+		resolverInst,
+		beadsClient,
+		config.OutputDir,
+		nil, // ipcClient set later via SetIPCClient
+		config.Verbose,
+		0, // Use default resolver timeout (10 minutes)
+	)
+
+	return &MergeCoordinator{
+		config:      config,
+		queue:       queue,
+		processor:   processor,
+		merger:      merger,
+		resolver:    resolverInst,
+		beadsClient: beadsClient,
+	}, nil
+}
+
+// Start begins the merge processor goroutine.
+// It processes merge requests from the queue until context is cancelled.
+func (mc *MergeCoordinator) Start(ctx context.Context) {
+	go mc.processor.Start(ctx)
+}
+
+// SetIPCClient sets the IPC client for merge status updates.
+func (mc *MergeCoordinator) SetIPCClient(client *ipc.Client) {
+	mc.ipcClient = client
+	if mc.resolver != nil {
+		mc.resolver.SetIPCClient(client)
+	}
+}
+
+// SetRepoID sets the repository ID for IPC tracking.
+func (mc *MergeCoordinator) SetRepoID(repoID string) {
+	mc.repoID = repoID
+	if mc.resolver != nil {
+		mc.resolver.SetRepoID(repoID)
+	}
+}
+
+// SetCleanupCallback sets a callback to cleanup overlays after merge.
+func (mc *MergeCoordinator) SetCleanupCallback(callback func(*agent.Result)) {
+	mc.cleanupCallback = callback
+}
+
+// SetAgentID records the agentID for a taskID, enabling parent-child tracking.
+func (mc *MergeCoordinator) SetAgentID(taskID, agentID string) {
+	mc.agentIDMap.Store(taskID, agentID)
+}
+
+// GetAgentID retrieves the agentID for a taskID.
+func (mc *MergeCoordinator) GetAgentID(taskID string) string {
+	if val, ok := mc.agentIDMap.Load(taskID); ok {
+		return val.(string)
+	}
+	return ""
+}
+
+// CacheTask stores a task for later retrieval during merge.
+func (mc *MergeCoordinator) CacheTask(taskID string, task *beads.Task) {
+	mc.taskCache.Store(taskID, task)
+}
+
+// EnqueueMerge adds a completed agent result to the merge queue.
+// This blocks until the merge completes and returns the merge response.
+// Returns nil if the queue is full or closed.
+func (mc *MergeCoordinator) EnqueueMerge(result *agent.Result) *mergequeue.MergeResponse {
+	// Retrieve task from cache
+	var task *beads.Task
+	if cached, ok := mc.taskCache.Load(result.TaskID); ok {
+		task = cached.(*beads.Task)
+		mc.taskCache.Delete(result.TaskID) // Clean up cache
+	} else {
+		// Fallback: fetch from beads if not cached
+		if fetched, err := mc.beadsClient.Show(result.TaskID); err == nil {
+			task = fetched
+		}
+	}
+
+	// Create merge request and enqueue
+	req := mergequeue.NewMergeRequest(result, task)
+	if !mc.queue.Enqueue(req) {
+		// Queue is full or closed
+		if mc.config.Verbose {
+			fmt.Fprintf(os.Stderr, "warning: merge queue full for task %s\n", result.TaskID)
+		}
+		mc.cleanup(result)
+		return nil
+	}
+
+	// Block waiting for merge response
+	resp := <-req.Response
+
+	// Cleanup overlay after merge completes
+	mc.cleanup(result)
+
+	return resp
+}
+
+// HandleFailure handles a failed task - cleans up and marks failed in beads.
+// Failed tasks don't need merge since there are no changes to merge.
+func (mc *MergeCoordinator) HandleFailure(taskID string, result *agent.Result, errMsg string) {
+	// Clean up task cache if present
+	mc.taskCache.Delete(taskID)
+
+	// Clean up overlay for failed task
+	mc.cleanup(result)
+
+	// Mark task as failed in beads
+	if err := mc.beadsClient.Fail(taskID, errMsg); err != nil {
+		fmt.Fprintf(os.Stderr, "ERROR: failed to mark task %s as failed: %v\n", taskID, err)
+	}
+}
+
+// cleanup runs the cleanup callback if set.
+func (mc *MergeCoordinator) cleanup(result *agent.Result) {
+	if mc.cleanupCallback != nil {
+		mc.cleanupCallback(result)
+	}
+}
+
+// Queue returns the underlying merge queue for advanced operations.
+func (mc *MergeCoordinator) Queue() *mergequeue.Queue {
+	return mc.queue
+}
+
+// Resolver returns the underlying resolver for advanced operations.
+func (mc *MergeCoordinator) Resolver() *resolver.Resolver {
+	return mc.resolver
+}
