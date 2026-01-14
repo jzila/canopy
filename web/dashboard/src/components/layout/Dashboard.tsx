@@ -1,9 +1,11 @@
 import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import { Play, Pause, Activity, DollarSign, Zap, GitCommit, FileEdit, Sun, Moon, Terminal as TerminalIcon, List, CheckCircle, XCircle, ListTodo, GripHorizontal, Archive } from 'lucide-react';
 import { useStateStore } from '../../stores/stateStore';
+import type { AgentState } from '../../stores/stateStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { pauseOrch, resumeOrch, getState, getRepositories, activateRepository } from '../../api/client';
 import { AgentCard } from '../agents/AgentCard';
+import { AgentCardGroup } from '../agents/AgentCardGroup';
 import { AgentTerminal } from '../agents/AgentTerminal';
 import { LiveFeed } from '../agents/LiveFeed';
 import { CommitList } from '../agents/CommitList';
@@ -263,6 +265,31 @@ export const Dashboard: React.FC = () => {
       });
   }, [agentList, statusFilter, showArchivedAgents]);
 
+  // Group agents by parent/child relationships
+  // Returns parent agents with their children, excluding standalone child agents
+  const groupedAgents = useMemo(() => {
+    // Build a map of parent_id -> children
+    const childrenByParent = new Map<string, AgentState[]>();
+    const childIds = new Set<string>();
+
+    for (const agent of filteredAgents) {
+      if (agent.parent_agent_id) {
+        childIds.add(agent.id);
+        const siblings = childrenByParent.get(agent.parent_agent_id) || [];
+        siblings.push(agent);
+        childrenByParent.set(agent.parent_agent_id, siblings);
+      }
+    }
+
+    // Return parent agents (those without parent_agent_id) with their children
+    return filteredAgents
+      .filter(agent => !agent.parent_agent_id) // Only top-level agents
+      .map(parent => ({
+        parent,
+        children: childrenByParent.get(parent.id) || [],
+      }));
+  }, [filteredAgents]);
+
   const handleAgentArchiveToggle = (agentId: string, archived: boolean) => {
     updateAgent(agentId, { archived });
   };
@@ -486,7 +513,7 @@ export const Dashboard: React.FC = () => {
         <main className="flex-1 flex flex-col overflow-hidden">
           {/* Agent Grid */}
           <div className="flex-1 overflow-y-auto p-6">
-          {filteredAgents.length === 0 ? (
+          {groupedAgents.length === 0 ? (
             <div className="flex items-center justify-center h-full">
               <div className="text-center">
                 <Activity className="w-16 h-16 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
@@ -502,13 +529,14 @@ export const Dashboard: React.FC = () => {
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-              {filteredAgents.map((agent) => (
-                <AgentCard
-                  key={agent.id}
-                  agent={agent}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 items-start">
+              {groupedAgents.map(({ parent, children }) => (
+                <AgentCardGroup
+                  key={parent.id}
+                  parentAgent={parent}
+                  childAgents={children}
                   onSelect={handleSelectAgent}
-                  isSelected={agent.id === selectedAgentId}
+                  selectedAgentId={selectedAgentId}
                   onArchiveToggle={handleAgentArchiveToggle}
                 />
               ))}
