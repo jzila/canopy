@@ -13,10 +13,11 @@ import (
 )
 
 var (
-	historySince  string
-	historyStatus string
-	historyJSON   bool
-	historyLimit  int
+	historySince   string
+	historyStatus  string
+	historyJSON    bool
+	historyLimit   int
+	historyVerbose bool
 )
 
 var historyCmd = &cobra.Command{
@@ -30,6 +31,9 @@ With a run ID, shows detailed information about that specific run.
 EXAMPLES
   # Show recent runs (default: last 20)
   canopy history
+
+  # Show runs with task details
+  canopy history -v
 
   # Show runs from the last 7 days
   canopy history --since=7d
@@ -53,6 +57,7 @@ func init() {
 	historyCmd.Flags().StringVar(&historyStatus, "status", "", "Filter by status (completed, failed, partial)")
 	historyCmd.Flags().BoolVar(&historyJSON, "json", false, "Output as JSON")
 	historyCmd.Flags().IntVar(&historyLimit, "limit", 20, "Maximum number of runs to show")
+	historyCmd.Flags().BoolVarP(&historyVerbose, "verbose", "v", false, "Show task details for each run")
 
 	rootCmd.AddCommand(historyCmd)
 }
@@ -114,7 +119,7 @@ func listRuns(store *history.Store) error {
 		return outputJSON(runs)
 	}
 
-	return outputTable(runs)
+	return outputTable(runs, historyVerbose)
 }
 
 func showRunDetails(store *history.Store, runID string) error {
@@ -135,7 +140,7 @@ func showRunDetails(store *history.Store, runID string) error {
 	return outputRunDetails(run)
 }
 
-func outputTable(runs []*history.RunRecord) error {
+func outputTable(runs []*history.RunRecord, verbose bool) error {
 	// Print header
 	fmt.Printf("%-12s  %-20s  %-10s  %-7s  %-10s  %s\n",
 		"ID", "STARTED", "STATUS", "TASKS", "DURATION", "COST")
@@ -164,9 +169,51 @@ func outputTable(runs []*history.RunRecord) error {
 
 		fmt.Printf("%-12s  %-20s  %-10s  %-7s  %-10s  %s\n",
 			shortID, started, status, tasks, duration, cost)
+
+		// Show task details in verbose mode
+		if verbose && len(run.Tasks) > 0 {
+			outputTaskTree(run.Tasks)
+		}
 	}
 
 	return nil
+}
+
+// outputTaskTree prints a tree view of tasks under a run
+func outputTaskTree(tasks []history.TaskRecord) {
+	for i, task := range tasks {
+		// Determine tree connector
+		var connector string
+		if i == len(tasks)-1 {
+			connector = "  └─"
+		} else {
+			connector = "  ├─"
+		}
+
+		// Format task ID (truncate if needed)
+		taskID := task.ID
+		if len(taskID) > 12 {
+			taskID = taskID[:12]
+		}
+
+		// Format status (short form)
+		status := task.Status
+		if status == "completed" {
+			status = "done"
+		}
+
+		// Format duration
+		duration := formatDuration(time.Duration(task.DurationMS) * time.Millisecond)
+
+		// Format title (truncate if needed)
+		title := task.Title
+		if len(title) > 40 {
+			title = title[:37] + "..."
+		}
+
+		fmt.Printf("%s %-12s  %-8s  %-6s  %s\n",
+			connector, taskID, status, duration, title)
+	}
 }
 
 func outputRunDetails(run *history.RunRecord) error {
