@@ -4,9 +4,6 @@ import type {
   TreeNode,
   TreeConnection,
   TreeLayout,
-  CompletedMerge,
-  PendingMerge,
-  ActiveWorker,
   ResolverBranch,
 } from './types';
 
@@ -14,18 +11,29 @@ import type {
 const DEFAULT_LAYOUT: TreeLayout = {
   nodeRadius: 12,
   nodeSpacing: 80,
-  trunkY: 120, // Increased to allow workers to fan out above and below
+  trunkY: 60,
   branchOffset: 50,
   padding: 40,
 };
 
-// Spacing for worker fan-out branches
-const WORKER_BRANCH_SPACING = 45; // Vertical space between worker branches
-const WORKER_BRANCH_LENGTH = 60; // Horizontal length of worker branches
+// Track newly created nodes/connections for animation
+interface AnimationState {
+  newNodeIds: Set<string>;
+  newConnectionIds: Set<string>;
+}
 
-// Truncate ID for display
-const truncateId = (id: string, length: number = 7): string => {
-  return id.length > length ? id.slice(0, length) : id;
+// Extract short bead ID from task ID (e.g., 'abc1' from 'canopy-abc1')
+const extractShortId = (taskId: string): string => {
+  // Handle 'canopy-xxx' format
+  if (taskId.startsWith('canopy-')) {
+    return taskId.slice(7); // Remove 'canopy-' prefix
+  }
+  // Handle 'beads-xxx' format
+  if (taskId.startsWith('beads-')) {
+    return taskId.slice(6); // Remove 'beads-' prefix
+  }
+  // Fallback: return last 4 characters if ID is long
+  return taskId.length > 8 ? taskId.slice(-4) : taskId;
 };
 
 // Node component for rendering individual nodes
@@ -33,6 +41,7 @@ interface NodeProps {
   node: TreeNode;
   layout: TreeLayout;
   isHovered: boolean;
+  isNew?: boolean;
   onClick?: () => void;
   onMouseEnter?: () => void;
   onMouseLeave?: () => void;
@@ -42,12 +51,22 @@ const TreeNodeComponent: React.FC<NodeProps> = ({
   node,
   layout,
   isHovered,
+  isNew = false,
   onClick,
   onMouseEnter,
   onMouseLeave,
 }) => {
   const { nodeRadius } = layout;
   const { x, y, type, status } = node;
+  const [animationComplete, setAnimationComplete] = useState(!isNew);
+
+  // Handle entry animation completion
+  useEffect(() => {
+    if (isNew) {
+      const timer = setTimeout(() => setAnimationComplete(true), 400);
+      return () => clearTimeout(timer);
+    }
+  }, [isNew]);
 
   // Determine fill and stroke based on node type and status
   const getNodeStyle = () => {
@@ -93,12 +112,20 @@ const TreeNodeComponent: React.FC<NodeProps> = ({
 
   const style = getNodeStyle();
   const isAnimated = type === 'active' || (type === 'resolver' && status === 'resolving');
-  const isWorker = type === 'active';
+
+  // Animation styles for new nodes
+  const entryStyle = isNew && !animationComplete
+    ? {
+        opacity: 0,
+        transform: type === 'resolver' ? `translate(0, -20px) scale(0.5)` : 'scale(0.5)',
+        animation: 'nodeEntry 0.4s ease-out forwards',
+      }
+    : {};
 
   return (
     <g
-      className={`tree-node cursor-pointer transition-transform ${isHovered ? 'scale-110' : ''} ${isWorker ? 'worker-node-animate' : ''}`}
-      style={{ transformOrigin: `${x}px ${y}px` }}
+      className={`tree-node cursor-pointer transition-transform ${isHovered ? 'scale-110' : ''}`}
+      style={{ transformOrigin: `${x}px ${y}px`, ...entryStyle }}
       onClick={onClick}
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
@@ -144,7 +171,7 @@ const TreeNodeComponent: React.FC<NodeProps> = ({
         </text>
       )}
 
-      {/* Label below node */}
+      {/* Label below node - shows short bead ID */}
       <text
         x={x}
         y={y + nodeRadius + 16}
@@ -153,7 +180,7 @@ const TreeNodeComponent: React.FC<NodeProps> = ({
         fill="#9ca3af"
         className="font-mono"
       >
-        {truncateId(node.taskId)}
+        {extractShortId(node.taskId)}
       </text>
 
       {/* Hover tooltip */}
@@ -188,14 +215,15 @@ const TreeNodeComponent: React.FC<NodeProps> = ({
 // Connection line component
 interface ConnectionProps {
   connection: TreeConnection;
+  isNew?: boolean;
 }
 
-const ConnectionLine: React.FC<ConnectionProps> = ({ connection }) => {
+const ConnectionLine: React.FC<ConnectionProps> = ({ connection, isNew = false }) => {
   const { fromX, fromY, toX, toY, type } = connection;
+  const pathRef = useRef<SVGPathElement>(null);
 
   // Calculate control points for curved paths
   const getMidX = () => (fromX + toX) / 2;
-  const getMidY = () => (fromY + toY) / 2;
 
   const getPathStyle = () => {
     switch (type) {
@@ -217,12 +245,6 @@ const ConnectionLine: React.FC<ConnectionProps> = ({ connection }) => {
           strokeWidth: 2,
           strokeDasharray: '4,2',
         };
-      case 'worker':
-        return {
-          stroke: '#3b82f6', // blue-500
-          strokeWidth: 2,
-          strokeDasharray: undefined,
-        };
       default:
         return {
           stroke: '#6b7280',
@@ -240,15 +262,9 @@ const ConnectionLine: React.FC<ConnectionProps> = ({ connection }) => {
       // Straight horizontal line for trunk
       return `M ${fromX} ${fromY} L ${toX} ${toY}`;
     } else if (type === 'branch') {
-      // Curved path going down for branch (resolvers)
+      // Curved path going down for branch
       const midX = getMidX();
       return `M ${fromX} ${fromY} C ${midX} ${fromY}, ${midX} ${toY}, ${toX} ${toY}`;
-    } else if (type === 'worker') {
-      // Curved path for worker fan-out branches
-      // Starts horizontal, curves to the worker position
-      const controlX1 = fromX + (toX - fromX) * 0.4;
-      const controlX2 = fromX + (toX - fromX) * 0.6;
-      return `M ${fromX} ${fromY} C ${controlX1} ${fromY}, ${controlX2} ${toY}, ${toX} ${toY}`;
     } else {
       // Curved path going up for merge
       const midX = getMidX();
@@ -256,15 +272,44 @@ const ConnectionLine: React.FC<ConnectionProps> = ({ connection }) => {
     }
   };
 
+  // Animate path drawing for new connections
+  useEffect(() => {
+    if (isNew && pathRef.current) {
+      const path = pathRef.current;
+      const length = path.getTotalLength();
+
+      // Set up initial state for animation
+      path.style.strokeDasharray = `${length}`;
+      path.style.strokeDashoffset = `${length}`;
+
+      // Trigger reflow to ensure initial state is applied
+      path.getBoundingClientRect();
+
+      // Animate to full path
+      path.style.transition = 'stroke-dashoffset 0.5s ease-out';
+      path.style.strokeDashoffset = '0';
+
+      // Clean up animation styles after completion
+      const cleanup = setTimeout(() => {
+        path.style.transition = '';
+        path.style.strokeDasharray = style.strokeDasharray || '';
+        path.style.strokeDashoffset = '';
+      }, 600);
+
+      return () => clearTimeout(cleanup);
+    }
+  }, [isNew, style.strokeDasharray]);
+
   return (
     <path
+      ref={pathRef}
       d={getPath()}
       fill="none"
       stroke={style.stroke}
       strokeWidth={style.strokeWidth}
-      strokeDasharray={style.strokeDasharray}
+      strokeDasharray={isNew ? undefined : style.strokeDasharray}
       strokeLinecap="round"
-      className={`tree-connection transition-all duration-300 ${type === 'worker' ? 'worker-branch-animate' : ''}`}
+      className="transition-all duration-300"
     />
   );
 };
@@ -283,8 +328,16 @@ export const MergeQueueTree: React.FC<MergeQueueTreeProps> = ({
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const layout = DEFAULT_LAYOUT;
 
+  // Track previously seen node/connection IDs for animation
+  const seenNodeIdsRef = useRef<Set<string>>(new Set());
+  const seenConnectionIdsRef = useRef<Set<string>>(new Set());
+  const [animationState, setAnimationState] = useState<AnimationState>({
+    newNodeIds: new Set(),
+    newConnectionIds: new Set(),
+  });
+
   // Build nodes and connections from props
-  const { nodes, connections, svgWidth, svgHeight, minY } = useMemo(() => {
+  const { nodes, connections, svgWidth, svgHeight } = useMemo(() => {
     const nodeList: TreeNode[] = [];
     const connectionList: TreeConnection[] = [];
     let currentX = layout.padding;
@@ -386,88 +439,91 @@ export const MergeQueueTree: React.FC<MergeQueueTreeProps> = ({
       }
     });
 
-    // Calculate the fork point X position (end of completed nodes on trunk)
-    const forkPointX = layout.padding + completed.length * layout.nodeSpacing;
+    // Calculate starting X for active workers and pending items
+    currentX = layout.padding + completed.length * layout.nodeSpacing;
 
-    // Add active workers as fan-out branches from the fork point
-    // Workers are distributed vertically: above and below the trunk
-    if (activeWorkers.length > 0) {
-      // Calculate vertical positions for workers (fan out symmetrically)
-      // Workers alternate: 0 goes above, 1 goes below, 2 goes further above, etc.
-      const getWorkerY = (index: number): number => {
-        const position = Math.floor(index / 2) + 1; // 1, 1, 2, 2, 3, 3...
-        const isAbove = index % 2 === 0;
-        return isAbove
-          ? trunkY - position * WORKER_BRANCH_SPACING
-          : trunkY + position * WORKER_BRANCH_SPACING;
-      };
+    // Add active workers on the trunk
+    activeWorkers.forEach((worker, index) => {
+      const x = currentX + index * layout.nodeSpacing;
+      const nodeId = `active-${worker.taskId}`;
 
-      activeWorkers.forEach((worker, index) => {
-        const workerY = getWorkerY(index);
-        const workerX = forkPointX + WORKER_BRANCH_LENGTH;
-        const nodeId = `active-${worker.taskId}`;
+      nodeList.push({
+        id: nodeId,
+        taskId: worker.taskId,
+        agentId: worker.agentId,
+        type: 'active',
+        status: 'active',
+        x,
+        y: trunkY,
+      });
 
-        nodeList.push({
-          id: nodeId,
-          taskId: worker.taskId,
-          agentId: worker.agentId,
-          type: 'active',
-          status: 'active',
-          x: workerX,
-          y: workerY,
-        });
+      // Connect to previous node
+      const prevNodeIndex = completed.length + index - 1;
+      if (prevNodeIndex >= 0) {
+        let prevNodeId: string | null = null;
+        if (index === 0) {
+          const lastCompleted = completed[completed.length - 1];
+          if (lastCompleted) {
+            prevNodeId = `completed-${lastCompleted.taskId}`;
+          }
+        } else {
+          const prevWorker = activeWorkers[index - 1];
+          if (prevWorker) {
+            prevNodeId = `active-${prevWorker.taskId}`;
+          }
+        }
 
-        // Connect worker to fork point with a curved branch
-        connectionList.push({
-          id: `worker-branch-${index}`,
-          fromNode: 'fork-point',
-          toNode: nodeId,
-          type: 'worker',
-          fromX: forkPointX,
-          fromY: trunkY,
-          toX: workerX - layout.nodeRadius,
-          toY: workerY,
-        });
-
-        // Check for resolvers on active workers
-        const workerResolvers = resolverMap.get(worker.taskId);
-        if (workerResolvers) {
-          workerResolvers.forEach((resolver, resolverIndex) => {
-            // Position resolver branches extending from the worker
-            const resolverY = workerY + (workerY >= trunkY ? 1 : -1) * (layout.branchOffset + resolverIndex * 40);
-            const resolverX = workerX + layout.nodeSpacing / 2;
-            const resolverNodeId = `resolver-${resolver.resolverTaskId}`;
-
-            nodeList.push({
-              id: resolverNodeId,
-              taskId: resolver.resolverTaskId,
-              agentId: resolver.resolverAgentId,
-              type: 'resolver',
-              status: resolver.status,
-              x: resolverX,
-              y: resolverY,
-              parentId: nodeId,
-            });
-
-            connectionList.push({
-              id: `branch-${resolver.resolverTaskId}`,
-              fromNode: nodeId,
-              toNode: resolverNodeId,
-              type: 'branch',
-              fromX: workerX + layout.nodeRadius,
-              fromY: workerY,
-              toX: resolverX - layout.nodeRadius,
-              toY: resolverY,
-            });
+        if (prevNodeId) {
+          connectionList.push({
+            id: `trunk-active-${index}`,
+            fromNode: prevNodeId,
+            toNode: nodeId,
+            type: 'trunk',
+            fromX: x - layout.nodeSpacing + layout.nodeRadius,
+            fromY: trunkY,
+            toX: x - layout.nodeRadius,
+            toY: trunkY,
           });
         }
-      });
-    }
+      }
 
-    // Update current X for pending items (after the worker branch area)
-    currentX = forkPointX + (activeWorkers.length > 0 ? WORKER_BRANCH_LENGTH + layout.nodeSpacing : 0);
+      // Check for resolvers on active workers
+      const workerResolvers = resolverMap.get(worker.taskId);
+      if (workerResolvers) {
+        workerResolvers.forEach((resolver, resolverIndex) => {
+          const resolverY = trunkY + layout.branchOffset + resolverIndex * 40;
+          const resolverX = x + layout.nodeSpacing / 3;
+          const resolverNodeId = `resolver-${resolver.resolverTaskId}`;
 
-    // Add pending nodes continuing on the trunk after the fork point
+          nodeList.push({
+            id: resolverNodeId,
+            taskId: resolver.resolverTaskId,
+            agentId: resolver.resolverAgentId,
+            type: 'resolver',
+            status: resolver.status,
+            x: resolverX,
+            y: resolverY,
+            parentId: nodeId,
+          });
+
+          connectionList.push({
+            id: `branch-${resolver.resolverTaskId}`,
+            fromNode: nodeId,
+            toNode: resolverNodeId,
+            type: 'branch',
+            fromX: x,
+            fromY: trunkY + layout.nodeRadius,
+            toX: resolverX,
+            toY: resolverY - layout.nodeRadius,
+          });
+        });
+      }
+    });
+
+    // Update current X for pending items
+    currentX = layout.padding + (completed.length + activeWorkers.length) * layout.nodeSpacing;
+
+    // Add pending nodes
     pending.forEach((item, index) => {
       const x = currentX + index * layout.nodeSpacing;
       const nodeId = `pending-${item.taskId}`;
@@ -483,69 +539,95 @@ export const MergeQueueTree: React.FC<MergeQueueTreeProps> = ({
         label: `#${item.position}`,
       });
 
-      // Connect to previous node (fork point or previous pending)
-      let prevNodeId: string | null = null;
-      let prevX: number;
+      // Connect to previous node
+      const prevNodeIndex = completed.length + activeWorkers.length + index - 1;
+      if (prevNodeIndex >= 0) {
+        let prevNodeId: string | null = null;
 
-      if (index === 0) {
-        // First pending connects to the fork point (end of completed)
-        const lastCompleted = completed[completed.length - 1];
-        if (lastCompleted) {
-          prevNodeId = `completed-${lastCompleted.taskId}`;
-          prevX = forkPointX - layout.nodeSpacing + layout.nodeRadius;
+        if (index === 0) {
+          const lastWorker = activeWorkers[activeWorkers.length - 1];
+          const lastCompleted = completed[completed.length - 1];
+          if (lastWorker) {
+            prevNodeId = `active-${lastWorker.taskId}`;
+          } else if (lastCompleted) {
+            prevNodeId = `completed-${lastCompleted.taskId}`;
+          }
         } else {
-          prevX = layout.padding;
+          const prevPending = pending[index - 1];
+          if (prevPending) {
+            prevNodeId = `pending-${prevPending.taskId}`;
+          }
         }
-      } else {
-        const prevPending = pending[index - 1];
-        if (prevPending) {
-          prevNodeId = `pending-${prevPending.taskId}`;
-        }
-        prevX = x - layout.nodeSpacing + layout.nodeRadius;
-      }
 
-      if (prevNodeId) {
-        connectionList.push({
-          id: `trunk-pending-${index}`,
-          fromNode: prevNodeId,
-          toNode: nodeId,
-          type: 'trunk',
-          fromX: prevX,
-          fromY: trunkY,
-          toX: x - layout.nodeRadius,
-          toY: trunkY,
-        });
+        if (prevNodeId) {
+          connectionList.push({
+            id: `trunk-pending-${index}`,
+            fromNode: prevNodeId,
+            toNode: nodeId,
+            type: 'trunk',
+            fromX: x - layout.nodeSpacing + layout.nodeRadius,
+            fromY: trunkY,
+            toX: x - layout.nodeRadius,
+            toY: trunkY,
+          });
+        }
       }
     });
 
     // Calculate SVG dimensions
-    // Width: completed nodes + worker branch area + pending nodes
-    const workerBranchWidth = activeWorkers.length > 0 ? WORKER_BRANCH_LENGTH + layout.nodeSpacing : 0;
+    const totalNodes = completed.length + activeWorkers.length + pending.length;
     const calculatedWidth = Math.max(
-      layout.padding * 2 +
-        completed.length * layout.nodeSpacing +
-        workerBranchWidth +
-        pending.length * layout.nodeSpacing,
+      layout.padding * 2 + totalNodes * layout.nodeSpacing,
       300
     );
 
-    // Find min and max Y for height calculation (workers fan both above and below)
-    const allYPositions = nodeList.map((n) => n.y);
-    const minY = Math.min(layout.padding, ...allYPositions.map((y) => y - layout.nodeRadius - 30));
+    // Find max Y for height calculation (account for resolver branches)
     const maxY = Math.max(
       trunkY + layout.nodeRadius + 30,
-      ...allYPositions.map((y) => y + layout.nodeRadius + 30)
+      ...nodeList.map((n) => n.y + layout.nodeRadius + 30)
     );
 
     return {
       nodes: nodeList,
       connections: connectionList,
       svgWidth: calculatedWidth,
-      svgHeight: maxY - minY + layout.padding * 2,
-      // Store minY offset for viewBox adjustment
-      minY,
+      svgHeight: maxY + layout.padding,
     };
   }, [completed, resolvers, pending, activeWorkers, layout]);
+
+  // Detect new nodes and connections for animation
+  useEffect(() => {
+    const newNodeIds = new Set<string>();
+    const newConnectionIds = new Set<string>();
+
+    // Find new nodes
+    nodes.forEach((node) => {
+      if (!seenNodeIdsRef.current.has(node.id)) {
+        newNodeIds.add(node.id);
+        seenNodeIdsRef.current.add(node.id);
+      }
+    });
+
+    // Find new connections
+    connections.forEach((conn) => {
+      if (!seenConnectionIdsRef.current.has(conn.id)) {
+        newConnectionIds.add(conn.id);
+        seenConnectionIdsRef.current.add(conn.id);
+      }
+    });
+
+    // Update animation state if there are new items
+    if (newNodeIds.size > 0 || newConnectionIds.size > 0) {
+      setAnimationState({ newNodeIds, newConnectionIds });
+
+      // Clear animation state after animation completes
+      const timer = setTimeout(() => {
+        setAnimationState({ newNodeIds: new Set(), newConnectionIds: new Set() });
+      }, 700);
+
+      return () => clearTimeout(timer);
+    }
+  }, [nodes, connections]);
 
   // Auto-scroll to the right (newest nodes)
   useEffect(() => {
@@ -594,7 +676,7 @@ export const MergeQueueTree: React.FC<MergeQueueTreeProps> = ({
         ref={svgRef}
         width={svgWidth}
         height={svgHeight}
-        viewBox={`0 ${minY} ${svgWidth} ${svgHeight}`}
+        viewBox={`0 0 ${svgWidth} ${svgHeight}`}
         className="block"
       >
         {/* Definitions for gradients and filters */}
@@ -621,6 +703,36 @@ export const MergeQueueTree: React.FC<MergeQueueTreeProps> = ({
           </marker>
         </defs>
 
+        {/* CSS animations for node entry */}
+        <style>
+          {`
+            @keyframes nodeEntry {
+              0% {
+                opacity: 0;
+                transform: scale(0.5) translateY(-10px);
+              }
+              60% {
+                opacity: 1;
+                transform: scale(1.1) translateY(0);
+              }
+              100% {
+                opacity: 1;
+                transform: scale(1) translateY(0);
+              }
+            }
+            @keyframes branchEntry {
+              0% {
+                opacity: 0;
+                transform: scale(0.8) translateY(-15px);
+              }
+              100% {
+                opacity: 1;
+                transform: scale(1) translateY(0);
+              }
+            }
+          `}
+        </style>
+
         {/* Background grid (subtle) */}
         <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
           <path
@@ -636,7 +748,11 @@ export const MergeQueueTree: React.FC<MergeQueueTreeProps> = ({
         {/* Render connections first (behind nodes) */}
         <g className="connections">
           {connections.map((connection) => (
-            <ConnectionLine key={connection.id} connection={connection} />
+            <ConnectionLine
+              key={connection.id}
+              connection={connection}
+              isNew={animationState.newConnectionIds.has(connection.id)}
+            />
           ))}
         </g>
 
@@ -648,6 +764,7 @@ export const MergeQueueTree: React.FC<MergeQueueTreeProps> = ({
               node={node}
               layout={layout}
               isHovered={hoveredNodeId === node.taskId}
+              isNew={animationState.newNodeIds.has(node.id)}
               onClick={() => handleNodeClick(node.taskId)}
               onMouseEnter={() => handleNodeHover(node.taskId)}
               onMouseLeave={() => handleNodeHover(null)}

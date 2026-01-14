@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Repository } from '../api/client';
+import type { Repository, MergeQueueState } from '../api/client';
 
 // Types based on Go backend structures
 
@@ -105,6 +105,7 @@ interface StateStore {
   repositories: Repository[];
   activeRepoId: string;
   isRepoSwitching: boolean;
+  mergeQueue: MergeQueueState | null;
 
   // Actions
   setConnected: (connected: boolean) => void;
@@ -118,6 +119,7 @@ interface StateStore {
   setRepositories: (repositories: Repository[], activeRepoId: string) => void;
   setActiveRepo: (repoId: string) => void;
   setRepoSwitching: (isSwitching: boolean) => void;
+  setMergeQueue: (queue: MergeQueueState) => void;
 }
 
 // Initial stats
@@ -189,6 +191,7 @@ export const useStateStore = create<StateStore>((set) => ({
   repositories: [],
   activeRepoId: '',
   isRepoSwitching: false,
+  mergeQueue: null,
 
   // Actions
   setConnected: (connected) => set({ connected }),
@@ -321,4 +324,6 @@ export const useStateStore = create<StateStore>((set) => ({
     })),
 
   setRepoSwitching: (isRepoSwitching) => set({ isRepoSwitching }),
+
+  setMergeQueue: (mergeQueue) => set({ mergeQueue }),
 }));
