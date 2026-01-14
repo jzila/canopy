@@ -8,7 +8,6 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/jzila/canopy/pkg/logging"
 	"github.com/jzila/canopy/pkg/persistence"
 	"github.com/jzila/canopy/pkg/repository"
 )
@@ -432,17 +431,20 @@ func convertPersistenceStatus(status persistence.AgentStatus) AgentStatus {
 // Start initializes and starts all daemon components
 // Blocks until a termination signal is received
 func (d *Daemon) Start() error {
-	// Setup file logging (writes to $XDG_CACHE_HOME/canopy/daemon.log)
-	cleanupLogging, err := logging.SetupFileLogging()
-	if err != nil {
-		// Non-fatal: continue with stderr-only logging
-		log.Printf("Warning: failed to setup file logging: %v", err)
-	} else {
-		defer cleanupLogging()
-		log.Printf("Logging to %s", logging.LogPath())
+	log.Println("Starting Canopy daemon...")
+
+	// Clean up any stale pidfile from previous crash
+	if cleaned, err := CleanStalePidFile(); err != nil {
+		log.Printf("Warning: failed to check stale pidfile: %v", err)
+	} else if cleaned {
+		log.Println("Cleaned up stale pidfile from previous crash")
 	}
 
-	log.Printf("Starting Canopy daemon (PID %d)...", os.Getpid())
+	// Write pidfile
+	if err := WritePidFile(); err != nil {
+		return fmt.Errorf("failed to write pidfile: %w", err)
+	}
+	log.Println("Pidfile written")
 
 	// Initialize components if not already done (allows pre-initialization via Init())
 	d.Init()
@@ -495,6 +497,13 @@ func (d *Daemon) Start() error {
 // Stop gracefully shuts down all daemon components
 func (d *Daemon) Stop() error {
 	log.Println("Stopping Canopy daemon...")
+
+	// Remove pidfile first (before any other cleanup that might fail)
+	if err := RemovePidFile(); err != nil {
+		log.Printf("Warning: failed to remove pidfile: %v", err)
+	} else {
+		log.Println("Pidfile removed")
+	}
 
 	var firstErr error
 

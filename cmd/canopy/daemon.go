@@ -42,8 +42,24 @@ Example:
   canopy daemon --dev
 
   # Start with TUI dashboard
-  canopy daemon --tui`,
+  canopy daemon --tui
+
+  # Check if daemon is running
+  canopy daemon status`,
 	RunE: runDaemon,
+}
+
+var daemonStatusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Check daemon status",
+	Long: `Check if the canopy daemon is running.
+
+Reports the daemon's running status and PID.
+
+Exit codes:
+  0 - Daemon is running
+  1 - Daemon is not running or error occurred`,
+	RunE: runDaemonStatus,
 }
 
 func init() {
@@ -52,6 +68,7 @@ func init() {
 	daemonCmd.Flags().BoolVar(&daemonDevMode, "dev", false, "Enable development mode")
 	daemonCmd.Flags().BoolVar(&daemonTUIMode, "tui", false, "Enable TUI dashboard view")
 
+	daemonCmd.AddCommand(daemonStatusCmd)
 	rootCmd.AddCommand(daemonCmd)
 }
 
@@ -59,6 +76,15 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	// Use runtime socket path if not specified
 	if daemonSocket == "" {
 		daemonSocket = runtime.SocketPath("")
+	}
+
+	// Check if daemon is already running
+	running, pid, err := daemon.IsRunning()
+	if err != nil {
+		return fmt.Errorf("failed to check daemon status: %w", err)
+	}
+	if running {
+		return fmt.Errorf("daemon is already running (pid %d)", pid)
 	}
 
 	if verbose && !daemonTUIMode {
@@ -143,4 +169,22 @@ func runDaemonWithTUI(d *daemon.Daemon) error {
 		d.Stop()
 		return nil
 	}
+}
+
+// runDaemonStatus checks if the daemon is running using the pidfile
+func runDaemonStatus(cmd *cobra.Command, args []string) error {
+	running, pid, err := daemon.IsRunning()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error checking daemon status: %v\n", err)
+		os.Exit(1)
+	}
+
+	if running {
+		fmt.Printf("Daemon is running (pid %d)\n", pid)
+		return nil
+	}
+
+	fmt.Println("Daemon is not running")
+	os.Exit(1)
+	return nil // unreachable, but satisfies compiler
 }
