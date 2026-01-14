@@ -322,6 +322,7 @@ type MergeOptions struct {
 // The overlay must still be mounted when this is called.
 //
 // Always uses file-based merge to create a single commit per agent containing ALL changes.
+// On failure, the working directory is reset to HEAD state to prevent partial changes.
 func (m *SequentialMerger) MergeSingle(result *agent.Result, opts *MergeOptions) (*Result, error) {
 	if opts == nil {
 		opts = &MergeOptions{}
@@ -331,6 +332,14 @@ func (m *SequentialMerger) MergeSingle(result *agent.Result, opts *MergeOptions)
 	}
 
 	if !result.Success {
+		return mergeResult, nil
+	}
+
+	// Record HEAD before merge so we can reset on failure
+	headCommit, err := m.getCurrentHead()
+	if err != nil {
+		mergeResult.Errors = append(mergeResult.Errors,
+			fmt.Sprintf("failed to get HEAD: %v", err))
 		return mergeResult, nil
 	}
 
@@ -373,6 +382,11 @@ func (m *SequentialMerger) MergeSingle(result *agent.Result, opts *MergeOptions)
 			commitMsg := m.buildMergeCommitMessage(result)
 			committed, err := m.commitFileChanges(result, paths, commitMsg)
 			if err != nil {
+				// Commit failed - reset working directory to clean HEAD state
+				// This prevents partial changes from affecting subsequent operations
+				if resetErr := m.resetToHead(headCommit, paths); resetErr != nil && m.verbose {
+					fmt.Fprintf(os.Stderr, "warning: failed to reset working directory after merge failure: %v\n", resetErr)
+				}
 				mergeResult.Errors = append(mergeResult.Errors,
 					fmt.Sprintf("failed to commit changes from %s: %v", result.TaskID, err))
 			} else if committed {
@@ -382,6 +396,47 @@ func (m *SequentialMerger) MergeSingle(result *agent.Result, opts *MergeOptions)
 	}
 
 	return mergeResult, nil
+}
+
+// getCurrentHead returns the current HEAD commit hash
+func (m *SequentialMerger) getCurrentHead() (string, error) {
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = m.outputDir
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse HEAD failed: %w", err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// resetToHead restores the working directory to a clean HEAD state.
+// This is called when merge fails to ensure no partial changes remain.
+func (m *SequentialMerger) resetToHead(headCommit string, paths []string) error {
+	// First, reset any staged changes
+	resetCmd := exec.Command("git", "reset", "HEAD", "--")
+	resetCmd.Args = append(resetCmd.Args, paths...)
+	resetCmd.Dir = m.outputDir
+	var resetStderr bytes.Buffer
+	resetCmd.Stderr = &resetStderr
+	if err := resetCmd.Run(); err != nil {
+		// Non-fatal: continue to checkout even if reset fails
+		if m.verbose {
+			fmt.Fprintf(os.Stderr, "warning: git reset failed: %v: %s\n", err, resetStderr.String())
+		}
+	}
+
+	// Restore working directory files from HEAD
+	// This ensures files are back to their pre-merge state
+	checkoutCmd := exec.Command("git", "checkout", headCommit, "--")
+	checkoutCmd.Args = append(checkoutCmd.Args, paths...)
+	checkoutCmd.Dir = m.outputDir
+	var checkoutStderr bytes.Buffer
+	checkoutCmd.Stderr = &checkoutStderr
+	if err := checkoutCmd.Run(); err != nil {
+		return fmt.Errorf("git checkout failed: %w: %s", err, checkoutStderr.String())
+	}
+
+	return nil
 }
 
 // buildMergeCommitMessage creates a descriptive commit message for merged changes.

@@ -255,36 +255,61 @@ func (r *Resolver) writePatchFiles(overlay *sandbox.Overlay, conflict *ConflictC
 	return nil
 }
 
-// buildResolverPrompt creates the prompt for the resolver agent
+// buildResolverPrompt creates the prompt for the resolver agent.
+// The prompt focuses specifically on conflict resolution - NOT reimplementation.
 func (r *Resolver) buildResolverPrompt(conflict *ConflictContext) string {
 	prompt := fmt.Sprintf(`## Merge Conflict Resolution
 
-A previous agent attempted to complete a task but their git commits could not be cleanly applied to the current codebase. You need to manually apply the intended changes.
+**CRITICAL: You are a MERGE RESOLVER, not a feature implementer.**
 
-### Original Task
+A previous agent completed the task below and created valid changes, but those changes could not be cleanly applied because HEAD has moved. Your ONLY job is to resolve the merge conflict - NOT to reimplement the feature.
+
+### Original Task (for context only)
 **ID:** %s
 **Title:** %s
 
 %s
 
-### Conflict Information
-The patches that failed to apply are in .canopy/conflict/patch-*.patch
-Error messages are in .canopy/conflict/errors.txt
-Original task context is in .canopy/conflict/original-task.txt
+### What Happened
+1. An agent successfully completed this task and made commits
+2. While that agent was working, other changes were merged to HEAD
+3. The original agent's patches can no longer apply cleanly
+4. The HEAD has been reset to a clean state before the merge attempt
 
-### Your Goal
-1. Review the failed patches to understand what changes were intended
-2. Examine the current codebase state at the conflicting locations
-3. Manually apply the intended changes, resolving any conflicts
-4. Ensure the changes match the original task's intent
-5. Create appropriate git commits for your changes
+### Your ONLY Goal: Resolve the Merge Conflict
 
-### Important Notes
-- The patches show what the original agent tried to do
-- The current codebase may have diverged, so patches don't apply cleanly
-- Use your judgment to merge the intended changes with the current state
-- Make sure your commits have clear, descriptive messages
-- If the changes are no longer needed or already present, note that in your response
+The failed patches are in .canopy/conflict/patch-*.patch - these contain the EXACT changes the original agent made.
+
+**DO:**
+1. Read the patches carefully to understand what changes were made
+2. Look at the current state of affected files
+3. Apply the SAME changes from the patches, adapting for any conflicts with current HEAD
+4. Preserve the original intent of the patches exactly
+5. Create commits with messages that reference the original work
+
+**DO NOT:**
+- Reimplement the feature from scratch
+- Make additional changes beyond what's in the patches
+- "Improve" or extend the original implementation
+- Skip changes because you think they're unnecessary
+- Add new functionality not in the patches
+
+### Conflict Files
+- .canopy/conflict/patch-*.patch - The original patches (READ THESE FIRST)
+- .canopy/conflict/errors.txt - Why the patches failed to apply
+- .canopy/conflict/original-task.txt - Original task context
+
+### Resolution Strategy
+1. For each patch file, identify which hunks failed to apply
+2. Find the affected lines in the current codebase
+3. Apply the changes manually, resolving conflicts between old and new code
+4. The result should be: current HEAD + the changes from the patches
+
+### Success Criteria
+Your work is complete when:
+- All changes from the patches have been applied (adapted for current HEAD)
+- The feature works as the original agent intended
+- You've made clean commits that can be merged to HEAD
 `, conflict.TaskID, conflict.TaskTitle, conflict.TaskDescription)
 
 	return prompt

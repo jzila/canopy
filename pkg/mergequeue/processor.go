@@ -191,10 +191,17 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 		resp.ResolverSpawned = true
 
 		// Build conflict context for the resolver
+		// Include the original patches so resolver can understand what was intended
+		var failedPatches []string
+		if req.Result.GitState != nil {
+			failedPatches = req.Result.GitState.Patches
+		}
+
 		conflictCtx := &resolver.ConflictContext{
 			TaskID:          taskID,
 			TaskTitle:       req.Task.Title,
 			TaskDescription: req.Task.Description,
+			FailedPatches:   failedPatches,
 			PatchErrors:     mergeResult.Errors,
 			FileChanges:     req.Result.Changes,
 		}

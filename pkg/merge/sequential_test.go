@@ -2,6 +2,7 @@ package merge
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -233,4 +234,149 @@ func findSubstring(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestGetCurrentHead(t *testing.T) {
+	// Create a temp git repo
+	tempDir := t.TempDir()
+	initGitRepo(t, tempDir)
+
+	merger := NewSequentialMerger(tempDir, tempDir, true)
+	head, err := merger.getCurrentHead()
+	if err != nil {
+		t.Fatalf("getCurrentHead failed: %v", err)
+	}
+
+	if len(head) != 40 {
+		t.Errorf("Expected 40-char hash, got %d chars: %s", len(head), head)
+	}
+}
+
+func TestResetToHead(t *testing.T) {
+	// Create a temp git repo
+	tempDir := t.TempDir()
+	initGitRepo(t, tempDir)
+
+	// Create a file and commit it
+	testFile := filepath.Join(tempDir, "test.txt")
+	if err := os.WriteFile(testFile, []byte("original"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, tempDir, "add", "test.txt")
+	runGit(t, tempDir, "commit", "-m", "add test file")
+
+	// Get HEAD
+	merger := NewSequentialMerger(tempDir, tempDir, true)
+	head, err := merger.getCurrentHead()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Modify the file (simulating failed merge)
+	if err := os.WriteFile(testFile, []byte("modified"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify file was modified
+	content, _ := os.ReadFile(testFile)
+	if string(content) != "modified" {
+		t.Fatalf("File should be modified, got: %s", content)
+	}
+
+	// Reset to HEAD
+	err = merger.resetToHead(head, []string{"test.txt"})
+	if err != nil {
+		t.Fatalf("resetToHead failed: %v", err)
+	}
+
+	// Verify file was restored
+	content, _ = os.ReadFile(testFile)
+	if string(content) != "original" {
+		t.Errorf("File should be restored to 'original', got: %s", content)
+	}
+}
+
+func TestMergeSingleResetsOnCommitFailure(t *testing.T) {
+	// Create a temp git repo
+	tempDir := t.TempDir()
+	overlayDir := filepath.Join(tempDir, "overlay")
+	initGitRepo(t, tempDir)
+
+	// Create a file and commit it
+	testFile := filepath.Join(tempDir, "test.txt")
+	if err := os.WriteFile(testFile, []byte("original"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, tempDir, "add", "test.txt")
+	runGit(t, tempDir, "commit", "-m", "add test file")
+
+	// Create overlay with a change to same file
+	overlay := &sandbox.Overlay{
+		UpperDir: filepath.Join(overlayDir, "upper"),
+	}
+	if err := os.MkdirAll(overlay.UpperDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create modified file in overlay
+	overlayFile := filepath.Join(overlay.UpperDir, "test.txt")
+	if err := os.WriteFile(overlayFile, []byte("modified by agent"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create agent result
+	result := &agent.Result{
+		TaskID:  "test-task",
+		Success: true,
+		Overlay: overlay,
+		Changes: []sandbox.FileChange{
+			{Path: "test.txt", Type: sandbox.ChangeModified},
+		},
+	}
+
+	// Create merger
+	merger := NewSequentialMerger(tempDir, tempDir, true)
+
+	// MergeSingle should apply changes and commit successfully
+	mergeResult, err := merger.MergeSingle(result, nil)
+	if err != nil {
+		t.Fatalf("MergeSingle failed: %v", err)
+	}
+
+	// Check that commit was applied
+	if mergeResult.CommitsApplied != 1 {
+		t.Errorf("Expected 1 commit, got %d", mergeResult.CommitsApplied)
+	}
+
+	// Verify file was changed
+	content, _ := os.ReadFile(testFile)
+	if string(content) != "modified by agent" {
+		t.Errorf("File should be modified, got: %s", content)
+	}
+}
+
+// initGitRepo initializes a git repo in the given directory
+func initGitRepo(t *testing.T, dir string) {
+	t.Helper()
+	runGit(t, dir, "init")
+	runGit(t, dir, "config", "user.email", "test@test.com")
+	runGit(t, dir, "config", "user.name", "Test User")
+	// Create initial commit so HEAD exists
+	readmeFile := filepath.Join(dir, "README.md")
+	if err := os.WriteFile(readmeFile, []byte("test"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "add", "README.md")
+	runGit(t, dir, "commit", "-m", "initial")
+}
+
+// runGit runs a git command in the given directory
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, output)
+	}
 }
