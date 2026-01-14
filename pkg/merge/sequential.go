@@ -314,14 +314,14 @@ func copyFile(src, dst string) error {
 
 // MergeOptions configures the merge behavior
 type MergeOptions struct {
-	// SkipFileFallback skips the file-based fallback when git am fails.
-	// Use this when a resolver agent will handle the conflict instead.
-	SkipFileFallback bool
+	// Reserved for future use
 }
 
 // MergeSingle merges and commits a single agent result atomically.
 // This should be called immediately when each agent completes.
 // The overlay must still be mounted when this is called.
+//
+// Always uses file-based merge to create a single commit per agent containing ALL changes.
 func (m *SequentialMerger) MergeSingle(result *agent.Result, opts *MergeOptions) (*Result, error) {
 	if opts == nil {
 		opts = &MergeOptions{}
@@ -331,32 +331,6 @@ func (m *SequentialMerger) MergeSingle(result *agent.Result, opts *MergeOptions)
 	}
 
 	if !result.Success {
-		return mergeResult, nil
-	}
-
-	// Apply git patches first (these preserve the agent's commit history)
-	if result.GitState != nil && len(result.GitState.Patches) > 0 {
-		if err := sandbox.ApplyPatches(m.outputDir, result.GitState.Patches); err != nil {
-			mergeResult.Errors = append(mergeResult.Errors,
-				fmt.Sprintf("failed to apply commits from %s: %v", result.TaskID, err))
-			mergeResult.PatchFailed[result.TaskID] = true
-		} else {
-			mergeResult.CommitsApplied += len(result.GitState.Patches)
-			if m.verbose {
-				fmt.Printf("Applied %d commits from task %s\n", len(result.GitState.Patches), result.TaskID)
-			}
-			// Patches applied successfully - no need to commit file changes
-			// since they're already committed via git am
-			return mergeResult, nil
-		}
-	}
-
-	// If we get here, either there were no git patches, or patch application failed
-	// Skip file-based fallback if requested (resolver will handle it)
-	if opts.SkipFileFallback && mergeResult.PatchFailed[result.TaskID] {
-		if m.verbose {
-			fmt.Printf("Skipping file-based fallback for task %s (resolver will handle)\n", result.TaskID)
-		}
 		return mergeResult, nil
 	}
 
@@ -393,9 +367,11 @@ func (m *SequentialMerger) MergeSingle(result *agent.Result, opts *MergeOptions)
 			}
 		}
 
-		// Commit the file changes
+		// Commit all changes in one commit
 		if len(paths) > 0 {
-			committed, err := m.commitFileChanges(result, paths, mergeResult.PatchFailed[result.TaskID])
+			// Build commit message including agent's original commit messages if any
+			commitMsg := m.buildMergeCommitMessage(result)
+			committed, err := m.commitFileChanges(result, paths, commitMsg)
 			if err != nil {
 				mergeResult.Errors = append(mergeResult.Errors,
 					fmt.Sprintf("failed to commit changes from %s: %v", result.TaskID, err))
@@ -408,10 +384,29 @@ func (m *SequentialMerger) MergeSingle(result *agent.Result, opts *MergeOptions)
 	return mergeResult, nil
 }
 
+// buildMergeCommitMessage creates a descriptive commit message for merged changes.
+// If the agent made commits, their messages are included in the body for context.
+func (m *SequentialMerger) buildMergeCommitMessage(result *agent.Result) string {
+	// Title: always indicate this is a canopy merge commit
+	title := fmt.Sprintf("canopy: apply changes from %s", result.TaskID)
+
+	// Body: include original commit messages if any
+	var body string
+	if result.GitState != nil && len(result.GitState.CommitMessages) > 0 {
+		body = "\nOriginal commits:\n"
+		for i, msg := range result.GitState.CommitMessages {
+			// Add indentation to distinguish from merge commit message
+			body += fmt.Sprintf("  [%d] %s\n", i+1, strings.TrimSpace(msg))
+		}
+	}
+
+	return title + body
+}
+
 // commitFileChanges stages and commits file changes for a single task.
 // Returns (true, nil) if a commit was made, (false, nil) if no changes to commit,
 // or (false, error) if an error occurred.
-func (m *SequentialMerger) commitFileChanges(result *agent.Result, paths []string, patchFailed bool) (bool, error) {
+func (m *SequentialMerger) commitFileChanges(result *agent.Result, paths []string, commitMsg string) (bool, error) {
 	if len(paths) == 0 {
 		return false, nil
 	}
@@ -432,15 +427,9 @@ func (m *SequentialMerger) commitFileChanges(result *agent.Result, paths []strin
 	if err := diffCmd.Run(); err == nil {
 		// No staged changes (exit code 0 means no diff)
 		if m.verbose {
-			fmt.Printf("No changes to commit for task %s (files may have been committed via git am)\n", result.TaskID)
+			fmt.Printf("No changes to commit for task %s (all changes already committed)\n", result.TaskID)
 		}
 		return false, nil
-	}
-
-	// Create commit message
-	commitMsg := fmt.Sprintf("canopy: apply changes from %s", result.TaskID)
-	if patchFailed {
-		commitMsg = fmt.Sprintf("canopy: apply changes from %s (git patch failed, using file-based merge)", result.TaskID)
 	}
 
 	commitCmd := exec.Command("git", "commit", "-m", commitMsg)
@@ -459,11 +448,7 @@ func (m *SequentialMerger) commitFileChanges(result *agent.Result, paths []strin
 	}
 
 	if m.verbose {
-		if patchFailed {
-			fmt.Printf("Created commit for file changes from task %s (patch application failed)\n", result.TaskID)
-		} else {
-			fmt.Printf("Created commit for file-only changes from task %s\n", result.TaskID)
-		}
+		fmt.Printf("Created commit for changes from task %s\n", result.TaskID)
 	}
 
 	return true, nil

@@ -115,11 +115,7 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 	p.sendMergeStatus(taskID, ipc.MergeStatusMerging, 0, "")
 
 	// Apply merge via merger.MergeSingle()
-	// When there are patches, skip file fallback since resolver will handle failures
-	mergeOpts := &merge.MergeOptions{
-		SkipFileFallback: req.Result.GitState != nil && len(req.Result.GitState.Patches) > 0,
-	}
-	mergeResult, err := p.merger.MergeSingle(req.Result, mergeOpts)
+	mergeResult, err := p.merger.MergeSingle(req.Result, nil)
 	if err != nil {
 		resp.Error = fmt.Sprintf("merge failed: %v", err)
 		p.markTaskFailed(taskID, resp.Error)
@@ -133,22 +129,16 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 	needsResolver := false
 	resolverReason := ""
 
-	// Case 1: git am failed (patch application failed)
-	if mergeResult.PatchFailed[taskID] && req.Result.GitState != nil && len(req.Result.GitState.Patches) > 0 {
-		needsResolver = true
-		resolverReason = "git patch failed"
-	}
-
-	// Case 2: Merge had errors (git add/commit failed)
-	if !needsResolver && len(mergeResult.Errors) > 0 {
+	// Case 1: Merge had errors (git add/commit failed)
+	if len(mergeResult.Errors) > 0 {
 		needsResolver = true
 		resolverReason = "merge errors: " + strings.Join(mergeResult.Errors, "; ")
 	}
 
-	// Case 3: No actual changes applied (might be filtering issue)
+	// Case 2: No actual changes applied (might be filtering issue)
 	if !needsResolver && mergeResult.CommitsApplied == 0 && len(mergeResult.Applied) == 0 {
 		// Only spawn resolver if the agent actually produced something
-		if len(req.Result.Changes) > 0 || (req.Result.GitState != nil && len(req.Result.GitState.Patches) > 0) {
+		if len(req.Result.Changes) > 0 {
 			needsResolver = true
 			resolverReason = "no changes applied despite agent output"
 		}
@@ -169,17 +159,10 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 		resp.ResolverSpawned = true
 
 		// Build conflict context for the resolver
-		// Include patches if available, otherwise use file changes
-		var patches []string
-		if req.Result.GitState != nil && len(req.Result.GitState.Patches) > 0 {
-			patches = req.Result.GitState.Patches
-		}
-
 		conflictCtx := &resolver.ConflictContext{
 			TaskID:          taskID,
 			TaskTitle:       req.Task.Title,
 			TaskDescription: req.Task.Description,
-			FailedPatches:   patches,
 			PatchErrors:     mergeResult.Errors,
 			FileChanges:     req.Result.Changes,
 		}

@@ -384,27 +384,22 @@ func (o *Orchestrator) mergeAndCleanupWithContext(ctx context.Context, result *a
 		// Continue with merge - better to try than to fail completely
 	}
 
-	// Merge the result (applies patches or file changes and commits)
-	// When there are patches, skip file fallback since resolver will handle failures
-	mergeOpts := &merge.MergeOptions{
-		SkipFileFallback: result.GitState != nil && len(result.GitState.Patches) > 0,
-	}
-	mergeResult, err := o.merger.MergeSingle(result, mergeOpts)
+	// Merge the result (applies file changes and commits)
+	mergeResult, err := o.merger.MergeSingle(result, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to merge result for task %s: %v\n", result.TaskID, err)
 		o.sendMergeStatus(result.TaskID, ipc.MergeStatusFailed, 0, err.Error())
 	}
 
-	// Check if git am failed - if so, spawn a resolver agent
-	if mergeResult.PatchFailed[result.TaskID] && result.GitState != nil && len(result.GitState.Patches) > 0 {
-		fmt.Printf("[%s] Git patch failed, spawning resolver agent...\n", result.TaskID)
+	// Check if merge had errors - if so, spawn a resolver agent
+	if len(mergeResult.Errors) > 0 {
+		fmt.Printf("[%s] Merge errors detected, spawning resolver agent...\n", result.TaskID)
 		o.sendMergeStatus(result.TaskID, ipc.MergeStatusResolving, 0, "")
 
 		// Build conflict context for the resolver
 		conflictCtx := &resolver.ConflictContext{
 			TaskID:        result.TaskID,
 			TaskTitle:     result.TaskID, // Will be overridden if originalTask is available
-			FailedPatches: result.GitState.Patches,
 			PatchErrors:   mergeResult.Errors,
 			FileChanges:   result.Changes,
 			ParentAgentID: o.GetAgentID(result.TaskID), // Get parent agent ID for IPC tracking
