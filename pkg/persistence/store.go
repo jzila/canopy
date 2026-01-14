@@ -183,6 +183,12 @@ func (s *Store) Close() error {
 	return nil
 }
 
+// DB returns the underlying database connection for direct access.
+// This is primarily used for migration operations that need raw SQL access.
+func (s *Store) DB() *sql.DB {
+	return s.db
+}
+
 // getDefaultDBPath returns the default database path based on XDG_CACHE_HOME
 func getDefaultDBPath() string {
 	cacheDir := os.Getenv("XDG_CACHE_HOME")
@@ -791,42 +797,6 @@ func (s *Store) GetStatsByRepo(repoID string, since *time.Time) (*AggregateStats
 // RepoIDLookupFunc is a callback function used by MigrateOrphanedRepoIDs to look up
 // repository IDs from paths. Returns (repoID, found).
 type RepoIDLookupFunc func(path string) (string, bool)
-
-// DeleteRun deletes a run and all its associated agents by run ID.
-// Returns an error if the run does not exist.
-func (s *Store) DeleteRun(runID string) error {
-	// First check if the run exists
-	run, err := s.GetRun(runID)
-	if err != nil {
-		return err
-	}
-	if run == nil {
-		return fmt.Errorf("run not found: %s", runID)
-	}
-
-	// Delete in a transaction for atomicity
-	tx, err := s.db.Begin()
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Rollback()
-
-	// Delete associated agents first
-	if _, err := tx.Exec("DELETE FROM agents WHERE run_id = ?", runID); err != nil {
-		return fmt.Errorf("failed to delete agents: %w", err)
-	}
-
-	// Delete the run
-	if _, err := tx.Exec("DELETE FROM runs WHERE id = ?", runID); err != nil {
-		return fmt.Errorf("failed to delete run: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-
-	return nil
-}
 
 // MigrateOrphanedRepoIDs attempts to populate repo_id for runs that have NULL repo_id.
 // It uses the provided lookup function to find repository IDs from paths.
