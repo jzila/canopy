@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jzila/canopy/pkg/daemon"
+	"github.com/jzila/canopy/pkg/events"
 )
 
 // Server manages IPC connections from canopy run clients
@@ -20,7 +20,7 @@ import (
 type Server struct {
 	socketPath string
 	listener   net.Listener
-	eventBus   *daemon.EventBus
+	eventBus   *events.EventBus
 
 	// Connection management
 	mu          sync.RWMutex
@@ -31,8 +31,8 @@ type Server struct {
 
 // NewServer creates a new IPC server
 // socketPath: path to Unix socket (e.g., /tmp/canopy.sock)
-// eventBus: daemon EventBus to forward events to
-func NewServer(socketPath string, eventBus *daemon.EventBus) *Server {
+// eventBus: EventBus to forward events to
+func NewServer(socketPath string, eventBus *events.EventBus) *Server {
 	return &Server{
 		socketPath:  socketPath,
 		eventBus:    eventBus,
@@ -241,9 +241,9 @@ func (s *Server) extractIdentifier(msg *Message) string {
 	}
 }
 
-// convertToEvent converts IPC messages to daemon Events
+// convertToEvent converts IPC messages to events.Event
 // Returns nil for unknown message types
-func (s *Server) convertToEvent(msg *Message) *daemon.Event {
+func (s *Server) convertToEvent(msg *Message) *events.Event {
 	// Re-marshal payload for type conversion
 	// This handles the interface{} -> concrete type conversion
 	payloadBytes, err := json.Marshal(msg.Payload)
@@ -268,8 +268,8 @@ func (s *Server) convertToEvent(msg *Message) *daemon.Event {
 		if payload.RepoID != "" {
 			eventPayload["repo_id"] = payload.RepoID
 		}
-		return &daemon.Event{
-			Type:      daemon.EventAgentStarted,
+		return &events.Event{
+			Type:      events.EventAgentStarted,
 			Timestamp: msg.Timestamp,
 			Payload:   eventPayload,
 		}
@@ -279,8 +279,8 @@ func (s *Server) convertToEvent(msg *Message) *daemon.Event {
 		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 			return nil
 		}
-		return &daemon.Event{
-			Type:      daemon.EventAgentOutput,
+		return &events.Event{
+			Type:      events.EventAgentOutput,
 			Timestamp: msg.Timestamp,
 			Payload: map[string]interface{}{
 				"agent_id": payload.AgentID,
@@ -294,8 +294,8 @@ func (s *Server) convertToEvent(msg *Message) *daemon.Event {
 		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 			return nil
 		}
-		return &daemon.Event{
-			Type:      daemon.EventAgentLiveFeed,
+		return &events.Event{
+			Type:      events.EventAgentLiveFeed,
 			Timestamp: msg.Timestamp,
 			Payload: map[string]interface{}{
 				"agent_id":   payload.AgentID,
@@ -309,8 +309,8 @@ func (s *Server) convertToEvent(msg *Message) *daemon.Event {
 		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 			return nil
 		}
-		return &daemon.Event{
-			Type:      daemon.EventAgentCommit,
+		return &events.Event{
+			Type:      events.EventAgentCommit,
 			Timestamp: msg.Timestamp,
 			Payload: map[string]interface{}{
 				"agent_id":      payload.AgentID,
@@ -339,8 +339,8 @@ func (s *Server) convertToEvent(msg *Message) *daemon.Event {
 		if payload.Error != "" {
 			eventPayload["error"] = payload.Error
 		}
-		return &daemon.Event{
-			Type:      daemon.EventAgentMergeStatus,
+		return &events.Event{
+			Type:      events.EventAgentMergeStatus,
 			Timestamp: msg.Timestamp,
 			Payload:   eventPayload,
 		}
@@ -365,8 +365,8 @@ func (s *Server) convertToEvent(msg *Message) *daemon.Event {
 		if payload.ParentAgentID != "" {
 			eventPayload["parent_agent_id"] = payload.ParentAgentID
 		}
-		return &daemon.Event{
-			Type:      daemon.EventAgentCompleted,
+		return &events.Event{
+			Type:      events.EventAgentCompleted,
 			Timestamp: msg.Timestamp,
 			Payload:   eventPayload,
 		}
@@ -392,8 +392,8 @@ func (s *Server) convertToEvent(msg *Message) *daemon.Event {
 		if payload.ParentAgentID != "" {
 			eventPayload["parent_agent_id"] = payload.ParentAgentID
 		}
-		return &daemon.Event{
-			Type:      daemon.EventAgentCompleted,
+		return &events.Event{
+			Type:      events.EventAgentCompleted,
 			Timestamp: msg.Timestamp,
 			Payload:   eventPayload,
 		}
@@ -417,8 +417,8 @@ func (s *Server) convertToEvent(msg *Message) *daemon.Event {
 		if payload.RepoName != "" {
 			eventPayload["repo_name"] = payload.RepoName
 		}
-		return &daemon.Event{
-			Type:      daemon.EventRunStarted,
+		return &events.Event{
+			Type:      events.EventRunStarted,
 			Timestamp: msg.Timestamp,
 			Payload:   eventPayload,
 		}
@@ -429,8 +429,8 @@ func (s *Server) convertToEvent(msg *Message) *daemon.Event {
 			return nil
 		}
 		// Map to run completed event
-		return &daemon.Event{
-			Type:      daemon.EventRunCompleted,
+		return &events.Event{
+			Type:      events.EventRunCompleted,
 			Timestamp: msg.Timestamp,
 			Payload: map[string]interface{}{
 				"run_id":              payload.RunID,
@@ -460,8 +460,8 @@ func (s *Server) convertToEvent(msg *Message) *daemon.Event {
 		if payload.RepoID != "" {
 			eventPayload["repo_id"] = payload.RepoID
 		}
-		return &daemon.Event{
-			Type:      daemon.EventTaskUpdated,
+		return &events.Event{
+			Type:      events.EventTaskUpdated,
 			Timestamp: msg.Timestamp,
 			Payload:   eventPayload,
 		}

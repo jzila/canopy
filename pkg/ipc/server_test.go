@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jzila/canopy/pkg/daemon"
+	"github.com/jzila/canopy/pkg/events"
 )
 
 func TestServerStartStop(t *testing.T) {
@@ -16,7 +16,7 @@ func TestServerStartStop(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 
 	// Create event bus and server
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 	server := NewServer(socketPath, eventBus)
 
 	// Start server
@@ -42,7 +42,7 @@ func TestServerStartStop(t *testing.T) {
 
 func TestServerConnection(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 	server := NewServer(socketPath, eventBus)
 
 	if err := server.Start(); err != nil {
@@ -68,7 +68,7 @@ func TestServerConnection(t *testing.T) {
 
 func TestServerEventForwarding(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 	server := NewServer(socketPath, eventBus)
 
 	if err := server.Start(); err != nil {
@@ -77,8 +77,8 @@ func TestServerEventForwarding(t *testing.T) {
 	defer server.Stop()
 
 	// Subscribe to event bus
-	receivedEvents := make(chan daemon.Event, 10)
-	eventBus.Subscribe(func(event daemon.Event) {
+	receivedEvents := make(chan events.Event, 10)
+	eventBus.Subscribe(func(event events.Event) {
 		receivedEvents <- event
 	})
 
@@ -110,7 +110,7 @@ func TestServerEventForwarding(t *testing.T) {
 		// Wait for event
 		select {
 		case event := <-receivedEvents:
-			if event.Type != daemon.EventAgentStarted {
+			if event.Type != events.EventAgentStarted {
 				t.Errorf("Expected EventAgentStarted, got %s", event.Type)
 			}
 			payload := event.Payload.(map[string]interface{})
@@ -142,7 +142,7 @@ func TestServerEventForwarding(t *testing.T) {
 
 		select {
 		case event := <-receivedEvents:
-			if event.Type != daemon.EventAgentOutput {
+			if event.Type != events.EventAgentOutput {
 				t.Errorf("Expected EventAgentOutput, got %s", event.Type)
 			}
 		case <-time.After(time.Second):
@@ -179,7 +179,7 @@ func TestServerEventForwarding(t *testing.T) {
 
 		select {
 		case event := <-receivedEvents:
-			if event.Type != daemon.EventAgentCompleted {
+			if event.Type != events.EventAgentCompleted {
 				t.Errorf("Expected EventAgentCompleted, got %s", event.Type)
 			}
 			payload := event.Payload.(map[string]interface{})
@@ -220,7 +220,7 @@ func TestServerEventForwarding(t *testing.T) {
 
 		select {
 		case event := <-receivedEvents:
-			if event.Type != daemon.EventAgentCompleted {
+			if event.Type != events.EventAgentCompleted {
 				t.Errorf("Expected EventAgentCompleted, got %s", event.Type)
 			}
 			payload := event.Payload.(map[string]interface{})
@@ -235,7 +235,7 @@ func TestServerEventForwarding(t *testing.T) {
 
 func TestServerMultipleConnections(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 	server := NewServer(socketPath, eventBus)
 
 	if err := server.Start(); err != nil {
@@ -274,7 +274,7 @@ func TestServerMultipleConnections(t *testing.T) {
 
 func TestServerInvalidJSON(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 	server := NewServer(socketPath, eventBus)
 
 	if err := server.Start(); err != nil {
@@ -283,8 +283,8 @@ func TestServerInvalidJSON(t *testing.T) {
 	defer server.Stop()
 
 	// Subscribe to event bus
-	receivedEvents := make(chan daemon.Event, 10)
-	eventBus.Subscribe(func(event daemon.Event) {
+	receivedEvents := make(chan events.Event, 10)
+	eventBus.Subscribe(func(event events.Event) {
 		receivedEvents <- event
 	})
 
@@ -318,7 +318,7 @@ func TestServerInvalidJSON(t *testing.T) {
 	// Should receive the valid message
 	select {
 	case event := <-receivedEvents:
-		if event.Type != daemon.EventAgentStarted {
+		if event.Type != events.EventAgentStarted {
 			t.Errorf("Expected EventAgentStarted, got %s", event.Type)
 		}
 	case <-time.After(time.Second):

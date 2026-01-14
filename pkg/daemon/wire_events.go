@@ -1,30 +1,26 @@
 package daemon
 
-import "time"
+import "github.com/jzila/canopy/pkg/events"
 
-// EventType represents the type of event being sent over WebSocket
-type EventType string
+// Re-export event types from pkg/events for backwards compatibility
+type EventType = events.EventType
 
-// Event type constants
+// Event type constants - re-exported from pkg/events
 const (
-	EventStateSync        EventType = "state:sync"
-	EventRunStarted       EventType = "run:started"
-	EventRunCompleted     EventType = "run:completed"
-	EventAgentStarted     EventType = "agent:started"
-	EventAgentOutput      EventType = "agent:output"
-	EventAgentLiveFeed    EventType = "agent:live_feed"
-	EventAgentCommit      EventType = "agent:commit"
-	EventAgentMergeStatus EventType = "agent:merge_status"
-	EventAgentCompleted   EventType = "agent:completed"
-	EventTaskUpdated      EventType = "task:updated"
-	EventOrchPaused       EventType = "orch:paused"
-	EventOrchResumed      EventType = "orch:resumed"
-	EventStatsUpdated     EventType = "stats:updated"
+	EventStateSync        = events.EventStateSync
+	EventRunStarted       = events.EventRunStarted
+	EventRunCompleted     = events.EventRunCompleted
+	EventAgentStarted     = events.EventAgentStarted
+	EventAgentOutput      = events.EventAgentOutput
+	EventAgentLiveFeed    = events.EventAgentLiveFeed
+	EventAgentCommit      = events.EventAgentCommit
+	EventAgentMergeStatus = events.EventAgentMergeStatus
+	EventAgentCompleted   = events.EventAgentCompleted
+	EventTaskUpdated      = events.EventTaskUpdated
+	EventOrchPaused       = events.EventOrchPaused
+	EventOrchResumed      = events.EventOrchResumed
+	EventStatsUpdated     = events.EventStatsUpdated
 )
 
-// Event represents a WebSocket event sent to browser clients
-type Event struct {
-	Type      EventType   `json:"type"`
-	Timestamp time.Time   `json:"timestamp"`
-	Payload   interface{} `json:"payload"`
-}
+// Event - re-exported from pkg/events
+type Event = events.Event

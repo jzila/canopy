@@ -8,6 +8,7 @@ import (
 	"sync"
 	"syscall"
 
+	"github.com/jzila/canopy/pkg/events"
 	"github.com/jzila/canopy/pkg/persistence"
 	"github.com/jzila/canopy/pkg/repository"
 )
@@ -20,16 +21,13 @@ type Config struct {
 }
 
 // IPCServer defines the interface for IPC server operations
-// This avoids circular dependency with pkg/ipc
 type IPCServer interface {
 	Start() error
 	Stop() error
 }
 
 // IPCServerFactory creates an IPC server given an EventBus
-// This allows the daemon to create the IPC server after initializing the EventBus
-// without directly importing pkg/ipc (which would create a circular dependency)
-type IPCServerFactory func(socketPath string, eventBus *EventBus) IPCServer
+type IPCServerFactory func(socketPath string, eventBus *events.EventBus) IPCServer
 
 // BeadsClientFactory creates a BeadsClientInterface for a given repository path.
 // This allows lazy creation of beads clients for different repositories.
@@ -283,10 +281,10 @@ func (d *Daemon) restoreStateFromDB() error {
 		d.state.StartTime = run.StartedAt
 	}
 
-	// Load ALL agents across all runs (including archived) so that users can un-archive them
-	agents, err := d.persistenceStore.GetAllAgents()
+	// Load ALL non-archived agents across all runs (not just the most recent run)
+	agents, err := d.persistenceStore.GetAllNonArchivedAgents()
 	if err != nil {
-		return fmt.Errorf("failed to get all agents: %w", err)
+		return fmt.Errorf("failed to get non-archived agents: %w", err)
 	}
 
 	if len(agents) == 0 {
@@ -304,7 +302,7 @@ func (d *Daemon) restoreStateFromDB() error {
 	// Update stats after restoring all agents
 	d.state.UpdateStats()
 
-	log.Printf("Restored %d agents from all runs (including archived)", len(agents))
+	log.Printf("Restored %d non-archived agents from all runs (historical data)", len(agents))
 	return nil
 }
 

@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jzila/canopy/pkg/daemon"
+	"github.com/jzila/canopy/pkg/events"
 	"github.com/jzila/canopy/pkg/ipc"
 	"github.com/jzila/canopy/pkg/runtime"
 	"github.com/jzila/canopy/pkg/tui"
@@ -219,8 +220,7 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create IPC server factory that wraps ipc.NewServer
-	// This avoids circular dependency issues between pkg/daemon and pkg/ipc
-	ipcServerFactory := func(socketPath string, eventBus *daemon.EventBus) daemon.IPCServer {
+	ipcServerFactory := func(socketPath string, eventBus *events.EventBus) daemon.IPCServer {
 		return ipc.NewServer(socketPath, eventBus)
 	}
 

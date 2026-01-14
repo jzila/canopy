@@ -7,14 +7,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jzila/canopy/pkg/daemon"
+	"github.com/jzila/canopy/pkg/events"
 )
 
 func TestClientConnectClose(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 
 	// Start server
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 	server := NewServer(socketPath, eventBus)
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
@@ -60,7 +60,7 @@ func TestClientSendAgentStart(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 
 	// Setup server
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 	server := NewServer(socketPath, eventBus)
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
@@ -68,8 +68,8 @@ func TestClientSendAgentStart(t *testing.T) {
 	defer server.Stop()
 
 	// Subscribe to events
-	receivedEvents := make(chan daemon.Event, 10)
-	eventBus.Subscribe(func(event daemon.Event) {
+	receivedEvents := make(chan events.Event, 10)
+	eventBus.Subscribe(func(event events.Event) {
 		receivedEvents <- event
 	})
 
@@ -88,7 +88,7 @@ func TestClientSendAgentStart(t *testing.T) {
 	// Verify event received
 	select {
 	case event := <-receivedEvents:
-		if event.Type != daemon.EventAgentStarted {
+		if event.Type != events.EventAgentStarted {
 			t.Errorf("Expected EventAgentStarted, got %s", event.Type)
 		}
 		payload := event.Payload.(map[string]interface{})
@@ -110,7 +110,7 @@ func TestClientSendAgentStartWithParent(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 
 	// Setup server
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 	server := NewServer(socketPath, eventBus)
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
@@ -118,8 +118,8 @@ func TestClientSendAgentStartWithParent(t *testing.T) {
 	defer server.Stop()
 
 	// Subscribe to events
-	receivedEvents := make(chan daemon.Event, 10)
-	eventBus.Subscribe(func(event daemon.Event) {
+	receivedEvents := make(chan events.Event, 10)
+	eventBus.Subscribe(func(event events.Event) {
 		receivedEvents <- event
 	})
 
@@ -138,7 +138,7 @@ func TestClientSendAgentStartWithParent(t *testing.T) {
 	// Verify event received with parent_agent_id
 	select {
 	case event := <-receivedEvents:
-		if event.Type != daemon.EventAgentStarted {
+		if event.Type != events.EventAgentStarted {
 			t.Errorf("Expected EventAgentStarted, got %s", event.Type)
 		}
 		payload := event.Payload.(map[string]interface{})
@@ -156,15 +156,15 @@ func TestClientSendAgentStartWithParent(t *testing.T) {
 func TestClientSendAgentOutput(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 	server := NewServer(socketPath, eventBus)
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
 	defer server.Stop()
 
-	receivedEvents := make(chan daemon.Event, 10)
-	eventBus.Subscribe(func(event daemon.Event) {
+	receivedEvents := make(chan events.Event, 10)
+	eventBus.Subscribe(func(event events.Event) {
 		receivedEvents <- event
 	})
 
@@ -182,7 +182,7 @@ func TestClientSendAgentOutput(t *testing.T) {
 
 		select {
 		case event := <-receivedEvents:
-			if event.Type != daemon.EventAgentOutput {
+			if event.Type != events.EventAgentOutput {
 				t.Errorf("Expected EventAgentOutput, got %s", event.Type)
 			}
 			payload := event.Payload.(map[string]interface{})
@@ -218,15 +218,15 @@ func TestClientSendAgentOutput(t *testing.T) {
 func TestClientSendAgentDone(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 	server := NewServer(socketPath, eventBus)
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
 	defer server.Stop()
 
-	receivedEvents := make(chan daemon.Event, 10)
-	eventBus.Subscribe(func(event daemon.Event) {
+	receivedEvents := make(chan events.Event, 10)
+	eventBus.Subscribe(func(event events.Event) {
 		receivedEvents <- event
 	})
 
@@ -252,7 +252,7 @@ func TestClientSendAgentDone(t *testing.T) {
 
 	select {
 	case event := <-receivedEvents:
-		if event.Type != daemon.EventAgentCompleted {
+		if event.Type != events.EventAgentCompleted {
 			t.Errorf("Expected EventAgentCompleted, got %s", event.Type)
 		}
 		payload := event.Payload.(map[string]interface{})
@@ -273,7 +273,7 @@ func TestClientSendAgentDone(t *testing.T) {
 func TestClientSendAgentDoneNilResult(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 	server := NewServer(socketPath, eventBus)
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
@@ -295,15 +295,15 @@ func TestClientSendAgentDoneNilResult(t *testing.T) {
 func TestClientSendAgentFail(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 	server := NewServer(socketPath, eventBus)
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
 	defer server.Stop()
 
-	receivedEvents := make(chan daemon.Event, 10)
-	eventBus.Subscribe(func(event daemon.Event) {
+	receivedEvents := make(chan events.Event, 10)
+	eventBus.Subscribe(func(event events.Event) {
 		receivedEvents <- event
 	})
 
@@ -325,7 +325,7 @@ func TestClientSendAgentFail(t *testing.T) {
 
 	select {
 	case event := <-receivedEvents:
-		if event.Type != daemon.EventAgentCompleted {
+		if event.Type != events.EventAgentCompleted {
 			t.Errorf("Expected EventAgentCompleted, got %s", event.Type)
 		}
 		payload := event.Payload.(map[string]interface{})
@@ -343,7 +343,7 @@ func TestClientSendAgentFail(t *testing.T) {
 func TestClientSendAgentFailNilError(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 	server := NewServer(socketPath, eventBus)
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
@@ -372,15 +372,15 @@ func TestClientSendAgentFailNilError(t *testing.T) {
 func TestClientSendRunStarted(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 	server := NewServer(socketPath, eventBus)
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
 	defer server.Stop()
 
-	receivedEvents := make(chan daemon.Event, 10)
-	eventBus.Subscribe(func(event daemon.Event) {
+	receivedEvents := make(chan events.Event, 10)
+	eventBus.Subscribe(func(event events.Event) {
 		receivedEvents <- event
 	})
 
@@ -397,7 +397,7 @@ func TestClientSendRunStarted(t *testing.T) {
 	select {
 	case event := <-receivedEvents:
 		// RunStarted is mapped to EventRunStarted by the server
-		if event.Type != daemon.EventRunStarted {
+		if event.Type != events.EventRunStarted {
 			t.Errorf("Expected EventRunStarted, got %s", event.Type)
 		}
 		payload := event.Payload.(map[string]interface{})
@@ -415,15 +415,15 @@ func TestClientSendRunStarted(t *testing.T) {
 func TestClientSendRunCompleted(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 	server := NewServer(socketPath, eventBus)
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
 	defer server.Stop()
 
-	receivedEvents := make(chan daemon.Event, 10)
-	eventBus.Subscribe(func(event daemon.Event) {
+	receivedEvents := make(chan events.Event, 10)
+	eventBus.Subscribe(func(event events.Event) {
 		receivedEvents <- event
 	})
 
@@ -452,7 +452,7 @@ func TestClientSendRunCompleted(t *testing.T) {
 	select {
 	case event := <-receivedEvents:
 		// RunCompleted is mapped to EventRunCompleted by the server
-		if event.Type != daemon.EventRunCompleted {
+		if event.Type != events.EventRunCompleted {
 			t.Errorf("Expected EventRunCompleted, got %s", event.Type)
 		}
 		payload := event.Payload.(map[string]interface{})
@@ -473,7 +473,7 @@ func TestClientSendRunCompleted(t *testing.T) {
 func TestClientSendRunCompletedNilStats(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 	server := NewServer(socketPath, eventBus)
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
@@ -529,7 +529,7 @@ func TestClientSendWithoutConnection(t *testing.T) {
 func TestClientReconnect(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 	server := NewServer(socketPath, eventBus)
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
@@ -560,8 +560,8 @@ func TestClientReconnect(t *testing.T) {
 	}
 
 	// Verify reconnected client can send messages
-	receivedEvents := make(chan daemon.Event, 10)
-	eventBus.Subscribe(func(event daemon.Event) {
+	receivedEvents := make(chan events.Event, 10)
+	eventBus.Subscribe(func(event events.Event) {
 		receivedEvents <- event
 	})
 
@@ -571,7 +571,7 @@ func TestClientReconnect(t *testing.T) {
 
 	select {
 	case event := <-receivedEvents:
-		if event.Type != daemon.EventAgentStarted {
+		if event.Type != events.EventAgentStarted {
 			t.Errorf("Expected EventAgentStarted, got %s", event.Type)
 		}
 	case <-time.After(time.Second):
@@ -582,15 +582,15 @@ func TestClientReconnect(t *testing.T) {
 func TestClientMultipleMessages(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 	server := NewServer(socketPath, eventBus)
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
 	defer server.Stop()
 
-	receivedEvents := make(chan daemon.Event, 100)
-	eventBus.Subscribe(func(event daemon.Event) {
+	receivedEvents := make(chan events.Event, 100)
+	eventBus.Subscribe(func(event events.Event) {
 		receivedEvents <- event
 	})
 
@@ -613,7 +613,7 @@ func TestClientMultipleMessages(t *testing.T) {
 	for eventCount < 10 {
 		select {
 		case event := <-receivedEvents:
-			if event.Type == daemon.EventAgentOutput {
+			if event.Type == events.EventAgentOutput {
 				eventCount++
 			}
 		case <-timeout:
@@ -625,7 +625,7 @@ func TestClientMultipleMessages(t *testing.T) {
 func TestClientMessageFormat(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 	server := NewServer(socketPath, eventBus)
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
@@ -648,8 +648,8 @@ func TestClientMessageFormat(t *testing.T) {
 	// Use the client connection and capture what would be sent
 	// We'll verify the message structure by parsing what the server receives
 
-	receivedEvents := make(chan daemon.Event, 10)
-	eventBus.Subscribe(func(event daemon.Event) {
+	receivedEvents := make(chan events.Event, 10)
+	eventBus.Subscribe(func(event events.Event) {
 		receivedEvents <- event
 	})
 
@@ -661,7 +661,7 @@ func TestClientMessageFormat(t *testing.T) {
 	select {
 	case event := <-receivedEvents:
 		// If we received the event, the format was correct
-		if event.Type != daemon.EventAgentStarted {
+		if event.Type != events.EventAgentStarted {
 			t.Errorf("Expected EventAgentStarted, got %s", event.Type)
 		}
 		// Verify timestamp is recent (within last 5 seconds)
@@ -676,7 +676,7 @@ func TestClientMessageFormat(t *testing.T) {
 func TestClientDoubleClose(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 	server := NewServer(socketPath, eventBus)
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
