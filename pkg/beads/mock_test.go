@@ -94,7 +94,7 @@ func TestMockClient_Done(t *testing.T) {
 
 func TestMockClient_Fail(t *testing.T) {
 	mock := NewMockClient()
-	mock.SetTask(&Task{ID: "task-1", Title: "Test", Status: "open"})
+	mock.SetTask(&Task{ID: "task-1", Title: "Test", Status: "in_progress"})
 
 	err := mock.Fail("task-1", "something went wrong")
 	if err != nil {
@@ -109,6 +109,11 @@ func TestMockClient_Fail(t *testing.T) {
 	}
 	if mock.Calls.Fail[0].Reason != "something went wrong" {
 		t.Errorf("Fail() reason = %s, want 'something went wrong'", mock.Calls.Fail[0].Reason)
+	}
+
+	// Verify status is reset to "open" so task can be retried
+	if mock.Tasks["task-1"].Status != "open" {
+		t.Errorf("Task status = %s, want open (failed tasks should be reopened for retry)", mock.Tasks["task-1"].Status)
 	}
 }
 

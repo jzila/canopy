@@ -177,7 +177,7 @@ func (m *MockClient) Done(taskID string) error {
 	return nil
 }
 
-// Fail marks a task as failed
+// Fail marks a task as failed by resetting it to open status so it can be retried
 func (m *MockClient) Fail(taskID string, reason string) error {
 	m.mu.Lock()
 	m.Calls.Fail = append(m.Calls.Fail, struct {
@@ -194,7 +194,7 @@ func (m *MockClient) Fail(taskID string, reason string) error {
 	defer m.mu.Unlock()
 
 	if task, ok := m.Tasks[taskID]; ok {
-		task.Status = "closed"
+		task.Status = "open"
 	}
 	return nil
 }
