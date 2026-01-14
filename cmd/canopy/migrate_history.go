@@ -11,9 +11,68 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
-	"github.com/jzila/canopy/pkg/history"
 	"github.com/jzila/canopy/pkg/persistence"
 )
+
+// Legacy JSON history types (inlined from deprecated pkg/history)
+
+// legacyRunStatus represents the overall status of a run in JSON history
+type legacyRunStatus string
+
+const (
+	legacyRunStatusCompleted legacyRunStatus = "completed"
+	legacyRunStatusFailed    legacyRunStatus = "failed"
+	legacyRunStatusPartial   legacyRunStatus = "partial"
+)
+
+// legacyModelUsage represents per-model token usage and cost
+type legacyModelUsage struct {
+	InputTokens              int     `json:"input_tokens"`
+	OutputTokens             int     `json:"output_tokens"`
+	CacheReadInputTokens     int     `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens int     `json:"cache_creation_input_tokens"`
+	CostUSD                  float64 `json:"cost_usd"`
+}
+
+// legacyTaskRecord represents a single task execution within a run
+type legacyTaskRecord struct {
+	ID            string                      `json:"id"`
+	Title         string                      `json:"title"`
+	Status        string                      `json:"status"`
+	StartTime     time.Time                   `json:"start_time"`
+	EndTime       time.Time                   `json:"end_time,omitempty"`
+	DurationMS    int64                       `json:"duration_ms"`
+	InputTokens   int                         `json:"input_tokens"`
+	OutputTokens  int                         `json:"output_tokens"`
+	CostUSD       float64                     `json:"cost_usd"`
+	FilesChanged  int                         `json:"files_changed"`
+	Commits       int                         `json:"commits"`
+	Error         string                      `json:"error,omitempty"`
+	ResultMessage string                      `json:"result_message,omitempty"`
+	ModelUsage    map[string]legacyModelUsage `json:"model_usage,omitempty"`
+}
+
+// legacyRunRecord represents a complete orchestration run from JSON history
+type legacyRunRecord struct {
+	ID                       string             `json:"id"`
+	StartTime                time.Time          `json:"start_time"`
+	EndTime                  time.Time          `json:"end_time"`
+	Status                   legacyRunStatus    `json:"status"`
+	WorkDir                  string             `json:"work_dir"`
+	TotalTasks               int                `json:"total_tasks"`
+	CompletedTasks           int                `json:"completed_tasks"`
+	FailedTasks              int                `json:"failed_tasks"`
+	DurationSeconds          float64            `json:"duration_seconds"`
+	TotalInputTokens         int                `json:"total_input_tokens"`
+	TotalOutputTokens        int                `json:"total_output_tokens"`
+	TotalCacheCreationTokens int                `json:"total_cache_creation_tokens"`
+	TotalCacheReadTokens     int                `json:"total_cache_read_tokens"`
+	TotalCostUSD             float64            `json:"total_cost_usd"`
+	TotalTurns               int                `json:"total_turns"`
+	FilesChanged             int                `json:"files_changed"`
+	GitCommits               int                `json:"git_commits"`
+	Tasks                    []legacyTaskRecord `json:"tasks,omitempty"`
+}
 
 var (
 	migrateHistoryDryRun bool
@@ -140,13 +199,13 @@ func getHistoryDir() (string, error) {
 }
 
 // readJSONHistoryFiles reads all run-*.json files from the history directory
-func readJSONHistoryFiles(dir string) ([]*history.RunRecord, error) {
+func readJSONHistoryFiles(dir string) ([]*legacyRunRecord, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read directory: %w", err)
 	}
 
-	var runs []*history.RunRecord
+	var runs []*legacyRunRecord
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -169,13 +228,13 @@ func readJSONHistoryFiles(dir string) ([]*history.RunRecord, error) {
 }
 
 // readJSONRunFile reads a single JSON run file
-func readJSONRunFile(path string) (*history.RunRecord, error) {
+func readJSONRunFile(path string) (*legacyRunRecord, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 
-	var run history.RunRecord
+	var run legacyRunRecord
 	if err := json.Unmarshal(data, &run); err != nil {
 		return nil, fmt.Errorf("failed to parse JSON: %w", err)
 	}
@@ -184,7 +243,7 @@ func readJSONRunFile(path string) (*history.RunRecord, error) {
 }
 
 // migrateRuns migrates JSON runs to SQLite, returning counts
-func migrateRuns(store *persistence.Store, jsonRuns []*history.RunRecord) (migrated, skipped, errors int) {
+func migrateRuns(store *persistence.Store, jsonRuns []*legacyRunRecord) (migrated, skipped, errors int) {
 	for _, jsonRun := range jsonRuns {
 		// Check if run already exists
 		existing, err := store.GetRun(jsonRun.ID)
@@ -212,8 +271,8 @@ func migrateRuns(store *persistence.Store, jsonRuns []*history.RunRecord) (migra
 }
 
 // migrateRun converts a JSON run to SQLite format and inserts it
-func migrateRun(store *persistence.Store, jsonRun *history.RunRecord) error {
-	// Convert history.RunRecord to persistence.Run
+func migrateRun(store *persistence.Store, jsonRun *legacyRunRecord) error {
+	// Convert legacyRunRecord to persistence.Run
 	run := &persistence.Run{
 		ID:                  jsonRun.ID,
 		StartedAt:           jsonRun.StartTime,
@@ -261,22 +320,22 @@ func migrateRun(store *persistence.Store, jsonRun *history.RunRecord) error {
 	return nil
 }
 
-// convertRunStatus converts history.RunStatus to persistence.RunStatus
-func convertRunStatus(status history.RunStatus) persistence.RunStatus {
+// convertRunStatus converts legacyRunStatus to persistence.RunStatus
+func convertRunStatus(status legacyRunStatus) persistence.RunStatus {
 	switch status {
-	case history.RunStatusCompleted:
+	case legacyRunStatusCompleted:
 		return persistence.RunStatusCompleted
-	case history.RunStatusFailed:
+	case legacyRunStatusFailed:
 		return persistence.RunStatusFailed
-	case history.RunStatusPartial:
+	case legacyRunStatusPartial:
 		return persistence.RunStatusPartial
 	default:
 		return persistence.RunStatusFailed
 	}
 }
 
-// convertTaskToAgent converts a history.TaskRecord to a persistence.Agent
-func convertTaskToAgent(runID string, task *history.TaskRecord) *persistence.Agent {
+// convertTaskToAgent converts a legacyTaskRecord to a persistence.Agent
+func convertTaskToAgent(runID string, task *legacyTaskRecord) *persistence.Agent {
 	agent := &persistence.Agent{
 		ID:              generateAgentID(runID, task.ID),
 		RunID:           runID,
