@@ -81,6 +81,7 @@ export interface TreeLayout {
   trunkY: number;
   branchOffset: number;
   padding: number;
+  workerFanSpacing?: number; // Vertical spacing between fan-out worker branches
 }
 
 // Token usage information

@@ -26,6 +26,7 @@ const DEFAULT_LAYOUT: TreeLayout = {
   trunkY: 60,
   branchOffset: 50,
   padding: 40,
+  workerFanSpacing: 35, // Vertical spacing between fan-out worker branches
 };
 
 // Track newly created nodes/connections for animation
@@ -585,6 +586,12 @@ const ConnectionLine: React.FC<ConnectionProps> = ({ connection, isNew = false }
           strokeWidth: 2,
           strokeDasharray: '4,2',
         };
+      case 'worker':
+        return {
+          stroke: '#3b82f6', // blue-500 (matches active node color)
+          strokeWidth: 2,
+          strokeDasharray: undefined,
+        };
       default:
         return {
           stroke: '#6b7280',
@@ -602,7 +609,12 @@ const ConnectionLine: React.FC<ConnectionProps> = ({ connection, isNew = false }
       // Straight horizontal line for trunk
       return `M ${fromX} ${fromY} L ${toX} ${toY}`;
     } else if (type === 'branch') {
-      // Curved path going down for branch
+      // Curved path going down for branch (resolver)
+      const midX = getMidX();
+      return `M ${fromX} ${fromY} C ${midX} ${fromY}, ${midX} ${toY}, ${toX} ${toY}`;
+    } else if (type === 'worker') {
+      // Curved path for worker fan-out branches
+      // Uses a gentle curve from trunk to worker position
       const midX = getMidX();
       return `M ${fromX} ${fromY} C ${midX} ${fromY}, ${midX} ${toY}, ${toX} ${toY}`;
     } else {
@@ -823,91 +835,174 @@ export const MergeQueueTree: React.FC<MergeQueueTreeProps> = ({
       }
     });
 
-    // Calculate starting X for active workers and pending items
+    // Calculate starting X for active workers (fan-out) and pending items
     currentX = layout.padding + completed.length * layout.nodeSpacing;
 
-    // Add active workers on the trunk
-    activeWorkers.forEach((worker, index) => {
-      const x = currentX + index * layout.nodeSpacing;
-      const nodeId = `active-${worker.taskId}`;
+    // Fan-out layout: Active workers branch out from a junction point
+    // This creates the git-tree-style visualization where workers fan out at the tail
+    const workerFanSpacing = layout.workerFanSpacing ?? 35;
+    const fanJunctionX = currentX;
 
-      nodeList.push({
-        id: nodeId,
-        taskId: worker.taskId,
-        agentId: worker.agentId,
-        type: 'active',
-        status: 'active',
-        x,
-        y: trunkY,
-      });
+    if (activeWorkers.length > 0) {
+      // For a single worker, keep it on the trunk line
+      // For multiple workers, fan them out from a junction point
+      if (activeWorkers.length === 1) {
+        const worker = activeWorkers[0]!;
+        const nodeId = `active-${worker.taskId}`;
 
-      // Connect to previous node
-      const prevNodeIndex = completed.length + index - 1;
-      if (prevNodeIndex >= 0) {
-        let prevNodeId: string | null = null;
-        if (index === 0) {
-          const lastCompleted = completed[completed.length - 1];
-          if (lastCompleted) {
-            prevNodeId = `completed-${lastCompleted.taskId}`;
-          }
-        } else {
-          const prevWorker = activeWorkers[index - 1];
-          if (prevWorker) {
-            prevNodeId = `active-${prevWorker.taskId}`;
-          }
-        }
+        nodeList.push({
+          id: nodeId,
+          taskId: worker.taskId,
+          agentId: worker.agentId,
+          type: 'active',
+          status: 'active',
+          x: currentX,
+          y: trunkY,
+        });
 
-        if (prevNodeId) {
+        // Connect to last completed node
+        const lastCompleted = completed[completed.length - 1];
+        if (lastCompleted) {
           connectionList.push({
-            id: `trunk-active-${index}`,
-            fromNode: prevNodeId,
+            id: `trunk-to-active-0`,
+            fromNode: `completed-${lastCompleted.taskId}`,
             toNode: nodeId,
             type: 'trunk',
-            fromX: x - layout.nodeSpacing + layout.nodeRadius,
+            fromX: currentX - layout.nodeSpacing + layout.nodeRadius,
             fromY: trunkY,
-            toX: x - layout.nodeRadius,
+            toX: currentX - layout.nodeRadius,
             toY: trunkY,
           });
         }
-      }
 
-      // Check for resolvers on active workers
-      const workerResolvers = resolverMap.get(worker.taskId);
-      if (workerResolvers) {
-        workerResolvers.forEach((resolver, resolverIndex) => {
-          const resolverY = trunkY + layout.branchOffset + resolverIndex * 40;
-          const resolverX = x + layout.nodeSpacing / 3;
-          const resolverNodeId = `resolver-${resolver.resolverTaskId}`;
+        // Check for resolvers on this worker
+        const workerResolvers = resolverMap.get(worker.taskId);
+        if (workerResolvers) {
+          workerResolvers.forEach((resolver, resolverIndex) => {
+            const resolverY = trunkY + layout.branchOffset + resolverIndex * 40;
+            const resolverX = currentX + layout.nodeSpacing / 3;
+            const resolverNodeId = `resolver-${resolver.resolverTaskId}`;
+
+            nodeList.push({
+              id: resolverNodeId,
+              taskId: resolver.resolverTaskId,
+              agentId: resolver.resolverAgentId,
+              type: 'resolver',
+              status: resolver.status,
+              x: resolverX,
+              y: resolverY,
+              parentId: nodeId,
+            });
+
+            connectionList.push({
+              id: `branch-${resolver.resolverTaskId}`,
+              fromNode: nodeId,
+              toNode: resolverNodeId,
+              type: 'branch',
+              fromX: currentX,
+              fromY: trunkY + layout.nodeRadius,
+              toX: resolverX,
+              toY: resolverY - layout.nodeRadius,
+            });
+          });
+        }
+
+        currentX += layout.nodeSpacing;
+      } else {
+        // Multiple workers: fan them out from a junction point
+        // Calculate vertical positions for fan-out (centered around trunk Y)
+        const totalHeight = (activeWorkers.length - 1) * workerFanSpacing;
+        const startY = trunkY - totalHeight / 2;
+
+        activeWorkers.forEach((worker, index) => {
+          const workerX = fanJunctionX + layout.nodeSpacing * 0.7;
+          const workerY = startY + index * workerFanSpacing;
+          const nodeId = `active-${worker.taskId}`;
 
           nodeList.push({
-            id: resolverNodeId,
-            taskId: resolver.resolverTaskId,
-            agentId: resolver.resolverAgentId,
-            type: 'resolver',
-            status: resolver.status,
-            x: resolverX,
-            y: resolverY,
-            parentId: nodeId,
+            id: nodeId,
+            taskId: worker.taskId,
+            agentId: worker.agentId,
+            type: 'active',
+            status: 'active',
+            x: workerX,
+            y: workerY,
           });
 
-          connectionList.push({
-            id: `branch-${resolver.resolverTaskId}`,
-            fromNode: nodeId,
-            toNode: resolverNodeId,
-            type: 'branch',
-            fromX: x,
-            fromY: trunkY + layout.nodeRadius,
-            toX: resolverX,
-            toY: resolverY - layout.nodeRadius,
-          });
+          // Connect from junction point (or last completed, or origin) to this worker
+          // Create a fan-out from the trunk line to each worker
+          const lastCompleted = completed[completed.length - 1];
+          if (lastCompleted) {
+            connectionList.push({
+              id: `worker-branch-${index}`,
+              fromNode: `completed-${lastCompleted.taskId}`,
+              toNode: nodeId,
+              type: 'worker',
+              fromX: fanJunctionX - layout.nodeSpacing + layout.nodeRadius,
+              fromY: trunkY,
+              toX: workerX - layout.nodeRadius,
+              toY: workerY,
+            });
+          } else {
+            // No completed items - fan out from the origin point
+            connectionList.push({
+              id: `worker-branch-${index}`,
+              fromNode: '', // No source node, just draw from origin
+              toNode: nodeId,
+              type: 'worker',
+              fromX: layout.padding,
+              fromY: trunkY,
+              toX: workerX - layout.nodeRadius,
+              toY: workerY,
+            });
+          }
+
+          // Check for resolvers on this worker
+          const workerResolvers = resolverMap.get(worker.taskId);
+          if (workerResolvers) {
+            workerResolvers.forEach((resolver, resolverIndex) => {
+              const resolverY = workerY + layout.branchOffset + resolverIndex * 40;
+              const resolverX = workerX + layout.nodeSpacing / 3;
+              const resolverNodeId = `resolver-${resolver.resolverTaskId}`;
+
+              nodeList.push({
+                id: resolverNodeId,
+                taskId: resolver.resolverTaskId,
+                agentId: resolver.resolverAgentId,
+                type: 'resolver',
+                status: resolver.status,
+                x: resolverX,
+                y: resolverY,
+                parentId: nodeId,
+              });
+
+              connectionList.push({
+                id: `branch-${resolver.resolverTaskId}`,
+                fromNode: nodeId,
+                toNode: resolverNodeId,
+                type: 'branch',
+                fromX: workerX,
+                fromY: workerY + layout.nodeRadius,
+                toX: resolverX,
+                toY: resolverY - layout.nodeRadius,
+              });
+            });
+          }
         });
-      }
-    });
 
-    // Update current X for pending items
-    currentX = layout.padding + (completed.length + activeWorkers.length) * layout.nodeSpacing;
+        // Update currentX for pending items (account for fan-out width)
+        currentX = fanJunctionX + layout.nodeSpacing * 1.5;
+      }
+    }
+
+    // Update current X for pending items (if no workers modified it)
+    if (activeWorkers.length === 0) {
+      currentX = layout.padding + completed.length * layout.nodeSpacing;
+    }
 
     // Add pending nodes
+    // When workers are fanned out (multiple workers), pending nodes should not connect to workers
+    // since workers are on separate branches - pending stays on the conceptual "queue" line
     pending.forEach((item, index) => {
       const x = currentX + index * layout.nodeSpacing;
       const nodeId = `pending-${item.taskId}`;
@@ -924,29 +1019,63 @@ export const MergeQueueTree: React.FC<MergeQueueTreeProps> = ({
       });
 
       // Connect to previous node
-      const prevNodeIndex = completed.length + activeWorkers.length + index - 1;
-      if (prevNodeIndex >= 0) {
-        let prevNodeId: string | null = null;
-
-        if (index === 0) {
-          const lastWorker = activeWorkers[activeWorkers.length - 1];
-          const lastCompleted = completed[completed.length - 1];
-          if (lastWorker) {
-            prevNodeId = `active-${lastWorker.taskId}`;
-          } else if (lastCompleted) {
-            prevNodeId = `completed-${lastCompleted.taskId}`;
-          }
-        } else {
-          const prevPending = pending[index - 1];
-          if (prevPending) {
-            prevNodeId = `pending-${prevPending.taskId}`;
-          }
-        }
-
-        if (prevNodeId) {
+      if (index === 0) {
+        // First pending: connect to trunk continuation point
+        // If workers are fanned out (multiple workers), connect from the junction area
+        // If single worker on trunk, connect from that worker
+        // If no workers, connect from last completed
+        if (activeWorkers.length === 1) {
+          // Single worker stays on trunk - connect from it
+          const lastWorker = activeWorkers[0]!;
           connectionList.push({
             id: `trunk-pending-${index}`,
-            fromNode: prevNodeId,
+            fromNode: `active-${lastWorker.taskId}`,
+            toNode: nodeId,
+            type: 'trunk',
+            fromX: x - layout.nodeSpacing + layout.nodeRadius,
+            fromY: trunkY,
+            toX: x - layout.nodeRadius,
+            toY: trunkY,
+          });
+        } else if (activeWorkers.length > 1) {
+          // Multiple workers are fanned out - pending is independent
+          // Draw a dashed continuation line from the fan junction area
+          const lastCompleted = completed[completed.length - 1];
+          if (lastCompleted) {
+            connectionList.push({
+              id: `trunk-pending-${index}`,
+              fromNode: `completed-${lastCompleted.taskId}`,
+              toNode: nodeId,
+              type: 'trunk',
+              fromX: fanJunctionX - layout.nodeSpacing + layout.nodeRadius,
+              fromY: trunkY,
+              toX: x - layout.nodeRadius,
+              toY: trunkY,
+            });
+          }
+        } else {
+          // No workers - connect from last completed
+          const lastCompleted = completed[completed.length - 1];
+          if (lastCompleted) {
+            connectionList.push({
+              id: `trunk-pending-${index}`,
+              fromNode: `completed-${lastCompleted.taskId}`,
+              toNode: nodeId,
+              type: 'trunk',
+              fromX: x - layout.nodeSpacing + layout.nodeRadius,
+              fromY: trunkY,
+              toX: x - layout.nodeRadius,
+              toY: trunkY,
+            });
+          }
+        }
+      } else {
+        // Subsequent pending nodes connect to previous pending
+        const prevPending = pending[index - 1];
+        if (prevPending) {
+          connectionList.push({
+            id: `trunk-pending-${index}`,
+            fromNode: `pending-${prevPending.taskId}`,
             toNode: nodeId,
             type: 'trunk',
             fromX: x - layout.nodeSpacing + layout.nodeRadius,
@@ -959,23 +1088,34 @@ export const MergeQueueTree: React.FC<MergeQueueTreeProps> = ({
     });
 
     // Calculate SVG dimensions
-    const totalNodes = completed.length + activeWorkers.length + pending.length;
+    // Account for fan-out workers which may extend beyond simple node count
     const calculatedWidth = Math.max(
-      layout.padding * 2 + totalNodes * layout.nodeSpacing,
+      currentX + pending.length * layout.nodeSpacing + layout.padding,
+      layout.padding * 2 + (completed.length + activeWorkers.length + pending.length) * layout.nodeSpacing,
       300
     );
 
-    // Find max Y for height calculation (account for resolver branches)
+    // Find max/min Y for height calculation (account for resolver branches and fan-out)
+    const minY = Math.min(
+      trunkY - layout.nodeRadius - 30,
+      ...nodeList.map((n) => n.y - layout.nodeRadius - 30)
+    );
     const maxY = Math.max(
       trunkY + layout.nodeRadius + 30,
       ...nodeList.map((n) => n.y + layout.nodeRadius + 30)
     );
 
+    // Ensure minimum height accommodates the fan-out
+    const svgMinHeight = maxY - minY + layout.padding * 2;
+
+    // Use the calculated height that accounts for fan-out above and below trunk
     return {
       nodes: nodeList,
       connections: connectionList,
       svgWidth: calculatedWidth,
-      svgHeight: maxY + layout.padding,
+      svgHeight: Math.max(svgMinHeight, maxY + layout.padding),
+      // Track vertical offset needed when nodes extend above the default trunk Y
+      yOffset: minY < 0 ? Math.abs(minY) + layout.padding : 0,
     };
   }, [completed, resolvers, pending, activeWorkers, layout]);
 
