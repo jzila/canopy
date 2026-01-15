@@ -77,6 +77,18 @@ const (
 	MergeStatusResolved MergeStatus = "resolved" // Merged after conflict resolution
 )
 
+// Task represents a beads task persisted in the database
+type Task struct {
+	ID        string `json:"id"`
+	RepoID    string `json:"repoId,omitempty"`
+	Title     string `json:"title"`
+	Status    string `json:"status"` // ready, in_progress, completed, failed, blocked
+	Type      string `json:"type,omitempty"`
+	Priority  int    `json:"priority"`
+	AgentID   string `json:"agentId,omitempty"`
+	UpdatedAt int64  `json:"updatedAt"`
+}
+
 // Agent represents a single agent execution within a run
 type Agent struct {
 	ID                  string      `json:"id"`
@@ -174,15 +186,13 @@ func NewStoreWithPath(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	// Configure connection pool for SQLite with WAL mode
-	// WAL mode enables concurrent readers with a single writer. Multiple connections
-	// allow parallel reads while writes are serialized by SQLite itself. The DSN
-	// _timeout=5000 parameter handles write contention by retrying for 5 seconds.
-	// This avoids application-level serialization bottlenecks while SQLite manages
-	// write locking internally.
-	db.SetMaxOpenConns(10)
-	db.SetMaxIdleConns(5)
-	db.SetConnMaxLifetime(5 * time.Minute)
+	// Configure connection pool for SQLite
+	// SQLite performs best with a single writer connection. With WAL mode,
+	// multiple readers are supported but writes are still serialized.
+	// Using 1 connection avoids SQLITE_BUSY errors and connection contention.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0) // Connections don't expire
 
 	store := &Store{
 		db:     db,
@@ -1219,6 +1229,180 @@ func (s *Store) MigrateOrphanedRepoIDs(lookupFn RepoIDLookupFunc) (int64, error)
 	}
 
 	return updated, nil
+}
+
+// taskColumns lists all columns for task queries
+const taskColumns = `id, repo_id, title, status, type, priority, agent_id, updated_at`
+
+// UpsertTask creates or updates a task record
+func (s *Store) UpsertTask(task *Task) error {
+	query := `
+		INSERT INTO tasks (id, repo_id, title, status, type, priority, agent_id, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'))
+		ON CONFLICT(id) DO UPDATE SET
+			repo_id = excluded.repo_id,
+			title = excluded.title,
+			status = excluded.status,
+			type = excluded.type,
+			priority = excluded.priority,
+			agent_id = excluded.agent_id,
+			updated_at = strftime('%s', 'now')
+	`
+	_, err := s.db.Exec(query,
+		task.ID,
+		nullString(task.RepoID),
+		task.Title,
+		task.Status,
+		nullString(task.Type),
+		task.Priority,
+		nullString(task.AgentID),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to upsert task: %w", err)
+	}
+	return nil
+}
+
+// GetTask retrieves a task by ID
+func (s *Store) GetTask(id string) (*Task, error) {
+	query := `SELECT ` + taskColumns + ` FROM tasks WHERE id = ?`
+	row := s.db.QueryRow(query, id)
+	return s.scanTask(row)
+}
+
+// GetTasks retrieves all tasks for a specific repository
+func (s *Store) GetTasks(repoID string) ([]Task, error) {
+	query := `SELECT ` + taskColumns + ` FROM tasks WHERE repo_id = ? ORDER BY priority ASC, updated_at DESC`
+	rows, err := s.db.Query(query, repoID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query tasks: %w", err)
+	}
+	defer rows.Close()
+
+	tasks := []Task{}
+	for rows.Next() {
+		task, err := s.scanTaskFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, *task)
+	}
+	return tasks, nil
+}
+
+// GetTasksByStatus retrieves all tasks with a specific status
+func (s *Store) GetTasksByStatus(status string) ([]Task, error) {
+	query := `SELECT ` + taskColumns + ` FROM tasks WHERE status = ? ORDER BY priority ASC, updated_at DESC`
+	rows, err := s.db.Query(query, status)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query tasks by status: %w", err)
+	}
+	defer rows.Close()
+
+	tasks := []Task{}
+	for rows.Next() {
+		task, err := s.scanTaskFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, *task)
+	}
+	return tasks, nil
+}
+
+// GetAllTasks retrieves all tasks across all repositories
+func (s *Store) GetAllTasks() ([]Task, error) {
+	query := `SELECT ` + taskColumns + ` FROM tasks ORDER BY priority ASC, updated_at DESC`
+	rows, err := s.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query all tasks: %w", err)
+	}
+	defer rows.Close()
+
+	tasks := []Task{}
+	for rows.Next() {
+		task, err := s.scanTaskFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, *task)
+	}
+	return tasks, nil
+}
+
+// DeleteTask deletes a task by ID
+func (s *Store) DeleteTask(id string) error {
+	_, err := s.db.Exec("DELETE FROM tasks WHERE id = ?", id)
+	if err != nil {
+		return fmt.Errorf("failed to delete task: %w", err)
+	}
+	return nil
+}
+
+// DeleteTasksByRepo deletes all tasks for a specific repository
+func (s *Store) DeleteTasksByRepo(repoID string) error {
+	_, err := s.db.Exec("DELETE FROM tasks WHERE repo_id = ?", repoID)
+	if err != nil {
+		return fmt.Errorf("failed to delete tasks by repo: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) scanTask(row *sql.Row) (*Task, error) {
+	var task Task
+	var repoID, taskType, agentID sql.NullString
+	var updatedAt sql.NullInt64
+
+	err := row.Scan(
+		&task.ID,
+		&repoID,
+		&task.Title,
+		&task.Status,
+		&taskType,
+		&task.Priority,
+		&agentID,
+		&updatedAt,
+	)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan task: %w", err)
+	}
+
+	task.RepoID = repoID.String
+	task.Type = taskType.String
+	task.AgentID = agentID.String
+	task.UpdatedAt = updatedAt.Int64
+
+	return &task, nil
+}
+
+func (s *Store) scanTaskFromRows(rows *sql.Rows) (*Task, error) {
+	var task Task
+	var repoID, taskType, agentID sql.NullString
+	var updatedAt sql.NullInt64
+
+	err := rows.Scan(
+		&task.ID,
+		&repoID,
+		&task.Title,
+		&task.Status,
+		&taskType,
+		&task.Priority,
+		&agentID,
+		&updatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan task: %w", err)
+	}
+
+	task.RepoID = repoID.String
+	task.Type = taskType.String
+	task.AgentID = agentID.String
+	task.UpdatedAt = updatedAt.Int64
+
+	return &task, nil
 }
 
 // Helper functions for scanning rows

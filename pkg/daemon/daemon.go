@@ -320,6 +320,12 @@ func (d *Daemon) restoreStateFromDB() error {
 	// ParentAgentID is stored, and we reconstruct the reverse mapping on restore.
 	d.rebuildAgentChildLinks()
 
+	// Restore persisted tasks
+	if err := d.restoreTasksFromDB(); err != nil {
+		logging.Warn("failed to restore tasks from database", "error", err)
+		// Non-fatal: continue with agent restoration
+	}
+
 	// Update stats after restoring all agents
 	d.state.UpdateStats()
 
@@ -347,6 +353,44 @@ func (d *Daemon) rebuildAgentChildLinks() {
 			}
 		}
 	}
+}
+
+// restoreTasksFromDB loads persisted tasks from the database into RuntimeState.
+// This ensures tasks survive daemon restart.
+func (d *Daemon) restoreTasksFromDB() error {
+	if d.persistenceStore == nil {
+		return nil
+	}
+
+	// Get all tasks from the database
+	tasks, err := d.persistenceStore.GetAllTasks()
+	if err != nil {
+		return fmt.Errorf("failed to get tasks from database: %w", err)
+	}
+
+	if len(tasks) == 0 {
+		logging.Debug("no tasks found in database")
+		return nil
+	}
+
+	logging.Debug("found tasks to restore", "count", len(tasks))
+
+	// Convert persistence.Task to daemon.TaskState and add to RuntimeState
+	d.state.mu.Lock()
+	for _, pTask := range tasks {
+		d.state.Tasks[pTask.ID] = &TaskState{
+			ID:       pTask.ID,
+			Title:    pTask.Title,
+			Status:   pTask.Status,
+			AgentID:  pTask.AgentID,
+			Priority: pTask.Priority,
+			RepoID:   pTask.RepoID,
+		}
+	}
+	d.state.mu.Unlock()
+
+	logging.Info("restored tasks from database", "count", len(tasks))
+	return nil
 }
 
 // markOrphanedStatesAsFailed marks any orphaned runs and agents as failed.

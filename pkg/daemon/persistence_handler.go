@@ -49,6 +49,8 @@ func (h *PersistenceHandler) handleEvent(event Event) {
 		h.handleAgentCompleted(event)
 	case EventRunCompleted:
 		h.handleRunCompleted(event)
+	case EventTaskUpdated:
+		h.handleTaskUpdated(event)
 	}
 }
 
@@ -357,4 +359,48 @@ func (h *PersistenceHandler) handleRunCompleted(event Event) {
 	h.mu.Lock()
 	h.currentRunID = ""
 	h.mu.Unlock()
+}
+
+// handleTaskUpdated persists task state changes to the store
+func (h *PersistenceHandler) handleTaskUpdated(event Event) {
+	payload, ok := event.Payload.(map[string]interface{})
+	if !ok {
+		logging.Warn("invalid task updated payload type", "component", "persistence")
+		return
+	}
+
+	taskID, _ := payload["task_id"].(string)
+	if taskID == "" {
+		logging.Warn("missing task_id in task updated event", "component", "persistence")
+		return
+	}
+
+	title, _ := payload["title"].(string)
+	status, _ := payload["status"].(string)
+	taskType, _ := payload["type"].(string)
+	priority, _ := getIntFromPayload(payload, "priority")
+	agentID, _ := payload["agent_id"].(string)
+	repoID, _ := payload["repo_id"].(string)
+
+	task := &persistence.Task{
+		ID:       taskID,
+		RepoID:   repoID,
+		Title:    title,
+		Status:   status,
+		Type:     taskType,
+		Priority: priority,
+		AgentID:  agentID,
+	}
+
+	if err := h.store.UpsertTask(task); err != nil {
+		logging.Error("failed to upsert task",
+			"task_id", taskID,
+			"error", err,
+			"component", "persistence")
+	} else {
+		logging.Debug("persisted task",
+			"task_id", taskID,
+			"status", status,
+			"component", "persistence")
+	}
 }
