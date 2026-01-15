@@ -219,6 +219,10 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 			if err := ipcClient.SendAgentStart(agentID, taskID, task.Title, parentAgentID, repoID); err != nil && verbose {
 				fmt.Fprintf(os.Stderr, "warning: failed to send agent start: %v\n", err)
 			}
+			// Send task status update to in_progress
+			if err := ipcClient.SendTaskUpdated(taskID, task.Title, "in_progress", agentID, repoID); err != nil && verbose {
+				fmt.Fprintf(os.Stderr, "warning: failed to send task updated: %v\n", err)
+			}
 		},
 		OnOutputFn: func(taskID string, output string, isError bool) {
 			agentID := makeAgentID(runID, taskID)

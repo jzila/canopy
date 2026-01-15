@@ -127,6 +127,9 @@ func (mc *MergeCoordinator) Start(ctx context.Context) {
 // SetIPCClient sets the IPC client for merge status updates.
 func (mc *MergeCoordinator) SetIPCClient(client *ipc.Client) {
 	mc.ipcClient = client
+	if mc.processor != nil {
+		mc.processor.SetIPCClient(client)
+	}
 	if mc.resolver != nil {
 		mc.resolver.SetIPCClient(client)
 	}
@@ -135,6 +138,9 @@ func (mc *MergeCoordinator) SetIPCClient(client *ipc.Client) {
 // SetRepoID sets the repository ID for IPC tracking.
 func (mc *MergeCoordinator) SetRepoID(repoID string) {
 	mc.repoID = repoID
+	if mc.processor != nil {
+		mc.processor.SetRepoID(repoID)
+	}
 	if mc.resolver != nil {
 		mc.resolver.SetRepoID(repoID)
 	}
@@ -211,6 +217,13 @@ func (mc *MergeCoordinator) EnqueueMerge(result *agent.Result) *mergequeue.Merge
 // HandleFailure handles a failed task - cleans up and marks failed in beads.
 // Failed tasks don't need merge since there are no changes to merge.
 func (mc *MergeCoordinator) HandleFailure(taskID string, result *agent.Result, errMsg string) {
+	// Get task title from cache before cleanup for IPC notification
+	var taskTitle string
+	if cached, ok := mc.taskCache.Load(taskID); ok {
+		task := cached.(*beads.Task)
+		taskTitle = task.Title
+	}
+
 	// Clean up task cache if present
 	mc.taskCache.Delete(taskID)
 
@@ -220,6 +233,23 @@ func (mc *MergeCoordinator) HandleFailure(taskID string, result *agent.Result, e
 	// Mark task as failed in beads
 	if err := mc.beadsClient.Fail(taskID, errMsg); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: failed to mark task %s as failed: %v\n", taskID, err)
+	}
+
+	// Send task status update via IPC
+	mc.sendTaskUpdated(taskID, taskTitle, "failed")
+}
+
+// sendTaskUpdated sends a task status update via IPC if client is connected.
+func (mc *MergeCoordinator) sendTaskUpdated(taskID, title, status string) {
+	if mc.ipcClient == nil {
+		return
+	}
+
+	// Get agent ID for this task
+	agentID := mc.GetAgentID(taskID)
+
+	if err := mc.ipcClient.SendTaskUpdated(taskID, title, status, agentID, mc.repoID); err != nil && mc.config.Verbose {
+		fmt.Fprintf(os.Stderr, "warning: failed to send task updated for %s: %v\n", taskID, err)
 	}
 }
 
