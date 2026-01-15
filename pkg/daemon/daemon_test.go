@@ -723,3 +723,139 @@ func TestClearTasksForRepo(t *testing.T) {
 		t.Errorf("expected 0 tasks after clearing all, got %d", len(state.Tasks))
 	}
 }
+
+// TestHistoricalLiveFeedEvents verifies that restored agents get synthetic live feed events
+func TestHistoricalLiveFeedEvents(t *testing.T) {
+	// Create a temporary database
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
+	store, err := persistence.NewStoreWithPath(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+
+	now := time.Now()
+
+	// Create a completed run
+	run := &persistence.Run{
+		ID:        "run-with-history",
+		StartedAt: now.Add(-time.Hour),
+		Status:    persistence.RunStatusCompleted,
+	}
+	finishedAt := now.Add(-30 * time.Minute)
+	run.FinishedAt = &finishedAt
+	if err := store.CreateRun(run); err != nil {
+		t.Fatalf("failed to create run: %v", err)
+	}
+
+	// Create an agent with a result message
+	agent := &persistence.Agent{
+		ID:              "agent-with-result",
+		RunID:           "run-with-history",
+		TaskID:          "task-1",
+		TaskTitle:       "Test Task",
+		Status:          persistence.AgentStatusCompleted,
+		StartedAt:       now.Add(-50 * time.Minute),
+		ResultMessage:   "Task completed successfully with 5 files changed.",
+		FilesChanged:    5,
+		GitCommitsCreated: 2,
+	}
+	if err := store.CreateAgent(agent); err != nil {
+		t.Fatalf("failed to create agent: %v", err)
+	}
+
+	// Create a failed agent with an error message
+	failedAgent := &persistence.Agent{
+		ID:           "agent-with-error",
+		RunID:        "run-with-history",
+		TaskID:       "task-2",
+		TaskTitle:    "Failed Task",
+		Status:       persistence.AgentStatusFailed,
+		StartedAt:    now.Add(-40 * time.Minute),
+		ErrorMessage: "Failed due to merge conflict",
+		FilesChanged: 0,
+	}
+	if err := store.CreateAgent(failedAgent); err != nil {
+		t.Fatalf("failed to create agent: %v", err)
+	}
+
+	daemon := &Daemon{
+		config:           Config{EnablePersistence: true},
+		eventBus:         NewEventBus(),
+		state:            NewRuntimeState(),
+		persistenceStore: store,
+		beadsClients:     make(map[string]BeadsClientInterface),
+	}
+
+	// Restore state from DB
+	if err := daemon.restoreStateFromDB(); err != nil {
+		t.Fatalf("restoreStateFromDB failed: %v", err)
+	}
+
+	// Verify agent with result has live feed events
+	state := daemon.GetRuntimeState()
+	restoredAgent := state.GetAgent("agent-with-result")
+	if restoredAgent == nil {
+		t.Fatal("expected agent-with-result to be restored")
+	}
+
+	// Should have at least 3 events: historical marker, result text, and agent_completed
+	if len(restoredAgent.LiveFeedEvents) < 3 {
+		t.Errorf("expected at least 3 live feed events, got %d", len(restoredAgent.LiveFeedEvents))
+	}
+
+	// Verify the historical marker event
+	if len(restoredAgent.LiveFeedEvents) > 0 {
+		firstEvent := restoredAgent.LiveFeedEvents[0]
+		if firstEvent.EventType != "text" {
+			t.Errorf("expected first event type 'text', got %s", firstEvent.EventType)
+		}
+		if isHistoric, ok := firstEvent.Data["is_historic"].(bool); !ok || !isHistoric {
+			t.Error("expected first event to have is_historic=true")
+		}
+	}
+
+	// Verify the result message event
+	if len(restoredAgent.LiveFeedEvents) > 1 {
+		resultEvent := restoredAgent.LiveFeedEvents[1]
+		if resultEvent.EventType != "text" {
+			t.Errorf("expected second event type 'text', got %s", resultEvent.EventType)
+		}
+		if text, ok := resultEvent.Data["text"].(string); !ok || text != "Task completed successfully with 5 files changed." {
+			t.Errorf("unexpected result message: %v", resultEvent.Data["text"])
+		}
+	}
+
+	// Verify the agent_completed event
+	if len(restoredAgent.LiveFeedEvents) > 2 {
+		completedEvent := restoredAgent.LiveFeedEvents[2]
+		if completedEvent.EventType != "agent_completed" {
+			t.Errorf("expected third event type 'agent_completed', got %s", completedEvent.EventType)
+		}
+		if filesChanged, ok := completedEvent.Data["files_changed"].(int); !ok || filesChanged != 5 {
+			t.Errorf("expected files_changed=5, got %v", completedEvent.Data["files_changed"])
+		}
+		if commitsCreated, ok := completedEvent.Data["commits_created"].(int); !ok || commitsCreated != 2 {
+			t.Errorf("expected commits_created=2, got %v", completedEvent.Data["commits_created"])
+		}
+	}
+
+	// Verify failed agent has error in completion event
+	failedRestored := state.GetAgent("agent-with-error")
+	if failedRestored == nil {
+		t.Fatal("expected agent-with-error to be restored")
+	}
+
+	// Check the last event (agent_completed) has the error
+	if len(failedRestored.LiveFeedEvents) > 0 {
+		lastEvent := failedRestored.LiveFeedEvents[len(failedRestored.LiveFeedEvents)-1]
+		if lastEvent.EventType != "agent_completed" {
+			t.Errorf("expected last event type 'agent_completed', got %s", lastEvent.EventType)
+		}
+		if errorMsg, ok := lastEvent.Data["error"].(string); !ok || errorMsg != "Failed due to merge conflict" {
+			t.Errorf("expected error message in completion event, got %v", lastEvent.Data["error"])
+		}
+	}
+
+	store.Close()
+}

@@ -12,6 +12,7 @@ import {
   XCircle,
   Clock,
   ChevronRight,
+  History,
 } from 'lucide-react';
 import { useStateStore } from '../../stores/stateStore';
 
@@ -85,6 +86,22 @@ const eventTypeStyles: Record<string, { bg: string; border: string; text: string
     bg: 'bg-emerald-900/30',
     border: 'border-emerald-500/50',
     text: 'text-emerald-300',
+    icon: 'text-emerald-400',
+  },
+};
+
+// Historic event styles (muted versions)
+const historicEventStyles: Record<string, { bg: string; border: string; text: string; icon: string }> = {
+  text: {
+    bg: 'bg-amber-900/20',
+    border: 'border-amber-500/30',
+    text: 'text-amber-200',
+    icon: 'text-amber-400',
+  },
+  agent_completed: {
+    bg: 'bg-emerald-900/20',
+    border: 'border-emerald-500/30',
+    text: 'text-emerald-200',
     icon: 'text-emerald-400',
   },
 };
@@ -327,7 +344,12 @@ const defaultStyles = {
 
 // Single event component
 const FeedEvent: React.FC<{ event: LiveFeedEvent }> = ({ event }) => {
-  const styles = eventTypeStyles[event.event_type] ?? defaultStyles;
+  const isHistoric = event.data.is_historic === true;
+
+  // Use historic styles if available, otherwise fall back to regular styles
+  const styles = isHistoric
+    ? (historicEventStyles[event.event_type] ?? eventTypeStyles[event.event_type] ?? defaultStyles)
+    : (eventTypeStyles[event.event_type] ?? defaultStyles);
 
   const renderContent = () => {
     switch (event.event_type) {
@@ -362,9 +384,13 @@ const FeedEvent: React.FC<{ event: LiveFeedEvent }> = ({ event }) => {
     >
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
-          <Clock className={`w-3 h-3 ${styles.icon}`} />
+          {isHistoric ? (
+            <History className={`w-3 h-3 ${styles.icon}`} />
+          ) : (
+            <Clock className={`w-3 h-3 ${styles.icon}`} />
+          )}
           <span className="text-xs text-gray-500 font-mono">
-            {formatTime(event.timestamp)}
+            {isHistoric ? 'Historical' : formatTime(event.timestamp)}
           </span>
         </div>
         <span className={`text-xs font-medium ${styles.text} uppercase tracking-wide`}>

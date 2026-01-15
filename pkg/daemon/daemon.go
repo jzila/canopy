@@ -411,7 +411,61 @@ func (d *Daemon) convertPersistenceAgentToState(pAgent *persistence.Agent) *Agen
 		agent.Output.Stderr = pAgent.Stderr
 	}
 
+	// Generate synthetic live feed events from historical data
+	// This allows the UI to display something meaningful for historical agents
+	agent.LiveFeedEvents = d.generateHistoricalLiveFeedEvents(pAgent)
+
 	return agent
+}
+
+// generateHistoricalLiveFeedEvents creates synthetic live feed events from persisted agent data.
+// Since live feed events aren't persisted to the database, we reconstruct meaningful events
+// from the available data (result message, error message, completion status) to provide
+// visibility into historical agent executions.
+func (d *Daemon) generateHistoricalLiveFeedEvents(pAgent *persistence.Agent) []LiveFeedEvent {
+	events := []LiveFeedEvent{}
+
+	// Add a "historical" marker event so the UI knows these are reconstructed
+	events = append(events, LiveFeedEvent{
+		EventType: "text",
+		Data: map[string]interface{}{
+			"text":        "[Historical session - live feed events were not recorded]",
+			"is_historic": true,
+		},
+	})
+
+	// If we have a result message, add it as a text event
+	if pAgent.ResultMessage != "" {
+		events = append(events, LiveFeedEvent{
+			EventType: "text",
+			Data: map[string]interface{}{
+				"text":        pAgent.ResultMessage,
+				"is_historic": true,
+			},
+		})
+	}
+
+	// Add an agent_completed event with available metrics
+	completionData := map[string]interface{}{
+		"files_changed":   pAgent.FilesChanged,
+		"commits_created": pAgent.GitCommitsCreated,
+		"is_historic":     true,
+	}
+
+	if pAgent.ErrorMessage != "" {
+		completionData["error"] = pAgent.ErrorMessage
+	}
+
+	if pAgent.ResultMessage != "" {
+		completionData["result_message"] = pAgent.ResultMessage
+	}
+
+	events = append(events, LiveFeedEvent{
+		EventType: "agent_completed",
+		Data:      completionData,
+	})
+
+	return events
 }
 
 // convertPersistenceStatus converts persistence.AgentStatus to daemon.AgentStatus
