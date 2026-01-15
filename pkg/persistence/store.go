@@ -174,13 +174,15 @@ func NewStoreWithPath(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	// Configure connection pool for SQLite
-	// SQLite performs best with a single writer connection. With WAL mode,
-	// multiple readers are supported but writes are still serialized.
-	// Using 1 connection avoids SQLITE_BUSY errors and connection contention.
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-	db.SetConnMaxLifetime(0) // Connections don't expire
+	// Configure connection pool for SQLite with WAL mode
+	// WAL mode enables concurrent readers with a single writer. Multiple connections
+	// allow parallel reads while writes are serialized by SQLite itself. The DSN
+	// _timeout=5000 parameter handles write contention by retrying for 5 seconds.
+	// This avoids application-level serialization bottlenecks while SQLite manages
+	// write locking internally.
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(5 * time.Minute)
 
 	store := &Store{
 		db:     db,
