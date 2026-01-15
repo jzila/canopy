@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
-import { Play, Pause, Activity, DollarSign, Zap, GitCommit, FileEdit, Sun, Moon, Terminal as TerminalIcon, List, CheckCircle, XCircle, ListTodo, GripHorizontal, Archive, GitMerge, ChevronDown, ChevronUp } from 'lucide-react';
+import { Play, Pause, Activity, DollarSign, Zap, GitCommit, FileEdit, Sun, Moon, Terminal as TerminalIcon, List, CheckCircle, XCircle, ListTodo, GripHorizontal, Archive } from 'lucide-react';
 import { useStateStore } from '../../stores/stateStore';
 import type { AgentState } from '../../stores/stateStore';
-import { useWebSocket, useMergeQueue } from '../../hooks';
+import { useWebSocket } from '../../hooks';
 import { pauseOrch, resumeOrch, getState, getRepositories, activateRepository, getRuns } from '../../api/client';
 import { AgentCardGroup } from '../agents/AgentCardGroup';
 import { AgentTerminal } from '../agents/AgentTerminal';
@@ -11,19 +11,14 @@ import { CommitList } from '../agents/CommitList';
 import { BeadsPane } from '../beads/BeadsPane';
 import { RepoSelector } from './RepoSelector';
 import { RunSelector } from './RunSelector';
-import { MergeQueueTree } from '../merge';
-import type { NodeDetails } from '../merge/types';
 
 type TerminalTab = 'feed' | 'terminal' | 'commits';
 type StatusFilter = 'all' | 'running' | 'completed' | 'failed';
 
 const SHOW_ARCHIVED_AGENTS_KEY = 'canopy-show-archived-agents';
 
-const MERGE_QUEUE_EXPANDED_KEY = 'canopy-merge-queue-expanded';
-
 export const Dashboard: React.FC = () => {
   const { connected } = useWebSocket();
-  const { mergeQueue } = useMergeQueue();
   const [isPauseLoading, setIsPauseLoading] = useState(false);
   const [isResumeLoading, setIsResumeLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<TerminalTab>('feed');
@@ -41,10 +36,6 @@ export const Dashboard: React.FC = () => {
     const saved = localStorage.getItem(SHOW_ARCHIVED_AGENTS_KEY);
     return saved === 'true';
   });
-  const [mergeQueueExpanded, setMergeQueueExpanded] = useState(() => {
-    const saved = localStorage.getItem(MERGE_QUEUE_EXPANDED_KEY);
-    return saved !== null ? saved === 'true' : true;
-  });
 
   // Persist beads pane state
   useEffect(() => {
@@ -55,11 +46,6 @@ export const Dashboard: React.FC = () => {
   useEffect(() => {
     localStorage.setItem(SHOW_ARCHIVED_AGENTS_KEY, String(showArchivedAgents));
   }, [showArchivedAgents]);
-
-  // Persist merge queue expanded state
-  useEffect(() => {
-    localStorage.setItem(MERGE_QUEUE_EXPANDED_KEY, String(mergeQueueExpanded));
-  }, [mergeQueueExpanded]);
 
   // Resizable pane state
   const MIN_PANE_HEIGHT = 200;
@@ -353,65 +339,12 @@ export const Dashboard: React.FC = () => {
   };
   const hasSelectedAgent = selectedAgentId && agents[selectedAgentId];
 
-  // Transform merge queue data to component format
-  const mergeQueueData = useMemo(() => {
-    if (!mergeQueue) {
-      return {
-        completed: [],
-        resolvers: [],
-        pending: [],
-        activeWorkers: [],
-      };
-    }
-
-    return {
-      completed: mergeQueue.completed.map((item) => ({
-        taskId: item.taskId,
-        agentId: item.agentId,
-        timestamp: item.timestamp,
-        success: item.success,
-        ...(item.error !== undefined && { error: item.error }),
-      })),
-      resolvers: mergeQueue.resolvers.map((item) => ({
-        parentTaskId: item.parentTaskId,
-        resolverTaskId: item.resolverTaskId,
-        parentAgentId: item.parentAgentId,
-        resolverAgentId: item.resolverAgentId,
-        status: item.status === 'completed' ? 'resolved' as const : item.status === 'failed' ? 'failed' as const : 'resolving' as const,
-      })),
-      pending: mergeQueue.pending.map((item) => ({
-        taskId: item.taskId,
-        agentId: item.agentId,
-        position: item.position,
-      })),
-      activeWorkers: mergeQueue.activeWorkers.map((item) => ({
-        taskId: item.taskId,
-        agentId: item.agentId,
-        status: item.status as 'pending' | 'acquiring' | 'merging' | 'resolving' | 'merged' | 'failed',
-      })),
-    };
-  }, [mergeQueue]);
-
-  // Check if merge queue has any activity
-  const hasMergeQueueActivity = mergeQueueData.completed.length > 0 ||
-    mergeQueueData.resolvers.length > 0 ||
-    mergeQueueData.pending.length > 0 ||
-    mergeQueueData.activeWorkers.length > 0;
-
-  // Get node details from agent state for tooltips
-  const getNodeDetails = useCallback((taskId: string): NodeDetails | null => {
+  // Handle task click from BeadsPane merge queue status - find agent by task ID and select it
+  const handleMergeTaskClick = useCallback((taskId: string) => {
     const agent = Object.values(agents).find(a => a.task_id === taskId);
-    if (!agent) return null;
-
-    return {
-      title: agent.task_title,
-      duration: agent.duration,
-      tokenUsage: agent.token_usage,
-      filesChanged: agent.changes,
-      commitCount: agent.commits,
-      commits: agent.git_commits,
-      output: agent.output,
-    };
+    if (agent) {
+      handleSelectAgent(agent.id);
+    }
   }, [agents]);
 
   const formatCost = (cost: number): string => {
@@ -629,73 +562,11 @@ export const Dashboard: React.FC = () => {
         <BeadsPane
           isExpanded={beadsPaneExpanded}
           onToggle={() => setBeadsPaneExpanded(!beadsPaneExpanded)}
+          onTaskClick={handleMergeTaskClick}
         />
 
         {/* Main Content */}
         <main className="flex-1 flex flex-col overflow-hidden">
-          {/* Merge Queue Panel - Collapsible */}
-          <div className="flex-shrink-0 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
-            <button
-              onClick={() => setMergeQueueExpanded(!mergeQueueExpanded)}
-              className="w-full flex items-center justify-between px-4 py-2 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
-            >
-              <div className="flex items-center gap-2">
-                <GitMerge className={`w-4 h-4 ${hasMergeQueueActivity ? 'text-amber-500' : 'text-gray-400 dark:text-gray-500'}`} />
-                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                  Merge Queue
-                </span>
-                {!hasMergeQueueActivity && (
-                  <span className="text-xs text-gray-400 dark:text-gray-500">
-                    (empty)
-                  </span>
-                )}
-                {hasMergeQueueActivity && mergeQueueData.resolvers.length > 0 && (
-                  <span className="px-2 py-0.5 text-xs font-medium bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300 rounded-full animate-pulse">
-                    {mergeQueueData.resolvers.length} resolving
-                  </span>
-                )}
-                {hasMergeQueueActivity && (
-                  <span className="text-xs text-gray-500 dark:text-gray-400">
-                    ({mergeQueueData.completed.length} completed, {mergeQueueData.activeWorkers.length} active, {mergeQueueData.pending.length} pending)
-                  </span>
-                )}
-              </div>
-              {mergeQueueExpanded ? (
-                <ChevronUp className="w-4 h-4 text-gray-500" />
-              ) : (
-                <ChevronDown className="w-4 h-4 text-gray-500" />
-              )}
-            </button>
-            {mergeQueueExpanded && (
-              <div className="px-4 pb-4">
-                {hasMergeQueueActivity ? (
-                  <MergeQueueTree
-                    completed={mergeQueueData.completed}
-                    resolvers={mergeQueueData.resolvers}
-                    pending={mergeQueueData.pending}
-                    activeWorkers={mergeQueueData.activeWorkers}
-                    getNodeDetails={getNodeDetails}
-                    onNodeClick={(taskId) => {
-                      // Find agent by task ID and select it
-                      const agent = Object.values(agents).find(a => a.task_id === taskId);
-                      if (agent) {
-                        handleSelectAgent(agent.id);
-                      }
-                    }}
-                  />
-                ) : (
-                  <div className="flex items-center justify-center py-6 text-gray-400 dark:text-gray-500">
-                    <div className="text-center">
-                      <GitMerge className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                      <p className="text-sm">No merge activity</p>
-                      <p className="text-xs mt-1">Tasks will appear here when agents complete work and queue for merging</p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
           {/* Agent Grid */}
           <div className="flex-1 overflow-y-auto p-6">
           {groupedAgents.length === 0 ? (
