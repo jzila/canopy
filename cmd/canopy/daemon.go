@@ -13,6 +13,7 @@ import (
 	"github.com/jzila/canopy/pkg/daemon"
 	"github.com/jzila/canopy/pkg/events"
 	"github.com/jzila/canopy/pkg/ipc"
+	"github.com/jzila/canopy/pkg/logging"
 	"github.com/jzila/canopy/pkg/runtime"
 	"github.com/jzila/canopy/pkg/tui"
 )
@@ -23,6 +24,8 @@ var (
 	daemonDevMode   bool
 	daemonTUIMode   bool
 	daemonAddr      string // explicit daemon address for remote TUI connection
+	daemonLogLevel  string // log level (debug, info, warn, error)
+	daemonLogJSON   bool   // enable JSON log output
 )
 
 var daemonCmd = &cobra.Command{
@@ -157,6 +160,8 @@ func init() {
 	daemonCmd.Flags().BoolVar(&daemonDevMode, "dev", false, "Enable development mode")
 	daemonCmd.Flags().BoolVar(&daemonTUIMode, "tui", false, "Enable TUI dashboard view")
 	daemonCmd.Flags().StringVar(&daemonAddr, "daemon-addr", "", "Connect TUI to daemon at specified address (e.g., localhost:8080)")
+	daemonCmd.Flags().StringVar(&daemonLogLevel, "log-level", "info", "Log level (debug, info, warn, error)")
+	daemonCmd.Flags().BoolVar(&daemonLogJSON, "log-json", false, "Output logs in JSON format")
 
 	daemonLogsCmd.Flags().BoolVarP(&logsFollow, "follow", "f", false, "Follow log file (like tail -f)")
 	daemonLogsCmd.Flags().IntVarP(&logsLines, "lines", "n", 50, "Number of lines to show")
@@ -173,6 +178,28 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	// Use runtime socket path if not specified
 	if daemonSocket == "" {
 		daemonSocket = runtime.SocketPath("")
+	}
+
+	// Configure logging based on flags
+	logLevel, err := logging.ParseLevel(daemonLogLevel)
+	if err != nil {
+		return fmt.Errorf("invalid log level: %w", err)
+	}
+
+	logConfig := logging.Config{
+		Level:     logLevel,
+		JSON:      daemonLogJSON,
+		Component: "daemon",
+	}
+
+	// Set up file logging (writes to both stderr and log file)
+	cleanup, err := logging.SetupFileLogging(logConfig)
+	if err != nil {
+		// Fall back to stderr-only logging
+		logging.Configure(logConfig)
+		logging.Warn("failed to setup file logging, using stderr only", "error", err)
+	} else {
+		defer cleanup()
 	}
 
 	// If --daemon-addr is specified with --tui, connect directly to that daemon

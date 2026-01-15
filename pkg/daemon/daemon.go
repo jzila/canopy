@@ -2,13 +2,13 @@ package daemon
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
 
 	"github.com/jzila/canopy/pkg/events"
+	"github.com/jzila/canopy/pkg/logging"
 	"github.com/jzila/canopy/pkg/persistence"
 	"github.com/jzila/canopy/pkg/repository"
 )
@@ -93,14 +93,14 @@ func (d *Daemon) SetActiveRepository(repoID string) error {
 	d.activeRepoID = repoID
 	d.repoMu.Unlock()
 
-	log.Printf("Active repository set to %s (%s)", repo.Name, repoID)
+	logging.Info("active repository set", "repo_name", repo.Name, "repo_id", repoID)
 
 	// Reload tasks from the new repository's beads database
 	if d.state != nil {
 		// Clear existing tasks and load tasks from the new repository
 		d.state.ClearTasksForRepo("")
 		if err := d.loadTasksFromBeads(); err != nil {
-			log.Printf("Warning: failed to load tasks for repository %s: %v", repoID, err)
+			logging.Warn("failed to load tasks for repository", "repo_id", repoID, "error", err)
 		}
 	}
 
@@ -120,7 +120,7 @@ func (d *Daemon) GetActiveRepository() *repository.Repository {
 
 	repo, err := repository.FromID(repoID)
 	if err != nil {
-		log.Printf("Warning: failed to lookup active repository %s: %v", repoID, err)
+		logging.Warn("failed to lookup active repository", "repo_id", repoID, "error", err)
 		return nil
 	}
 	return repo
@@ -177,7 +177,7 @@ func (d *Daemon) getBeadsClient(repoID string) (BeadsClientInterface, error) {
 
 	// No factory available - return nil (no beads support for this repo)
 	if d.beadsClientFactory == nil {
-		log.Printf("Warning: no beads client factory configured, cannot create client for repo %s", repoID)
+		logging.Warn("no beads client factory configured", "repo_id", repoID)
 		return nil, nil
 	}
 
@@ -187,7 +187,7 @@ func (d *Daemon) getBeadsClient(repoID string) (BeadsClientInterface, error) {
 	}
 
 	d.beadsClients[repoID] = client
-	log.Printf("Created beads client for repository %s (%s)", repo.Name, repoID)
+	logging.Info("created beads client for repository", "repo_name", repo.Name, "repo_id", repoID)
 	return client, nil
 }
 
@@ -219,23 +219,23 @@ func (d *Daemon) Init() {
 	if d.config.EnablePersistence && d.persistenceStore == nil {
 		store, err := persistence.NewStore()
 		if err != nil {
-			log.Printf("Warning: failed to initialize persistence store: %v", err)
+			logging.Warn("failed to initialize persistence store", "error", err)
 		} else {
 			d.persistenceStore = store
 			d.persistenceHandler = NewPersistenceHandler(store, d.eventBus)
 			d.persistenceUnsubscribe = d.persistenceHandler.Start()
-			log.Println("Persistence enabled - run history will be saved to SQLite")
+			logging.Info("persistence enabled - run history will be saved to SQLite")
 
 			// Restore state from database if there was a running run
 			if err := d.restoreStateFromDB(); err != nil {
-				log.Printf("Warning: failed to restore state from database: %v", err)
+				logging.Warn("failed to restore state from database", "error", err)
 			}
 		}
 	}
 
 	// Load pending tasks from beads database to populate the UI
 	if err := d.loadTasksFromBeads(); err != nil {
-		log.Printf("Warning: failed to load tasks from beads: %v", err)
+		logging.Warn("failed to load tasks from beads", "error", err)
 	}
 }
 
@@ -250,11 +250,11 @@ func (d *Daemon) Init() {
 // which enables proper beads client selection for task loading.
 func (d *Daemon) restoreStateFromDB() error {
 	if d.persistenceStore == nil {
-		log.Println("State restoration: persistence store is nil, skipping")
+		logging.Debug("state restoration skipped - persistence store is nil")
 		return nil
 	}
 
-	log.Println("State restoration: beginning database state restoration")
+	logging.Debug("beginning database state restoration")
 
 	// First, mark any orphaned runs/agents as failed.
 	// These are runs/agents that were still "running" when the daemon crashed or was killed.
@@ -269,7 +269,10 @@ func (d *Daemon) restoreStateFromDB() error {
 		return fmt.Errorf("failed to get most recent run: %w", err)
 	}
 	if run != nil {
-		log.Printf("State restoration: most recent run: %s (status: %s, started %s)", run.ID, run.Status, run.StartedAt.Format("2006-01-02 15:04:05"))
+		logging.Debug("most recent run found",
+			"run_id", run.ID,
+			"status", run.Status,
+			"started_at", run.StartedAt.Format("2006-01-02 15:04:05"))
 
 		// Set the active repository based on the most recent run's repo context
 		// This allows loadTasksFromBeads to use the correct beads client
@@ -277,40 +280,44 @@ func (d *Daemon) restoreStateFromDB() error {
 			d.repoMu.Lock()
 			d.activeRepoID = run.RepoID
 			d.repoMu.Unlock()
-			log.Printf("State restoration: set active repository to %s (%s)", run.RepoName, run.RepoID)
+			logging.Debug("set active repository from run", "repo_name", run.RepoName, "repo_id", run.RepoID)
 		}
 
 		// Update RuntimeState start time to match the most recent run
 		d.state.StartTime = run.StartedAt
 	} else {
-		log.Println("State restoration: no previous runs found in database")
+		logging.Debug("no previous runs found in database")
 	}
 
 	// Load ALL non-archived agents across all runs (not just the most recent run)
-	log.Println("State restoration: querying non-archived agents from database")
+	logging.Debug("querying non-archived agents from database")
 	agents, err := d.persistenceStore.GetAllNonArchivedAgents()
 	if err != nil {
 		return fmt.Errorf("failed to get non-archived agents: %w", err)
 	}
 
 	if len(agents) == 0 {
-		log.Println("State restoration: no agents found in database, starting fresh")
+		logging.Debug("no agents found in database, starting fresh")
 		return nil
 	}
 
-	log.Printf("State restoration: found %d non-archived agents to restore", len(agents))
+	logging.Debug("found agents to restore", "count", len(agents))
 
 	// Convert persistence.Agent to daemon.AgentState and add to RuntimeState
 	for _, pAgent := range agents {
 		agentState := d.convertPersistenceAgentToState(&pAgent)
 		d.state.AddAgent(agentState)
-		log.Printf("State restoration: restored agent %s (task=%s, status=%s, run=%s)", pAgent.ID, pAgent.TaskID, pAgent.Status, pAgent.RunID)
+		logging.Debug("restored agent",
+			"agent_id", pAgent.ID,
+			"task_id", pAgent.TaskID,
+			"status", pAgent.Status,
+			"run_id", pAgent.RunID)
 	}
 
 	// Update stats after restoring all agents
 	d.state.UpdateStats()
 
-	log.Printf("State restoration: successfully restored %d agents from database", len(agents))
+	logging.Info("restored agents from database", "count", len(agents))
 	return nil
 }
 
@@ -325,7 +332,7 @@ func (d *Daemon) markOrphanedStatesAsFailed() error {
 		return fmt.Errorf("failed to mark orphaned agents: %w", err)
 	}
 	if agentCount > 0 {
-		log.Printf("Marked %d orphaned agent(s) as failed (daemon terminated unexpectedly)", agentCount)
+		logging.Warn("marked orphaned agents as failed (daemon terminated unexpectedly)", "count", agentCount)
 	}
 
 	// Mark orphaned runs (runs in "running" state)
@@ -334,7 +341,7 @@ func (d *Daemon) markOrphanedStatesAsFailed() error {
 		return fmt.Errorf("failed to mark orphaned runs: %w", err)
 	}
 	if runCount > 0 {
-		log.Printf("Marked %d orphaned run(s) as failed (daemon terminated unexpectedly)", runCount)
+		logging.Warn("marked orphaned runs as failed (daemon terminated unexpectedly)", "count", runCount)
 	}
 
 	return nil
@@ -363,7 +370,7 @@ func (d *Daemon) loadTasksFromBeads() error {
 	}
 
 	if len(tasks) == 0 {
-		log.Println("No pending tasks found in beads database")
+		logging.Debug("no pending tasks found in beads database")
 		return nil
 	}
 
@@ -372,7 +379,7 @@ func (d *Daemon) loadTasksFromBeads() error {
 		d.state.AddTaskWithRepo(&tasks[i], repoID)
 	}
 
-	log.Printf("Loaded %d pending task(s) from beads database", len(tasks))
+	logging.Info("loaded pending tasks from beads database", "count", len(tasks))
 	return nil
 }
 
@@ -492,30 +499,30 @@ func convertPersistenceStatus(status persistence.AgentStatus) AgentStatus {
 // Start initializes and starts all daemon components
 // Blocks until a termination signal is received
 func (d *Daemon) Start() error {
-	log.Println("Starting Canopy daemon...")
+	logging.Info("starting canopy daemon")
 
 	// Clean up any stale pidfile from previous crash
 	if cleaned, err := CleanStalePidFile(); err != nil {
-		log.Printf("Warning: failed to check stale pidfile: %v", err)
+		logging.Warn("failed to check stale pidfile", "error", err)
 	} else if cleaned {
-		log.Println("Cleaned up stale pidfile from previous crash")
+		logging.Info("cleaned up stale pidfile from previous crash")
 	}
 
 	// Write pidfile
 	if err := WritePidFile(); err != nil {
 		return fmt.Errorf("failed to write pidfile: %w", err)
 	}
-	log.Println("Pidfile written")
+	logging.Debug("pidfile written")
 
 	// Initialize components if not already done (allows pre-initialization via Init())
 	d.Init()
-	log.Println("EventBus initialized")
-	log.Println("RuntimeState initialized")
+	logging.Debug("eventbus initialized")
+	logging.Debug("runtime state initialized")
 
 	// Subscribe RuntimeState to EventBus to update from IPC events
 	unsubscribeState := d.state.SubscribeToEventBus(d.eventBus)
 	defer unsubscribeState()
-	log.Println("RuntimeState subscribed to EventBus")
+	logging.Debug("runtime state subscribed to eventbus")
 
 	// Initialize HTTP server (REST API + WebSocket)
 	// Pass persistence store if available (for /api/runs endpoints)
@@ -529,7 +536,7 @@ func (d *Daemon) Start() error {
 	if err := d.ipcServer.Start(); err != nil {
 		return fmt.Errorf("failed to start IPC server: %w", err)
 	}
-	log.Printf("IPC server listening on %s", d.config.SocketPath)
+	logging.Info("IPC server listening", "socket", d.config.SocketPath)
 
 	// Start HTTP server in a goroutine (it blocks in ListenAndServe)
 	httpErrChan := make(chan error, 1)
@@ -545,34 +552,34 @@ func (d *Daemon) Start() error {
 
 	select {
 	case err := <-httpErrChan:
-		log.Printf("HTTP server error: %v", err)
+		logging.Error("HTTP server error", "error", err)
 		// Stop IPC server before returning
 		d.ipcServer.Stop()
 		return err
 	case sig := <-sigChan:
-		log.Printf("Received signal: %v", sig)
+		logging.Info("received shutdown signal", "signal", sig)
 		return d.Stop()
 	}
 }
 
 // Stop gracefully shuts down all daemon components
 func (d *Daemon) Stop() error {
-	log.Println("Stopping Canopy daemon...")
+	logging.Info("stopping canopy daemon")
 
 	// Remove pidfile first (before any other cleanup that might fail)
 	if err := RemovePidFile(); err != nil {
-		log.Printf("Warning: failed to remove pidfile: %v", err)
+		logging.Warn("failed to remove pidfile", "error", err)
 	} else {
-		log.Println("Pidfile removed")
+		logging.Debug("pidfile removed")
 	}
 
 	var firstErr error
 
 	// Stop IPC server (stops accepting new connections)
 	if d.ipcServer != nil {
-		log.Println("Stopping IPC server...")
+		logging.Debug("stopping IPC server")
 		if err := d.ipcServer.Stop(); err != nil {
-			log.Printf("IPC server stop error: %v", err)
+			logging.Error("IPC server stop error", "error", err)
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -581,9 +588,9 @@ func (d *Daemon) Stop() error {
 
 	// Stop HTTP server (closes WebSocket connections)
 	if d.httpServer != nil {
-		log.Println("Stopping HTTP server...")
+		logging.Debug("stopping HTTP server")
 		if err := d.httpServer.Stop(); err != nil {
-			log.Printf("HTTP server stop error: %v", err)
+			logging.Error("HTTP server stop error", "error", err)
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -592,20 +599,20 @@ func (d *Daemon) Stop() error {
 
 	// Stop persistence handler and close store
 	if d.persistenceUnsubscribe != nil {
-		log.Println("Stopping persistence handler...")
+		logging.Debug("stopping persistence handler")
 		d.persistenceUnsubscribe()
 	}
 	if d.persistenceStore != nil {
-		log.Println("Closing persistence store...")
+		logging.Debug("closing persistence store")
 		if err := d.persistenceStore.Close(); err != nil {
-			log.Printf("Persistence store close error: %v", err)
+			logging.Error("persistence store close error", "error", err)
 			if firstErr == nil {
 				firstErr = err
 			}
 		}
 	}
 
-	log.Println("Daemon stopped")
+	logging.Info("daemon stopped")
 	return firstErr
 }
 

@@ -1,10 +1,10 @@
 package daemon
 
 import (
-	"log"
 	"sync"
 	"time"
 
+	"github.com/jzila/canopy/pkg/logging"
 	"github.com/jzila/canopy/pkg/persistence"
 )
 
@@ -56,13 +56,13 @@ func (h *PersistenceHandler) handleEvent(event Event) {
 func (h *PersistenceHandler) handleRunStarted(event Event) {
 	payload, ok := event.Payload.(map[string]interface{})
 	if !ok {
-		log.Printf("PersistenceHandler: invalid run started payload type")
+		logging.Warn("invalid run started payload type", "component", "persistence")
 		return
 	}
 
 	runID, _ := payload["run_id"].(string)
 	if runID == "" {
-		log.Printf("PersistenceHandler: missing run_id in run started event")
+		logging.Warn("missing run_id in run started event", "component", "persistence")
 		return
 	}
 
@@ -88,9 +88,9 @@ func (h *PersistenceHandler) handleRunStarted(event Event) {
 	}
 
 	if err := h.store.CreateRun(run); err != nil {
-		log.Printf("PersistenceHandler: failed to create run %s: %v", runID, err)
+		logging.Error("failed to create run", "run_id", runID, "error", err, "component", "persistence")
 	} else {
-		log.Printf("PersistenceHandler: persisted run %s (tasks=%d)", runID, taskCount)
+		logging.Debug("persisted run", "run_id", runID, "task_count", taskCount, "component", "persistence")
 	}
 }
 
@@ -100,13 +100,13 @@ func (h *PersistenceHandler) handleRunStarted(event Event) {
 func (h *PersistenceHandler) handleAgentMergeStatus(event Event) {
 	payload, ok := event.Payload.(map[string]interface{})
 	if !ok {
-		log.Printf("PersistenceHandler: invalid agent merge status payload type")
+		logging.Warn("invalid agent merge status payload type", "component", "persistence")
 		return
 	}
 
 	agentID, _ := payload["agent_id"].(string)
 	if agentID == "" {
-		log.Printf("PersistenceHandler: missing agent_id in agent merge status event")
+		logging.Warn("missing agent_id in agent merge status event", "component", "persistence")
 		return
 	}
 
@@ -133,10 +133,18 @@ func (h *PersistenceHandler) handleAgentMergeStatus(event Event) {
 	resolverSpawned, _ := payload["resolver_spawned"].(bool)
 
 	if err := h.store.UpdateAgentMergeResult(agentID, persistMergeStatus, commitsApplied, hadConflict, resolverSpawned, mergeErr); err != nil {
-		log.Printf("PersistenceHandler: failed to update merge result for agent %s: %v", agentID, err)
+		logging.Error("failed to update merge result",
+			"agent_id", agentID,
+			"error", err,
+			"component", "persistence")
 	} else {
-		log.Printf("PersistenceHandler: updated merge result for agent %s (status=%s, commits=%d, conflict=%v, resolver=%v)",
-			agentID, mergeStatus, commitsApplied, hadConflict, resolverSpawned)
+		logging.Debug("updated merge result",
+			"agent_id", agentID,
+			"merge_status", mergeStatus,
+			"commits_applied", commitsApplied,
+			"had_conflict", hadConflict,
+			"resolver_spawned", resolverSpawned,
+			"component", "persistence")
 	}
 }
 
@@ -144,13 +152,13 @@ func (h *PersistenceHandler) handleAgentMergeStatus(event Event) {
 func (h *PersistenceHandler) handleAgentStarted(event Event) {
 	payload, ok := event.Payload.(map[string]interface{})
 	if !ok {
-		log.Printf("PersistenceHandler: invalid agent started payload type")
+		logging.Warn("invalid agent started payload type", "component", "persistence")
 		return
 	}
 
 	agentID, _ := payload["agent_id"].(string)
 	if agentID == "" {
-		log.Printf("PersistenceHandler: missing agent_id in agent started event")
+		logging.Warn("missing agent_id in agent started event", "component", "persistence")
 		return
 	}
 
@@ -174,9 +182,16 @@ func (h *PersistenceHandler) handleAgentStarted(event Event) {
 	}
 
 	if err := h.store.CreateAgent(agent); err != nil {
-		log.Printf("PersistenceHandler: failed to create agent %s: %v", agentID, err)
+		logging.Error("failed to create agent",
+			"agent_id", agentID,
+			"error", err,
+			"component", "persistence")
 	} else {
-		log.Printf("PersistenceHandler: persisted agent %s (task=%s, run=%s)", agentID, taskID, runID)
+		logging.Debug("persisted agent",
+			"agent_id", agentID,
+			"task_id", taskID,
+			"run_id", runID,
+			"component", "persistence")
 	}
 }
 
@@ -184,13 +199,13 @@ func (h *PersistenceHandler) handleAgentStarted(event Event) {
 func (h *PersistenceHandler) handleAgentCompleted(event Event) {
 	payload, ok := event.Payload.(map[string]interface{})
 	if !ok {
-		log.Printf("PersistenceHandler: invalid agent completed payload type")
+		logging.Warn("invalid agent completed payload type", "component", "persistence")
 		return
 	}
 
 	agentID, _ := payload["agent_id"].(string)
 	if agentID == "" {
-		log.Printf("PersistenceHandler: missing agent_id in agent completed event")
+		logging.Warn("missing agent_id in agent completed event", "component", "persistence")
 		return
 	}
 
@@ -245,9 +260,15 @@ func (h *PersistenceHandler) handleAgentCompleted(event Event) {
 	}
 
 	if err := h.store.UpdateAgent(agent); err != nil {
-		log.Printf("PersistenceHandler: failed to update agent %s: %v", agentID, err)
+		logging.Error("failed to update agent",
+			"agent_id", agentID,
+			"error", err,
+			"component", "persistence")
 	} else {
-		log.Printf("PersistenceHandler: updated agent %s (status=%s)", agentID, status)
+		logging.Debug("updated agent",
+			"agent_id", agentID,
+			"status", status,
+			"component", "persistence")
 	}
 }
 
@@ -255,13 +276,13 @@ func (h *PersistenceHandler) handleAgentCompleted(event Event) {
 func (h *PersistenceHandler) handleRunCompleted(event Event) {
 	payload, ok := event.Payload.(map[string]interface{})
 	if !ok {
-		log.Printf("PersistenceHandler: invalid run completed payload type")
+		logging.Warn("invalid run completed payload type", "component", "persistence")
 		return
 	}
 
 	runID, _ := payload["run_id"].(string)
 	if runID == "" {
-		log.Printf("PersistenceHandler: missing run_id in run completed event")
+		logging.Warn("missing run_id in run completed event", "component", "persistence")
 		return
 	}
 
@@ -316,9 +337,18 @@ func (h *PersistenceHandler) handleRunCompleted(event Event) {
 	}
 
 	if err := h.store.UpdateRun(run); err != nil {
-		log.Printf("PersistenceHandler: failed to update run %s: %v", runID, err)
+		logging.Error("failed to update run",
+			"run_id", runID,
+			"error", err,
+			"component", "persistence")
 	} else {
-		log.Printf("PersistenceHandler: updated run %s (status=%s, succeeded=%d, failed=%d, cost=$%.4f)", runID, status, succeededTasks, failedTasks, totalCostUSD)
+		logging.Info("run completed",
+			"run_id", runID,
+			"status", status,
+			"succeeded_tasks", succeededTasks,
+			"failed_tasks", failedTasks,
+			"cost_usd", totalCostUSD,
+			"component", "persistence")
 	}
 
 	// Clear current run ID

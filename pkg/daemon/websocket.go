@@ -2,10 +2,10 @@ package daemon
 
 import (
 	"encoding/json"
-	"log"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/jzila/canopy/pkg/logging"
 )
 
 const (
@@ -85,7 +85,7 @@ func (h *Hub) Run() {
 		// Marshal event to JSON
 		data, err := json.Marshal(event)
 		if err != nil {
-			log.Printf("Error marshaling event: %v", err)
+			logging.Error("error marshaling event", "error", err, "event_type", event.Type)
 			return
 		}
 		// Send to broadcast channel (non-blocking)
@@ -94,8 +94,9 @@ func (h *Hub) Run() {
 		default:
 			// Drop event if broadcast channel is full
 			h.droppedBroadcastEvents++
-			log.Printf("Warning: dropped event (type=%s) due to full broadcast channel (total dropped: %d)",
-				event.Type, h.droppedBroadcastEvents)
+			logging.Warn("dropped event due to full broadcast channel",
+				"event_type", event.Type,
+				"total_dropped", h.droppedBroadcastEvents)
 		}
 	})
 
@@ -120,8 +121,9 @@ func (h *Hub) Run() {
 					// Client's send buffer is full, close the connection
 					h.droppedClientMessages++
 					h.disconnectedSlowClients++
-					log.Printf("Warning: disconnecting slow client due to full send buffer (total dropped messages: %d, total disconnected: %d)",
-						h.droppedClientMessages, h.disconnectedSlowClients)
+					logging.Warn("disconnecting slow client due to full send buffer",
+						"dropped_messages", h.droppedClientMessages,
+						"disconnected_clients", h.disconnectedSlowClients)
 					close(client.send)
 					delete(h.clients, client)
 				}
@@ -179,7 +181,7 @@ func (c *Client) ReadPump() {
 		_, message, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("WebSocket error: %v", err)
+				logging.Warn("WebSocket error", "error", err)
 			}
 			break
 		}

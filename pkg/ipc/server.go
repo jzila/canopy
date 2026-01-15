@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"os"
 	"sync"
 	"time"
 
 	"github.com/jzila/canopy/pkg/events"
+	"github.com/jzila/canopy/pkg/logging"
 )
 
 // Server manages IPC connections from canopy run clients
@@ -102,7 +102,7 @@ func (s *Server) acceptLoop() {
 		connCount := len(s.connections)
 		s.mu.Unlock()
 
-		log.Printf("IPC: accepted connection from canopy run client (total: %d)", connCount)
+		logging.Debug("IPC accepted connection", "total_connections", connCount)
 
 		// Handle connection in goroutine
 		s.wg.Add(1)
@@ -132,27 +132,31 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 		// Enforce message size limit
 		if len(line) > MaxMessageSize {
-			log.Printf("IPC: message size %d exceeds maximum %d, dropping", len(line), MaxMessageSize)
+			logging.Warn("IPC message size exceeds maximum, dropping",
+				"size", len(line),
+				"max_size", MaxMessageSize)
 			continue
 		}
 
 		// Parse as RawMessage first to check version and payload size
 		var rawMsg RawMessage
 		if err := json.Unmarshal(line, &rawMsg); err != nil {
-			log.Printf("IPC: failed to parse message: %v", err)
+			logging.Warn("IPC failed to parse message", "error", err)
 			continue
 		}
 
 		// Enforce payload size limit
 		if len(rawMsg.Payload) > MaxPayloadSize {
-			log.Printf("IPC: payload size %d exceeds maximum %d, dropping", len(rawMsg.Payload), MaxPayloadSize)
+			logging.Warn("IPC payload size exceeds maximum, dropping",
+				"size", len(rawMsg.Payload),
+				"max_size", MaxPayloadSize)
 			continue
 		}
 
 		// Log protocol version for debugging (only for non-v1 messages)
 		version := rawMsg.ProtocolVersion()
 		if version > ProtocolVersion1 {
-			log.Printf("IPC: received v%d message type=%s", version, rawMsg.Type)
+			logging.Debug("IPC received message", "version", version, "type", rawMsg.Type)
 		}
 
 		// Convert RawMessage to Message for processing
@@ -165,34 +169,36 @@ func (s *Server) handleConnection(conn net.Conn) {
 		// Unmarshal payload into interface{} for convertToEvent
 		if len(rawMsg.Payload) > 0 {
 			if err := json.Unmarshal(rawMsg.Payload, &msg.Payload); err != nil {
-				log.Printf("IPC: failed to parse payload: %v", err)
+				logging.Warn("IPC failed to parse payload", "error", err)
 				continue
 			}
 		}
 
 		// Extract identifier for logging
 		identifier := s.extractIdentifier(&msg)
-		log.Printf("IPC: received message type=%s%s", msg.Type, identifier)
+		logging.Debug("IPC received message", "type", msg.Type, "identifier", identifier)
 
 		// Log agent completion events with pretty-printed JSON for readability
 		if msg.Type == MessageTypeAgentDone || msg.Type == MessageTypeAgentFail {
 			if formatted, err := FormatJSON(msg.Payload); err == nil {
-				log.Printf("IPC: %s payload:\n%s", msg.Type, IndentMultilineString(formatted, "  "))
+				logging.Debug("IPC agent completion payload",
+					"type", msg.Type,
+					"payload", IndentMultilineString(formatted, "  "))
 			}
 		}
 
 		// Convert and forward to EventBus
 		if event := s.convertToEvent(&msg); event != nil {
-			log.Printf("IPC: forwarding event type=%s%s to EventBus", event.Type, identifier)
+			logging.Debug("IPC forwarding event to EventBus", "event_type", event.Type, "identifier", identifier)
 			s.eventBus.Publish(*event)
 		} else {
-			log.Printf("IPC: warning - failed to convert message type=%s%s to event", msg.Type, identifier)
+			logging.Warn("IPC failed to convert message to event", "type", msg.Type, "identifier", identifier)
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
 		if err != io.EOF {
-			log.Printf("IPC: connection error: %v", err)
+			logging.Warn("IPC connection error", "error", err)
 		}
 	}
 }

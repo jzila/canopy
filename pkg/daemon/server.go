@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
-	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/jzila/canopy/pkg/logging"
 	"github.com/jzila/canopy/web"
 )
 
@@ -116,7 +116,7 @@ func (s *Server) Start() error {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	log.Printf("Starting HTTP server on port %d", s.port)
+	logging.Info("starting HTTP server", "port", s.port)
 
 	// Start server (blocking)
 	if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -128,7 +128,7 @@ func (s *Server) Start() error {
 
 // Stop gracefully shuts down the server
 func (s *Server) Stop() error {
-	log.Println("Shutting down HTTP server...")
+	logging.Debug("shutting down HTTP server")
 
 	// Create shutdown context with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -146,7 +146,7 @@ func (s *Server) Stop() error {
 		s.hub.Shutdown()
 	}
 
-	log.Println("HTTP server stopped")
+	logging.Debug("HTTP server stopped")
 	return nil
 }
 
@@ -317,7 +317,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Upgrade HTTP connection to WebSocket
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("WebSocket upgrade error: %v", err)
+		logging.Warn("WebSocket upgrade error", "error", err)
 		return
 	}
 
@@ -354,7 +354,7 @@ func (s *Server) sendInitialState(client *Client) {
 	// Marshal and send
 	data, err := json.Marshal(event)
 	if err != nil {
-		log.Printf("Error marshaling initial state: %v", err)
+		logging.Error("error marshaling initial state", "error", err)
 		return
 	}
 
@@ -362,7 +362,7 @@ func (s *Server) sendInitialState(client *Client) {
 	select {
 	case client.send <- data:
 	default:
-		log.Printf("Warning: could not send initial state to client (buffer full)")
+		logging.Warn("could not send initial state to client (buffer full)")
 	}
 }
 

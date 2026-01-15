@@ -21,12 +21,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/jzila/canopy/pkg/logging"
 )
 
 const (
@@ -114,7 +115,7 @@ func NewStore() (*Store, error) {
 	oldDir, err := oldDataDir()
 	if err == nil && oldDir != newDir {
 		if err := migrateHistory(oldDir, newDir); err != nil {
-			log.Printf("Warning: failed to migrate history: %v", err)
+			logging.Warn("failed to migrate history", "error", err)
 		}
 	}
 
@@ -224,7 +225,7 @@ func migrateHistory(oldDir, newDir string) error {
 		return fmt.Errorf("migration incomplete: copied %d of %d files", copiedCount, len(oldRunFiles))
 	}
 
-	log.Printf("Migrated %d history files from %s to %s", copiedCount, oldHistoryDir, newHistoryDir)
+	logging.Info("migrated history files", "count", copiedCount, "from", oldHistoryDir, "to", newHistoryDir)
 	return nil
 }
 
