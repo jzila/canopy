@@ -67,6 +67,16 @@ type Run struct {
 	DurationSeconds      float64 `json:"duration_seconds"`
 }
 
+// MergeStatus represents the final merge status of an agent's changes
+type MergeStatus string
+
+const (
+	MergeStatusNone     MergeStatus = ""         // Not yet merged or no changes
+	MergeStatusMerged   MergeStatus = "merged"   // Successfully merged
+	MergeStatusFailed   MergeStatus = "failed"   // Merge failed
+	MergeStatusResolved MergeStatus = "resolved" // Merged after conflict resolution
+)
+
 // Agent represents a single agent execution within a run
 type Agent struct {
 	ID                  string      `json:"id"`
@@ -93,6 +103,12 @@ type Agent struct {
 	ResultMessage       string      `json:"result_message,omitempty"`
 	RepoID              string      `json:"repo_id,omitempty"`
 	Archived            bool        `json:"archived"`
+	// Merge result fields
+	MergeStatus         MergeStatus `json:"mergeStatus,omitempty"`
+	MergeCommitsApplied int         `json:"mergeCommitsApplied"`
+	MergeHadConflict    bool        `json:"mergeHadConflict"`
+	MergeResolverSpawned bool       `json:"mergeResolverSpawned"`
+	MergeError          string      `json:"mergeError,omitempty"`
 }
 
 // RunFilter specifies criteria for querying runs
@@ -280,8 +296,8 @@ func (t *Tx) CreateRun(run *Run) error {
 // CreateAgent creates a new agent record within the transaction.
 func (t *Tx) CreateAgent(agent *Agent) error {
 	query := `
-		INSERT INTO agents (id, run_id, task_id, task_title, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO agents (id, run_id, task_id, task_title, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived, merge_status, merge_commits_applied, merge_had_conflict, merge_resolver_spawned, merge_error)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	var finishedAt *int64
 	if agent.FinishedAt != nil {
@@ -313,6 +329,11 @@ func (t *Tx) CreateAgent(agent *Agent) error {
 		agent.ResultMessage,
 		nullString(agent.RepoID),
 		boolToInt(agent.Archived),
+		nullString(string(agent.MergeStatus)),
+		agent.MergeCommitsApplied,
+		boolToInt(agent.MergeHadConflict),
+		boolToInt(agent.MergeResolverSpawned),
+		nullString(agent.MergeError),
 	)
 	return err
 }
@@ -547,8 +568,8 @@ func (s *Store) ListRuns(filter RunFilter) (*RunListResult, error) {
 // CreateAgent creates a new agent record
 func (s *Store) CreateAgent(agent *Agent) error {
 	query := `
-		INSERT INTO agents (id, run_id, task_id, task_title, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO agents (id, run_id, task_id, task_title, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived, merge_status, merge_commits_applied, merge_had_conflict, merge_resolver_spawned, merge_error)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	var finishedAt *int64
 	if agent.FinishedAt != nil {
@@ -580,6 +601,11 @@ func (s *Store) CreateAgent(agent *Agent) error {
 		agent.ResultMessage,
 		nullString(agent.RepoID),
 		boolToInt(agent.Archived),
+		nullString(string(agent.MergeStatus)),
+		agent.MergeCommitsApplied,
+		boolToInt(agent.MergeHadConflict),
+		boolToInt(agent.MergeResolverSpawned),
+		nullString(agent.MergeError),
 	)
 	return err
 }
@@ -613,7 +639,12 @@ func (s *Store) UpdateAgent(agent *Agent) error {
 			git_commits_created = ?,
 			num_turns = ?,
 			result_message = ?,
-			archived = ?
+			archived = ?,
+			merge_status = ?,
+			merge_commits_applied = ?,
+			merge_had_conflict = ?,
+			merge_resolver_spawned = ?,
+			merge_error = ?
 		WHERE id = ?
 	`
 	var finishedAt *int64
@@ -640,6 +671,11 @@ func (s *Store) UpdateAgent(agent *Agent) error {
 		agent.NumTurns,
 		agent.ResultMessage,
 		boolToInt(agent.Archived),
+		nullString(string(agent.MergeStatus)),
+		agent.MergeCommitsApplied,
+		boolToInt(agent.MergeHadConflict),
+		boolToInt(agent.MergeResolverSpawned),
+		nullString(agent.MergeError),
 		agent.ID,
 	)
 	return err
@@ -652,8 +688,30 @@ func (s *Store) SetAgentArchived(agentID string, archived bool) error {
 	return err
 }
 
+// UpdateAgentMergeResult updates only the merge result fields of an agent
+func (s *Store) UpdateAgentMergeResult(agentID string, mergeStatus MergeStatus, commitsApplied int, hadConflict, resolverSpawned bool, mergeError string) error {
+	query := `
+		UPDATE agents SET
+			merge_status = ?,
+			merge_commits_applied = ?,
+			merge_had_conflict = ?,
+			merge_resolver_spawned = ?,
+			merge_error = ?
+		WHERE id = ?
+	`
+	_, err := s.db.Exec(query,
+		nullString(string(mergeStatus)),
+		commitsApplied,
+		boolToInt(hadConflict),
+		boolToInt(resolverSpawned),
+		nullString(mergeError),
+		agentID,
+	)
+	return err
+}
+
 // agentColumns lists all columns for agent queries
-const agentColumns = `id, run_id, task_id, task_title, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived`
+const agentColumns = `id, run_id, task_id, task_title, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived, merge_status, merge_commits_applied, merge_had_conflict, merge_resolver_spawned, merge_error`
 
 // GetAgent retrieves an agent by ID
 func (s *Store) GetAgent(id string) (*Agent, error) {
@@ -1177,6 +1235,8 @@ func (s *Store) scanAgent(row *sql.Row) (*Agent, error) {
 	var status string
 	var errorMessage, stdout, stderr, resultMessage, repoID sql.NullString
 	var archived sql.NullInt64
+	var mergeStatus, mergeError sql.NullString
+	var mergeCommitsApplied, mergeHadConflict, mergeResolverSpawned sql.NullInt64
 
 	err := row.Scan(
 		&agent.ID,
@@ -1203,6 +1263,11 @@ func (s *Store) scanAgent(row *sql.Row) (*Agent, error) {
 		&resultMessage,
 		&repoID,
 		&archived,
+		&mergeStatus,
+		&mergeCommitsApplied,
+		&mergeHadConflict,
+		&mergeResolverSpawned,
+		&mergeError,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -1227,6 +1292,11 @@ func (s *Store) scanAgent(row *sql.Row) (*Agent, error) {
 	agent.ResultMessage = resultMessage.String
 	agent.RepoID = repoID.String
 	agent.Archived = archived.Valid && archived.Int64 == 1
+	agent.MergeStatus = MergeStatus(mergeStatus.String)
+	agent.MergeCommitsApplied = int(mergeCommitsApplied.Int64)
+	agent.MergeHadConflict = mergeHadConflict.Valid && mergeHadConflict.Int64 == 1
+	agent.MergeResolverSpawned = mergeResolverSpawned.Valid && mergeResolverSpawned.Int64 == 1
+	agent.MergeError = mergeError.String
 
 	return &agent, nil
 }
@@ -1238,6 +1308,8 @@ func (s *Store) scanAgentFromRows(rows *sql.Rows) (*Agent, error) {
 	var status string
 	var errorMessage, stdout, stderr, resultMessage, repoID sql.NullString
 	var archived sql.NullInt64
+	var mergeStatus, mergeError sql.NullString
+	var mergeCommitsApplied, mergeHadConflict, mergeResolverSpawned sql.NullInt64
 
 	err := rows.Scan(
 		&agent.ID,
@@ -1264,6 +1336,11 @@ func (s *Store) scanAgentFromRows(rows *sql.Rows) (*Agent, error) {
 		&resultMessage,
 		&repoID,
 		&archived,
+		&mergeStatus,
+		&mergeCommitsApplied,
+		&mergeHadConflict,
+		&mergeResolverSpawned,
+		&mergeError,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan agent: %w", err)
@@ -1285,6 +1362,11 @@ func (s *Store) scanAgentFromRows(rows *sql.Rows) (*Agent, error) {
 	agent.ResultMessage = resultMessage.String
 	agent.Archived = archived.Valid && archived.Int64 == 1
 	agent.RepoID = repoID.String
+	agent.MergeStatus = MergeStatus(mergeStatus.String)
+	agent.MergeCommitsApplied = int(mergeCommitsApplied.Int64)
+	agent.MergeHadConflict = mergeHadConflict.Valid && mergeHadConflict.Int64 == 1
+	agent.MergeResolverSpawned = mergeResolverSpawned.Valid && mergeResolverSpawned.Int64 == 1
+	agent.MergeError = mergeError.String
 
 	return &agent, nil
 }

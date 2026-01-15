@@ -154,6 +154,22 @@ func (c *Client) SendAgentMergeStatus(agentID string, status MergeStatus, queueP
 	return c.sendMessage(MessageTypeAgentMergeStatus, payload)
 }
 
+// SendAgentMergeStatusFull notifies the daemon of an agent's merge queue status with full details.
+// This should be used for final statuses (merged/failed) to include commit and conflict information.
+func (c *Client) SendAgentMergeStatusFull(agentID string, status MergeStatus, queuePos int, errMsg string, commitsApplied int, hadConflict, resolverSpawned bool) error {
+	payload := AgentMergeStatusPayload{
+		AgentID:         agentID,
+		MergeStatus:     status,
+		QueuePos:        queuePos,
+		Error:           errMsg,
+		CommitsApplied:  commitsApplied,
+		HadConflict:     hadConflict,
+		ResolverSpawned: resolverSpawned,
+	}
+
+	return c.sendMessage(MessageTypeAgentMergeStatus, payload)
+}
+
 // SendAgentDone notifies the daemon that an agent completed successfully
 // parentAgentID is optional and specifies the ID of the parent agent if this agent was spawned by another
 func (c *Client) SendAgentDone(agentID, parentAgentID string, result *AgentResult) error {

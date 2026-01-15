@@ -43,6 +43,8 @@ func (h *PersistenceHandler) handleEvent(event Event) {
 		h.handleRunStarted(event)
 	case EventAgentStarted:
 		h.handleAgentStarted(event)
+	case EventAgentMergeStatus:
+		h.handleAgentMergeStatus(event)
 	case EventAgentCompleted:
 		h.handleAgentCompleted(event)
 	case EventRunCompleted:
@@ -89,6 +91,52 @@ func (h *PersistenceHandler) handleRunStarted(event Event) {
 		log.Printf("PersistenceHandler: failed to create run %s: %v", runID, err)
 	} else {
 		log.Printf("PersistenceHandler: persisted run %s (tasks=%d)", runID, taskCount)
+	}
+}
+
+// handleAgentMergeStatus updates the merge result fields when merge completes.
+// We only persist final merge statuses (merged or failed) to avoid noise from
+// intermediate statuses (pending, merging, resolving).
+func (h *PersistenceHandler) handleAgentMergeStatus(event Event) {
+	payload, ok := event.Payload.(map[string]interface{})
+	if !ok {
+		log.Printf("PersistenceHandler: invalid agent merge status payload type")
+		return
+	}
+
+	agentID, _ := payload["agent_id"].(string)
+	if agentID == "" {
+		log.Printf("PersistenceHandler: missing agent_id in agent merge status event")
+		return
+	}
+
+	mergeStatus, _ := payload["merge_status"].(string)
+	mergeErr, _ := payload["error"].(string)
+
+	// Only persist final merge statuses
+	if mergeStatus != "merged" && mergeStatus != "failed" {
+		return
+	}
+
+	// Map IPC merge status to persistence merge status
+	var persistMergeStatus persistence.MergeStatus
+	switch mergeStatus {
+	case "merged":
+		persistMergeStatus = persistence.MergeStatusMerged
+	case "failed":
+		persistMergeStatus = persistence.MergeStatusFailed
+	}
+
+	// Extract merge result details from payload
+	commitsApplied, _ := getIntFromPayload(payload, "commits_applied")
+	hadConflict, _ := payload["had_conflict"].(bool)
+	resolverSpawned, _ := payload["resolver_spawned"].(bool)
+
+	if err := h.store.UpdateAgentMergeResult(agentID, persistMergeStatus, commitsApplied, hadConflict, resolverSpawned, mergeErr); err != nil {
+		log.Printf("PersistenceHandler: failed to update merge result for agent %s: %v", agentID, err)
+	} else {
+		log.Printf("PersistenceHandler: updated merge result for agent %s (status=%s, commits=%d, conflict=%v, resolver=%v)",
+			agentID, mergeStatus, commitsApplied, hadConflict, resolverSpawned)
 	}
 }
 

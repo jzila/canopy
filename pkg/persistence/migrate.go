@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-const currentSchemaVersion = 5
+const currentSchemaVersion = 6
 
 // migrate runs all pending database migrations
 func (s *Store) migrate() error {
@@ -63,6 +63,10 @@ func (s *Store) runMigration(version int) error {
 		}
 	case 5:
 		if err := s.migrateV5(tx); err != nil {
+			return err
+		}
+	case 6:
+		if err := s.migrateV6(tx); err != nil {
 			return err
 		}
 	default:
@@ -200,6 +204,26 @@ func (s *Store) migrateV5(tx *sql.Tx) error {
 		// Add num_turns and result_message
 		`ALTER TABLE agents ADD COLUMN num_turns INTEGER DEFAULT 0`,
 		`ALTER TABLE agents ADD COLUMN result_message TEXT`,
+	}
+
+	for _, m := range migrations {
+		if _, err := tx.Exec(m); err != nil {
+			return fmt.Errorf("failed to execute migration: %s: %w", m, err)
+		}
+	}
+
+	return nil
+}
+
+// migrateV6 adds merge result tracking fields to agents table
+func (s *Store) migrateV6(tx *sql.Tx) error {
+	migrations := []string{
+		// Add merge result fields to agents table
+		`ALTER TABLE agents ADD COLUMN merge_status TEXT`,         // Final merge status (merged, failed, etc.)
+		`ALTER TABLE agents ADD COLUMN merge_commits_applied INTEGER DEFAULT 0`, // Number of commits applied
+		`ALTER TABLE agents ADD COLUMN merge_had_conflict INTEGER DEFAULT 0`,    // Whether conflict occurred (bool)
+		`ALTER TABLE agents ADD COLUMN merge_resolver_spawned INTEGER DEFAULT 0`, // Whether resolver was spawned (bool)
+		`ALTER TABLE agents ADD COLUMN merge_error TEXT`,          // Error message if merge failed
 	}
 
 	for _, m := range migrations {
