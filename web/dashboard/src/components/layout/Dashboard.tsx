@@ -306,28 +306,46 @@ export const Dashboard: React.FC = () => {
   }, [agentList, statusFilter, showArchivedAgents, activeRunId]);
 
   // Group agents by parent/child relationships
-  // Returns parent agents with their children, excluding standalone child agents
+  // Returns parent agents with their children
+  // Orphaned children (whose parent is filtered out) are shown as standalone cards
   const groupedAgents = useMemo(() => {
-    // Build a map of parent_id -> children
+    // Build a set of filtered agent IDs for quick lookup
+    const filteredIds = new Set(filteredAgents.map(a => a.id));
+
+    // Build a map of parent_id -> children (only for filtered children)
     const childrenByParent = new Map<string, AgentState[]>();
-    const childIds = new Set<string>();
+    const orphanedChildren: AgentState[] = [];
 
     for (const agent of filteredAgents) {
       if (agent.parent_agent_id) {
-        childIds.add(agent.id);
-        const siblings = childrenByParent.get(agent.parent_agent_id) || [];
-        siblings.push(agent);
-        childrenByParent.set(agent.parent_agent_id, siblings);
+        // Check if parent is in filtered set
+        if (filteredIds.has(agent.parent_agent_id)) {
+          // Parent is visible, group with parent
+          const siblings = childrenByParent.get(agent.parent_agent_id) || [];
+          siblings.push(agent);
+          childrenByParent.set(agent.parent_agent_id, siblings);
+        } else {
+          // Parent is filtered out, show child as standalone
+          orphanedChildren.push(agent);
+        }
       }
     }
 
-    // Return parent agents (those without parent_agent_id) with their children
-    return filteredAgents
-      .filter(agent => !agent.parent_agent_id) // Only top-level agents
+    // Get parent agents (those without parent_agent_id) with their children
+    const parentGroups = filteredAgents
+      .filter(agent => !agent.parent_agent_id)
       .map(parent => ({
         parent,
         children: childrenByParent.get(parent.id) || [],
       }));
+
+    // Add orphaned children as standalone cards (no children of their own)
+    const orphanGroups = orphanedChildren.map(orphan => ({
+      parent: orphan,
+      children: [],
+    }));
+
+    return [...parentGroups, ...orphanGroups];
   }, [filteredAgents]);
 
   const handleAgentArchiveToggle = (agentId: string, archived: boolean) => {
