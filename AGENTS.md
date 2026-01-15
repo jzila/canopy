@@ -100,6 +100,16 @@ When defining API types that cross the Go/TypeScript boundary:
 
 4. **Rebuild dashboard after API changes**: Run `cd web/dashboard && npm run build` to catch TypeScript errors early.
 
+## Dashboard (web/dashboard) TypeScript
+
+**Never run `tsc` directly** in `web/dashboard`. Vite handles all transpilation.
+
+- **Type checking**: `npm run type-check` (runs `tsc --noEmit`)
+- **Building**: `npm run build` (type-checks then Vite builds)
+- **Development**: `npm run dev` (Vite dev server)
+
+Running raw `tsc` without `--noEmit` generates `.js`, `.d.ts`, and `.map` files in `src/` which pollute the working directory. These are gitignored but cause issues with overlay change detection.
+
 ## Persistence Invariant
 
 **ALL canopy persistence MUST live at `$XDG_CACHE_HOME/canopy/` or `~/.cache/canopy/`.**
