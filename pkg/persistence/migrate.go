@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-const currentSchemaVersion = 7
+const currentSchemaVersion = 8
 
 // migrate runs all pending database migrations
 func (s *Store) migrate() error {
@@ -71,6 +71,10 @@ func (s *Store) runMigration(version int) error {
 		}
 	case 7:
 		if err := s.migrateV7(tx); err != nil {
+			return err
+		}
+	case 8:
+		if err := s.migrateV8(tx); err != nil {
 			return err
 		}
 	default:
@@ -252,6 +256,37 @@ func (s *Store) migrateV7(tx *sql.Tx) error {
 		if _, err := tx.Exec(m); err != nil {
 			return fmt.Errorf("failed to execute migration: %s: %w", m, err)
 		}
+	}
+
+	return nil
+}
+
+// migrateV8 backfills parent_agent_id for existing resolver agents
+// Resolver agents have IDs ending in "-resolver" and share the same task_id as their parent
+func (s *Store) migrateV8(tx *sql.Tx) error {
+	// Find all resolver agents that don't have a parent_agent_id set
+	// and match them with their parent agent in the same run by task_id
+	//
+	// Resolver agent convention: ID = "{taskID}-resolver" and task_id = original task_id
+	// Parent agent: same run_id and task_id, but ID doesn't end in "-resolver"
+	backfillSQL := `
+		UPDATE agents
+		SET parent_agent_id = (
+			SELECT parent.id
+			FROM agents parent
+			WHERE parent.run_id = agents.run_id
+			  AND parent.task_id = agents.task_id
+			  AND parent.id != agents.id
+			  AND parent.id NOT LIKE '%-resolver'
+			LIMIT 1
+		)
+		WHERE agents.id LIKE '%-resolver'
+		  AND (agents.parent_agent_id IS NULL OR agents.parent_agent_id = '')
+	`
+
+	_, err := tx.Exec(backfillSQL)
+	if err != nil {
+		return fmt.Errorf("failed to backfill parent_agent_id: %w", err)
 	}
 
 	return nil

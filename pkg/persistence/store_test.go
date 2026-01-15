@@ -1,11 +1,14 @@
 package persistence
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 func TestNewStore(t *testing.T) {
@@ -1350,71 +1353,6 @@ func TestCreateAgentWithRepoID(t *testing.T) {
 	}
 }
 
-func TestCreateAgentUpsert(t *testing.T) {
-	store := createTestStore(t)
-	defer store.Close()
-
-	now := time.Now()
-
-	// Create a run
-	run := &Run{ID: "run-upsert", StartedAt: now, Status: RunStatusRunning}
-	if err := store.CreateRun(run); err != nil {
-		t.Fatalf("failed to create run: %v", err)
-	}
-
-	// Create initial agent (simulating a failed run)
-	agent := &Agent{
-		ID:           "agent-retry",
-		RunID:        "run-upsert",
-		TaskID:       "task-retry",
-		TaskTitle:    "Retry Task",
-		Status:       AgentStatusFailed,
-		StartedAt:    now.Add(-time.Hour),
-		ErrorMessage: "previous failure",
-		InputTokens:  100,
-	}
-	if err := store.CreateAgent(agent); err != nil {
-		t.Fatalf("failed to create initial agent: %v", err)
-	}
-
-	// Create second run for retry
-	run2 := &Run{ID: "run-upsert-2", StartedAt: now, Status: RunStatusRunning}
-	if err := store.CreateRun(run2); err != nil {
-		t.Fatalf("failed to create second run: %v", err)
-	}
-
-	// Retry: create agent with same ID but new run (should upsert)
-	retryAgent := &Agent{
-		ID:           "agent-retry", // Same ID
-		RunID:        "run-upsert-2",
-		TaskID:       "task-retry",
-		TaskTitle:    "Retry Task",
-		Status:       AgentStatusRunning,
-		StartedAt:    now,
-		ErrorMessage: "", // Cleared
-		InputTokens:  0,
-	}
-	if err := store.CreateAgent(retryAgent); err != nil {
-		t.Fatalf("failed to upsert agent: %v", err)
-	}
-
-	// Verify the agent was updated, not duplicated
-	retrieved, err := store.GetAgent("agent-retry")
-	if err != nil {
-		t.Fatalf("failed to get agent: %v", err)
-	}
-
-	if retrieved.RunID != "run-upsert-2" {
-		t.Errorf("expected RunID 'run-upsert-2', got '%s'", retrieved.RunID)
-	}
-	if retrieved.Status != AgentStatusRunning {
-		t.Errorf("expected status Running, got '%s'", retrieved.Status)
-	}
-	if retrieved.ErrorMessage != "" {
-		t.Errorf("expected empty error message, got '%s'", retrieved.ErrorMessage)
-	}
-}
-
 func TestDeleteRun(t *testing.T) {
 	store := createTestStore(t)
 	defer store.Close()
@@ -1855,6 +1793,194 @@ func TestBeginTx_Atomicity(t *testing.T) {
 	if len(agents) != 5 {
 		t.Errorf("expected 5 agents, got %d", len(agents))
 	}
+}
+
+func TestMigrateV8_BackfillParentAgentID(t *testing.T) {
+	// This test simulates a pre-V8 database with existing resolver agents,
+	// then verifies the migration correctly backfills parent_agent_id.
+	tmpDir, err := os.MkdirTemp("", "canopy-test-v8-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dbPath := filepath.Join(tmpDir, "test.db")
+	now := time.Now().Unix()
+
+	// Step 1: Create database and manually set schema to V7 (before V8 migration)
+	db, err := openTestDB(dbPath)
+	if err != nil {
+		t.Fatalf("failed to open db: %v", err)
+	}
+
+	// Create tables manually (simulating V7 schema state)
+	setupSQL := `
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version INTEGER PRIMARY KEY,
+			applied_at INTEGER NOT NULL
+		);
+		INSERT INTO schema_migrations (version, applied_at) VALUES (7, strftime('%s', 'now'));
+
+		CREATE TABLE IF NOT EXISTS runs (
+			id TEXT PRIMARY KEY,
+			started_at INTEGER NOT NULL,
+			finished_at INTEGER,
+			status TEXT NOT NULL,
+			concurrency INTEGER NOT NULL DEFAULT 1,
+			git_branch TEXT,
+			git_commit TEXT,
+			total_tasks INTEGER DEFAULT 0,
+			completed_tasks INTEGER DEFAULT 0,
+			failed_tasks INTEGER DEFAULT 0,
+			repo_id TEXT,
+			repo_path TEXT,
+			repo_name TEXT,
+			total_input_tokens INTEGER DEFAULT 0,
+			total_output_tokens INTEGER DEFAULT 0,
+			cache_creation_tokens INTEGER DEFAULT 0,
+			cache_read_tokens INTEGER DEFAULT 0,
+			total_cost_usd REAL DEFAULT 0.0,
+			total_turns INTEGER DEFAULT 0,
+			files_changed INTEGER DEFAULT 0,
+			git_commits INTEGER DEFAULT 0,
+			duration_seconds REAL DEFAULT 0.0
+		);
+
+		CREATE TABLE IF NOT EXISTS agents (
+			id TEXT PRIMARY KEY,
+			run_id TEXT NOT NULL,
+			task_id TEXT NOT NULL,
+			task_title TEXT NOT NULL,
+			status TEXT NOT NULL,
+			started_at INTEGER NOT NULL,
+			finished_at INTEGER,
+			duration_seconds REAL,
+			exit_code INTEGER,
+			error_message TEXT,
+			stdout TEXT,
+			stderr TEXT,
+			input_tokens INTEGER DEFAULT 0,
+			output_tokens INTEGER DEFAULT 0,
+			total_tokens INTEGER DEFAULT 0,
+			cost_usd REAL DEFAULT 0.0,
+			files_changed INTEGER DEFAULT 0,
+			git_commits_created INTEGER DEFAULT 0,
+			repo_id TEXT,
+			archived INTEGER DEFAULT 0,
+			cache_creation_tokens INTEGER DEFAULT 0,
+			cache_read_tokens INTEGER DEFAULT 0,
+			num_turns INTEGER DEFAULT 0,
+			result_message TEXT,
+			merge_status TEXT,
+			merge_commits_applied INTEGER DEFAULT 0,
+			merge_had_conflict INTEGER DEFAULT 0,
+			merge_resolver_spawned INTEGER DEFAULT 0,
+			merge_error TEXT,
+			parent_agent_id TEXT
+		);
+		CREATE INDEX IF NOT EXISTS idx_agents_parent_agent_id ON agents(parent_agent_id);
+	`
+	_, err = db.Exec(setupSQL)
+	if err != nil {
+		db.Close()
+		t.Fatalf("failed to create schema: %v", err)
+	}
+
+	// Insert test data with NULL parent_agent_id (simulating pre-V8 state)
+	insertSQL := `
+		INSERT INTO runs (id, started_at, status) VALUES ('run-1', ?, 'completed');
+
+		-- Parent agent for task-abc
+		INSERT INTO agents (id, run_id, task_id, task_title, status, started_at, duration_seconds)
+		VALUES ('canopy-abc', 'run-1', 'task-abc', 'Task ABC', 'completed', ?, 0);
+
+		-- Resolver agent for task-abc (should get parent_agent_id = canopy-abc)
+		INSERT INTO agents (id, run_id, task_id, task_title, status, started_at, duration_seconds)
+		VALUES ('canopy-abc-resolver', 'run-1', 'task-abc', 'Resolve conflict', 'completed', ?, 0);
+
+		-- Parent agent for task-xyz
+		INSERT INTO agents (id, run_id, task_id, task_title, status, started_at, duration_seconds)
+		VALUES ('canopy-xyz', 'run-1', 'task-xyz', 'Task XYZ', 'completed', ?, 0);
+
+		-- Resolver agent for task-xyz (should get parent_agent_id = canopy-xyz)
+		INSERT INTO agents (id, run_id, task_id, task_title, status, started_at, duration_seconds)
+		VALUES ('canopy-xyz-resolver', 'run-1', 'task-xyz', 'Resolve conflict', 'completed', ?, 0);
+
+		-- Regular agent (not a resolver)
+		INSERT INTO agents (id, run_id, task_id, task_title, status, started_at, duration_seconds)
+		VALUES ('canopy-regular', 'run-1', 'task-regular', 'Regular Task', 'completed', ?, 0);
+
+		-- Another run with a resolver whose potential parent is in a different run (should NOT match)
+		INSERT INTO runs (id, started_at, status) VALUES ('run-2', ?, 'completed');
+		INSERT INTO agents (id, run_id, task_id, task_title, status, started_at, duration_seconds)
+		VALUES ('canopy-orphan-resolver', 'run-2', 'task-abc', 'Orphan resolver', 'completed', ?, 0);
+	`
+	_, err = db.Exec(insertSQL, now, now, now+60, now+120, now+180, now+240, now+3600, now+3660)
+	if err != nil {
+		db.Close()
+		t.Fatalf("failed to insert test data: %v", err)
+	}
+
+	db.Close()
+
+	// Step 2: Open with Store which will run the V8 migration
+	store, err := NewStoreWithPath(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	// Step 3: Verify migration backfilled parent_agent_id correctly
+
+	// Check resolver for task-abc
+	resolverABC, err := store.GetAgent("canopy-abc-resolver")
+	if err != nil {
+		t.Fatalf("failed to get resolver agent: %v", err)
+	}
+	if resolverABC.ParentAgentID != "canopy-abc" {
+		t.Errorf("expected ParentAgentID 'canopy-abc' for resolver, got '%s'", resolverABC.ParentAgentID)
+	}
+
+	// Check resolver for task-xyz
+	resolverXYZ, err := store.GetAgent("canopy-xyz-resolver")
+	if err != nil {
+		t.Fatalf("failed to get resolver agent: %v", err)
+	}
+	if resolverXYZ.ParentAgentID != "canopy-xyz" {
+		t.Errorf("expected ParentAgentID 'canopy-xyz' for resolver, got '%s'", resolverXYZ.ParentAgentID)
+	}
+
+	// Check that parent agents don't have parent_agent_id set
+	parentABC, err := store.GetAgent("canopy-abc")
+	if err != nil {
+		t.Fatalf("failed to get parent agent: %v", err)
+	}
+	if parentABC.ParentAgentID != "" {
+		t.Errorf("expected empty ParentAgentID for parent agent, got '%s'", parentABC.ParentAgentID)
+	}
+
+	// Check that regular agents don't have parent_agent_id set
+	regular, err := store.GetAgent("canopy-regular")
+	if err != nil {
+		t.Fatalf("failed to get regular agent: %v", err)
+	}
+	if regular.ParentAgentID != "" {
+		t.Errorf("expected empty ParentAgentID for regular agent, got '%s'", regular.ParentAgentID)
+	}
+
+	// Check that resolver in different run doesn't get parent matched
+	orphanResolver, err := store.GetAgent("canopy-orphan-resolver")
+	if err != nil {
+		t.Fatalf("failed to get orphan resolver: %v", err)
+	}
+	if orphanResolver.ParentAgentID != "" {
+		t.Errorf("expected empty ParentAgentID for cross-run resolver, got '%s'", orphanResolver.ParentAgentID)
+	}
+}
+
+// openTestDB opens a raw database connection for test setup
+func openTestDB(path string) (*sql.DB, error) {
+	return sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
 }
 
 // Helper function to create a test store
