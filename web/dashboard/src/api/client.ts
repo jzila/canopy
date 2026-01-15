@@ -1,4 +1,4 @@
-import type { RuntimeState, AgentState, TaskState, Stats } from '../stores/appStore';
+import type { RuntimeState, AgentState, TaskState, Stats } from '../stores/stateStore';
 
 const API_BASE = 'http://localhost:8080';
 
