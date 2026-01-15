@@ -638,6 +638,117 @@ func (o *Orchestrator) handleConflict(conflict *merge.Conflict) error {
 
 ---
 
+## Process Hierarchy and IPC Design
+
+### Process Hierarchy
+
+Agents are managed as child processes of their orchestrator using Unix process groups:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                           Daemon                                 │
+│                (long-running, started once)                     │
+│                              │                                   │
+│                    IPC (Unix socket)                            │
+│                              │                                   │
+└──────────────────────────────┼──────────────────────────────────┘
+                               ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                        Orchestrator                               │
+│               (one per canopy run invocation)                    │
+│                              │                                   │
+│              ┌───────────────┼───────────────┐                   │
+│              │               │               │                   │
+│              ▼               ▼               ▼                   │
+│         [Agent 1]       [Agent 2]       [Agent N]                │
+│      (PGID=PID_1)    (PGID=PID_2)    (PGID=PID_N)               │
+│              │               │               │                   │
+│              ▼               ▼               ▼                   │
+│     (child procs)    (child procs)    (child procs)             │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**Key design decisions:**
+
+1. **Process Groups** (`Setpgid: true`): Each agent spawns in its own process group. This enables clean termination of the agent and all its child processes (e.g., subprocess spawned by Claude).
+
+2. **Parent Death Signal** (`Pdeathsig: SIGKILL`): If the orchestrator crashes unexpectedly, all agents receive SIGKILL immediately. This prevents orphaned agent processes consuming resources without supervision.
+
+3. **Graceful Shutdown**: On context cancellation (SIGINT/SIGTERM to orchestrator), agents receive SIGTERM to their process group, wait up to 3 seconds for graceful exit, then SIGKILL if still running.
+
+```go
+// Termination sequence:
+// 1. Context cancelled (timeout, SIGINT, or SIGTERM)
+// 2. SIGTERM sent to -PGID (negative = process group)
+// 3. Wait up to 3 seconds for exit
+// 4. SIGKILL sent to -PGID if still running
+```
+
+### Agent-Orchestrator Communication
+
+Communication is one-way: agent → orchestrator via stdout streaming:
+
+```
+┌─────────────┐                      ┌─────────────────┐
+│    Agent    │ ────── stdout ─────► │  Orchestrator   │
+│  (claude)   │                      │                 │
+│             │ ◄───── (none) ────── │  (no input)     │
+│             │                      │                 │
+│             │ ◄─── SIGTERM/KILL ── │  (cancellation) │
+└─────────────┘                      └─────────────────┘
+```
+
+**Design rationale:**
+
+- **No bidirectional IPC**: Agents are black-box CLI executions. The orchestrator doesn't send instructions mid-execution.
+- **Cancellation via signals**: Process termination is the only communication to agents. No message-based cancellation protocol.
+- **Security boundary**: Agents may run sandboxed (bubblewrap) and should be treated as potentially untrusted. They have no access to daemon sockets or orchestrator state.
+
+### Agent-Daemon Isolation
+
+Agents have zero knowledge of the daemon:
+
+```
+Agent process:
+├── No IPC_SOCKET_PATH in environment
+├── No daemon URLs or addresses
+├── Filtered environment (only ANTHROPIC_*, PATH, etc.)
+└── Sandboxed working directory (OverlayFS)
+
+All status flows:
+Agent → stdout → Orchestrator → IPC → Daemon → WebSocket → Dashboard
+```
+
+This isolation provides:
+- **Security**: Agents cannot interfere with orchestration
+- **Simplicity**: Agents are stateless command executions
+- **Portability**: Agent execution doesn't depend on daemon availability
+
+### Daemon Restart Resilience
+
+The orchestrator-daemon connection handles daemon restarts:
+
+```go
+// IPC Client reconnection behavior:
+// - Queue up to 10,000 messages during disconnection
+// - Exponential backoff: 100ms → 200ms → ... → 5s
+// - Retry for up to 5 minutes before giving up
+// - Flush queued messages on reconnection
+```
+
+If the daemon restarts:
+1. Orchestrator queues outgoing IPC messages
+2. Reconnection attempts with exponential backoff
+3. On reconnection, queued messages flush in order
+4. No message loss during brief daemon outages
+
+If the daemon is unreachable for >5 minutes:
+1. IPC client enters "disconnected" state
+2. Orchestrator continues execution (logging to stderr)
+3. Dashboard will be out of date until daemon returns
+
+---
+
 ## Merge Strategy
 
 ### Sequential Merging

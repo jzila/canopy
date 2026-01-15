@@ -7,9 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/jzila/canopy/pkg/beads"
@@ -19,6 +17,10 @@ import (
 
 // DefaultTimeout is the default execution timeout for agents
 const DefaultTimeout = 10 * time.Minute
+
+// processGroupGracePeriod is the time to wait for processes to exit after SIGTERM
+// before sending SIGKILL
+const processGroupGracePeriod = 3 * time.Second
 
 // Result holds the execution result from an agent
 type Result struct {
@@ -189,6 +191,9 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 	env = addGoCacheEnv(env, e.config.SandboxConfig)
 
 	// Build command - use bwrap sandbox if available and enabled
+	// Note: We don't use exec.CommandContext because it sends SIGKILL immediately
+	// on context cancellation. Instead, we handle cancellation ourselves to enable
+	// graceful shutdown (SIGTERM, wait, then SIGKILL to the process group).
 	var cmd *exec.Cmd
 	useBwrap := e.config.UseBwrap && sandbox.BwrapAvailable()
 
@@ -208,21 +213,19 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 			result.Error = fmt.Sprintf("failed to build bwrap command: %v", err)
 			return result
 		}
-		// Wrap with context for timeout support
-		cmd = exec.CommandContext(ctx, bwrapCmd.Path, bwrapCmd.Args[1:]...)
+		cmd = exec.Command(bwrapCmd.Path, bwrapCmd.Args[1:]...)
 		cmd.Dir = bwrapCmd.Dir
 		cmd.Env = bwrapCmd.Env
 	} else {
-		cmd = exec.CommandContext(ctx, e.config.ClaudePath, args...)
+		cmd = exec.Command(e.config.ClaudePath, args...)
 		cmd.Dir = overlay.MergedDir
 		cmd.Env = env
 	}
 
-	// Apply resource limits on Linux (when not using bwrap)
-	if runtime.GOOS == "linux" && !useBwrap {
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			Pdeathsig: syscall.SIGKILL, // Kill agent if parent dies
-		}
+	// Apply resource limits (process groups, death signals) on supported platforms
+	// This is a no-op on non-Linux platforms
+	// When using bwrap, it handles process isolation internally
+	if !useBwrap {
 		setResourceLimits(cmd)
 	}
 
@@ -243,6 +246,26 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 		result.ExitCode = -1
 		return result
 	}
+
+	// Watch for context cancellation to gracefully terminate the process group
+	// This runs in a goroutine and will clean up when context is cancelled
+	// (either due to timeout or manual cancellation)
+	processDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			// Context cancelled - gracefully terminate the process group
+			if cmd.Process != nil {
+				pid := cmd.Process.Pid
+				if pid > 0 {
+					// Use our graceful termination: SIGTERM, wait, then SIGKILL
+					killProcessGroup(pid, processGroupGracePeriod)
+				}
+			}
+		case <-processDone:
+			// Process exited normally, nothing to do
+		}
+	}()
 
 	// Parse streaming output and collect final result
 	var finalResult *ClaudeStreamResult
@@ -286,6 +309,10 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 
 	// Wait for command to complete
 	err = cmd.Wait()
+
+	// Signal that process has exited (stops the context cancellation goroutine)
+	close(processDone)
+
 	result.Duration = time.Since(start)
 	result.Stderr = stderr.String()
 
