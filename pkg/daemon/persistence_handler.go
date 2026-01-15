@@ -369,9 +369,9 @@ func (h *PersistenceHandler) handleTaskUpdated(event Event) {
 		return
 	}
 
-	taskID, _ := payload["task_id"].(string)
+	taskID, _ := payload["id"].(string)
 	if taskID == "" {
-		logging.Warn("missing task_id in task updated event", "component", "persistence")
+		logging.Warn("missing id in task updated event", "component", "persistence")
 		return
 	}
 

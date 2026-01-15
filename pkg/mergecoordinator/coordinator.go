@@ -239,6 +239,26 @@ func (mc *MergeCoordinator) HandleFailure(taskID string, result *agent.Result, e
 	mc.sendTaskUpdated(taskID, taskTitle, "failed")
 }
 
+// NotifyTaskStarted sends a task "in_progress" status update via IPC.
+// This should be called when a task starts execution.
+func (mc *MergeCoordinator) NotifyTaskStarted(taskID string, task *beads.Task) {
+	if mc.ipcClient == nil {
+		return
+	}
+
+	title := ""
+	if task != nil {
+		title = task.Title
+	}
+
+	// Get agent ID for this task
+	agentID := mc.GetAgentID(taskID)
+
+	if err := mc.ipcClient.SendTaskUpdated(taskID, title, "in_progress", agentID, mc.repoID); err != nil && mc.config.Verbose {
+		fmt.Fprintf(os.Stderr, "warning: failed to send task started for %s: %v\n", taskID, err)
+	}
+}
+
 // sendTaskUpdated sends a task status update via IPC if client is connected.
 func (mc *MergeCoordinator) sendTaskUpdated(taskID, title, status string) {
 	if mc.ipcClient == nil {

@@ -821,6 +821,8 @@ func (r *RuntimeState) handleEvent(event Event) {
 		r.handleAgentMergeStatus(payload)
 	case EventAgentCompleted:
 		r.handleAgentCompleted(payload, event.Timestamp)
+	case EventTaskUpdated:
+		r.handleTaskUpdated(payload)
 	case EventStatsUpdated:
 		// Stats updates are informational, we recalculate from agents
 		r.UpdateStats()
@@ -1128,4 +1130,39 @@ func (r *RuntimeState) handleAgentCompleted(payload map[string]interface{}, time
 	}
 
 	r.UpdateStats()
+}
+
+func (r *RuntimeState) handleTaskUpdated(payload map[string]interface{}) {
+	taskID, _ := payload["id"].(string)
+	if taskID == "" {
+		return
+	}
+
+	status, _ := payload["status"].(string)
+	agentID, _ := payload["agent_id"].(string)
+	title, _ := payload["title"].(string)
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	task, exists := r.Tasks[taskID]
+	if !exists {
+		// Create new task entry
+		task = &TaskState{
+			ID:    taskID,
+			Title: title,
+		}
+		r.Tasks[taskID] = task
+	}
+
+	// Update task fields
+	if status != "" {
+		task.Status = status
+	}
+	if agentID != "" {
+		task.AgentID = agentID
+	}
+	if title != "" {
+		task.Title = title
+	}
 }

@@ -210,6 +210,8 @@ func (o *Orchestrator) setupInternalCallbacks() {
 		OnAgentStartFn: func(taskID string, task *beads.Task) {
 			// Store task in merge coordinator for later use in OnDone
 			o.mergeCoordinator.CacheTask(taskID, task)
+			// Send task "in_progress" status via IPC
+			o.mergeCoordinator.NotifyTaskStarted(taskID, task)
 		},
 		OnDoneFn: func(taskID string, result *agent.Result) {
 			// Delegate merge to coordinator - it handles queueing, merge, and task completion
