@@ -1350,6 +1350,71 @@ func TestCreateAgentWithRepoID(t *testing.T) {
 	}
 }
 
+func TestCreateAgentUpsert(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	now := time.Now()
+
+	// Create a run
+	run := &Run{ID: "run-upsert", StartedAt: now, Status: RunStatusRunning}
+	if err := store.CreateRun(run); err != nil {
+		t.Fatalf("failed to create run: %v", err)
+	}
+
+	// Create initial agent (simulating a failed run)
+	agent := &Agent{
+		ID:           "agent-retry",
+		RunID:        "run-upsert",
+		TaskID:       "task-retry",
+		TaskTitle:    "Retry Task",
+		Status:       AgentStatusFailed,
+		StartedAt:    now.Add(-time.Hour),
+		ErrorMessage: "previous failure",
+		InputTokens:  100,
+	}
+	if err := store.CreateAgent(agent); err != nil {
+		t.Fatalf("failed to create initial agent: %v", err)
+	}
+
+	// Create second run for retry
+	run2 := &Run{ID: "run-upsert-2", StartedAt: now, Status: RunStatusRunning}
+	if err := store.CreateRun(run2); err != nil {
+		t.Fatalf("failed to create second run: %v", err)
+	}
+
+	// Retry: create agent with same ID but new run (should upsert)
+	retryAgent := &Agent{
+		ID:           "agent-retry", // Same ID
+		RunID:        "run-upsert-2",
+		TaskID:       "task-retry",
+		TaskTitle:    "Retry Task",
+		Status:       AgentStatusRunning,
+		StartedAt:    now,
+		ErrorMessage: "", // Cleared
+		InputTokens:  0,
+	}
+	if err := store.CreateAgent(retryAgent); err != nil {
+		t.Fatalf("failed to upsert agent: %v", err)
+	}
+
+	// Verify the agent was updated, not duplicated
+	retrieved, err := store.GetAgent("agent-retry")
+	if err != nil {
+		t.Fatalf("failed to get agent: %v", err)
+	}
+
+	if retrieved.RunID != "run-upsert-2" {
+		t.Errorf("expected RunID 'run-upsert-2', got '%s'", retrieved.RunID)
+	}
+	if retrieved.Status != AgentStatusRunning {
+		t.Errorf("expected status Running, got '%s'", retrieved.Status)
+	}
+	if retrieved.ErrorMessage != "" {
+		t.Errorf("expected empty error message, got '%s'", retrieved.ErrorMessage)
+	}
+}
+
 func TestDeleteRun(t *testing.T) {
 	store := createTestStore(t)
 	defer store.Close()

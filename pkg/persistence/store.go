@@ -295,10 +295,38 @@ func (t *Tx) CreateRun(run *Run) error {
 }
 
 // CreateAgent creates a new agent record within the transaction.
+// If an agent with the same ID already exists (e.g., retrying a failed task),
+// the existing record is updated with the new values.
 func (t *Tx) CreateAgent(agent *Agent) error {
 	query := `
 		INSERT INTO agents (id, run_id, task_id, task_title, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived, parent_agent_id, merge_status, merge_commits_applied, merge_had_conflict, merge_resolver_spawned, merge_error)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			run_id = excluded.run_id,
+			status = excluded.status,
+			started_at = excluded.started_at,
+			finished_at = excluded.finished_at,
+			duration_seconds = excluded.duration_seconds,
+			exit_code = excluded.exit_code,
+			error_message = excluded.error_message,
+			stdout = excluded.stdout,
+			stderr = excluded.stderr,
+			input_tokens = excluded.input_tokens,
+			output_tokens = excluded.output_tokens,
+			total_tokens = excluded.total_tokens,
+			cache_creation_tokens = excluded.cache_creation_tokens,
+			cache_read_tokens = excluded.cache_read_tokens,
+			cost_usd = excluded.cost_usd,
+			files_changed = excluded.files_changed,
+			git_commits_created = excluded.git_commits_created,
+			num_turns = excluded.num_turns,
+			result_message = excluded.result_message,
+			parent_agent_id = excluded.parent_agent_id,
+			merge_status = excluded.merge_status,
+			merge_commits_applied = excluded.merge_commits_applied,
+			merge_had_conflict = excluded.merge_had_conflict,
+			merge_resolver_spawned = excluded.merge_resolver_spawned,
+			merge_error = excluded.merge_error
 	`
 	var finishedAt *int64
 	if agent.FinishedAt != nil {
@@ -567,11 +595,39 @@ func (s *Store) ListRuns(filter RunFilter) (*RunListResult, error) {
 	return result, nil
 }
 
-// CreateAgent creates a new agent record
+// CreateAgent creates a new agent record.
+// If an agent with the same ID already exists (e.g., retrying a failed task),
+// the existing record is updated with the new values.
 func (s *Store) CreateAgent(agent *Agent) error {
 	query := `
 		INSERT INTO agents (id, run_id, task_id, task_title, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived, parent_agent_id, merge_status, merge_commits_applied, merge_had_conflict, merge_resolver_spawned, merge_error)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			run_id = excluded.run_id,
+			status = excluded.status,
+			started_at = excluded.started_at,
+			finished_at = excluded.finished_at,
+			duration_seconds = excluded.duration_seconds,
+			exit_code = excluded.exit_code,
+			error_message = excluded.error_message,
+			stdout = excluded.stdout,
+			stderr = excluded.stderr,
+			input_tokens = excluded.input_tokens,
+			output_tokens = excluded.output_tokens,
+			total_tokens = excluded.total_tokens,
+			cache_creation_tokens = excluded.cache_creation_tokens,
+			cache_read_tokens = excluded.cache_read_tokens,
+			cost_usd = excluded.cost_usd,
+			files_changed = excluded.files_changed,
+			git_commits_created = excluded.git_commits_created,
+			num_turns = excluded.num_turns,
+			result_message = excluded.result_message,
+			parent_agent_id = excluded.parent_agent_id,
+			merge_status = excluded.merge_status,
+			merge_commits_applied = excluded.merge_commits_applied,
+			merge_had_conflict = excluded.merge_had_conflict,
+			merge_resolver_spawned = excluded.merge_resolver_spawned,
+			merge_error = excluded.merge_error
 	`
 	var finishedAt *int64
 	if agent.FinishedAt != nil {
