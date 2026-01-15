@@ -1,11 +1,14 @@
-import React, { useMemo, useState, useEffect, useRef } from 'react';
+import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import { Circle, Clock, AlertCircle, Loader2, ChevronRight, ChevronLeft, ChevronDown, GitBranch } from 'lucide-react';
 import { useStateStore } from '../../stores/stateStore';
 import type { TaskState } from '../../stores/stateStore';
+import { useMergeQueue } from '../../hooks/useMergeQueue';
+import { MergeQueueStatus } from '../merge';
 
 interface BeadsPaneProps {
   isExpanded: boolean;
   onToggle: () => void;
+  onTaskClick?: (taskId: string) => void;
 }
 
 type ViewMode = 'hierarchy' | 'flat';
@@ -180,13 +183,29 @@ const truncateId = (id: string, length: number = 11): string => {
   return id.length > length ? id.slice(0, length) : id;
 };
 
-export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle }) => {
+export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTaskClick }) => {
   const tasks = useStateStore((state) => state.tasks);
   const highlightedTaskId = useStateStore((state) => state.highlightedTaskId);
   const [viewMode, setViewMode] = useState<ViewMode>('hierarchy');
   const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set());
   const taskRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const listContainerRef = useRef<HTMLDivElement>(null);
+
+  // Merge queue data for compact status display
+  const { mergeQueue } = useMergeQueue();
+
+  // Transform merge queue data for MergeQueueStatus component
+  const mergeQueueData = useMemo(() => {
+    if (!mergeQueue) {
+      return { completed: [], resolvers: [], pending: [], activeWorkers: [] };
+    }
+    return {
+      completed: mergeQueue.completed,
+      resolvers: mergeQueue.resolvers,
+      pending: mergeQueue.pending,
+      activeWorkers: mergeQueue.activeWorkers,
+    };
+  }, [mergeQueue]);
 
   // Filter to only show incomplete beads (not done/completed) and not archived
   const incompleteBeads = useMemo(() => {
@@ -363,6 +382,15 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle }) =>
           </button>
         </div>
       </div>
+
+      {/* Merge Queue Status - Compact strip at top (always visible) */}
+      <MergeQueueStatus
+        completed={mergeQueueData.completed}
+        resolvers={mergeQueueData.resolvers}
+        pending={mergeQueueData.pending}
+        activeWorkers={mergeQueueData.activeWorkers}
+        {...(onTaskClick && { onTaskClick })}
+      />
 
       {/* Status Summary */}
       <div className="flex items-center gap-2 px-4 py-2 border-b border-gray-100 dark:border-gray-700/50 bg-gray-50 dark:bg-gray-800/50">
