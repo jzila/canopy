@@ -772,6 +772,25 @@ func (s *Store) UpdateAgentMergeResult(agentID string, mergeStatus MergeStatus, 
 // agentColumns lists all columns for agent queries
 const agentColumns = `id, run_id, task_id, task_title, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived, parent_agent_id, merge_status, merge_commits_applied, merge_had_conflict, merge_resolver_spawned, merge_error`
 
+// agentColumnsWithPrefix returns the agent columns with a table alias prefix.
+// This is used for queries with JOINs to disambiguate column names.
+func agentColumnsWithPrefix(prefix string) string {
+	cols := []string{
+		"id", "run_id", "task_id", "task_title", "status", "started_at", "finished_at",
+		"duration_seconds", "exit_code", "error_message", "stdout", "stderr",
+		"input_tokens", "output_tokens", "total_tokens", "cache_creation_tokens",
+		"cache_read_tokens", "cost_usd", "files_changed", "git_commits_created",
+		"num_turns", "result_message", "repo_id", "archived", "parent_agent_id",
+		"merge_status", "merge_commits_applied", "merge_had_conflict",
+		"merge_resolver_spawned", "merge_error",
+	}
+	result := make([]string, len(cols))
+	for i, col := range cols {
+		result[i] = prefix + col
+	}
+	return strings.Join(result, ", ")
+}
+
 // GetAgent retrieves an agent by ID
 func (s *Store) GetAgent(id string) (*Agent, error) {
 	query := `SELECT ` + agentColumns + ` FROM agents WHERE id = ?`
@@ -801,8 +820,20 @@ func (s *Store) GetAgentsByRun(runID string) ([]Agent, error) {
 
 // GetAllNonArchivedAgents retrieves all agents where archived = 0, across all runs.
 // This is used to restore full agent history on daemon startup.
+// Children of archived parents are also excluded (inherited archive status).
 func (s *Store) GetAllNonArchivedAgents() ([]Agent, error) {
-	query := `SELECT ` + agentColumns + ` FROM agents WHERE archived = 0 ORDER BY started_at ASC`
+	// Use a LEFT JOIN to check if the parent agent is archived.
+	// We exclude agents where:
+	// - The agent itself is archived (a.archived = 1)
+	// - The agent has a parent that is archived (p.archived = 1)
+	// This implements inherited archive status - children of archived parents
+	// are implicitly archived without needing to update the database.
+	query := `SELECT ` + agentColumnsWithPrefix("a.") + `
+		FROM agents a
+		LEFT JOIN agents p ON a.parent_agent_id = p.id
+		WHERE a.archived = 0
+		  AND (a.parent_agent_id = '' OR a.parent_agent_id IS NULL OR p.archived = 0)
+		ORDER BY a.started_at ASC`
 	rows, err := s.db.Query(query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query non-archived agents: %w", err)

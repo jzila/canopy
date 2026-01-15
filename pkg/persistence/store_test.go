@@ -365,6 +365,147 @@ func TestGetAllNonArchivedAgents(t *testing.T) {
 	}
 }
 
+// TestGetAllNonArchivedAgents_InheritedArchiveStatus verifies that children of archived
+// parents are excluded from GetAllNonArchivedAgents results (inherited archive status).
+func TestGetAllNonArchivedAgents_InheritedArchiveStatus(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	now := time.Now()
+
+	// Create a run
+	run := &Run{ID: "run-1", StartedAt: now, Status: RunStatusCompleted}
+	if err := store.CreateRun(run); err != nil {
+		t.Fatalf("failed to create run: %v", err)
+	}
+
+	// Create a parent agent and child agents (resolver pattern)
+	// Parent is archived, children are not explicitly archived but should be excluded
+	agents := []*Agent{
+		// Parent agent - archived
+		{
+			ID:        "parent-agent",
+			RunID:     "run-1",
+			TaskID:    "task-1",
+			TaskTitle: "Parent Task",
+			Status:    AgentStatusCompleted,
+			StartedAt: now,
+			Archived:  true,
+		},
+		// Child agent 1 - NOT archived, but parent is archived
+		{
+			ID:            "child-agent-1",
+			RunID:         "run-1",
+			TaskID:        "task-1-resolver",
+			TaskTitle:     "Resolver Task 1",
+			Status:        AgentStatusCompleted,
+			StartedAt:     now.Add(time.Minute),
+			Archived:      false,
+			ParentAgentID: "parent-agent",
+		},
+		// Child agent 2 - NOT archived, but parent is archived
+		{
+			ID:            "child-agent-2",
+			RunID:         "run-1",
+			TaskID:        "task-1-resolver-2",
+			TaskTitle:     "Resolver Task 2",
+			Status:        AgentStatusCompleted,
+			StartedAt:     now.Add(2 * time.Minute),
+			Archived:      false,
+			ParentAgentID: "parent-agent",
+		},
+		// Standalone agent - NOT archived, no parent
+		{
+			ID:        "standalone-agent",
+			RunID:     "run-1",
+			TaskID:    "task-2",
+			TaskTitle: "Standalone Task",
+			Status:    AgentStatusCompleted,
+			StartedAt: now.Add(3 * time.Minute),
+			Archived:  false,
+		},
+		// Another parent that is NOT archived, with a child
+		{
+			ID:        "active-parent",
+			RunID:     "run-1",
+			TaskID:    "task-3",
+			TaskTitle: "Active Parent Task",
+			Status:    AgentStatusCompleted,
+			StartedAt: now.Add(4 * time.Minute),
+			Archived:  false,
+		},
+		{
+			ID:            "active-child",
+			RunID:         "run-1",
+			TaskID:        "task-3-resolver",
+			TaskTitle:     "Active Resolver Task",
+			Status:        AgentStatusCompleted,
+			StartedAt:     now.Add(5 * time.Minute),
+			Archived:      false,
+			ParentAgentID: "active-parent",
+		},
+	}
+
+	for _, agent := range agents {
+		if err := store.CreateAgent(agent); err != nil {
+			t.Fatalf("failed to create agent %s: %v", agent.ID, err)
+		}
+	}
+
+	// Test GetAllNonArchivedAgents - should exclude children of archived parents
+	retrieved, err := store.GetAllNonArchivedAgents()
+	if err != nil {
+		t.Fatalf("failed to get non-archived agents: %v", err)
+	}
+
+	// Should get 3 agents:
+	// - standalone-agent (no parent, not archived)
+	// - active-parent (not archived)
+	// - active-child (parent not archived)
+	// Should NOT get:
+	// - parent-agent (archived)
+	// - child-agent-1 (parent archived - inherited)
+	// - child-agent-2 (parent archived - inherited)
+	expectedCount := 3
+	if len(retrieved) != expectedCount {
+		t.Errorf("expected %d non-archived agents, got %d", expectedCount, len(retrieved))
+		for _, a := range retrieved {
+			t.Logf("  retrieved: %s (parent: %s, archived: %v)", a.ID, a.ParentAgentID, a.Archived)
+		}
+	}
+
+	// Verify expected agents are present
+	expectedIDs := map[string]bool{
+		"standalone-agent": false,
+		"active-parent":    false,
+		"active-child":     false,
+	}
+
+	for _, agent := range retrieved {
+		if _, ok := expectedIDs[agent.ID]; ok {
+			expectedIDs[agent.ID] = true
+		} else {
+			t.Errorf("unexpected agent ID in results: %s (parent: %s)", agent.ID, agent.ParentAgentID)
+		}
+	}
+
+	for id, found := range expectedIDs {
+		if !found {
+			t.Errorf("expected agent %s not found in results", id)
+		}
+	}
+
+	// Verify child agents of archived parent are NOT returned
+	excludedIDs := []string{"parent-agent", "child-agent-1", "child-agent-2"}
+	for _, agent := range retrieved {
+		for _, excludedID := range excludedIDs {
+			if agent.ID == excludedID {
+				t.Errorf("agent %s should have been excluded but was returned", excludedID)
+			}
+		}
+	}
+}
+
 func TestGetAllAgents(t *testing.T) {
 	store := createTestStore(t)
 	defer store.Close()
