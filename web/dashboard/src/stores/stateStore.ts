@@ -150,6 +150,8 @@ interface StateStore {
   setRuns: (runs: Run[]) => void;
   setActiveRunId: (runId: string) => void;
   setRunsLoading: (loading: boolean) => void;
+  addRun: (run: Run) => void;
+  updateRun: (runId: string, update: Partial<Run>) => void;
 }
 
 // Initial stats
@@ -402,4 +404,22 @@ export const useStateStore = create<StateStore>((set) => ({
   setActiveRunId: (activeRunId) => set({ activeRunId }),
 
   setRunsLoading: (isRunsLoading) => set({ isRunsLoading }),
+
+  addRun: (run) =>
+    set((state) => {
+      // Check if run already exists (avoid duplicates)
+      if (state.runs.some((r) => r.id === run.id)) {
+        return state;
+      }
+      // Add new run at the beginning (most recent first)
+      return { runs: [run, ...state.runs] };
+    }),
+
+  updateRun: (runId, update) =>
+    set((state) => {
+      const runs = state.runs.map((run) =>
+        run.id === runId ? { ...run, ...update } : run
+      );
+      return { runs };
+    }),
 }));

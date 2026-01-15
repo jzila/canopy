@@ -95,9 +95,9 @@ export const RunSelector: React.FC<RunSelectorProps> = ({
   // If there are no runs, show disabled state
   if (runs.length === 0) {
     return (
-      <div className="header-control gap-2.5 px-4 bg-gray-100 dark:bg-gray-700 rounded-lg text-gray-500 dark:text-gray-400">
+      <div className="flex items-center gap-2 px-3 py-2 bg-gray-100 dark:bg-gray-700 rounded-lg text-gray-500 dark:text-gray-400">
         <Clock className="w-4 h-4" />
-        <span className="text-sm tracking-wide">No runs</span>
+        <span className="text-sm">No runs</span>
       </div>
     );
   }
@@ -108,7 +108,7 @@ export const RunSelector: React.FC<RunSelectorProps> = ({
         onClick={() => !disabled && !isLoading && setIsOpen(!isOpen)}
         disabled={disabled || isLoading}
         className={`
-          header-control gap-2.5 px-4 bg-gray-100 dark:bg-gray-700 rounded-lg
+          flex items-center gap-2 px-3 py-2 bg-gray-100 dark:bg-gray-700 rounded-lg
           transition-colors min-w-[160px] max-w-[220px]
           ${disabled || isLoading
             ? 'opacity-50 cursor-not-allowed'
@@ -199,16 +199,23 @@ export const RunSelector: React.FC<RunSelectorProps> = ({
                       ? 'text-blue-600 dark:text-blue-400'
                       : 'text-gray-500 dark:text-gray-400'
                   }`} />
-                  <div className={`absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full ${getStatusColor(run.status)}`} />
+                  <div className={`absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full ${getStatusColor(run.status)} ${run.status === 'running' ? 'animate-pulse' : ''}`} />
                 </div>
                 <div className="flex flex-col min-w-0 flex-1">
-                  <span className={`text-sm font-medium truncate ${
-                    run.id === activeRunId
-                      ? 'text-blue-700 dark:text-blue-300'
-                      : 'text-gray-900 dark:text-gray-100'
-                  }`}>
-                    {formatRunId(run.id)}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-sm font-medium truncate ${
+                      run.id === activeRunId
+                        ? 'text-blue-700 dark:text-blue-300'
+                        : 'text-gray-900 dark:text-gray-100'
+                    }`}>
+                      {formatRunId(run.id)}
+                    </span>
+                    {run.status === 'running' && (
+                      <span className="px-1.5 py-0.5 text-xs font-medium bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 rounded">
+                        Running
+                      </span>
+                    )}
+                  </div>
                   <span className="text-xs text-gray-500 dark:text-gray-400">
                     {formatDate(run.started_at)} · {run.completed_tasks}/{run.total_tasks} tasks
                   </span>

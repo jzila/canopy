@@ -186,6 +186,29 @@ interface OrchResumedEvent {
     paused: boolean;
   };
 }
+
+interface RunStartedEvent {
+  type: 'run:started';
+  timestamp: string;
+  payload: {
+    run_id: string;
+    task_count: number;
+    repo_id?: string;
+    repo_path?: string;
+    repo_name?: string;
+  };
+}
+
+interface RunCompletedEvent {
+  type: 'run:completed';
+  timestamp: string;
+  payload: {
+    run_id: string;
+    total_tasks: number;
+    succeeded_tasks: number;
+    failed_tasks: number;
+  };
+}
 type EventType =
   | StateSyncEvent
   | AgentStartedEvent
@@ -196,7 +219,9 @@ type EventType =
   | TaskUpdatedEvent
   | StatsUpdatedEvent
   | OrchPausedEvent
-  | OrchResumedEvent;
+  | OrchResumedEvent
+  | RunStartedEvent
+  | RunCompletedEvent;
 
 const MAX_BACKOFF = 30000; // 30 seconds
 const INITIAL_BACKOFF = 1000; // 1 second
@@ -229,6 +254,9 @@ export function useWebSocket() {
     setIsPaused,
     setActiveRepo,
     updateAgentMergeStatus,
+    addRun,
+    updateRun,
+    activeRepoId,
   } = useStateStore();
 
   const connect = useCallback(() => {
@@ -446,6 +474,49 @@ export function useWebSocket() {
               break;
             }
 
+            case 'run:started': {
+              const { run_id, task_count, repo_id, repo_path, repo_name } = message.payload;
+              console.log('[WebSocket] Run started:', run_id, 'tasks:', task_count);
+              // Only add run if it belongs to the active repository
+              if (!repo_id || repo_id === activeRepoId) {
+                addRun({
+                  id: run_id,
+                  started_at: message.timestamp,
+                  status: 'running',
+                  total_tasks: task_count,
+                  completed_tasks: 0,
+                  failed_tasks: 0,
+                  total_cost_usd: 0,
+                  duration_seconds: 0,
+                  // Only set optional properties if they have values (exactOptionalPropertyTypes compliance)
+                  ...(repo_id && { repo_id }),
+                  ...(repo_path && { repo_path }),
+                  ...(repo_name && { repo_name }),
+                });
+              }
+              break;
+            }
+
+            case 'run:completed': {
+              const { run_id, total_tasks, succeeded_tasks, failed_tasks } = message.payload;
+              console.log('[WebSocket] Run completed:', run_id);
+              // Determine final status based on task results
+              let status: 'completed' | 'failed' | 'partial' = 'completed';
+              if (failed_tasks > 0 && succeeded_tasks > 0) {
+                status = 'partial';
+              } else if (failed_tasks > 0) {
+                status = 'failed';
+              }
+              updateRun(run_id, {
+                status,
+                finished_at: message.timestamp,
+                total_tasks,
+                completed_tasks: succeeded_tasks,
+                failed_tasks,
+              });
+              break;
+            }
+
             default:
               console.warn('[WebSocket] Unknown event type:', (message as WebSocketEvent).type);
           }
@@ -488,7 +559,7 @@ export function useWebSocket() {
         }, backoffTime);
       }
     }
-  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, syncState, setIsPaused, setActiveRepo, updateAgentMergeStatus]);
+  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, syncState, setIsPaused, setActiveRepo, updateAgentMergeStatus, addRun, updateRun, activeRepoId]);
 
   const disconnect = useCallback(() => {
     isManuallyClosedRef.current = true;
