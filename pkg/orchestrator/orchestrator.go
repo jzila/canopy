@@ -276,6 +276,12 @@ func (o *Orchestrator) SetRepoID(repoID string) {
 	o.mergeCoordinator.SetRepoID(repoID)
 }
 
+// SetRunID sets the run ID for unique agent ID generation.
+// This ensures agent IDs are unique per run, even when retrying tasks.
+func (o *Orchestrator) SetRunID(runID string) {
+	o.mergeCoordinator.SetRunID(runID)
+}
+
 // SetAgentID records the agentID for a taskID, enabling parent-child tracking for resolvers.
 // This should be called when an agent starts execution.
 func (o *Orchestrator) SetAgentID(taskID, agentID string) {

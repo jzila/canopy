@@ -24,6 +24,7 @@ type Config struct {
 	UseBwrap      bool                   // Use bubblewrap sandbox
 	SandboxConfig *sandbox.SandboxConfig // Sandbox configuration
 	RepoID        string                 // Repository ID for IPC tracking
+	RunID         string                 // Run ID for unique agent ID generation
 }
 
 // ConflictContext provides information about the failed merge
@@ -90,6 +91,25 @@ func (r *Resolver) SetRepoID(repoID string) {
 	r.config.RepoID = repoID
 }
 
+// SetRunID sets the run ID for unique agent ID generation.
+func (r *Resolver) SetRunID(runID string) {
+	r.config.RunID = runID
+}
+
+// makeAgentID creates a unique resolver agent ID by combining run ID prefix with task ID.
+// Format: agent-{runID[:8]}-{taskID}-resolver
+func (r *Resolver) makeAgentID(taskID string) string {
+	prefix := r.config.RunID
+	if len(prefix) > 8 {
+		prefix = prefix[:8]
+	}
+	if prefix == "" {
+		// Fallback for when runID is not set (shouldn't happen in normal flow)
+		return fmt.Sprintf("%s-resolver", taskID)
+	}
+	return fmt.Sprintf("agent-%s-%s-resolver", prefix, taskID)
+}
+
 // Resolve spawns a resolver agent to handle merge conflicts.
 // It creates a fresh overlay based on current HEAD and provides the failed patch
 // along with the original task context.
@@ -105,8 +125,8 @@ func (r *Resolver) Resolve(ctx context.Context, conflict *ConflictContext) (*Res
 
 	result := &Result{}
 
-	// Generate unique resolver agent ID
-	resolverAgentID := fmt.Sprintf("%s-resolver", conflict.TaskID)
+	// Generate unique resolver agent ID using run ID prefix
+	resolverAgentID := r.makeAgentID(conflict.TaskID)
 	result.ResolverAgentID = resolverAgentID
 
 	// Create a fresh overlay based on current HEAD

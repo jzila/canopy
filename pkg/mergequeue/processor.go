@@ -27,6 +27,7 @@ type Processor struct {
 	ipcClient       *ipc.Client
 	verbose         bool
 	resolverTimeout time.Duration // Timeout for resolver operations (0 = no timeout)
+	runID           string        // Run ID for unique agent ID generation
 }
 
 // NewProcessor creates a new merge processor.
@@ -56,6 +57,25 @@ func NewProcessor(
 		verbose:         verbose,
 		resolverTimeout: resolverTimeout,
 	}
+}
+
+// SetRunID sets the run ID for unique agent ID generation.
+func (p *Processor) SetRunID(runID string) {
+	p.runID = runID
+}
+
+// makeAgentID creates a unique agent ID by combining run ID prefix with task ID.
+// Format: agent-{runID[:8]}-{taskID}
+func (p *Processor) makeAgentID(taskID string) string {
+	prefix := p.runID
+	if len(prefix) > 8 {
+		prefix = prefix[:8]
+	}
+	if prefix == "" {
+		// Fallback for when runID is not set (shouldn't happen in normal flow)
+		return fmt.Sprintf("agent-%s", taskID)
+	}
+	return fmt.Sprintf("agent-%s-%s", prefix, taskID)
 }
 
 // Start begins the merge processing loop.
@@ -372,8 +392,7 @@ func (p *Processor) sendMergeStatus(taskID string, status ipc.MergeStatus, queue
 		return
 	}
 
-	// Use taskID as agentID since we don't have a separate agent ID here
-	agentID := fmt.Sprintf("agent-%s", taskID)
+	agentID := p.makeAgentID(taskID)
 	if err := p.ipcClient.SendAgentMergeStatus(agentID, status, queuePos, errMsg); err != nil && p.verbose {
 		fmt.Fprintf(os.Stderr, "warning: failed to send merge status for %s: %v\n", taskID, err)
 	}
@@ -386,8 +405,7 @@ func (p *Processor) sendMergeStatusFull(taskID string, status ipc.MergeStatus, e
 		return
 	}
 
-	// Use taskID as agentID since we don't have a separate agent ID here
-	agentID := fmt.Sprintf("agent-%s", taskID)
+	agentID := p.makeAgentID(taskID)
 	if err := p.ipcClient.SendAgentMergeStatusFull(agentID, status, 0, errMsg, commitsApplied, hadConflict, resolverSpawned); err != nil && p.verbose {
 		fmt.Fprintf(os.Stderr, "warning: failed to send merge status for %s: %v\n", taskID, err)
 	}

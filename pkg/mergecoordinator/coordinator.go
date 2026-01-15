@@ -140,6 +140,15 @@ func (mc *MergeCoordinator) SetRepoID(repoID string) {
 	}
 }
 
+// SetRunID sets the run ID for unique agent ID generation.
+// This ensures agent IDs are unique per run, even when retrying tasks.
+func (mc *MergeCoordinator) SetRunID(runID string) {
+	mc.processor.SetRunID(runID)
+	if mc.resolver != nil {
+		mc.resolver.SetRunID(runID)
+	}
+}
+
 // SetCleanupCallback sets a callback to cleanup overlays after merge.
 func (mc *MergeCoordinator) SetCleanupCallback(callback func(*agent.Result)) {
 	mc.cleanupCallback = callback

@@ -212,7 +212,7 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 	callbacks := &orchestrator.EventCallbacks{
 		OnAgentStartFn: func(taskID string, task *beads.Task) {
 			runStats.recordTaskStart(taskID, task)
-			agentID := fmt.Sprintf("agent-%s", taskID)
+			agentID := makeAgentID(runID, taskID)
 			// Record agent ID for parent-child tracking (resolver agents need this)
 			orch.SetAgentID(taskID, agentID)
 			parentAgentID := "" // Top-level agents have no parent
@@ -221,20 +221,20 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 			}
 		},
 		OnOutputFn: func(taskID string, output string, isError bool) {
-			agentID := fmt.Sprintf("agent-%s", taskID)
+			agentID := makeAgentID(runID, taskID)
 			if err := ipcClient.SendAgentOutput(agentID, output, isError); err != nil && verbose {
 				fmt.Fprintf(os.Stderr, "warning: failed to send agent output: %v\n", err)
 			}
 		},
 		OnLiveFeedFn: func(taskID string, event *agent.LiveFeedEvent) {
-			agentID := fmt.Sprintf("agent-%s", taskID)
+			agentID := makeAgentID(runID, taskID)
 			if err := ipcClient.SendAgentLiveFeed(agentID, event.EventType, event.Data); err != nil && verbose {
 				fmt.Fprintf(os.Stderr, "warning: failed to send agent live feed: %v\n", err)
 			}
 		},
 		OnDoneFn: func(taskID string, result *agent.Result) {
 			runStats.recordResult(taskID, result, true)
-			agentID := fmt.Sprintf("agent-%s", taskID)
+			agentID := makeAgentID(runID, taskID)
 			parentAgentID := "" // Top-level agents have no parent
 			// Send individual commit events before completion
 			sendAgentCommits(ipcClient, agentID, result, verbose)
@@ -245,7 +245,7 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		},
 		OnFailFn: func(taskID string, result *agent.Result) {
 			runStats.recordResult(taskID, result, false)
-			agentID := fmt.Sprintf("agent-%s", taskID)
+			agentID := makeAgentID(runID, taskID)
 			parentAgentID := "" // Top-level agents have no parent
 			// Send individual commit events before failure (agent may have committed before failing)
 			sendAgentCommits(ipcClient, agentID, result, verbose)
@@ -266,6 +266,9 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 	if repo != nil {
 		orch.SetRepoID(repo.ID)
 	}
+
+	// Pass run ID to orchestrator for unique agent ID generation
+	orch.SetRunID(runID)
 
 	// Get initial ready tasks to send task count
 	beadsClient, err := beads.NewClient(absWorkdir)
@@ -339,6 +342,18 @@ func convertToIPCResult(result *agent.Result) *ipc.AgentResult {
 	ipcResult.Stderr = result.Stderr
 
 	return ipcResult
+}
+
+// makeAgentID creates a unique agent ID by combining run ID prefix with task ID.
+// Format: agent-{runID[:8]}-{taskID}
+// This ensures agent IDs are unique per run, even when retrying the same task.
+func makeAgentID(runID, taskID string) string {
+	// Use first 8 characters of run ID as prefix for readability
+	prefix := runID
+	if len(prefix) > 8 {
+		prefix = prefix[:8]
+	}
+	return fmt.Sprintf("agent-%s-%s", prefix, taskID)
 }
 
 // sendAgentCommits sends individual commit events for each git commit made by an agent
