@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-const currentSchemaVersion = 9
+const currentSchemaVersion = 8
 
 // migrate runs all pending database migrations
 func (s *Store) migrate() error {
@@ -75,10 +75,6 @@ func (s *Store) runMigration(version int) error {
 		}
 	case 8:
 		if err := s.migrateV8(tx); err != nil {
-			return err
-		}
-	case 9:
-		if err := s.migrateV9(tx); err != nil {
 			return err
 		}
 	default:
@@ -291,32 +287,6 @@ func (s *Store) migrateV8(tx *sql.Tx) error {
 	_, err := tx.Exec(backfillSQL)
 	if err != nil {
 		return fmt.Errorf("failed to backfill parent_agent_id: %w", err)
-	}
-
-	return nil
-}
-
-// migrateV9 creates the tasks table for beads task persistence
-func (s *Store) migrateV9(tx *sql.Tx) error {
-	schema := `
-		CREATE TABLE IF NOT EXISTS tasks (
-			id TEXT PRIMARY KEY,
-			repo_id TEXT,
-			title TEXT NOT NULL,
-			status TEXT NOT NULL,
-			type TEXT,
-			priority INTEGER DEFAULT 2,
-			agent_id TEXT,
-			updated_at INTEGER DEFAULT (strftime('%s', 'now'))
-		);
-
-		CREATE INDEX IF NOT EXISTS idx_tasks_repo_id ON tasks(repo_id);
-		CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
-	`
-
-	_, err := tx.Exec(schema)
-	if err != nil {
-		return fmt.Errorf("failed to create tasks table: %w", err)
 	}
 
 	return nil

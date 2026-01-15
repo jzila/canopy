@@ -138,7 +138,11 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 	// Record base commit if this is a git repo
 	var baseCommit string
 	if overlay.HasGitRepo() {
-		baseCommit, _ = overlay.GetBaseCommit()
+		var err error
+		baseCommit, err = overlay.GetBaseCommit()
+		if err != nil && e.config.Verbose {
+			fmt.Fprintf(os.Stderr, "warning: failed to get base commit: %v\n", err)
+		}
 	}
 
 	// Write dependency context to sandbox
@@ -354,7 +358,10 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 	}
 
 	// Get file changes from overlay
-	changes, _ := overlay.GetChanges()
+	changes, err := overlay.GetChanges()
+	if err != nil && e.config.Verbose {
+		fmt.Fprintf(os.Stderr, "warning: failed to get overlay changes: %v\n", err)
+	}
 	result.Changes = changes
 
 	// Extract git commits if this is a git repo

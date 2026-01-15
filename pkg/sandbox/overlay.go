@@ -103,11 +103,15 @@ func NewOverlay(baseDir, lowerDir string) (*Overlay, error) {
 
 	// Copy Claude credentials to upper dir so agents can authenticate
 	// Non-fatal: agent might work with env vars or repo-level config
-	_ = overlay.copyClaudeCredentials()
+	if err := overlay.copyClaudeCredentials(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to copy Claude credentials: %v\n", err)
+	}
 
 	// Copy git config so agents have correct authorship
 	// Non-fatal: agents can still commit with repo-local config
-	_ = overlay.copyGitConfig()
+	if err := overlay.copyGitConfig(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to copy git config: %v\n", err)
+	}
 
 	return overlay, nil
 }
@@ -428,7 +432,12 @@ func (o *Overlay) GetChanges() ([]FileChange, error) {
 			change.Type = ChangeModified
 		}
 
-		change.NewHash, _ = hashFile(path)
+		hash, hashErr := hashFile(path)
+		if hashErr != nil {
+			// Log but continue - file change is still recorded, just without hash
+			fmt.Fprintf(os.Stderr, "warning: failed to hash file %s: %v\n", relPath, hashErr)
+		}
+		change.NewHash = hash
 		changes = append(changes, change)
 
 		return nil

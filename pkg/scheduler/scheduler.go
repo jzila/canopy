@@ -306,7 +306,11 @@ func (s *Scheduler) gatherDependencyContext(task *beads.Task) []agent.Dependency
 	depIDs := task.GetDependencies()
 	if len(depIDs) == 0 {
 		// Try fetching from beads if not in task struct
-		depIDs, _ = s.beadsClient.GetDeps(task.ID)
+		var err error
+		depIDs, err = s.beadsClient.GetDeps(task.ID)
+		if err != nil && s.config.Verbose {
+			fmt.Fprintf(os.Stderr, "warning: failed to get dependencies for task %s: %v\n", task.ID, err)
+		}
 	}
 
 	for _, depID := range depIDs {
