@@ -392,6 +392,7 @@ export function useWebSocket() {
                 changes: 0,
                 commits: 0,
                 git_commits: [],
+                archived: false,
                 // Optional properties - only set if defined (exactOptionalPropertyTypes compliance)
                 ...(run_id && { run_id }),
                 ...(parent_agent_id && { parent_agent_id }),
