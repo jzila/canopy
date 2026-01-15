@@ -63,10 +63,16 @@ export interface AgentState {
   commits: number;
   git_commits: GitCommit[];
   archived: boolean;
-  // Merge queue state
+  // Merge queue state (real-time)
   merge_status?: MergeStatus;
   merge_queue_pos?: number;
   merge_error?: string;
+  // Merge result fields (persisted, from history API)
+  mergeStatus?: string;         // Final merge status: merged, failed
+  mergeCommitsApplied?: number; // Number of commits applied during merge
+  mergeHadConflict?: boolean;   // Whether merge had conflicts
+  mergeResolverSpawned?: boolean; // Whether resolver agent was spawned
+  mergeError?: string;          // Error message if merge failed (persisted)
 }
 
 export interface TaskState {
@@ -110,6 +116,7 @@ interface StateStore {
   stats: Stats;
   isPaused: boolean;
   selectedAgentId: string | null;
+  highlightedTaskId: string | null;
   repositories: Repository[];
   activeRepoId: string;
   isRepoSwitching: boolean;
@@ -127,6 +134,7 @@ interface StateStore {
   appendOutput: (agentId: string, output: string, isError?: boolean) => void;
   appendLiveFeedEvent: (agentId: string, event: LiveFeedEvent) => void;
   setSelectedAgent: (id: string | null) => void;
+  setHighlightedTask: (id: string | null) => void;
   setIsPaused: (paused: boolean) => void;
   setRepositories: (repositories: Repository[], activeRepoId: string) => void;
   setActiveRepo: (repoId: string) => void;
@@ -210,6 +218,7 @@ export const useStateStore = create<StateStore>((set) => ({
   stats: initialStats,
   isPaused: false,
   selectedAgentId: null,
+  highlightedTaskId: null,
   repositories: [],
   activeRepoId: '',
   isRepoSwitching: false,
@@ -331,6 +340,8 @@ export const useStateStore = create<StateStore>((set) => ({
     }),
 
   setSelectedAgent: (selectedAgentId) => set({ selectedAgentId }),
+
+  setHighlightedTask: (highlightedTaskId) => set({ highlightedTaskId }),
 
   setIsPaused: (isPaused) => set({ isPaused }),
 

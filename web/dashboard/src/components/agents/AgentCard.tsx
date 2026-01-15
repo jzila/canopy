@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Clock, Zap, DollarSign, XCircle, GitCommit, Archive, ExternalLink } from 'lucide-react';
+import { Clock, Zap, DollarSign, XCircle, GitCommit, Archive, ExternalLink, GitMerge, AlertTriangle } from 'lucide-react';
 import type { AgentState } from '../../stores/stateStore';
 import { useStateStore } from '../../stores/stateStore';
 import { killAgent, archiveAgent } from '../../api/client';
@@ -239,6 +239,35 @@ export const AgentCard: React.FC<AgentCardProps> = ({
           </div>
         )}
       </div>
+
+      {/* Merge status indicator for historical data */}
+      {(agent.mergeStatus || agent.merge_status) && (
+        <div className="mt-2 flex items-center gap-2 text-xs">
+          {(agent.mergeStatus === 'merged' || agent.merge_status === 'merged') ? (
+            <div className="flex items-center gap-1 text-green-600 dark:text-green-400" title={`Merged${agent.mergeCommitsApplied ? ` (${agent.mergeCommitsApplied} commits)` : ''}`}>
+              <GitMerge className="w-3.5 h-3.5" />
+              <span>Merged</span>
+              {agent.mergeCommitsApplied ? <span>({agent.mergeCommitsApplied})</span> : null}
+            </div>
+          ) : (agent.mergeStatus === 'failed' || agent.merge_status === 'failed') ? (
+            <div className="flex items-center gap-1 text-red-600 dark:text-red-400" title={agent.mergeError || agent.merge_error || 'Merge failed'}>
+              <GitMerge className="w-3.5 h-3.5" />
+              <span>Merge Failed</span>
+            </div>
+          ) : null}
+          {agent.mergeHadConflict && (
+            <div className="flex items-center gap-1 text-yellow-600 dark:text-yellow-400" title="Merge had conflicts">
+              <AlertTriangle className="w-3.5 h-3.5" />
+              <span>Conflict</span>
+            </div>
+          )}
+          {agent.mergeResolverSpawned && (
+            <span className="text-purple-600 dark:text-purple-400" title="Resolver agent was spawned">
+              (Resolved)
+            </span>
+          )}
+        </div>
+      )}
 
       {agent.error && (
         <div className="mt-3 text-xs text-red-600 dark:text-red-400 truncate" title={agent.error}>
