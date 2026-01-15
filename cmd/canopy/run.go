@@ -170,6 +170,7 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 			"If the daemon failed to start, check the logs at ~/.cache/canopy/daemon.log", err)
 	}
 	defer ipcClient.Close()
+	ipcClient.SetVerbose(verbose) // Enable verbose logging for reconnection events
 	if verbose {
 		fmt.Println("Connected to canopy daemon")
 	}

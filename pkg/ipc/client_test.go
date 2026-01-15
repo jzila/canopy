@@ -2,6 +2,7 @@ package ipc
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"path/filepath"
 	"testing"
@@ -496,34 +497,49 @@ func TestClientSendWithoutConnection(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 
 	// Create client but don't start server
-	client := &Client{socketPath: socketPath}
+	client := &Client{socketPath: socketPath, maxQueueSize: DefaultMaxQueueSize}
 
-	// All send operations should fail
-	if err := client.SendAgentStart("a1", "t1", "title", "", ""); err == nil {
-		t.Error("Expected error when not connected")
+	// All send operations should queue events instead of returning errors
+	if err := client.SendAgentStart("a1", "t1", "title", "", ""); err != nil {
+		t.Errorf("Expected no error when queuing event, got: %v", err)
 	}
 
-	if err := client.SendAgentOutput("a1", "output", false); err == nil {
-		t.Error("Expected error when not connected")
+	if err := client.SendAgentOutput("a1", "output", false); err != nil {
+		t.Errorf("Expected no error when queuing event, got: %v", err)
 	}
 
 	result := &AgentResult{ExitCode: 0}
-	if err := client.SendAgentDone("a1", "", result); err == nil {
-		t.Error("Expected error when not connected")
+	if err := client.SendAgentDone("a1", "", result); err != nil {
+		t.Errorf("Expected no error when queuing event, got: %v", err)
 	}
 
-	if err := client.SendAgentFail("a1", "", errors.New("err"), result); err == nil {
-		t.Error("Expected error when not connected")
+	if err := client.SendAgentFail("a1", "", errors.New("err"), result); err != nil {
+		t.Errorf("Expected no error when queuing event, got: %v", err)
 	}
 
-	if err := client.SendRunStarted("run1", 5, nil); err == nil {
-		t.Error("Expected error when not connected")
+	if err := client.SendRunStarted("run1", 5, nil); err != nil {
+		t.Errorf("Expected no error when queuing event, got: %v", err)
 	}
 
 	stats := &RunStats{TotalTasks: 5}
-	if err := client.SendRunCompleted("run1", stats); err == nil {
-		t.Error("Expected error when not connected")
+	if err := client.SendRunCompleted("run1", stats); err != nil {
+		t.Errorf("Expected no error when queuing event, got: %v", err)
 	}
+
+	// Verify events were queued
+	queued, dropped, reconnecting := client.QueueStats()
+	if queued != 6 {
+		t.Errorf("Expected 6 queued events, got %d", queued)
+	}
+	if dropped != 0 {
+		t.Errorf("Expected 0 dropped events, got %d", dropped)
+	}
+	if !reconnecting {
+		t.Error("Expected reconnecting to be true")
+	}
+
+	// Stop the reconnect goroutine
+	client.Close()
 }
 
 func TestClientReconnect(t *testing.T) {
@@ -822,5 +838,170 @@ func TestSizeLimitConstants(t *testing.T) {
 	}
 	if MaxPayloadSize >= MaxMessageSize {
 		t.Error("MaxPayloadSize should be less than MaxMessageSize")
+	}
+}
+
+func TestClientQueueOverflow(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+
+	// Create client with small queue for testing
+	client := &Client{socketPath: socketPath, maxQueueSize: 3}
+
+	// Queue 5 events (overflow by 2)
+	for i := 0; i < 5; i++ {
+		if err := client.SendAgentOutput("a1", fmt.Sprintf("output %d", i), false); err != nil {
+			t.Errorf("Expected no error when queuing event, got: %v", err)
+		}
+	}
+
+	// Verify queue state
+	queued, dropped, _ := client.QueueStats()
+	if queued != 3 {
+		t.Errorf("Expected 3 queued events (max), got %d", queued)
+	}
+	if dropped != 2 {
+		t.Errorf("Expected 2 dropped events, got %d", dropped)
+	}
+
+	client.Close()
+}
+
+func TestClientAutoReconnectAndFlush(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+
+	eventBus := events.NewEventBus()
+	receivedEvents := make(chan events.Event, 100)
+	eventBus.Subscribe(func(event events.Event) {
+		receivedEvents <- event
+	})
+
+	// Create client without server - events will be queued
+	client := &Client{socketPath: socketPath, maxQueueSize: DefaultMaxQueueSize}
+
+	// Queue some events
+	for i := 0; i < 3; i++ {
+		if err := client.SendAgentOutput("a1", fmt.Sprintf("output %d", i), false); err != nil {
+			t.Errorf("Expected no error when queuing event, got: %v", err)
+		}
+	}
+
+	// Verify events are queued
+	queued, _, reconnecting := client.QueueStats()
+	if queued != 3 {
+		t.Errorf("Expected 3 queued events, got %d", queued)
+	}
+	if !reconnecting {
+		t.Error("Expected reconnecting to be true")
+	}
+
+	// Start the server - client should auto-reconnect and flush
+	server := NewServer(socketPath, eventBus)
+	if err := server.Start(); err != nil {
+		t.Fatalf("Failed to start server: %v", err)
+	}
+	defer server.Stop()
+
+	// Wait for reconnect and flush (up to 3 seconds with backoff)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		queued, _, reconnecting = client.QueueStats()
+		if queued == 0 && !reconnecting {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Verify queue was flushed
+	queued, _, _ = client.QueueStats()
+	if queued != 0 {
+		t.Errorf("Expected 0 queued events after flush, got %d", queued)
+	}
+
+	// Verify all 3 events were received
+	received := 0
+	deadline = time.Now().Add(time.Second)
+	for received < 3 && time.Now().Before(deadline) {
+		select {
+		case <-receivedEvents:
+			received++
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+
+	if received != 3 {
+		t.Errorf("Expected 3 events to be received, got %d", received)
+	}
+
+	client.Close()
+}
+
+func TestClientConnectionLostDuringWrite(t *testing.T) {
+	socketPath := filepath.Join(t.TempDir(), "test.sock")
+
+	eventBus := events.NewEventBus()
+	receivedEvents := make(chan events.Event, 100)
+	eventBus.Subscribe(func(event events.Event) {
+		receivedEvents <- event
+	})
+
+	// Start server
+	server := NewServer(socketPath, eventBus)
+	if err := server.Start(); err != nil {
+		t.Fatalf("Failed to start server: %v", err)
+	}
+
+	// Connect client
+	client, err := NewClient(socketPath)
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+	defer client.Close()
+
+	// Send a message successfully first
+	if err := client.SendAgentStart("a1", "t1", "title", "", ""); err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	// Wait for it to be received
+	select {
+	case <-receivedEvents:
+	case <-time.After(time.Second):
+		t.Fatal("Timeout waiting for first event")
+	}
+
+	// Stop the server (simulates daemon restart)
+	server.Stop()
+
+	// Give time for connection to be detected as broken
+	time.Sleep(100 * time.Millisecond)
+
+	// Send more messages - they should be queued
+	for i := 0; i < 3; i++ {
+		if err := client.SendAgentOutput("a1", fmt.Sprintf("output %d", i), false); err != nil {
+			t.Errorf("Expected no error when queuing event, got: %v", err)
+		}
+	}
+
+	// Restart server
+	server2 := NewServer(socketPath, eventBus)
+	if err := server2.Start(); err != nil {
+		t.Fatalf("Failed to restart server: %v", err)
+	}
+	defer server2.Stop()
+
+	// Wait for reconnect and flush
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		queued, _, reconnecting := client.QueueStats()
+		if queued == 0 && !reconnecting {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Verify queued events were flushed
+	queued, _, _ := client.QueueStats()
+	if queued != 0 {
+		t.Errorf("Expected 0 queued events after reconnect, got %d", queued)
 	}
 }
