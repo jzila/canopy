@@ -1,40 +1,48 @@
-import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
-import { Play, Pause, Activity, DollarSign, Zap, GitCommit, FileEdit, Sun, Moon, Terminal as TerminalIcon, List, CheckCircle, XCircle, ListTodo, GripHorizontal, Archive } from 'lucide-react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useStateStore } from '../../stores/stateStore';
-import type { AgentState } from '../../stores/stateStore';
-import { useWebSocket } from '../../hooks';
+import { useWebSocket, useAgentFiltering, useResizablePane } from '../../hooks';
+import type { StatusFilter } from '../../hooks';
 import { pauseOrch, resumeOrch, getState, getRepositories, activateRepository, getRuns } from '../../api/client';
-import { AgentCardGroup } from '../agents/AgentCardGroup';
-import { AgentTerminal } from '../agents/AgentTerminal';
-import { LiveFeed } from '../agents/LiveFeed';
-import { CommitList } from '../agents/CommitList';
 import { BeadsPane } from '../beads/BeadsPane';
-import { RepoSelector } from './RepoSelector';
-import { RunSelector } from './RunSelector';
-
-type TerminalTab = 'feed' | 'terminal' | 'commits';
-type StatusFilter = 'all' | 'running' | 'completed' | 'failed';
+import { DashboardHeader } from './DashboardHeader';
+import { TerminalPanel } from './TerminalPanel';
+import { AgentGrid } from '../agents/AgentGrid';
 
 const SHOW_ARCHIVED_AGENTS_KEY = 'canopy-show-archived-agents';
 
 export const Dashboard: React.FC = () => {
   const { connected } = useWebSocket();
+
+  // Orchestrator control state
   const [isPauseLoading, setIsPauseLoading] = useState(false);
   const [isResumeLoading, setIsResumeLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<TerminalTab>('feed');
+
+  // Theme state
   const [isDark, setIsDark] = useState(() => {
     const saved = localStorage.getItem('darkMode');
     if (saved !== null) return saved === 'true';
     return window.matchMedia('(prefers-color-scheme: dark)').matches;
   });
+
+  // Filter state
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [showArchivedAgents, setShowArchivedAgents] = useState(() => {
+    const saved = localStorage.getItem(SHOW_ARCHIVED_AGENTS_KEY);
+    return saved === 'true';
+  });
+
+  // Beads pane state
   const [beadsPaneExpanded, setBeadsPaneExpanded] = useState(() => {
     const saved = localStorage.getItem('beadsPaneExpanded');
     return saved !== null ? saved === 'true' : true;
   });
-  const [showArchivedAgents, setShowArchivedAgents] = useState(() => {
-    const saved = localStorage.getItem(SHOW_ARCHIVED_AGENTS_KEY);
-    return saved === 'true';
+
+  // Resizable terminal pane
+  const { height: paneHeight, isResizing, handleResizeStart } = useResizablePane({
+    storageKey: 'outputPaneHeight',
+    defaultHeight: 320,
+    minHeight: 200,
+    maxHeightRatio: 0.8,
   });
 
   // Persist beads pane state
@@ -46,62 +54,6 @@ export const Dashboard: React.FC = () => {
   useEffect(() => {
     localStorage.setItem(SHOW_ARCHIVED_AGENTS_KEY, String(showArchivedAgents));
   }, [showArchivedAgents]);
-
-  // Resizable pane state
-  const MIN_PANE_HEIGHT = 200;
-  const MAX_PANE_HEIGHT_RATIO = 0.8; // 80% of viewport
-  const DEFAULT_PANE_HEIGHT = 320;
-
-  const [paneHeight, setPaneHeight] = useState(() => {
-    const saved = localStorage.getItem('outputPaneHeight');
-    return saved ? parseInt(saved, 10) : DEFAULT_PANE_HEIGHT;
-  });
-  const [isResizing, setIsResizing] = useState(false);
-  const resizeRef = useRef<{ startY: number; startHeight: number } | null>(null);
-
-  // Persist pane height
-  useEffect(() => {
-    localStorage.setItem('outputPaneHeight', String(paneHeight));
-  }, [paneHeight]);
-
-  // Handle resize mouse events
-  const handleResizeStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    setIsResizing(true);
-    resizeRef.current = {
-      startY: e.clientY,
-      startHeight: paneHeight,
-    };
-  }, [paneHeight]);
-
-  useEffect(() => {
-    if (!isResizing) return;
-
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!resizeRef.current) return;
-
-      const deltaY = resizeRef.current.startY - e.clientY;
-      const maxHeight = window.innerHeight * MAX_PANE_HEIGHT_RATIO;
-      const newHeight = Math.min(
-        maxHeight,
-        Math.max(MIN_PANE_HEIGHT, resizeRef.current.startHeight + deltaY)
-      );
-      setPaneHeight(newHeight);
-    };
-
-    const handleMouseUp = () => {
-      setIsResizing(false);
-      resizeRef.current = null;
-    };
-
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [isResizing]);
 
   // Apply dark mode class to document
   useEffect(() => {
@@ -128,13 +80,20 @@ export const Dashboard: React.FC = () => {
   const setRepositories = useStateStore((state) => state.setRepositories);
   const setActiveRepo = useStateStore((state) => state.setActiveRepo);
   const setRepoSwitching = useStateStore((state) => state.setRepoSwitching);
-  // Run filtering state
   const runs = useStateStore((state) => state.runs);
   const activeRunId = useStateStore((state) => state.activeRunId);
   const isRunsLoading = useStateStore((state) => state.isRunsLoading);
   const setRuns = useStateStore((state) => state.setRuns);
   const setActiveRunId = useStateStore((state) => state.setActiveRunId);
   const setRunsLoading = useStateStore((state) => state.setRunsLoading);
+
+  // Use the agent filtering hook
+  const { groupedAgents, archivedCount } = useAgentFiltering({
+    agents,
+    statusFilter,
+    showArchived: showArchivedAgents,
+    activeRunId,
+  });
 
   // Load initial state on mount
   useEffect(() => {
@@ -156,13 +115,9 @@ export const Dashboard: React.FC = () => {
             await activateRepository(firstRepo.id);
           } catch (activateError) {
             console.error('Failed to auto-activate repository:', activateError);
-            // Continue with local activeId even if backend activation fails
-            // The selector will still show the correct repo
           }
         }
 
-        // Always update state with repositories, even if activation failed
-        // This ensures the selector is visible and functional
         setRepositories(repoResponse.repositories, activeId);
       } catch (error) {
         console.error('Failed to load initial state:', error);
@@ -192,7 +147,6 @@ export const Dashboard: React.FC = () => {
         setRunsLoading(true);
         const response = await getRuns({ repo_id: activeRepoId, limit: 50 });
         setRuns(response.runs);
-        // Reset to "All runs" when repo changes
         setActiveRunId('');
       } catch (error) {
         console.error('Failed to load runs:', error);
@@ -205,6 +159,7 @@ export const Dashboard: React.FC = () => {
     loadRuns();
   }, [activeRepoId, setRuns, setActiveRunId, setRunsLoading]);
 
+  // Event handlers
   const handlePause = async () => {
     if (isPauseLoading) return;
 
@@ -240,9 +195,7 @@ export const Dashboard: React.FC = () => {
       setRepoSwitching(true);
       await activateRepository(repoId);
       setActiveRepo(repoId);
-      // Reset run selection when repo changes
       setActiveRunId('');
-      // After switching repos, reload state to get the new repo's data
       const state = await getState();
       syncState(state);
     } catch (error) {
@@ -252,331 +205,51 @@ export const Dashboard: React.FC = () => {
     }
   };
 
-  const handleRunSelect = (runId: string) => {
-    setActiveRunId(runId);
-  };
-
-  const handleSelectAgent = (agentId: string) => {
+  const handleSelectAgent = useCallback((agentId: string) => {
     setSelectedAgent(agentId);
-  };
+  }, [setSelectedAgent]);
 
-  const agentList = Object.values(agents);
-
-  // Count archived agents
-  const archivedAgentCount = useMemo(() => {
-    return agentList.filter(agent => agent.archived).length;
-  }, [agentList]);
-
-  // Filter agents based on selected status, archived state, and run
-  const filteredAgents = useMemo(() => {
-    return agentList
-      .filter(agent => {
-        // Filter by run ID first (if a specific run is selected)
-        if (activeRunId !== '' && agent.run_id !== activeRunId) {
-          return false;
-        }
-
-        // Filter by archived status
-        if (!showArchivedAgents && agent.archived) {
-          return false;
-        }
-
-        // Then filter by status
-        if (statusFilter === 'all') return true;
-
-        switch (statusFilter) {
-          case 'running':
-            return agent.status === 'running' || agent.status === 'starting';
-          case 'completed':
-            return agent.status === 'completed';
-          case 'failed':
-            return agent.status === 'failed' || agent.status === 'timed_out' || agent.status === 'cancelled';
-          default:
-            return true;
-        }
-      })
-      .sort((a, b) => {
-        // Archived agents go to the bottom
-        if (a.archived !== b.archived) {
-          return a.archived ? 1 : -1;
-        }
-        // Sort by start time (most recent first)
-        return new Date(b.start_time).getTime() - new Date(a.start_time).getTime();
-      });
-  }, [agentList, statusFilter, showArchivedAgents, activeRunId]);
-
-  // Group agents by parent/child relationships
-  // Returns parent agents with their children
-  // Orphaned children (whose parent is filtered out) are shown as standalone cards
-  const groupedAgents = useMemo(() => {
-    // Build a set of filtered agent IDs for quick lookup
-    const filteredIds = new Set(filteredAgents.map(a => a.id));
-
-    // Build a map of parent_id -> children (only for filtered children)
-    const childrenByParent = new Map<string, AgentState[]>();
-    const orphanedChildren: AgentState[] = [];
-
-    for (const agent of filteredAgents) {
-      if (agent.parent_agent_id) {
-        // Check if parent is in filtered set
-        if (filteredIds.has(agent.parent_agent_id)) {
-          // Parent is visible, group with parent
-          const siblings = childrenByParent.get(agent.parent_agent_id) || [];
-          siblings.push(agent);
-          childrenByParent.set(agent.parent_agent_id, siblings);
-        } else {
-          // Parent is filtered out, show child as standalone
-          orphanedChildren.push(agent);
-        }
-      }
-    }
-
-    // Get parent agents (those without parent_agent_id) with their children
-    const parentGroups = filteredAgents
-      .filter(agent => !agent.parent_agent_id)
-      .map(parent => ({
-        parent,
-        children: childrenByParent.get(parent.id) || [],
-      }));
-
-    // Add orphaned children as standalone cards (no children of their own)
-    const orphanGroups = orphanedChildren.map(orphan => ({
-      parent: orphan,
-      children: [],
-    }));
-
-    return [...parentGroups, ...orphanGroups];
-  }, [filteredAgents]);
-
-  const handleAgentArchiveToggle = (agentId: string, archived: boolean) => {
+  const handleAgentArchiveToggle = useCallback((agentId: string, archived: boolean) => {
     updateAgent(agentId, { archived });
-  };
+  }, [updateAgent]);
 
-  const toggleFilter = (filter: StatusFilter) => {
-    setStatusFilter(current => current === filter ? 'all' : filter);
-  };
-  const hasSelectedAgent = selectedAgentId && agents[selectedAgentId];
-
-  // Handle task click from BeadsPane merge queue status - find agent by task ID and select it
+  // Handle task click from BeadsPane merge queue status
   const handleMergeTaskClick = useCallback((taskId: string) => {
     const agent = Object.values(agents).find(a => a.task_id === taskId);
     if (agent) {
       handleSelectAgent(agent.id);
     }
-  }, [agents]);
+  }, [agents, handleSelectAgent]);
 
-  const formatCost = (cost: number): string => {
-    if (cost < 0.01) {
-      return `$${(cost * 100).toFixed(2)}c`;
-    }
-    return `$${cost.toFixed(2)}`;
-  };
-
-  const formatTokens = (tokens: number): string => {
-    if (tokens >= 1000000) {
-      return `${(tokens / 1000000).toFixed(1)}M`;
-    } else if (tokens >= 1000) {
-      return `${(tokens / 1000).toFixed(1)}K`;
-    }
-    return tokens.toString();
-  };
+  const selectedAgent = selectedAgentId ? agents[selectedAgentId] : null;
+  const totalAgentCount = Object.keys(agents).length;
 
   return (
     <div className="flex flex-col h-screen bg-gray-50 dark:bg-gray-900">
-      {/* Header */}
-      <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-8 py-5 flex-shrink-0">
-        <div className="flex items-center justify-between">
-          {/* Title, Repository Selector, and Connection Status */}
-          <div className="flex items-center gap-6">
-            <h1 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-100">Canopy Dashboard</h1>
-            <div className="flex items-center gap-4">
-              <RepoSelector
-                repositories={repositories}
-                activeRepoId={activeRepoId}
-                onSelect={handleRepoSelect}
-                isLoading={isRepoSwitching}
-                disabled={!connected}
-              />
-              <RunSelector
-                runs={runs}
-                activeRunId={activeRunId}
-                onSelect={handleRunSelect}
-                isLoading={isRunsLoading}
-                disabled={!connected || isRepoSwitching}
-              />
-            </div>
-            <div className="flex items-center gap-3">
-              <div className="header-control gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 rounded-lg">
-                <div
-                  className={`w-2 h-2 rounded-full ${
-                    connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'
-                  }`}
-                />
-                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                  {connected ? 'Connected' : 'Disconnected'}
-                </span>
-              </div>
-              <button
-                onClick={() => setIsDark(!isDark)}
-                className="header-control justify-center w-10 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
-                title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-              >
-                {isDark ? <Sun className="w-5 h-5 text-yellow-500" /> : <Moon className="w-5 h-5 text-gray-600" />}
-              </button>
-            </div>
-          </div>
-
-          {/* Pause/Resume Button */}
-          <div className="flex items-center gap-6">
-            {/* Stats Summary (non-interactive) */}
-            <div className="flex items-center gap-6 text-sm">
-              <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
-                <Zap className="w-4 h-4" />
-                <span className="font-medium tracking-wide">{formatTokens(stats.total_tokens)}</span>
-              </div>
-              <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
-                <DollarSign className="w-4 h-4" />
-                <span className="font-medium tracking-wide">{formatCost(stats.total_cost_usd)}</span>
-              </div>
-              <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
-                <FileEdit className="w-4 h-4" />
-                <span className="font-medium tracking-wide">{stats.file_changes}</span>
-              </div>
-              <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
-                <GitCommit className="w-4 h-4" />
-                <span className="font-medium tracking-wide">{stats.git_commits}</span>
-              </div>
-            </div>
-
-            {isPaused ? (
-              <button
-                onClick={handleResume}
-                disabled={isResumeLoading || !connected}
-                className={`
-                  flex items-center gap-2 px-4 py-2 bg-green-500 text-white rounded-lg
-                  font-medium transition-colors
-                  ${
-                    isResumeLoading || !connected
-                      ? 'opacity-50 cursor-not-allowed'
-                      : 'hover:bg-green-600'
-                  }
-                `}
-              >
-                <Play className="w-4 h-4" />
-                {isResumeLoading ? 'Resuming...' : 'Resume'}
-              </button>
-            ) : (
-              <button
-                onClick={handlePause}
-                disabled={isPauseLoading || !connected}
-                className={`
-                  flex items-center gap-2 px-4 py-2 bg-orange-500 text-white rounded-lg
-                  font-medium transition-colors
-                  ${
-                    isPauseLoading || !connected
-                      ? 'opacity-50 cursor-not-allowed'
-                      : 'hover:bg-orange-600'
-                  }
-                `}
-              >
-                <Pause className="w-4 h-4" />
-                {isPauseLoading ? 'Pausing...' : 'Pause'}
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Stats Filter Toggles */}
-        <div className="flex items-center gap-4 mt-5">
-          {/* All Tasks */}
-          <button
-            onClick={() => setStatusFilter('all')}
-            className={`
-              flex items-center gap-2.5 px-5 py-2.5 rounded-lg font-medium transition-all cursor-pointer
-              ${statusFilter === 'all'
-                ? 'bg-gray-200 dark:bg-gray-600 ring-2 ring-gray-400 dark:ring-gray-500'
-                : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'
-              }
-            `}
-          >
-            <ListTodo className="w-4 h-4 text-gray-600 dark:text-gray-400" />
-            <span className="text-sm tracking-wide text-gray-600 dark:text-gray-300">All</span>
-            <span className="text-lg font-bold tabular-nums text-gray-900 dark:text-gray-100">{stats.total_tasks}</span>
-          </button>
-
-          {/* Running */}
-          <button
-            onClick={() => toggleFilter('running')}
-            className={`
-              flex items-center gap-2.5 px-5 py-2.5 rounded-lg font-medium transition-all cursor-pointer
-              ${statusFilter === 'running'
-                ? 'bg-blue-100 dark:bg-blue-900/50 ring-2 ring-blue-500'
-                : 'bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 dark:hover:bg-blue-900/50'
-              }
-            `}
-          >
-            <Activity className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-            <span className="text-sm tracking-wide text-blue-600 dark:text-blue-400">Running</span>
-            <span className="text-lg font-bold tabular-nums text-blue-700 dark:text-blue-300">{stats.running_tasks}</span>
-          </button>
-
-          {/* Completed */}
-          <button
-            onClick={() => toggleFilter('completed')}
-            className={`
-              flex items-center gap-2.5 px-5 py-2.5 rounded-lg font-medium transition-all cursor-pointer
-              ${statusFilter === 'completed'
-                ? 'bg-green-100 dark:bg-green-900/50 ring-2 ring-green-500'
-                : 'bg-green-50 dark:bg-green-900/30 hover:bg-green-100 dark:hover:bg-green-900/50'
-              }
-            `}
-          >
-            <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
-            <span className="text-sm tracking-wide text-green-600 dark:text-green-400">Completed</span>
-            <span className="text-lg font-bold tabular-nums text-green-700 dark:text-green-300">{stats.completed_tasks}</span>
-          </button>
-
-          {/* Failed */}
-          <button
-            onClick={() => toggleFilter('failed')}
-            className={`
-              flex items-center gap-2.5 px-5 py-2.5 rounded-lg font-medium transition-all cursor-pointer
-              ${statusFilter === 'failed'
-                ? 'bg-red-100 dark:bg-red-900/50 ring-2 ring-red-500'
-                : 'bg-red-50 dark:bg-red-900/30 hover:bg-red-100 dark:hover:bg-red-900/50'
-              }
-            `}
-          >
-            <XCircle className="w-4 h-4 text-red-600 dark:text-red-400" />
-            <span className="text-sm tracking-wide text-red-600 dark:text-red-400">Failed</span>
-            <span className="text-lg font-bold tabular-nums text-red-700 dark:text-red-300">{stats.failed_tasks}</span>
-          </button>
-
-          {/* Spacer */}
-          <div className="flex-1" />
-
-          {/* Show Archived Toggle */}
-          <button
-            onClick={() => setShowArchivedAgents(!showArchivedAgents)}
-            className={`
-              flex items-center gap-2.5 px-5 py-2.5 rounded-lg font-medium transition-all cursor-pointer
-              ${showArchivedAgents
-                ? 'bg-purple-100 dark:bg-purple-900/50 ring-2 ring-purple-500'
-                : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'
-              }
-            `}
-            title={showArchivedAgents ? 'Hide archived agents' : 'Show archived agents'}
-          >
-            <Archive className={`w-4 h-4 ${showArchivedAgents ? 'text-purple-600 dark:text-purple-400' : 'text-gray-600 dark:text-gray-400'}`} />
-            <span className={`text-sm tracking-wide ${showArchivedAgents ? 'text-purple-600 dark:text-purple-400' : 'text-gray-600 dark:text-gray-400'}`}>
-              {showArchivedAgents ? 'Hide' : 'Show'} Archived
-            </span>
-            <span className={`text-lg font-bold tabular-nums ${showArchivedAgents ? 'text-purple-700 dark:text-purple-300' : 'text-gray-700 dark:text-gray-300'}`}>
-              {archivedAgentCount}
-            </span>
-          </button>
-        </div>
-      </header>
+      <DashboardHeader
+        connected={connected}
+        isPaused={isPaused}
+        isPauseLoading={isPauseLoading}
+        isResumeLoading={isResumeLoading}
+        isDark={isDark}
+        onToggleTheme={() => setIsDark(!isDark)}
+        repositories={repositories}
+        activeRepoId={activeRepoId}
+        isRepoSwitching={isRepoSwitching}
+        onRepoSelect={handleRepoSelect}
+        runs={runs}
+        activeRunId={activeRunId}
+        isRunsLoading={isRunsLoading}
+        onRunSelect={setActiveRunId}
+        stats={stats}
+        statusFilter={statusFilter}
+        onStatusFilterChange={setStatusFilter}
+        showArchivedAgents={showArchivedAgents}
+        archivedAgentCount={archivedCount}
+        onToggleShowArchived={() => setShowArchivedAgents(!showArchivedAgents)}
+        onPause={handlePause}
+        onResume={handleResume}
+      />
 
       {/* Main Content Area with Beads Pane */}
       <div className="flex-1 flex overflow-hidden">
@@ -591,146 +264,25 @@ export const Dashboard: React.FC = () => {
         <main className="flex-1 flex flex-col overflow-hidden">
           {/* Agent Grid */}
           <div className="flex-1 overflow-y-auto p-8">
-          {groupedAgents.length === 0 ? (
-            <div className="flex items-center justify-center h-full">
-              <div className="text-center">
-                <Activity className="w-16 h-16 text-gray-300 dark:text-gray-600 mx-auto mb-5" />
-                <h3 className="text-lg font-medium tracking-tight text-gray-500 dark:text-gray-400 mb-2">
-                  {agentList.length === 0 ? 'No Agents' : `No ${statusFilter === 'all' ? '' : statusFilter} Agents`}
-                </h3>
-                <p className="text-sm tracking-wide text-gray-400 dark:text-gray-500">
-                  {agentList.length === 0
-                    ? 'Agents will appear here when tasks are running'
-                    : 'Try selecting a different filter above'
-                  }
-                </p>
-              </div>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5 items-start">
-              {groupedAgents.map(({ parent, children }) => (
-                <AgentCardGroup
-                  key={parent.id}
-                  parentAgent={parent}
-                  childAgents={children}
-                  onSelect={handleSelectAgent}
-                  selectedAgentId={selectedAgentId}
-                  onArchiveToggle={handleAgentArchiveToggle}
-                />
-              ))}
-            </div>
-          )}
-        </div>
+            <AgentGrid
+              groupedAgents={groupedAgents}
+              totalAgentCount={totalAgentCount}
+              statusFilter={statusFilter}
+              selectedAgentId={selectedAgentId}
+              onSelectAgent={handleSelectAgent}
+              onArchiveToggle={handleAgentArchiveToggle}
+            />
+          </div>
 
           {/* Bottom Terminal Panel */}
-          {hasSelectedAgent && (
-            <div
-              className="border-t border-gray-200 dark:border-gray-700 bg-gray-900 flex-shrink-0"
-              style={{ height: paneHeight }}
-            >
-              <div className="h-full flex flex-col">
-                {/* Resize Handle */}
-                <div
-                  onMouseDown={handleResizeStart}
-                  className={`
-                    h-1.5 bg-gray-800 cursor-ns-resize flex items-center justify-center
-                    hover:bg-gray-700 transition-colors group
-                    ${isResizing ? 'bg-blue-600' : ''}
-                  `}
-                  title="Drag to resize"
-                >
-                  <GripHorizontal className={`w-4 h-4 text-gray-600 group-hover:text-gray-400 ${isResizing ? 'text-blue-400' : ''}`} />
-                </div>
-
-                {/* Terminal Header with Tabs */}
-                <div className="flex items-center justify-between px-4 py-2 bg-gray-800 border-b border-gray-700">
-                  <div className="flex items-center gap-4">
-                    {/* Tab buttons */}
-                    <div className="flex items-center gap-1 bg-gray-900/50 rounded-lg p-1">
-                      <button
-                        onClick={() => setActiveTab('feed')}
-                        className={`
-                          flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all
-                          ${activeTab === 'feed'
-                            ? 'bg-blue-600 text-white'
-                            : 'text-gray-400 hover:text-gray-200 hover:bg-gray-700/50'
-                          }
-                        `}
-                      >
-                        <List className="w-4 h-4" />
-                        Live Feed
-                      </button>
-                      <button
-                        onClick={() => setActiveTab('terminal')}
-                        className={`
-                          flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all
-                          ${activeTab === 'terminal'
-                            ? 'bg-blue-600 text-white'
-                            : 'text-gray-400 hover:text-gray-200 hover:bg-gray-700/50'
-                          }
-                        `}
-                      >
-                        <TerminalIcon className="w-4 h-4" />
-                        Raw Output
-                      </button>
-                      <button
-                        onClick={() => setActiveTab('commits')}
-                        className={`
-                          flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all
-                          ${activeTab === 'commits'
-                            ? 'bg-blue-600 text-white'
-                            : 'text-gray-400 hover:text-gray-200 hover:bg-gray-700/50'
-                          }
-                        `}
-                      >
-                        <GitCommit className="w-4 h-4" />
-                        Commits
-                        {(agents[selectedAgentId]?.commits ?? 0) > 0 && (
-                          <span className="ml-1 px-1.5 py-0.5 text-xs bg-blue-500/30 rounded">
-                            {agents[selectedAgentId]?.commits}
-                          </span>
-                        )}
-                      </button>
-                    </div>
-
-                    {/* Agent info */}
-                    <div className="flex items-center gap-2 text-xs">
-                      <span className="text-gray-500">|</span>
-                      <code className="font-mono text-gray-400">
-                        {selectedAgentId}
-                      </code>
-                      <span className="text-gray-500">-</span>
-                      <span className="text-gray-400 truncate max-w-[200px]">
-                        {agents[selectedAgentId]?.task_title}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => setSelectedAgent(null)}
-                      className="text-gray-400 hover:text-gray-200 transition-colors px-2 py-1 rounded hover:bg-gray-700"
-                    >
-                      <span className="text-sm">Close</span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Tab Content */}
-                <div className="flex-1 overflow-hidden">
-                  {activeTab === 'feed' && (
-                    <LiveFeed agentId={selectedAgentId} />
-                  )}
-                  {activeTab === 'terminal' && (
-                    <AgentTerminal agentId={selectedAgentId} />
-                  )}
-                  {activeTab === 'commits' && (
-                    <div className="h-full overflow-y-auto p-4 bg-gray-900">
-                      <CommitList commits={agents[selectedAgentId]?.git_commits || []} />
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
+          {selectedAgent && (
+            <TerminalPanel
+              agent={selectedAgent}
+              height={paneHeight}
+              isResizing={isResizing}
+              onResizeStart={handleResizeStart}
+              onClose={() => setSelectedAgent(null)}
+            />
           )}
         </main>
       </div>
