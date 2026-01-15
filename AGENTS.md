@@ -75,6 +75,81 @@ See `pkg/errors/errors.go` for defined error types and full guidelines.
 - **Log errors** only for truly non-fatal side effects (cleanup, telemetry, etc.)
 - Use `warning:` prefix for non-fatal errors in verbose output
 
+## Concurrency Guidelines
+
+Use consistent concurrency patterns based on the access pattern of your data:
+
+### When to Use `sync.Map`
+
+Use `sync.Map` for maps that are:
+- **Append-only or mostly-append**: Keys are written once and read many times
+- **High read contention**: Many goroutines read concurrently
+- **Disjoint key access**: Different goroutines access different keys
+
+```go
+// Good: Results cache (write once per task, read many times)
+results sync.Map // map[taskID]*Result
+
+// Good: Short-lived cancel functions (store, then delete)
+agentContexts sync.Map // map[taskID]context.CancelFunc
+```
+
+**Avoid** `sync.Map` for maps that require:
+- Iteration during updates
+- Complex multi-field updates
+- Snapshot/copy operations
+- Coordinated updates across multiple keys
+
+### When to Use `sync.RWMutex`
+
+Use `sync.RWMutex` for structured data with:
+- **Complex update patterns**: Multiple fields updated together
+- **Iteration requirements**: Need to range over all entries
+- **Snapshot operations**: Need consistent point-in-time copies
+- **Coordinated updates**: Changes span multiple entries
+
+```go
+// Good: Runtime state with snapshots and stats aggregation
+type RuntimeState struct {
+    Agents map[string]*AgentState
+    Tasks  map[string]*TaskState
+    Stats  Stats
+    mu     sync.RWMutex
+}
+
+func (r *RuntimeState) GetSnapshot() RuntimeState {
+    r.mu.RLock()
+    defer r.mu.RUnlock()
+    // Return consistent copy of all fields
+}
+```
+
+### When to Use `atomic` Types
+
+Use `atomic.Bool`, `atomic.Int64`, etc. for:
+- **Simple flags**: Boolean state (paused, closed, active)
+- **Counters**: Incrementing/decrementing integers
+- **Single-value state**: No coordination with other fields needed
+
+```go
+// Good: Independent boolean flags
+paused atomic.Bool
+closed atomic.Bool
+
+// Good: Simple counter
+activeCount atomic.Int64
+```
+
+**Avoid** atomics when the flag must be coordinated with other state changes—use a mutex instead.
+
+### Pattern Summary
+
+| Pattern | Use Case | Example |
+|---------|----------|---------|
+| `sync.Map` | Append-only cache, disjoint keys | `results`, `agentContexts` |
+| `sync.RWMutex` | Structured data, snapshots, iteration | `RuntimeState` |
+| `atomic` | Simple flags, counters | `paused`, `closed` |
+
 ## API Conventions (Go ↔ TypeScript)
 
 **JSON field names MUST use camelCase** to match TypeScript conventions.
