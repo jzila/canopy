@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+
+	"github.com/jzila/canopy/pkg/metrics"
 )
 
 // Queue manages sequential merge operations for concurrent agents.
@@ -55,6 +57,7 @@ func (q *Queue) Enqueue(req *MergeRequest) bool {
 
 	select {
 	case q.requests <- req:
+		metrics.SetMergeQueueDepth(len(q.requests))
 		return true
 	default:
 		// Queue is full
@@ -123,6 +126,7 @@ func (q *Queue) DequeueCtx(ctx context.Context) *MergeRequest {
 		if !ok {
 			return nil
 		}
+		metrics.SetMergeQueueDepth(len(q.requests))
 		return req
 	}
 }

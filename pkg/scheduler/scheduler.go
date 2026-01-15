@@ -14,6 +14,7 @@ import (
 
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
+	"github.com/jzila/canopy/pkg/metrics"
 	"github.com/jzila/canopy/pkg/sandbox"
 )
 
@@ -217,7 +218,11 @@ func (s *Scheduler) executeTask(ctx context.Context, task *beads.Task) *agent.Re
 
 	// Register overlay in active list for signal cleanup
 	s.activeOverlays.Store(task.ID, overlay)
-	defer s.activeOverlays.Delete(task.ID)
+	metrics.IncOverlayMounts()
+	defer func() {
+		s.activeOverlays.Delete(task.ID)
+		metrics.DecOverlayMounts()
+	}()
 
 	// Unmount when task completes, but don't delete directories yet
 	defer overlay.Unmount()

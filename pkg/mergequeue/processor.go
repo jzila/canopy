@@ -12,6 +12,7 @@ import (
 	"github.com/jzila/canopy/pkg/beads"
 	"github.com/jzila/canopy/pkg/ipc"
 	"github.com/jzila/canopy/pkg/merge"
+	"github.com/jzila/canopy/pkg/metrics"
 	"github.com/jzila/canopy/pkg/resolver"
 )
 
@@ -178,6 +179,7 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 
 	// Spawn resolver if any merge issue was detected
 	if needsResolver {
+		metrics.IncMergeConflicts()
 		if p.verbose {
 			fmt.Printf("[%s] Merge issue detected (%s), spawning resolver agent...\n", taskID, resolverReason)
 		}

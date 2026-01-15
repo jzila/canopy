@@ -12,6 +12,7 @@ import (
 
 	"github.com/jzila/canopy/pkg/events"
 	"github.com/jzila/canopy/pkg/logging"
+	"github.com/jzila/canopy/pkg/metrics"
 )
 
 // Server manages IPC connections from canopy run clients
@@ -191,6 +192,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 		if event := s.convertToEvent(&msg); event != nil {
 			logging.Debug("IPC forwarding event to EventBus", "event_type", event.Type, "identifier", identifier)
 			s.eventBus.Publish(*event)
+			metrics.IncIPCMessages(string(msg.Type))
 		} else {
 			logging.Warn("IPC failed to convert message to event", "type", msg.Type, "identifier", identifier)
 		}

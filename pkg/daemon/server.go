@@ -12,6 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/jzila/canopy/pkg/logging"
 	"github.com/jzila/canopy/web"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // Server manages the HTTP server that serves the web UI and REST API
@@ -172,6 +173,9 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// REST API routes - repository management
 	mux.HandleFunc("/api/repositories", s.handleRepositoriesRoutes)  // Handles GET /api/repositories
 	mux.HandleFunc("/api/repositories/", s.handleRepositoriesRoutes) // Handles /api/repositories/:id and /api/repositories/:id/activate
+
+	// Prometheus metrics endpoint
+	mux.Handle("/metrics", promhttp.Handler())
 
 	// WebSocket endpoint
 	mux.HandleFunc("/ws", s.handleWebSocket)

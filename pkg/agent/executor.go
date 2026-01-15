@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jzila/canopy/pkg/beads"
+	"github.com/jzila/canopy/pkg/metrics"
 	"github.com/jzila/canopy/pkg/sandbox"
 )
 
@@ -355,6 +356,13 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 			result.Error = fmt.Sprintf("exit code %d", result.ExitCode)
 		}
 	}
+
+	// Record task duration metric
+	status := "success"
+	if !result.Success {
+		status = "failure"
+	}
+	metrics.RecordTaskDuration(result.Duration.Seconds(), status)
 
 	return result
 }
