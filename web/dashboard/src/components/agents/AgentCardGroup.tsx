@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from 'react';
-import { ChevronDown, ChevronRight, GitMerge } from 'lucide-react';
+import { ChevronDown, ChevronRight, GitMerge, ExternalLink } from 'lucide-react';
 import { AgentCard } from './AgentCard';
 import type { AgentState } from '../../stores/stateStore';
+import { useStateStore } from '../../stores/stateStore';
 
 interface AgentCardGroupProps {
   parentAgent: AgentState;
@@ -151,6 +152,17 @@ const ResolverCard: React.FC<ResolverCardProps> = ({
   isSelected,
 }) => {
   const statusColor = STATUS_COLORS[agent.status] || 'bg-gray-500';
+  const setHighlightedTask = useStateStore((state) => state.setHighlightedTask);
+  const tasks = useStateStore((state) => state.tasks);
+  const taskExistsInBeads = Boolean(tasks[agent.task_id]);
+
+  const handleTaskIdClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (tasks[agent.task_id]) {
+      setHighlightedTask(agent.task_id);
+      setTimeout(() => setHighlightedTask(null), 3000);
+    }
+  };
 
   return (
     <div
@@ -163,9 +175,20 @@ const ResolverCard: React.FC<ResolverCardProps> = ({
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <GitMerge className="w-4 h-4 text-amber-500 flex-shrink-0" />
-          <code className="text-xs font-mono text-gray-500 dark:text-gray-400 truncate">
-            {agent.task_id}
-          </code>
+          {taskExistsInBeads ? (
+            <button
+              onClick={handleTaskIdClick}
+              className="inline-flex items-center gap-1 text-xs font-mono text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 hover:underline transition-colors truncate"
+              title="Click to highlight in Beads pane"
+            >
+              {agent.task_id}
+              <ExternalLink className="w-2.5 h-2.5 flex-shrink-0" />
+            </button>
+          ) : (
+            <code className="text-xs font-mono text-gray-500 dark:text-gray-400 truncate">
+              {agent.task_id}
+            </code>
+          )}
           <span
             className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium text-white ${statusColor}`}
           >

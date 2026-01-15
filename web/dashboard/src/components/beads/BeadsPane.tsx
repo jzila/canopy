@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { Circle, Clock, AlertCircle, Loader2, ChevronRight, ChevronLeft, ChevronDown, GitBranch } from 'lucide-react';
 import { useStateStore } from '../../stores/stateStore';
 import type { TaskState } from '../../stores/stateStore';
@@ -182,8 +182,11 @@ const truncateId = (id: string, length: number = 11): string => {
 
 export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle }) => {
   const tasks = useStateStore((state) => state.tasks);
+  const highlightedTaskId = useStateStore((state) => state.highlightedTaskId);
   const [viewMode, setViewMode] = useState<ViewMode>('hierarchy');
   const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set());
+  const taskRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const listContainerRef = useRef<HTMLDivElement>(null);
 
   // Filter to only show incomplete beads (not done/completed) and not archived
   const incompleteBeads = useMemo(() => {
@@ -233,6 +236,16 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle }) =>
   const hasDependencies = useMemo(() => {
     return incompleteBeads.some(task => task.dependencies && task.dependencies.length > 0);
   }, [incompleteBeads]);
+
+  // Scroll to highlighted task when it changes
+  useEffect(() => {
+    if (highlightedTaskId && isExpanded) {
+      const taskElement = taskRefs.current.get(highlightedTaskId);
+      if (taskElement && listContainerRef.current) {
+        taskElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  }, [highlightedTaskId, isExpanded]);
 
   const toggleNodeCollapsed = (taskId: string) => {
     setCollapsedNodes(prev => {
@@ -383,7 +396,7 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle }) =>
       </div>
 
       {/* Beads List */}
-      <div className="flex-1 overflow-y-auto">
+      <div ref={listContainerRef} className="flex-1 overflow-y-auto">
         {incompleteBeads.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center px-4">
             <div className="w-12 h-12 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center mb-3">
@@ -400,11 +413,23 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle }) =>
             {incompleteBeads.map((task: TaskState) => {
               const statusConfig = getStatusConfig(task.status);
               const priorityStyle = getPriorityStyle(task.priority);
+              const isHighlighted = highlightedTaskId === task.id;
 
               return (
                 <div
                   key={task.id}
-                  className="px-3 py-2.5 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors cursor-default"
+                  ref={(el) => {
+                    if (el) {
+                      taskRefs.current.set(task.id, el);
+                    } else {
+                      taskRefs.current.delete(task.id);
+                    }
+                  }}
+                  className={`px-3 py-2.5 transition-all cursor-default ${
+                    isHighlighted
+                      ? 'bg-blue-100 dark:bg-blue-900/50 ring-2 ring-blue-500 ring-inset'
+                      : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                  }`}
                 >
                   {/* Top row: Priority, Status, ID */}
                   <div className="flex items-center gap-1.5 mb-1.5">
@@ -452,11 +477,23 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle }) =>
               const priorityStyle = getPriorityStyle(task.priority);
               const hasChildren = children.length > 0;
               const isCollapsed = collapsedNodes.has(task.id);
+              const isHighlighted = highlightedTaskId === task.id;
 
               return (
                 <div
                   key={task.id}
-                  className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors cursor-default"
+                  ref={(el) => {
+                    if (el) {
+                      taskRefs.current.set(task.id, el);
+                    } else {
+                      taskRefs.current.delete(task.id);
+                    }
+                  }}
+                  className={`transition-all cursor-default ${
+                    isHighlighted
+                      ? 'bg-blue-100 dark:bg-blue-900/50 ring-2 ring-blue-500 ring-inset'
+                      : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                  }`}
                   style={{ paddingLeft: `${depth * 16 + 8}px` }}
                 >
                   <div className="py-2 pr-3">

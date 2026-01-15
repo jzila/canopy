@@ -109,6 +109,7 @@ interface StateStore {
   stats: Stats;
   isPaused: boolean;
   selectedAgentId: string | null;
+  highlightedTaskId: string | null;
   repositories: Repository[];
   activeRepoId: string;
   isRepoSwitching: boolean;
@@ -122,6 +123,7 @@ interface StateStore {
   appendOutput: (agentId: string, output: string, isError?: boolean) => void;
   appendLiveFeedEvent: (agentId: string, event: LiveFeedEvent) => void;
   setSelectedAgent: (id: string | null) => void;
+  setHighlightedTask: (id: string | null) => void;
   setIsPaused: (paused: boolean) => void;
   setRepositories: (repositories: Repository[], activeRepoId: string) => void;
   setActiveRepo: (repoId: string) => void;
@@ -201,6 +203,7 @@ export const useStateStore = create<StateStore>((set) => ({
   stats: initialStats,
   isPaused: false,
   selectedAgentId: null,
+  highlightedTaskId: null,
   repositories: [],
   activeRepoId: '',
   isRepoSwitching: false,
@@ -318,6 +321,8 @@ export const useStateStore = create<StateStore>((set) => ({
     }),
 
   setSelectedAgent: (selectedAgentId) => set({ selectedAgentId }),
+
+  setHighlightedTask: (highlightedTaskId) => set({ highlightedTaskId }),
 
   setIsPaused: (isPaused) => set({ isPaused }),
 

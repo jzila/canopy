@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Clock, Zap, DollarSign, XCircle, GitCommit, Archive } from 'lucide-react';
+import { Clock, Zap, DollarSign, XCircle, GitCommit, Archive, ExternalLink } from 'lucide-react';
 import type { AgentState } from '../../stores/stateStore';
+import { useStateStore } from '../../stores/stateStore';
 import { killAgent, archiveAgent } from '../../api/client';
 
 interface AgentCardProps {
@@ -68,6 +69,8 @@ export const AgentCard: React.FC<AgentCardProps> = ({
   );
   const [isKilling, setIsKilling] = useState(false);
   const [isArchiving, setIsArchiving] = useState(false);
+  const setHighlightedTask = useStateStore((state) => state.setHighlightedTask);
+  const tasks = useStateStore((state) => state.tasks);
 
   // Update elapsed time every second for running agents
   useEffect(() => {
@@ -118,6 +121,19 @@ export const AgentCard: React.FC<AgentCardProps> = ({
     onSelect(agent.id);
   };
 
+  const handleTaskIdClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    // Highlight the task in BeadsPane if it exists
+    if (tasks[agent.task_id]) {
+      setHighlightedTask(agent.task_id);
+      // Clear highlight after 3 seconds
+      setTimeout(() => setHighlightedTask(null), 3000);
+    }
+  };
+
+  // Check if task exists in the BeadsPane (incomplete tasks only)
+  const taskExistsInBeads = Boolean(tasks[agent.task_id]);
+
   const isRunning = agent.status === 'running' || agent.status === 'starting';
   const isFinished = agent.status === 'completed' || agent.status === 'failed' || agent.status === 'timed_out' || agent.status === 'cancelled';
   const statusColor = STATUS_COLORS[agent.status] || 'bg-gray-500';
@@ -143,9 +159,20 @@ export const AgentCard: React.FC<AgentCardProps> = ({
                 Archived
               </span>
             )}
-            <code className="text-sm font-mono text-gray-500 dark:text-gray-400">
-              {agent.task_id}
-            </code>
+            {taskExistsInBeads ? (
+              <button
+                onClick={handleTaskIdClick}
+                className="inline-flex items-center gap-1 text-sm font-mono text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 hover:underline transition-colors"
+                title="Click to highlight in Beads pane"
+              >
+                {agent.task_id}
+                <ExternalLink className="w-3 h-3" />
+              </button>
+            ) : (
+              <code className="text-sm font-mono text-gray-500 dark:text-gray-400">
+                {agent.task_id}
+              </code>
+            )}
             <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium text-white ${statusColor}`}>
               {agent.status}
             </span>
