@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/jzila/canopy/pkg/beads"
+	"github.com/jzila/canopy/pkg/metrics"
 )
 
 // AgentStatus represents the current state of an agent
@@ -355,6 +356,11 @@ func (r *RuntimeState) UpdateStats() {
 	stats.AllGitCommits = allCommits
 
 	r.Stats = stats
+
+	// Update Prometheus metrics for agent counts
+	metrics.SetActiveAgents("running", stats.RunningTasks)
+	metrics.SetActiveAgents("completed", stats.CompletedTasks)
+	metrics.SetActiveAgents("failed", stats.FailedTasks)
 }
 
 // Pause sets the paused state
