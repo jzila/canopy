@@ -117,11 +117,11 @@ func TestOrchestrator_MergeQueueInitialized(t *testing.T) {
 		concurrency     int
 		expectedBufSize int
 	}{
-		{"default concurrency", 0, 4},      // 0 means default, which is 4
-		{"concurrency 1", 1, 1},            // 1 agent = 1 buffer slot
-		{"concurrency 4", 4, 4},            // 4 agents = 4 buffer slots
-		{"concurrency 8", 8, 8},            // 8 agents = 8 buffer slots
-		{"negative concurrency", -1, 4},    // invalid defaults to 4
+		{"default concurrency", 0, 4},   // 0 means default, which is 4
+		{"concurrency 1", 1, 1},         // 1 agent = 1 buffer slot
+		{"concurrency 4", 4, 4},         // 4 agents = 4 buffer slots
+		{"concurrency 8", 8, 8},         // 8 agents = 8 buffer slots
+		{"negative concurrency", -1, 4}, // invalid defaults to 4
 	}
 
 	for _, tc := range testCases {
@@ -446,20 +446,8 @@ func TestCallbackManager_New(t *testing.T) {
 	}
 
 	// Should be empty initially
-	if len(m.onAgentStart) != 0 {
-		t.Error("onAgentStart should be empty initially")
-	}
-	if len(m.onOutput) != 0 {
-		t.Error("onOutput should be empty initially")
-	}
-	if len(m.onLiveFeed) != 0 {
-		t.Error("onLiveFeed should be empty initially")
-	}
-	if len(m.onDone) != 0 {
-		t.Error("onDone should be empty initially")
-	}
-	if len(m.onFail) != 0 {
-		t.Error("onFail should be empty initially")
+	if len(m.callbacks) != 0 {
+		t.Error("callbacks should be empty initially")
 	}
 }
 
@@ -469,15 +457,13 @@ func TestCallbackManager_RegisterAndInvoke(t *testing.T) {
 	var called bool
 	var receivedTaskID string
 
-	// Register callback
-	id := m.RegisterOnAgentStart(func(taskID string, task *beads.Task) {
-		called = true
-		receivedTaskID = taskID
+	// Register callbacks
+	m.Register(&EventCallbacks{
+		OnAgentStartFn: func(taskID string, task *beads.Task) {
+			called = true
+			receivedTaskID = taskID
+		},
 	})
-
-	if id < 0 {
-		t.Error("Expected valid callback ID")
-	}
 
 	// Invoke and check
 	m.OnAgentStart("test-task", &beads.Task{ID: "test-task"})
@@ -495,15 +481,21 @@ func TestCallbackManager_MultipleCallbacks(t *testing.T) {
 
 	var count int
 
-	// Register multiple callbacks
-	m.RegisterOnDone(func(taskID string, result *agent.Result) {
-		count++
+	// Register multiple callback sets
+	m.Register(&EventCallbacks{
+		OnDoneFn: func(taskID string, result *agent.Result) {
+			count++
+		},
 	})
-	m.RegisterOnDone(func(taskID string, result *agent.Result) {
-		count++
+	m.Register(&EventCallbacks{
+		OnDoneFn: func(taskID string, result *agent.Result) {
+			count++
+		},
 	})
-	m.RegisterOnDone(func(taskID string, result *agent.Result) {
-		count++
+	m.Register(&EventCallbacks{
+		OnDoneFn: func(taskID string, result *agent.Result) {
+			count++
+		},
 	})
 
 	// Invoke
@@ -514,60 +506,53 @@ func TestCallbackManager_MultipleCallbacks(t *testing.T) {
 	}
 }
 
-func TestCallbackManager_Unregister(t *testing.T) {
+func TestCallbackManager_RegisterNil(t *testing.T) {
 	m := NewCallbackManager()
 
-	var count int
+	// Should not panic
+	m.Register(nil)
 
-	// Register callbacks
-	id1 := m.RegisterOnFail(func(taskID string, result *agent.Result) {
-		count++
-	})
-	id2 := m.RegisterOnFail(func(taskID string, result *agent.Result) {
-		count++
-	})
-
-	// Invoke - both should be called
-	m.OnFail("test", &agent.Result{TaskID: "test"})
-	if count != 2 {
-		t.Errorf("Expected 2 callbacks, got %d", count)
-	}
-
-	// Unregister one
-	m.Unregister(id1)
-	count = 0
-
-	// Invoke again - only one should be called
-	m.OnFail("test", &agent.Result{TaskID: "test"})
-	if count != 1 {
-		t.Errorf("Expected 1 callback after unregister, got %d", count)
-	}
-
-	// Unregister the other
-	m.Unregister(id2)
-	count = 0
-
-	// Invoke again - none should be called
-	m.OnFail("test", &agent.Result{TaskID: "test"})
-	if count != 0 {
-		t.Errorf("Expected 0 callbacks after all unregistered, got %d", count)
+	if len(m.callbacks) != 0 {
+		t.Errorf("Expected 0 callbacks after nil registration, got %d", len(m.callbacks))
 	}
 }
 
-func TestCallbackManager_UnregisterNonexistent(t *testing.T) {
+func TestCallbackManager_PartialCallbacks(t *testing.T) {
 	m := NewCallbackManager()
 
-	// Should not panic when unregistering non-existent ID
-	m.Unregister(CallbackID(999))
-	m.Unregister(CallbackID(-1))
+	var startCalled, doneCalled bool
+
+	// Register callbacks with only some handlers
+	m.Register(&EventCallbacks{
+		OnAgentStartFn: func(taskID string, task *beads.Task) {
+			startCalled = true
+		},
+		OnDoneFn: func(taskID string, result *agent.Result) {
+			doneCalled = true
+		},
+	})
+
+	// Invoke all types - none should panic
+	m.OnAgentStart("test", &beads.Task{ID: "test"})
+	m.OnOutput("test", "output", false)
+	m.OnLiveFeed("test", &agent.LiveFeedEvent{})
+	m.OnDone("test", &agent.Result{TaskID: "test"})
+	m.OnFail("test", &agent.Result{TaskID: "test"})
+
+	if !startCalled {
+		t.Error("OnAgentStart callback not invoked")
+	}
+	if !doneCalled {
+		t.Error("OnDone callback not invoked")
+	}
 }
 
-func TestCallbackManager_RegisterAll(t *testing.T) {
+func TestCallbackManager_AllCallbackTypes(t *testing.T) {
 	m := NewCallbackManager()
 
 	var startCalled, outputCalled, liveFeedCalled, doneCalled, failCalled bool
 
-	callbacks := &EventCallbacks{
+	m.Register(&EventCallbacks{
 		OnAgentStartFn: func(taskID string, task *beads.Task) {
 			startCalled = true
 		},
@@ -583,13 +568,7 @@ func TestCallbackManager_RegisterAll(t *testing.T) {
 		OnFailFn: func(taskID string, result *agent.Result) {
 			failCalled = true
 		},
-	}
-
-	ids := m.RegisterAll(callbacks)
-
-	if len(ids) != 5 {
-		t.Errorf("Expected 5 callback IDs, got %d", len(ids))
-	}
+	})
 
 	// Invoke each type
 	m.OnAgentStart("test", &beads.Task{ID: "test"})
@@ -615,67 +594,6 @@ func TestCallbackManager_RegisterAll(t *testing.T) {
 	}
 }
 
-func TestCallbackManager_RegisterAllNil(t *testing.T) {
-	m := NewCallbackManager()
-
-	ids := m.RegisterAll(nil)
-
-	if ids != nil {
-		t.Errorf("Expected nil for nil callbacks, got %v", ids)
-	}
-}
-
-func TestCallbackManager_RegisterAllPartial(t *testing.T) {
-	m := NewCallbackManager()
-
-	// Only register some callbacks
-	callbacks := &EventCallbacks{
-		OnAgentStartFn: func(taskID string, task *beads.Task) {},
-		OnDoneFn:       func(taskID string, result *agent.Result) {},
-	}
-
-	ids := m.RegisterAll(callbacks)
-
-	if len(ids) != 2 {
-		t.Errorf("Expected 2 callback IDs for partial callbacks, got %d", len(ids))
-	}
-}
-
-func TestCallbackManager_UnregisterAll(t *testing.T) {
-	m := NewCallbackManager()
-
-	var count int
-
-	callbacks := &EventCallbacks{
-		OnDoneFn: func(taskID string, result *agent.Result) {
-			count++
-		},
-		OnFailFn: func(taskID string, result *agent.Result) {
-			count++
-		},
-	}
-
-	ids := m.RegisterAll(callbacks)
-
-	// Invoke
-	m.OnDone("test", &agent.Result{TaskID: "test"})
-	m.OnFail("test", &agent.Result{TaskID: "test"})
-	if count != 2 {
-		t.Errorf("Expected 2 callbacks, got %d", count)
-	}
-
-	// Unregister all
-	m.UnregisterAll(ids)
-	count = 0
-
-	// Invoke again
-	m.OnDone("test", &agent.Result{TaskID: "test"})
-	m.OnFail("test", &agent.Result{TaskID: "test"})
-	if count != 0 {
-		t.Errorf("Expected 0 callbacks after UnregisterAll, got %d", count)
-	}
-}
-
 func TestCallbackManager_ConcurrentRegistration(t *testing.T) {
 	m := NewCallbackManager()
 
@@ -687,7 +605,9 @@ func TestCallbackManager_ConcurrentRegistration(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			m.RegisterOnDone(func(taskID string, result *agent.Result) {})
+			m.Register(&EventCallbacks{
+				OnDoneFn: func(taskID string, result *agent.Result) {},
+			})
 		}()
 	}
 
@@ -695,7 +615,7 @@ func TestCallbackManager_ConcurrentRegistration(t *testing.T) {
 
 	// Verify all callbacks were registered
 	m.mu.RLock()
-	count := len(m.onDone)
+	count := len(m.callbacks)
 	m.mu.RUnlock()
 
 	if count != numGoroutines {
@@ -709,8 +629,10 @@ func TestCallbackManager_ConcurrentInvocation(t *testing.T) {
 	var counter int64
 
 	// Register a callback that increments counter
-	m.RegisterOnAgentStart(func(taskID string, task *beads.Task) {
-		atomic.AddInt64(&counter, 1)
+	m.Register(&EventCallbacks{
+		OnAgentStartFn: func(taskID string, task *beads.Task) {
+			atomic.AddInt64(&counter, 1)
+		},
 	})
 
 	var wg sync.WaitGroup
@@ -754,8 +676,10 @@ func TestCallbackManager_ConcurrentRegistrationAndInvocation(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			m.RegisterOnOutput(func(taskID string, output string, isError bool) {
-				atomic.AddInt64(&counter, 1)
+			m.Register(&EventCallbacks{
+				OnOutputFn: func(taskID string, output string, isError bool) {
+					atomic.AddInt64(&counter, 1)
+				},
 			})
 		}()
 	}
@@ -765,73 +689,6 @@ func TestCallbackManager_ConcurrentRegistrationAndInvocation(t *testing.T) {
 	// Counter should be > 0 (some callbacks should have been invoked)
 	// but we can't know exactly how many due to race between registration and invocation
 	t.Logf("Counter value: %d (expected > 0)", counter)
-}
-
-func TestCallbackManager_ConcurrentUnregistration(t *testing.T) {
-	m := NewCallbackManager()
-
-	// Register many callbacks
-	var ids []CallbackID
-	var mu sync.Mutex
-
-	for i := 0; i < 100; i++ {
-		id := m.RegisterOnLiveFeed(func(taskID string, event *agent.LiveFeedEvent) {})
-		mu.Lock()
-		ids = append(ids, id)
-		mu.Unlock()
-	}
-
-	var wg sync.WaitGroup
-
-	// Concurrently unregister callbacks
-	for _, id := range ids {
-		wg.Add(1)
-		go func(id CallbackID) {
-			defer wg.Done()
-			m.Unregister(id)
-		}(id)
-	}
-
-	// Also concurrently invoke callbacks
-	for i := 0; i < 50; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			m.OnLiveFeed("test", &agent.LiveFeedEvent{})
-		}()
-	}
-
-	wg.Wait()
-
-	// All callbacks should be unregistered
-	m.mu.RLock()
-	count := len(m.onLiveFeed)
-	m.mu.RUnlock()
-
-	if count != 0 {
-		t.Errorf("Expected 0 callbacks after concurrent unregistration, got %d", count)
-	}
-}
-
-func TestCallbackManager_UniqueIDs(t *testing.T) {
-	m := NewCallbackManager()
-
-	ids := make(map[CallbackID]bool)
-
-	// Register many callbacks of different types
-	for i := 0; i < 50; i++ {
-		ids[m.RegisterOnAgentStart(func(taskID string, task *beads.Task) {})] = true
-		ids[m.RegisterOnOutput(func(taskID string, output string, isError bool) {})] = true
-		ids[m.RegisterOnLiveFeed(func(taskID string, event *agent.LiveFeedEvent) {})] = true
-		ids[m.RegisterOnDone(func(taskID string, result *agent.Result) {})] = true
-		ids[m.RegisterOnFail(func(taskID string, result *agent.Result) {})] = true
-	}
-
-	// All IDs should be unique
-	expectedCount := 50 * 5
-	if len(ids) != expectedCount {
-		t.Errorf("Expected %d unique IDs, got %d (duplicates found)", expectedCount, len(ids))
-	}
 }
 
 func TestCallbackManager_ImplementsInterface(t *testing.T) {
@@ -846,76 +703,43 @@ func TestCallbackManager_ImplementsInterface(t *testing.T) {
 	m.OnFail("test", &agent.Result{TaskID: "test"})
 }
 
-func TestCallbackManager_AllCallbackTypes(t *testing.T) {
+func TestCallbackManager_InternalAndUserCallbacks(t *testing.T) {
 	m := NewCallbackManager()
 
-	testCases := []struct {
-		name     string
-		register func() CallbackID
-		invoke   func()
-	}{
-		{
-			name: "OnAgentStart",
-			register: func() CallbackID {
-				return m.RegisterOnAgentStart(func(taskID string, task *beads.Task) {})
-			},
-			invoke: func() {
-				m.OnAgentStart("test", &beads.Task{ID: "test"})
-			},
+	var internalCalled, userCalled bool
+
+	// Register internal callbacks (like orchestrator does)
+	m.Register(&EventCallbacks{
+		OnDoneFn: func(taskID string, result *agent.Result) {
+			internalCalled = true
 		},
-		{
-			name: "OnOutput",
-			register: func() CallbackID {
-				return m.RegisterOnOutput(func(taskID string, output string, isError bool) {})
-			},
-			invoke: func() {
-				m.OnOutput("test", "output", false)
-			},
+	})
+
+	// Register user callbacks
+	m.Register(&EventCallbacks{
+		OnDoneFn: func(taskID string, result *agent.Result) {
+			userCalled = true
 		},
-		{
-			name: "OnLiveFeed",
-			register: func() CallbackID {
-				return m.RegisterOnLiveFeed(func(taskID string, event *agent.LiveFeedEvent) {})
-			},
-			invoke: func() {
-				m.OnLiveFeed("test", &agent.LiveFeedEvent{})
-			},
-		},
-		{
-			name: "OnDone",
-			register: func() CallbackID {
-				return m.RegisterOnDone(func(taskID string, result *agent.Result) {})
-			},
-			invoke: func() {
-				m.OnDone("test", &agent.Result{TaskID: "test"})
-			},
-		},
-		{
-			name: "OnFail",
-			register: func() CallbackID {
-				return m.RegisterOnFail(func(taskID string, result *agent.Result) {})
-			},
-			invoke: func() {
-				m.OnFail("test", &agent.Result{TaskID: "test"})
-			},
-		},
+	})
+
+	// Invoke
+	m.OnDone("test", &agent.Result{TaskID: "test"})
+
+	if !internalCalled {
+		t.Error("Internal callback should have been invoked")
 	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			id := tc.register()
-			if id < 0 {
-				t.Error("Expected valid callback ID")
-			}
-
-			// Invoke should not panic
-			tc.invoke()
-
-			// Unregister should work
-			m.Unregister(id)
-
-			// Invoke again should not panic
-			tc.invoke()
-		})
+	if !userCalled {
+		t.Error("User callback should have been invoked")
 	}
+}
+
+func TestCallbackManager_EmptyInvocation(t *testing.T) {
+	m := NewCallbackManager()
+
+	// Should not panic with no registered callbacks
+	m.OnAgentStart("test", &beads.Task{ID: "test"})
+	m.OnOutput("test", "output", false)
+	m.OnLiveFeed("test", &agent.LiveFeedEvent{})
+	m.OnDone("test", &agent.Result{TaskID: "test"})
+	m.OnFail("test", &agent.Result{TaskID: "test"})
 }

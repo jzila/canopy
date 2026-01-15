@@ -193,22 +193,10 @@ func New(config *Config) (*Orchestrator, error) {
 }
 
 // SetCallbacks configures event callbacks for the orchestrator.
-// The orchestrator wraps the provided callbacks to also update beads status
-// immediately when each task completes, ensuring timely status updates.
-// Returns the CallbackIDs for the registered callbacks, which can be used
-// to unregister them later.
-func (o *Orchestrator) SetCallbacks(callbacks *EventCallbacks) []CallbackID {
-	return o.callbackManager.RegisterAll(callbacks)
-}
-
-// UnregisterCallbacks removes previously registered callbacks by their IDs.
-func (o *Orchestrator) UnregisterCallbacks(ids []CallbackID) {
-	o.callbackManager.UnregisterAll(ids)
-}
-
-// GetCallbackManager returns the underlying CallbackManager for advanced usage.
-func (o *Orchestrator) GetCallbackManager() *CallbackManager {
-	return o.callbackManager
+// The orchestrator invokes these callbacks alongside internal callbacks
+// when events occur.
+func (o *Orchestrator) SetCallbacks(callbacks *EventCallbacks) {
+	o.callbackManager.Register(callbacks)
 }
 
 // setupInternalCallbacks registers the orchestrator's internal callbacks with the CallbackManager.
@@ -217,28 +205,27 @@ func (o *Orchestrator) GetCallbackManager() *CallbackManager {
 // CRITICAL: Task completion (beadsClient.Done/Fail) now happens in the merge coordinator,
 // not the callback. This ensures dependent agents see merged changes from predecessors.
 func (o *Orchestrator) setupInternalCallbacks() {
-	// Register internal callback for task caching on agent start
-	o.callbackManager.RegisterOnAgentStart(func(taskID string, task *beads.Task) {
-		// Store task in merge coordinator for later use in OnDone
-		o.mergeCoordinator.CacheTask(taskID, task)
-	})
+	// Register internal callbacks as a single EventCallbacks struct
+	internalCallbacks := &EventCallbacks{
+		OnAgentStartFn: func(taskID string, task *beads.Task) {
+			// Store task in merge coordinator for later use in OnDone
+			o.mergeCoordinator.CacheTask(taskID, task)
+		},
+		OnDoneFn: func(taskID string, result *agent.Result) {
+			// Delegate merge to coordinator - it handles queueing, merge, and task completion
+			resp := o.mergeCoordinator.EnqueueMerge(result)
 
-	// Register internal callback for merge handling on task completion
-	o.callbackManager.RegisterOnDone(func(taskID string, result *agent.Result) {
-		// Delegate merge to coordinator - it handles queueing, merge, and task completion
-		resp := o.mergeCoordinator.EnqueueMerge(result)
-
-		// Log merge result if verbose and there was an error
-		if resp != nil && !resp.Success && o.config.Verbose {
-			fmt.Fprintf(os.Stderr, "[%s] merge failed: %s\n", taskID, resp.Error)
-		}
-	})
-
-	// Register internal callback for failure handling
-	o.callbackManager.RegisterOnFail(func(taskID string, result *agent.Result) {
-		// Delegate failure handling to coordinator
-		o.mergeCoordinator.HandleFailure(taskID, result, result.Error)
-	})
+			// Log merge result if verbose and there was an error
+			if resp != nil && !resp.Success && o.config.Verbose {
+				fmt.Fprintf(os.Stderr, "[%s] merge failed: %s\n", taskID, resp.Error)
+			}
+		},
+		OnFailFn: func(taskID string, result *agent.Result) {
+			// Delegate failure handling to coordinator
+			o.mergeCoordinator.HandleFailure(taskID, result, result.Error)
+		},
+	}
+	o.callbackManager.Register(internalCallbacks)
 
 	// Pass the callback manager to the scheduler
 	if o.scheduler != nil {
@@ -256,7 +243,7 @@ func (o *Orchestrator) cleanupOverlay(result *agent.Result) {
 	}
 }
 
-// WithCallbacks is a builder-style method to set callbacks
+// WithCallbacks is a builder-style method to register callbacks
 func (o *Orchestrator) WithCallbacks(callbacks *EventCallbacks) *Orchestrator {
 	o.SetCallbacks(callbacks)
 	return o
