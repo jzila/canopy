@@ -27,10 +27,280 @@ type OutputBuffer struct {
 	mu     sync.RWMutex
 }
 
+// LiveFeedEventType defines the type of live feed event
+type LiveFeedEventType string
+
+const (
+	// LiveFeedEventToolUse represents a tool invocation by the agent
+	LiveFeedEventToolUse LiveFeedEventType = "tool_use"
+	// LiveFeedEventText represents text output from the agent
+	LiveFeedEventText LiveFeedEventType = "text"
+	// LiveFeedEventFileChange represents a file modification
+	LiveFeedEventFileChange LiveFeedEventType = "file_change"
+	// LiveFeedEventAgentCompleted represents agent completion
+	LiveFeedEventAgentCompleted LiveFeedEventType = "agent_completed"
+	// LiveFeedEventError represents an error event
+	LiveFeedEventError LiveFeedEventType = "error"
+	// LiveFeedEventToolResult represents the result of a tool execution
+	LiveFeedEventToolResult LiveFeedEventType = "tool_result"
+)
+
+// LiveFeedEventData is an interface for type-safe event data
+// Use type assertions or the helper methods to access typed data
+type LiveFeedEventData interface {
+	eventData() // marker method
+}
+
+// ToolUseEventData contains data for a tool_use event
+type ToolUseEventData struct {
+	Tool     string `json:"tool"`               // Tool name (e.g., "Read", "Bash", "Grep")
+	FilePath string `json:"file_path,omitempty"` // For file tools (Read, Write, Edit)
+	Command  string `json:"command,omitempty"`   // For Bash tool
+	Pattern  string `json:"pattern,omitempty"`   // For Grep/Glob tools
+}
+
+func (ToolUseEventData) eventData() {}
+
+// TextEventData contains data for a text event
+type TextEventData struct {
+	Text       string `json:"text"`                  // The text content
+	IsHistoric bool   `json:"is_historic,omitempty"` // True if reconstructed from historical data
+}
+
+func (TextEventData) eventData() {}
+
+// FileChangeEventData contains data for a file_change event
+type FileChangeEventData struct {
+	Action   string `json:"action"`    // "created", "modified", "deleted"
+	FilePath string `json:"file_path"` // Path to the changed file
+}
+
+func (FileChangeEventData) eventData() {}
+
+// AgentCompletedEventData contains data for an agent_completed event
+type AgentCompletedEventData struct {
+	FilesChanged   int    `json:"files_changed"`             // Number of files modified
+	CommitsCreated int    `json:"commits_created"`           // Number of git commits
+	Error          string `json:"error,omitempty"`           // Error message if failed
+	ResultMessage  string `json:"result_message,omitempty"`  // Final result from agent
+	IsHistoric     bool   `json:"is_historic,omitempty"`     // True if reconstructed from historical data
+}
+
+func (AgentCompletedEventData) eventData() {}
+
+// ErrorEventData contains data for an error event
+type ErrorEventData struct {
+	Error   string `json:"error"`            // Error message
+	Code    string `json:"code,omitempty"`   // Error code if available
+	Details string `json:"details,omitempty"` // Additional error details
+}
+
+func (ErrorEventData) eventData() {}
+
+// ToolResultEventData contains data for a tool_result event
+type ToolResultEventData struct {
+	Tool    string `json:"tool"`              // Tool name
+	Success bool   `json:"success"`           // Whether the tool succeeded
+	Output  string `json:"output,omitempty"`  // Tool output (truncated)
+	Error   string `json:"error,omitempty"`   // Error message if failed
+}
+
+func (ToolResultEventData) eventData() {}
+
 // LiveFeedEvent represents a real-time event from the Claude API
+// EventType determines which typed data struct is stored in Data
 type LiveFeedEvent struct {
-	EventType string                 `json:"event_type"` // "tool_use", "text", "file_change", etc.
-	Data      map[string]interface{} `json:"data"`       // Event-specific data
+	EventType LiveFeedEventType `json:"event_type"` // "tool_use", "text", "file_change", etc.
+	Data      LiveFeedEventData `json:"-"`          // Type-safe event data (not directly serialized)
+	// RawData is used for JSON serialization to maintain backwards compatibility
+	RawData map[string]interface{} `json:"data"`
+}
+
+// NewToolUseEvent creates a new tool_use event with typed data
+func NewToolUseEvent(tool string, filePath, command, pattern string) LiveFeedEvent {
+	data := ToolUseEventData{
+		Tool:     tool,
+		FilePath: filePath,
+		Command:  command,
+		Pattern:  pattern,
+	}
+	return LiveFeedEvent{
+		EventType: LiveFeedEventToolUse,
+		Data:      data,
+		RawData:   toolUseToMap(data),
+	}
+}
+
+// NewTextEvent creates a new text event with typed data
+func NewTextEvent(text string, isHistoric bool) LiveFeedEvent {
+	data := TextEventData{
+		Text:       text,
+		IsHistoric: isHistoric,
+	}
+	return LiveFeedEvent{
+		EventType: LiveFeedEventText,
+		Data:      data,
+		RawData:   textToMap(data),
+	}
+}
+
+// NewFileChangeEvent creates a new file_change event with typed data
+func NewFileChangeEvent(action, filePath string) LiveFeedEvent {
+	data := FileChangeEventData{
+		Action:   action,
+		FilePath: filePath,
+	}
+	return LiveFeedEvent{
+		EventType: LiveFeedEventFileChange,
+		Data:      data,
+		RawData:   fileChangeToMap(data),
+	}
+}
+
+// NewAgentCompletedEvent creates a new agent_completed event with typed data
+func NewAgentCompletedEvent(filesChanged, commitsCreated int, errMsg, resultMsg string, isHistoric bool) LiveFeedEvent {
+	data := AgentCompletedEventData{
+		FilesChanged:   filesChanged,
+		CommitsCreated: commitsCreated,
+		Error:          errMsg,
+		ResultMessage:  resultMsg,
+		IsHistoric:     isHistoric,
+	}
+	return LiveFeedEvent{
+		EventType: LiveFeedEventAgentCompleted,
+		Data:      data,
+		RawData:   agentCompletedToMap(data),
+	}
+}
+
+// Helper functions to convert typed data to map for JSON serialization
+
+func toolUseToMap(d ToolUseEventData) map[string]interface{} {
+	m := map[string]interface{}{"tool": d.Tool}
+	if d.FilePath != "" {
+		m["file_path"] = d.FilePath
+	}
+	if d.Command != "" {
+		m["command"] = d.Command
+	}
+	if d.Pattern != "" {
+		m["pattern"] = d.Pattern
+	}
+	return m
+}
+
+func textToMap(d TextEventData) map[string]interface{} {
+	m := map[string]interface{}{"text": d.Text}
+	if d.IsHistoric {
+		m["is_historic"] = d.IsHistoric
+	}
+	return m
+}
+
+func fileChangeToMap(d FileChangeEventData) map[string]interface{} {
+	return map[string]interface{}{
+		"action":    d.Action,
+		"file_path": d.FilePath,
+	}
+}
+
+func agentCompletedToMap(d AgentCompletedEventData) map[string]interface{} {
+	m := map[string]interface{}{
+		"files_changed":   d.FilesChanged,
+		"commits_created": d.CommitsCreated,
+	}
+	if d.Error != "" {
+		m["error"] = d.Error
+	}
+	if d.ResultMessage != "" {
+		m["result_message"] = d.ResultMessage
+	}
+	if d.IsHistoric {
+		m["is_historic"] = d.IsHistoric
+	}
+	return m
+}
+
+// GetToolUseData returns the typed tool_use data if this is a tool_use event
+func (e LiveFeedEvent) GetToolUseData() (ToolUseEventData, bool) {
+	if d, ok := e.Data.(ToolUseEventData); ok {
+		return d, true
+	}
+	// Fallback: parse from RawData for events created from JSON
+	if e.EventType == LiveFeedEventToolUse && e.RawData != nil {
+		return ToolUseEventData{
+			Tool:     getStringFromMap(e.RawData, "tool"),
+			FilePath: getStringFromMap(e.RawData, "file_path"),
+			Command:  getStringFromMap(e.RawData, "command"),
+			Pattern:  getStringFromMap(e.RawData, "pattern"),
+		}, true
+	}
+	return ToolUseEventData{}, false
+}
+
+// GetTextData returns the typed text data if this is a text event
+func (e LiveFeedEvent) GetTextData() (TextEventData, bool) {
+	if d, ok := e.Data.(TextEventData); ok {
+		return d, true
+	}
+	// Fallback: parse from RawData
+	if e.EventType == LiveFeedEventText && e.RawData != nil {
+		return TextEventData{
+			Text:       getStringFromMap(e.RawData, "text"),
+			IsHistoric: getBoolFromMap(e.RawData, "is_historic"),
+		}, true
+	}
+	return TextEventData{}, false
+}
+
+// GetFileChangeData returns the typed file_change data if this is a file_change event
+func (e LiveFeedEvent) GetFileChangeData() (FileChangeEventData, bool) {
+	if d, ok := e.Data.(FileChangeEventData); ok {
+		return d, true
+	}
+	// Fallback: parse from RawData
+	if e.EventType == LiveFeedEventFileChange && e.RawData != nil {
+		return FileChangeEventData{
+			Action:   getStringFromMap(e.RawData, "action"),
+			FilePath: getStringFromMap(e.RawData, "file_path"),
+		}, true
+	}
+	return FileChangeEventData{}, false
+}
+
+// GetAgentCompletedData returns the typed agent_completed data if this is an agent_completed event
+func (e LiveFeedEvent) GetAgentCompletedData() (AgentCompletedEventData, bool) {
+	if d, ok := e.Data.(AgentCompletedEventData); ok {
+		return d, true
+	}
+	// Fallback: parse from RawData
+	if e.EventType == LiveFeedEventAgentCompleted && e.RawData != nil {
+		filesChanged, _ := getIntFromPayload(e.RawData, "files_changed")
+		commitsCreated, _ := getIntFromPayload(e.RawData, "commits_created")
+		return AgentCompletedEventData{
+			FilesChanged:   filesChanged,
+			CommitsCreated: commitsCreated,
+			Error:          getStringFromMap(e.RawData, "error"),
+			ResultMessage:  getStringFromMap(e.RawData, "result_message"),
+			IsHistoric:     getBoolFromMap(e.RawData, "is_historic"),
+		}, true
+	}
+	return AgentCompletedEventData{}, false
+}
+
+// Helper functions for parsing map values
+func getStringFromMap(m map[string]interface{}, key string) string {
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+func getBoolFromMap(m map[string]interface{}, key string) bool {
+	if v, ok := m[key].(bool); ok {
+		return v
+	}
+	return false
 }
 
 // GitCommit represents a git commit made by an agent
@@ -649,10 +919,36 @@ func (r *RuntimeState) handleAgentLiveFeed(payload map[string]interface{}) {
 		return
 	}
 
-	// Create and append the live feed event
-	liveFeedEvent := LiveFeedEvent{
-		EventType: eventType,
-		Data:      data,
+	// Create the live feed event with typed data based on event type
+	var liveFeedEvent LiveFeedEvent
+	switch LiveFeedEventType(eventType) {
+	case LiveFeedEventToolUse:
+		tool := getStringFromMap(data, "tool")
+		filePath := getStringFromMap(data, "file_path")
+		command := getStringFromMap(data, "command")
+		pattern := getStringFromMap(data, "pattern")
+		liveFeedEvent = NewToolUseEvent(tool, filePath, command, pattern)
+	case LiveFeedEventText:
+		text := getStringFromMap(data, "text")
+		isHistoric := getBoolFromMap(data, "is_historic")
+		liveFeedEvent = NewTextEvent(text, isHistoric)
+	case LiveFeedEventFileChange:
+		action := getStringFromMap(data, "action")
+		filePath := getStringFromMap(data, "file_path")
+		liveFeedEvent = NewFileChangeEvent(action, filePath)
+	case LiveFeedEventAgentCompleted:
+		filesChanged, _ := getIntFromPayload(data, "files_changed")
+		commitsCreated, _ := getIntFromPayload(data, "commits_created")
+		errMsg := getStringFromMap(data, "error")
+		resultMsg := getStringFromMap(data, "result_message")
+		isHistoric := getBoolFromMap(data, "is_historic")
+		liveFeedEvent = NewAgentCompletedEvent(filesChanged, commitsCreated, errMsg, resultMsg, isHistoric)
+	default:
+		// For unknown event types, store with raw data only
+		liveFeedEvent = LiveFeedEvent{
+			EventType: LiveFeedEventType(eventType),
+			RawData:   data,
+		}
 	}
 
 	agent.Update(func(a *AgentState) {

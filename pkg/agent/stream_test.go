@@ -36,14 +36,18 @@ func TestStreamParser(t *testing.T) {
 	if feed2 == nil {
 		t.Fatal("Expected non-nil for tool_use event")
 	}
-	if feed2.EventType != "tool_use" {
+	if feed2.EventType != LiveFeedEventToolUse {
 		t.Errorf("Expected event_type=tool_use, got %s", feed2.EventType)
 	}
-	if feed2.Data["tool"] != "Read" {
-		t.Errorf("Expected tool=Read, got %v", feed2.Data["tool"])
+	toolData, ok := feed2.GetToolUseData()
+	if !ok {
+		t.Fatal("Expected to get tool use data")
 	}
-	if feed2.Data["file_path"] != "/tmp/test.txt" {
-		t.Errorf("Expected file_path=/tmp/test.txt, got %v", feed2.Data["file_path"])
+	if toolData.Tool != "Read" {
+		t.Errorf("Expected tool=Read, got %v", toolData.Tool)
+	}
+	if toolData.FilePath != "/tmp/test.txt" {
+		t.Errorf("Expected file_path=/tmp/test.txt, got %v", toolData.FilePath)
 	}
 
 	// Event 3: text (should pass filter)
@@ -55,11 +59,15 @@ func TestStreamParser(t *testing.T) {
 	if feed3 == nil {
 		t.Fatal("Expected non-nil for text event")
 	}
-	if feed3.EventType != "text" {
+	if feed3.EventType != LiveFeedEventText {
 		t.Errorf("Expected event_type=text, got %s", feed3.EventType)
 	}
-	if feed3.Data["text"] != "Hello world" {
-		t.Errorf("Expected text='Hello world', got %v", feed3.Data["text"])
+	textData, ok := feed3.GetTextData()
+	if !ok {
+		t.Fatal("Expected to get text data")
+	}
+	if textData.Text != "Hello world" {
+		t.Errorf("Expected text='Hello world', got %v", textData.Text)
 	}
 
 	// Event 4: result (should be filtered)
@@ -112,25 +120,25 @@ func TestFilterToolUse(t *testing.T) {
 		name     string
 		toolName string
 		input    map[string]interface{}
-		expected map[string]interface{}
+		expected ToolUseEventData
 	}{
 		{
 			name:     "Read tool",
 			toolName: "Read",
 			input:    map[string]interface{}{"file_path": "/home/user/file.go"},
-			expected: map[string]interface{}{"tool": "Read", "file_path": "/home/user/file.go"},
+			expected: ToolUseEventData{Tool: "Read", FilePath: "/home/user/file.go"},
 		},
 		{
 			name:     "Bash tool",
 			toolName: "Bash",
 			input:    map[string]interface{}{"command": "ls -la"},
-			expected: map[string]interface{}{"tool": "Bash", "command": "ls -la"},
+			expected: ToolUseEventData{Tool: "Bash", Command: "ls -la"},
 		},
 		{
 			name:     "Grep tool",
 			toolName: "Grep",
 			input:    map[string]interface{}{"pattern": "func.*Test"},
-			expected: map[string]interface{}{"tool": "Grep", "pattern": "func.*Test"},
+			expected: ToolUseEventData{Tool: "Grep", Pattern: "func.*Test"},
 		},
 	}
 
@@ -145,13 +153,24 @@ func TestFilterToolUse(t *testing.T) {
 			if result == nil {
 				t.Fatal("Expected non-nil result")
 			}
-			if result.EventType != "tool_use" {
+			if result.EventType != LiveFeedEventToolUse {
 				t.Errorf("Expected event_type=tool_use, got %s", result.EventType)
 			}
-			for key, expectedValue := range tt.expected {
-				if result.Data[key] != expectedValue {
-					t.Errorf("Expected %s=%v, got %v", key, expectedValue, result.Data[key])
-				}
+			data, ok := result.GetToolUseData()
+			if !ok {
+				t.Fatal("Expected to get tool use data")
+			}
+			if data.Tool != tt.expected.Tool {
+				t.Errorf("Expected tool=%s, got %s", tt.expected.Tool, data.Tool)
+			}
+			if data.FilePath != tt.expected.FilePath {
+				t.Errorf("Expected file_path=%s, got %s", tt.expected.FilePath, data.FilePath)
+			}
+			if data.Command != tt.expected.Command {
+				t.Errorf("Expected command=%s, got %s", tt.expected.Command, data.Command)
+			}
+			if data.Pattern != tt.expected.Pattern {
+				t.Errorf("Expected pattern=%s, got %s", tt.expected.Pattern, data.Pattern)
 			}
 		})
 	}

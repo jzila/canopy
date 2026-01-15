@@ -507,44 +507,21 @@ func (d *Daemon) generateHistoricalLiveFeedEvents(pAgent *persistence.Agent) []L
 	events := []LiveFeedEvent{}
 
 	// Add a "historical" marker event so the UI knows these are reconstructed
-	events = append(events, LiveFeedEvent{
-		EventType: "text",
-		Data: map[string]interface{}{
-			"text":        "[Historical session - live feed events were not recorded]",
-			"is_historic": true,
-		},
-	})
+	events = append(events, NewTextEvent("[Historical session - live feed events were not recorded]", true))
 
 	// If we have a result message, add it as a text event
 	if pAgent.ResultMessage != "" {
-		events = append(events, LiveFeedEvent{
-			EventType: "text",
-			Data: map[string]interface{}{
-				"text":        pAgent.ResultMessage,
-				"is_historic": true,
-			},
-		})
+		events = append(events, NewTextEvent(pAgent.ResultMessage, true))
 	}
 
 	// Add an agent_completed event with available metrics
-	completionData := map[string]interface{}{
-		"files_changed":   pAgent.FilesChanged,
-		"commits_created": pAgent.GitCommitsCreated,
-		"is_historic":     true,
-	}
-
-	if pAgent.ErrorMessage != "" {
-		completionData["error"] = pAgent.ErrorMessage
-	}
-
-	if pAgent.ResultMessage != "" {
-		completionData["result_message"] = pAgent.ResultMessage
-	}
-
-	events = append(events, LiveFeedEvent{
-		EventType: "agent_completed",
-		Data:      completionData,
-	})
+	events = append(events, NewAgentCompletedEvent(
+		pAgent.FilesChanged,
+		pAgent.GitCommitsCreated,
+		pAgent.ErrorMessage,
+		pAgent.ResultMessage,
+		true, // isHistoric
+	))
 
 	return events
 }

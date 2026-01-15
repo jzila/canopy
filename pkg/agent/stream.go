@@ -71,10 +71,102 @@ type ContentBlock struct {
 	Input map[string]interface{} `json:"input,omitempty"` // For tool_use
 }
 
+// LiveFeedEventType defines the type of live feed event
+type LiveFeedEventType string
+
+const (
+	// LiveFeedEventToolUse represents a tool invocation by the agent
+	LiveFeedEventToolUse LiveFeedEventType = "tool_use"
+	// LiveFeedEventText represents text output from the agent
+	LiveFeedEventText LiveFeedEventType = "text"
+	// LiveFeedEventFileChange represents a file modification
+	LiveFeedEventFileChange LiveFeedEventType = "file_change"
+)
+
+// LiveFeedEventData is an interface for type-safe event data
+type LiveFeedEventData interface {
+	eventData() // marker method
+}
+
+// ToolUseEventData contains data for a tool_use event
+type ToolUseEventData struct {
+	Tool     string `json:"tool"`                // Tool name (e.g., "Read", "Bash", "Grep")
+	FilePath string `json:"file_path,omitempty"` // For file tools (Read, Write, Edit)
+	Command  string `json:"command,omitempty"`   // For Bash tool
+	Pattern  string `json:"pattern,omitempty"`   // For Grep/Glob tools
+}
+
+func (ToolUseEventData) eventData() {}
+
+// TextEventData contains data for a text event
+type TextEventData struct {
+	Text string `json:"text"` // The text content
+}
+
+func (TextEventData) eventData() {}
+
 // LiveFeedEvent represents a filtered event for live streaming to dashboard
 type LiveFeedEvent struct {
-	EventType string                 `json:"event_type"` // "tool_use", "file_change", "text"
-	Data      map[string]interface{} `json:"data"`
+	EventType LiveFeedEventType      `json:"event_type"` // "tool_use", "file_change", "text"
+	Data      LiveFeedEventData      `json:"-"`          // Type-safe event data (not directly serialized)
+	RawData   map[string]interface{} `json:"data"`       // For JSON serialization
+}
+
+// NewToolUseEvent creates a new tool_use event with typed data
+func NewToolUseEvent(tool, filePath, command, pattern string) *LiveFeedEvent {
+	data := ToolUseEventData{
+		Tool:     tool,
+		FilePath: filePath,
+		Command:  command,
+		Pattern:  pattern,
+	}
+	rawData := map[string]interface{}{"tool": tool}
+	if filePath != "" {
+		rawData["file_path"] = filePath
+	}
+	if command != "" {
+		rawData["command"] = command
+	}
+	if pattern != "" {
+		rawData["pattern"] = pattern
+	}
+	return &LiveFeedEvent{
+		EventType: LiveFeedEventToolUse,
+		Data:      data,
+		RawData:   rawData,
+	}
+}
+
+// NewTextEvent creates a new text event with typed data
+func NewTextEvent(text string) *LiveFeedEvent {
+	data := TextEventData{Text: text}
+	return &LiveFeedEvent{
+		EventType: LiveFeedEventText,
+		Data:      data,
+		RawData:   map[string]interface{}{"text": text},
+	}
+}
+
+// GetToolUseData returns the typed tool_use data if this is a tool_use event
+func (e *LiveFeedEvent) GetToolUseData() (ToolUseEventData, bool) {
+	if e == nil {
+		return ToolUseEventData{}, false
+	}
+	if d, ok := e.Data.(ToolUseEventData); ok {
+		return d, true
+	}
+	return ToolUseEventData{}, false
+}
+
+// GetTextData returns the typed text data if this is a text event
+func (e *LiveFeedEvent) GetTextData() (TextEventData, bool) {
+	if e == nil {
+		return TextEventData{}, false
+	}
+	if d, ok := e.Data.(TextEventData); ok {
+		return d, true
+	}
+	return TextEventData{}, false
 }
 
 // StreamParser reads and filters events from Claude's stream-json output
@@ -152,12 +244,7 @@ func filterAssistantMessage(msg *StreamMessage) *LiveFeedEvent {
 		if block.Type == "text" && block.Text != "" {
 			// Skip thinking blocks (heuristic: thinking is longer and more verbose)
 			// For now, we'll send all text to dashboard and let UI filter
-			return &LiveFeedEvent{
-				EventType: "text",
-				Data: map[string]interface{}{
-					"text": block.Text,
-				},
-			}
+			return NewTextEvent(block.Text)
 		}
 	}
 
@@ -169,32 +256,17 @@ func filterToolUse(block ContentBlock) *LiveFeedEvent {
 	toolName := block.Name
 	input := block.Input
 
-	data := map[string]interface{}{
-		"tool": toolName,
-	}
+	var filePath, command, pattern string
 
 	// Extract key parameters based on tool type
 	switch toolName {
 	case "Read", "Write", "Edit":
-		if filePath, ok := input["file_path"].(string); ok {
-			data["file_path"] = filePath
-		}
+		filePath, _ = input["file_path"].(string)
 	case "Bash":
-		if cmd, ok := input["command"].(string); ok {
-			data["command"] = cmd
-		}
-	case "Grep":
-		if pattern, ok := input["pattern"].(string); ok {
-			data["pattern"] = pattern
-		}
-	case "Glob":
-		if pattern, ok := input["pattern"].(string); ok {
-			data["pattern"] = pattern
-		}
+		command, _ = input["command"].(string)
+	case "Grep", "Glob":
+		pattern, _ = input["pattern"].(string)
 	}
 
-	return &LiveFeedEvent{
-		EventType: "tool_use",
-		Data:      data,
-	}
+	return NewToolUseEvent(toolName, filePath, command, pattern)
 }

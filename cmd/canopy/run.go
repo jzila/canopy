@@ -228,7 +228,7 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		},
 		OnLiveFeedFn: func(taskID string, event *agent.LiveFeedEvent) {
 			agentID := makeAgentID(runID, taskID)
-			if err := ipcClient.SendAgentLiveFeed(agentID, event.EventType, event.Data); err != nil && verbose {
+			if err := ipcClient.SendAgentLiveFeed(agentID, string(event.EventType), event.RawData); err != nil && verbose {
 				fmt.Fprintf(os.Stderr, "warning: failed to send agent live feed: %v\n", err)
 			}
 		},

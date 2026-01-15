@@ -92,12 +92,21 @@ func RenderLiveFeedEvents(events []daemon.LiveFeedEvent, width int) string {
 // renderEvent renders a single live feed event
 func renderEvent(event daemon.LiveFeedEvent, width int) string {
 	switch event.EventType {
-	case "tool_use":
-		return renderToolUse(event.Data, width)
-	case "text":
-		return renderText(event.Data, width)
-	case "file_change":
-		return renderFileChange(event.Data, width)
+	case daemon.LiveFeedEventToolUse:
+		if data, ok := event.GetToolUseData(); ok {
+			return renderToolUseTyped(data, width)
+		}
+		return renderToolUse(event.RawData, width)
+	case daemon.LiveFeedEventText:
+		if data, ok := event.GetTextData(); ok {
+			return renderTextTyped(data, width)
+		}
+		return renderText(event.RawData, width)
+	case daemon.LiveFeedEventFileChange:
+		if data, ok := event.GetFileChangeData(); ok {
+			return renderFileChangeTyped(data, width)
+		}
+		return renderFileChange(event.RawData, width)
 	default:
 		return ""
 	}
@@ -196,6 +205,95 @@ func renderFileChange(data map[string]interface{}, width int) string {
 
 	displayPath := truncatePath(filePath, width-10)
 	return style.Render(fmt.Sprintf("%s %s %s", icon, action, displayPath))
+}
+
+// renderToolUseTyped renders a tool use event from typed data
+func renderToolUseTyped(data daemon.ToolUseEventData, width int) string {
+	toolName := data.Tool
+	if toolName == "" {
+		return ""
+	}
+
+	// Get icon for tool
+	icon := toolIcons[toolName]
+	if icon == "" {
+		icon = "🔧"
+	}
+
+	// Build header
+	header := toolHeaderStyle.Render(fmt.Sprintf("%s %s", icon, toolName))
+
+	// Build parameter line based on tool type
+	var paramLine string
+	switch toolName {
+	case "Read", "Write", "Edit":
+		if data.FilePath != "" {
+			displayPath := truncatePath(data.FilePath, width-10)
+			paramLine = filePathStyle.Render(displayPath)
+		}
+	case "Bash":
+		if data.Command != "" {
+			displayCmd := truncateString(data.Command, width-10)
+			displayCmd = strings.ReplaceAll(displayCmd, "\n", " ")
+			paramLine = commandStyle.Render("$ " + displayCmd)
+		}
+	case "Grep", "Glob":
+		if data.Pattern != "" {
+			displayPattern := truncateString(data.Pattern, width-10)
+			paramLine = patternStyle.Render("/" + displayPattern + "/")
+		}
+	}
+
+	if paramLine != "" {
+		return fmt.Sprintf("%s\n%s", header, paramLine)
+	}
+	return header
+}
+
+// renderTextTyped renders assistant text output from typed data
+func renderTextTyped(data daemon.TextEventData, width int) string {
+	if data.Text == "" {
+		return ""
+	}
+
+	text := data.Text
+	// Truncate very long text
+	if len(text) > 500 {
+		text = text[:500] + "..."
+	}
+
+	// Wrap text to width
+	wrapped := wrapText(text, width)
+
+	header := textHeaderStyle.Render("💬 Assistant")
+	return fmt.Sprintf("%s\n%s", header, wrapped)
+}
+
+// renderFileChangeTyped renders a file change event from typed data
+func renderFileChangeTyped(data daemon.FileChangeEventData, width int) string {
+	if data.FilePath == "" {
+		return ""
+	}
+
+	var icon string
+	var style lipgloss.Style
+	switch data.Action {
+	case "created":
+		icon = "✨"
+		style = successHeaderStyle
+	case "modified":
+		icon = "📝"
+		style = toolHeaderStyle
+	case "deleted":
+		icon = "🗑️"
+		style = errorHeaderStyle
+	default:
+		icon = "📄"
+		style = toolHeaderStyle
+	}
+
+	displayPath := truncatePath(data.FilePath, width-10)
+	return style.Render(fmt.Sprintf("%s %s %s", icon, data.Action, displayPath))
 }
 
 // renderSeparator renders a horizontal separator between events

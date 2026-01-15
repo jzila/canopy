@@ -807,10 +807,11 @@ func TestHistoricalLiveFeedEvents(t *testing.T) {
 	// Verify the historical marker event
 	if len(restoredAgent.LiveFeedEvents) > 0 {
 		firstEvent := restoredAgent.LiveFeedEvents[0]
-		if firstEvent.EventType != "text" {
+		if firstEvent.EventType != LiveFeedEventText {
 			t.Errorf("expected first event type 'text', got %s", firstEvent.EventType)
 		}
-		if isHistoric, ok := firstEvent.Data["is_historic"].(bool); !ok || !isHistoric {
+		textData, ok := firstEvent.GetTextData()
+		if !ok || !textData.IsHistoric {
 			t.Error("expected first event to have is_historic=true")
 		}
 	}
@@ -818,25 +819,27 @@ func TestHistoricalLiveFeedEvents(t *testing.T) {
 	// Verify the result message event
 	if len(restoredAgent.LiveFeedEvents) > 1 {
 		resultEvent := restoredAgent.LiveFeedEvents[1]
-		if resultEvent.EventType != "text" {
+		if resultEvent.EventType != LiveFeedEventText {
 			t.Errorf("expected second event type 'text', got %s", resultEvent.EventType)
 		}
-		if text, ok := resultEvent.Data["text"].(string); !ok || text != "Task completed successfully with 5 files changed." {
-			t.Errorf("unexpected result message: %v", resultEvent.Data["text"])
+		textData, ok := resultEvent.GetTextData()
+		if !ok || textData.Text != "Task completed successfully with 5 files changed." {
+			t.Errorf("unexpected result message: %v", textData.Text)
 		}
 	}
 
 	// Verify the agent_completed event
 	if len(restoredAgent.LiveFeedEvents) > 2 {
 		completedEvent := restoredAgent.LiveFeedEvents[2]
-		if completedEvent.EventType != "agent_completed" {
+		if completedEvent.EventType != LiveFeedEventAgentCompleted {
 			t.Errorf("expected third event type 'agent_completed', got %s", completedEvent.EventType)
 		}
-		if filesChanged, ok := completedEvent.Data["files_changed"].(int); !ok || filesChanged != 5 {
-			t.Errorf("expected files_changed=5, got %v", completedEvent.Data["files_changed"])
+		completedData, ok := completedEvent.GetAgentCompletedData()
+		if !ok || completedData.FilesChanged != 5 {
+			t.Errorf("expected files_changed=5, got %v", completedData.FilesChanged)
 		}
-		if commitsCreated, ok := completedEvent.Data["commits_created"].(int); !ok || commitsCreated != 2 {
-			t.Errorf("expected commits_created=2, got %v", completedEvent.Data["commits_created"])
+		if completedData.CommitsCreated != 2 {
+			t.Errorf("expected commits_created=2, got %v", completedData.CommitsCreated)
 		}
 	}
 
@@ -849,11 +852,12 @@ func TestHistoricalLiveFeedEvents(t *testing.T) {
 	// Check the last event (agent_completed) has the error
 	if len(failedRestored.LiveFeedEvents) > 0 {
 		lastEvent := failedRestored.LiveFeedEvents[len(failedRestored.LiveFeedEvents)-1]
-		if lastEvent.EventType != "agent_completed" {
+		if lastEvent.EventType != LiveFeedEventAgentCompleted {
 			t.Errorf("expected last event type 'agent_completed', got %s", lastEvent.EventType)
 		}
-		if errorMsg, ok := lastEvent.Data["error"].(string); !ok || errorMsg != "Failed due to merge conflict" {
-			t.Errorf("expected error message in completion event, got %v", lastEvent.Data["error"])
+		completedData, ok := lastEvent.GetAgentCompletedData()
+		if !ok || completedData.Error != "Failed due to merge conflict" {
+			t.Errorf("expected error message in completion event, got %v", completedData.Error)
 		}
 	}
 
