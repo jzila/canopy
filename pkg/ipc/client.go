@@ -125,7 +125,6 @@ func (c *Client) sendMessage(msgType MessageType, payload interface{}) error {
 
 	now := time.Now()
 	msg := Message{
-		Version:   CurrentProtocolVersion,
 		Type:      msgType,
 		Timestamp: now,
 		Payload:   payload,

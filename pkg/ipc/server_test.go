@@ -326,93 +326,6 @@ func TestServerInvalidJSON(t *testing.T) {
 	}
 }
 
-func TestServerProtocolVersioning(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "test.sock")
-	eventBus := events.NewEventBus()
-	server := NewServer(socketPath, eventBus)
-
-	if err := server.Start(); err != nil {
-		t.Fatalf("Failed to start server: %v", err)
-	}
-	defer server.Stop()
-
-	receivedEvents := make(chan events.Event, 10)
-	eventBus.Subscribe(func(event events.Event) {
-		receivedEvents <- event
-	})
-
-	conn, err := net.Dial("unix", socketPath)
-	if err != nil {
-		t.Fatalf("Failed to connect: %v", err)
-	}
-	defer conn.Close()
-
-	// Test v1 message (no version field - backwards compatibility)
-	t.Run("V1Message", func(t *testing.T) {
-		// V1 message without version field
-		msg := map[string]interface{}{
-			"type":      "agent_start",
-			"timestamp": time.Now().Format(time.RFC3339Nano),
-			"payload": map[string]interface{}{
-				"agent_id":   "agent-v1",
-				"task_id":    "task-1",
-				"task_title": "V1 Task",
-			},
-		}
-
-		data, _ := json.Marshal(msg)
-		data = append(data, '\n')
-		if _, err := conn.Write(data); err != nil {
-			t.Fatalf("Failed to send v1 message: %v", err)
-		}
-
-		select {
-		case event := <-receivedEvents:
-			if event.Type != events.EventAgentStarted {
-				t.Errorf("Expected EventAgentStarted, got %s", event.Type)
-			}
-			payload := event.Payload.(map[string]interface{})
-			if payload["agent_id"] != "agent-v1" {
-				t.Errorf("Expected agent_id=agent-v1, got %v", payload["agent_id"])
-			}
-		case <-time.After(time.Second):
-			t.Fatal("Timeout waiting for v1 event")
-		}
-	})
-
-	// Test v2 message (with version field)
-	t.Run("V2Message", func(t *testing.T) {
-		msg := Message{
-			Version:   ProtocolVersion2,
-			Type:      MessageTypeAgentStart,
-			Timestamp: time.Now(),
-			Payload: AgentStartPayload{
-				AgentID:   "agent-v2",
-				TaskID:    "task-2",
-				TaskTitle: "V2 Task",
-			},
-		}
-
-		data, _ := json.Marshal(msg)
-		data = append(data, '\n')
-		if _, err := conn.Write(data); err != nil {
-			t.Fatalf("Failed to send v2 message: %v", err)
-		}
-
-		select {
-		case event := <-receivedEvents:
-			if event.Type != events.EventAgentStarted {
-				t.Errorf("Expected EventAgentStarted, got %s", event.Type)
-			}
-			payload := event.Payload.(map[string]interface{})
-			if payload["agent_id"] != "agent-v2" {
-				t.Errorf("Expected agent_id=agent-v2, got %v", payload["agent_id"])
-			}
-		case <-time.After(time.Second):
-			t.Fatal("Timeout waiting for v2 event")
-		}
-	})
-}
 
 func TestServerMessageSizeLimits(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
@@ -438,7 +351,6 @@ func TestServerMessageSizeLimits(t *testing.T) {
 	// Test message within limits
 	t.Run("WithinLimits", func(t *testing.T) {
 		msg := Message{
-			Version:   ProtocolVersion2,
 			Type:      MessageTypeAgentOutput,
 			Timestamp: time.Now(),
 			Payload: AgentOutputPayload{
@@ -468,7 +380,6 @@ func TestServerMessageSizeLimits(t *testing.T) {
 	t.Run("RecoveryAfterLargeMessage", func(t *testing.T) {
 		// Send a normal message to verify the connection still works
 		msg := Message{
-			Version:   ProtocolVersion2,
 			Type:      MessageTypeAgentStart,
 			Timestamp: time.Now(),
 			Payload: AgentStartPayload{

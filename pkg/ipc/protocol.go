@@ -8,21 +8,13 @@ communication between canopy run clients and the canopy daemon.
 
 ## Message Format
 
-All messages use a versioned envelope structure:
+All messages use an envelope structure:
 
 	{
-	    "v": 2,                              // Protocol version (optional in v1)
 	    "type": "agent_start",               // Message type identifier
 	    "timestamp": "2024-01-15T10:30:00Z", // ISO 8601 timestamp
 	    "payload": { ... }                   // Type-specific payload
 	}
-
-## Protocol Versions
-
-  - Version 1 (v1): Legacy unversioned protocol. Messages without a "v" field
-    are treated as v1. Supported for backwards compatibility.
-  - Version 2 (v2): Current protocol with explicit version field, size limits,
-    and DoS protection.
 
 ## Size Limits
 
@@ -32,15 +24,6 @@ To prevent denial-of-service attacks from oversized messages:
   - MaxPayloadSize: 512KB - Maximum payload size
 
 Messages exceeding these limits are dropped and logged.
-
-## Backwards Compatibility
-
-The server accepts both v1 (unversioned) and v2 messages:
-
-  - v1 messages: No "v" field, processed normally for compatibility
-  - v2 messages: Include "v": 2, subject to size limit enforcement
-
-Clients should always send v2 messages with the version field set.
 
 ## Message Types
 
@@ -83,16 +66,6 @@ import (
 	"time"
 )
 
-// Protocol version constants
-const (
-	// ProtocolVersion1 is the legacy unversioned protocol (implicit)
-	ProtocolVersion1 = 1
-	// ProtocolVersion2 is the current versioned protocol with envelope
-	ProtocolVersion2 = 2
-	// CurrentProtocolVersion is the version used by this implementation
-	CurrentProtocolVersion = ProtocolVersion2
-)
-
 // Message size limits for DoS protection
 const (
 	// MaxMessageSize is the maximum size of a single IPC message (1MB)
@@ -123,10 +96,7 @@ const (
 )
 
 // Message is the top-level IPC message envelope
-// Version 2+ messages include the Version field for protocol negotiation
 type Message struct {
-	// Version is the protocol version (omitted in v1 messages for backwards compatibility)
-	Version int `json:"v,omitempty"`
 	// Type identifies the message type
 	Type MessageType `json:"type"`
 	// Timestamp is when the message was created
@@ -135,31 +105,12 @@ type Message struct {
 	Payload interface{} `json:"payload"`
 }
 
-// RawMessage is used for initial parsing to detect protocol version
-// and validate message size before full deserialization
+// RawMessage is used for initial parsing to validate payload size
+// before full deserialization
 type RawMessage struct {
-	Version   int             `json:"v,omitempty"`
 	Type      MessageType     `json:"type"`
 	Timestamp time.Time       `json:"timestamp"`
 	Payload   json.RawMessage `json:"payload"`
-}
-
-// ProtocolVersion returns the protocol version of the message
-// Returns ProtocolVersion1 if no version field is present (legacy messages)
-func (m *Message) ProtocolVersion() int {
-	if m.Version == 0 {
-		return ProtocolVersion1
-	}
-	return m.Version
-}
-
-// ProtocolVersion returns the protocol version of the raw message
-// Returns ProtocolVersion1 if no version field is present (legacy messages)
-func (r *RawMessage) ProtocolVersion() int {
-	if r.Version == 0 {
-		return ProtocolVersion1
-	}
-	return r.Version
 }
 
 // AgentStartPayload is sent when an agent begins execution

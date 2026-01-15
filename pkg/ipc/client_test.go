@@ -791,43 +791,6 @@ func TestClientMessageSizeLimit(t *testing.T) {
 	})
 }
 
-func TestProtocolVersionConstants(t *testing.T) {
-	// Verify version constants are set correctly
-	if ProtocolVersion1 != 1 {
-		t.Errorf("Expected ProtocolVersion1=1, got %d", ProtocolVersion1)
-	}
-	if ProtocolVersion2 != 2 {
-		t.Errorf("Expected ProtocolVersion2=2, got %d", ProtocolVersion2)
-	}
-	if CurrentProtocolVersion != ProtocolVersion2 {
-		t.Errorf("Expected CurrentProtocolVersion=%d, got %d", ProtocolVersion2, CurrentProtocolVersion)
-	}
-}
-
-func TestMessageProtocolVersion(t *testing.T) {
-	// Test ProtocolVersion() method on Message
-	t.Run("UnversionedMessage", func(t *testing.T) {
-		msg := Message{Type: MessageTypeAgentStart}
-		if v := msg.ProtocolVersion(); v != ProtocolVersion1 {
-			t.Errorf("Expected ProtocolVersion1 for unversioned message, got %d", v)
-		}
-	})
-
-	t.Run("V1Message", func(t *testing.T) {
-		msg := Message{Version: 0, Type: MessageTypeAgentStart}
-		if v := msg.ProtocolVersion(); v != ProtocolVersion1 {
-			t.Errorf("Expected ProtocolVersion1 for v=0 message, got %d", v)
-		}
-	})
-
-	t.Run("V2Message", func(t *testing.T) {
-		msg := Message{Version: ProtocolVersion2, Type: MessageTypeAgentStart}
-		if v := msg.ProtocolVersion(); v != ProtocolVersion2 {
-			t.Errorf("Expected ProtocolVersion2, got %d", v)
-		}
-	})
-}
-
 func TestSizeLimitConstants(t *testing.T) {
 	// Verify size limit constants
 	if MaxMessageSize != 1<<20 {

@@ -154,15 +154,8 @@ func (s *Server) handleConnection(conn net.Conn) {
 			continue
 		}
 
-		// Log protocol version for debugging (only for non-v1 messages)
-		version := rawMsg.ProtocolVersion()
-		if version > ProtocolVersion1 {
-			logging.Debug("IPC received message", "version", version, "type", rawMsg.Type)
-		}
-
 		// Convert RawMessage to Message for processing
 		msg := Message{
-			Version:   rawMsg.Version,
 			Type:      rawMsg.Type,
 			Timestamp: rawMsg.Timestamp,
 		}
