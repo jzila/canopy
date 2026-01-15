@@ -115,23 +115,39 @@ func (o *Overlay) mountFuse() error {
 	return nil
 }
 
-// Unmount unmounts the overlay filesystem
+// Unmount unmounts the overlay filesystem.
+// This method is idempotent - it's safe to call even if not mounted.
+// It checks actual mount state rather than relying solely on the mounted flag,
+// which may be stale after crashes or inconsistent state.
 func (o *Overlay) Unmount() error {
-	if !o.mounted {
+	// Check actual mount state - don't rely solely on the flag
+	// The flag may be stale after crashes or state inconsistency
+	actuallyMounted := o.isMounted()
+
+	if !actuallyMounted && !o.mounted {
+		// Neither flag nor reality says mounted - nothing to do
 		return nil
 	}
 
-	// Unmount bind mounts first
+	// Clean up passthrough symlinks (they'll be removed with overlay anyway)
 	o.unmountPassthroughs()
 
-	// Try unmounting with retries
-	const maxRetries = 3
-	const retryDelay = 100 * time.Millisecond
+	// If flag says mounted but it's actually not, just clear the flag
+	if !actuallyMounted {
+		o.mounted = false
+		return nil
+	}
+
+	// Actually mounted - perform unmount with exponential backoff
+	const maxRetries = 5
+	baseDelay := 50 * time.Millisecond
 
 	var lastErr error
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
-			time.Sleep(retryDelay)
+			// Exponential backoff: 50ms, 100ms, 200ms, 400ms, 800ms
+			delay := baseDelay * time.Duration(1<<uint(attempt-1))
+			time.Sleep(delay)
 		}
 
 		// Try primary unmount method

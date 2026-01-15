@@ -453,20 +453,17 @@ func hashFile(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// Cleanup removes all overlay directories
+// Cleanup removes all overlay directories.
+// It defensively attempts to unmount first since the mount state may be
+// inconsistent after crashes or errors. Unmount() is idempotent so this
+// is always safe.
 func (o *Overlay) Cleanup() error {
-	// Always try to unmount defensively - the o.mounted flag might be stale
-	// (e.g., if process crashed and was restarted, or state is inconsistent)
-	// Check actual mount status and attempt unmount if needed
-	if o.isMounted() {
-		// Force the mounted flag to true so Unmount() will actually run
-		o.mounted = true
-		if err := o.Unmount(); err != nil {
-			return fmt.Errorf("failed to unmount before cleanup: %w", err)
-		}
-	} else if o.mounted {
-		// Flag says mounted but it's not - just clear the flag
-		o.mounted = false
+	// Always call Unmount() defensively - it's idempotent and will:
+	// 1. Check actual mount state (not just the flag)
+	// 2. Handle stale flags from crashes
+	// 3. Retry with exponential backoff for busy mounts
+	if err := o.Unmount(); err != nil {
+		return fmt.Errorf("failed to unmount before cleanup: %w", err)
 	}
 
 	// Final verification: ensure it's really unmounted before RemoveAll
