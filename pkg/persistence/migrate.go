@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-const currentSchemaVersion = 6
+const currentSchemaVersion = 7
 
 // migrate runs all pending database migrations
 func (s *Store) migrate() error {
@@ -67,6 +67,10 @@ func (s *Store) runMigration(version int) error {
 		}
 	case 6:
 		if err := s.migrateV6(tx); err != nil {
+			return err
+		}
+	case 7:
+		if err := s.migrateV7(tx); err != nil {
 			return err
 		}
 	default:
@@ -224,6 +228,24 @@ func (s *Store) migrateV6(tx *sql.Tx) error {
 		`ALTER TABLE agents ADD COLUMN merge_had_conflict INTEGER DEFAULT 0`,    // Whether conflict occurred (bool)
 		`ALTER TABLE agents ADD COLUMN merge_resolver_spawned INTEGER DEFAULT 0`, // Whether resolver was spawned (bool)
 		`ALTER TABLE agents ADD COLUMN merge_error TEXT`,          // Error message if merge failed
+	}
+
+	for _, m := range migrations {
+		if _, err := tx.Exec(m); err != nil {
+			return fmt.Errorf("failed to execute migration: %s: %w", m, err)
+		}
+	}
+
+	return nil
+}
+
+// migrateV7 adds parent_agent_id column to agents table for resolver agent grouping
+func (s *Store) migrateV7(tx *sql.Tx) error {
+	migrations := []string{
+		// Add parent_agent_id to track resolver agent relationships
+		`ALTER TABLE agents ADD COLUMN parent_agent_id TEXT`,
+		// Index for efficient child lookups
+		`CREATE INDEX IF NOT EXISTS idx_agents_parent_agent_id ON agents(parent_agent_id)`,
 	}
 
 	for _, m := range migrations {

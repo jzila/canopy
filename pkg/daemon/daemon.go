@@ -311,14 +311,42 @@ func (d *Daemon) restoreStateFromDB() error {
 			"agent_id", pAgent.ID,
 			"task_id", pAgent.TaskID,
 			"status", pAgent.Status,
-			"run_id", pAgent.RunID)
+			"run_id", pAgent.RunID,
+			"parent_agent_id", pAgent.ParentAgentID)
 	}
+
+	// Rebuild parent-child linkages (ChildAgentIDs) from persisted ParentAgentID relationships.
+	// This is necessary because ChildAgentIDs is not persisted to the database; only
+	// ParentAgentID is stored, and we reconstruct the reverse mapping on restore.
+	d.rebuildAgentChildLinks()
 
 	// Update stats after restoring all agents
 	d.state.UpdateStats()
 
 	logging.Info("restored agents from database", "count", len(agents))
 	return nil
+}
+
+// rebuildAgentChildLinks iterates through all agents and reconstructs the ChildAgentIDs
+// lists on parent agents based on persisted ParentAgentID values. This is called after
+// restoring agents from the database to rebuild the bidirectional parent-child relationship.
+func (d *Daemon) rebuildAgentChildLinks() {
+	d.state.mu.Lock()
+	defer d.state.mu.Unlock()
+
+	// First pass: clear existing ChildAgentIDs to avoid duplicates
+	for _, agent := range d.state.Agents {
+		agent.ChildAgentIDs = nil
+	}
+
+	// Second pass: rebuild ChildAgentIDs from ParentAgentID relationships
+	for _, agent := range d.state.Agents {
+		if agent.ParentAgentID != "" {
+			if parent, exists := d.state.Agents[agent.ParentAgentID]; exists {
+				parent.ChildAgentIDs = append(parent.ChildAgentIDs, agent.ID)
+			}
+		}
+	}
 }
 
 // markOrphanedStatesAsFailed marks any orphaned runs and agents as failed.
@@ -386,14 +414,15 @@ func (d *Daemon) loadTasksFromBeads() error {
 // convertPersistenceAgentToState converts a persistence.Agent to a daemon.AgentState
 func (d *Daemon) convertPersistenceAgentToState(pAgent *persistence.Agent) *AgentState {
 	agent := &AgentState{
-		ID:        pAgent.ID,
-		RunID:     pAgent.RunID,
-		TaskID:    pAgent.TaskID,
-		TaskTitle: pAgent.TaskTitle,
-		RepoID:    pAgent.RepoID,
-		Status:    convertPersistenceStatus(pAgent.Status),
-		StartTime: pAgent.StartedAt,
-		Duration:  pAgent.DurationSeconds,
+		ID:            pAgent.ID,
+		RunID:         pAgent.RunID,
+		TaskID:        pAgent.TaskID,
+		TaskTitle:     pAgent.TaskTitle,
+		RepoID:        pAgent.RepoID,
+		ParentAgentID: pAgent.ParentAgentID,
+		Status:        convertPersistenceStatus(pAgent.Status),
+		StartTime:     pAgent.StartedAt,
+		Duration:      pAgent.DurationSeconds,
 		TokenUsage: TokenUsage{
 			InputTokens:  pAgent.InputTokens,
 			OutputTokens: pAgent.OutputTokens,
