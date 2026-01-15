@@ -108,10 +108,13 @@ func (s *Server) Start() error {
 	// Setup routes
 	mux := s.setupRoutes()
 
+	// Apply middleware chain: RequestID -> Logging -> Routes
+	handler := RequestIDMiddleware(LoggingMiddleware(mux))
+
 	// Create HTTP server
 	s.httpServer = &http.Server{
 		Addr:         fmt.Sprintf(":%d", s.port),
-		Handler:      mux,
+		Handler:      handler,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,

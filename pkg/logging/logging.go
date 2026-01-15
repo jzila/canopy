@@ -31,10 +31,11 @@ const (
 type contextKey string
 
 const (
-	runIDKey   contextKey = "run_id"
-	agentIDKey contextKey = "agent_id"
-	taskIDKey  contextKey = "task_id"
-	repoIDKey  contextKey = "repo_id"
+	runIDKey     contextKey = "run_id"
+	agentIDKey   contextKey = "agent_id"
+	taskIDKey    contextKey = "task_id"
+	repoIDKey    contextKey = "repo_id"
+	requestIDKey contextKey = "request_id"
 )
 
 // Config holds logging configuration options
@@ -190,7 +191,7 @@ func WithTaskID(taskID string) *slog.Logger {
 	return Logger().With("task_id", taskID)
 }
 
-// WithContext extracts run_id, agent_id, and task_id from context and returns a logger with those fields
+// WithContext extracts run_id, agent_id, task_id, and request_id from context and returns a logger with those fields
 func WithContext(ctx context.Context) *slog.Logger {
 	logger := Logger()
 	if runID, ok := ctx.Value(runIDKey).(string); ok && runID != "" {
@@ -204,6 +205,9 @@ func WithContext(ctx context.Context) *slog.Logger {
 	}
 	if repoID, ok := ctx.Value(repoIDKey).(string); ok && repoID != "" {
 		logger = logger.With("repo_id", repoID)
+	}
+	if requestID, ok := ctx.Value(requestIDKey).(string); ok && requestID != "" {
+		logger = logger.With("request_id", requestID)
 	}
 	return logger
 }
@@ -226,6 +230,19 @@ func ContextWithTaskID(ctx context.Context, taskID string) context.Context {
 // ContextWithRepoID returns a new context with the repo_id value
 func ContextWithRepoID(ctx context.Context, repoID string) context.Context {
 	return context.WithValue(ctx, repoIDKey, repoID)
+}
+
+// ContextWithRequestID returns a new context with the request_id value
+func ContextWithRequestID(ctx context.Context, requestID string) context.Context {
+	return context.WithValue(ctx, requestIDKey, requestID)
+}
+
+// RequestIDFromContext extracts the request_id from context
+func RequestIDFromContext(ctx context.Context) string {
+	if requestID, ok := ctx.Value(requestIDKey).(string); ok {
+		return requestID
+	}
+	return ""
 }
 
 // ContextWithIDs returns a new context with all provided IDs
