@@ -586,34 +586,41 @@ export const Dashboard: React.FC = () => {
         {/* Main Content */}
         <main className="flex-1 flex flex-col overflow-hidden">
           {/* Merge Queue Panel - Collapsible */}
-          {hasMergeQueueActivity && (
-            <div className="flex-shrink-0 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
-              <button
-                onClick={() => setMergeQueueExpanded(!mergeQueueExpanded)}
-                className="w-full flex items-center justify-between px-4 py-2 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
-              >
-                <div className="flex items-center gap-2">
-                  <GitMerge className="w-4 h-4 text-amber-500" />
-                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                    Merge Queue
+          <div className="flex-shrink-0 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+            <button
+              onClick={() => setMergeQueueExpanded(!mergeQueueExpanded)}
+              className="w-full flex items-center justify-between px-4 py-2 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+            >
+              <div className="flex items-center gap-2">
+                <GitMerge className={`w-4 h-4 ${hasMergeQueueActivity ? 'text-amber-500' : 'text-gray-400 dark:text-gray-500'}`} />
+                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  Merge Queue
+                </span>
+                {!hasMergeQueueActivity && (
+                  <span className="text-xs text-gray-400 dark:text-gray-500">
+                    (empty)
                   </span>
-                  {mergeQueueData.resolvers.length > 0 && (
-                    <span className="px-2 py-0.5 text-xs font-medium bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300 rounded-full animate-pulse">
-                      {mergeQueueData.resolvers.length} resolving
-                    </span>
-                  )}
+                )}
+                {hasMergeQueueActivity && mergeQueueData.resolvers.length > 0 && (
+                  <span className="px-2 py-0.5 text-xs font-medium bg-amber-100 dark:bg-amber-900/50 text-amber-700 dark:text-amber-300 rounded-full animate-pulse">
+                    {mergeQueueData.resolvers.length} resolving
+                  </span>
+                )}
+                {hasMergeQueueActivity && (
                   <span className="text-xs text-gray-500 dark:text-gray-400">
                     ({mergeQueueData.completed.length} completed, {mergeQueueData.activeWorkers.length} active, {mergeQueueData.pending.length} pending)
                   </span>
-                </div>
-                {mergeQueueExpanded ? (
-                  <ChevronUp className="w-4 h-4 text-gray-500" />
-                ) : (
-                  <ChevronDown className="w-4 h-4 text-gray-500" />
                 )}
-              </button>
-              {mergeQueueExpanded && (
-                <div className="px-4 pb-4">
+              </div>
+              {mergeQueueExpanded ? (
+                <ChevronUp className="w-4 h-4 text-gray-500" />
+              ) : (
+                <ChevronDown className="w-4 h-4 text-gray-500" />
+              )}
+            </button>
+            {mergeQueueExpanded && (
+              <div className="px-4 pb-4">
+                {hasMergeQueueActivity ? (
                   <MergeQueueTree
                     completed={mergeQueueData.completed}
                     resolvers={mergeQueueData.resolvers}
@@ -628,10 +635,18 @@ export const Dashboard: React.FC = () => {
                       }
                     }}
                   />
-                </div>
-              )}
-            </div>
-          )}
+                ) : (
+                  <div className="flex items-center justify-center py-6 text-gray-400 dark:text-gray-500">
+                    <div className="text-center">
+                      <GitMerge className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                      <p className="text-sm">No merge activity</p>
+                      <p className="text-xs mt-1">Tasks will appear here when agents complete work and queue for merging</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
 
           {/* Agent Grid */}
           <div className="flex-1 overflow-y-auto p-6">

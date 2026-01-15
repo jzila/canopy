@@ -112,6 +112,16 @@ func listRuns(store *persistence.Store) error {
 		return nil
 	}
 
+	// Enrich runs with computed data where needed
+	for i := range result.Runs {
+		run := &result.Runs[i]
+		// For list view, we only compute duration from timestamps if missing
+		// We don't fetch agents for each run as that would be expensive
+		if run.DurationSeconds == 0 && run.FinishedAt != nil {
+			run.DurationSeconds = run.FinishedAt.Sub(run.StartedAt).Seconds()
+		}
+	}
+
 	if historyJSON {
 		return outputJSON(result.Runs)
 	}
@@ -133,15 +143,19 @@ func showRunDetails(store *persistence.Store, runID string) error {
 		}
 	}
 
-	if historyJSON {
-		return outputJSON(run)
-	}
-
 	// Get agents for this run to show task details
 	agents, err := store.GetAgentsByRun(run.ID)
 	if err != nil {
 		// Non-fatal, just show run without agent details
 		agents = nil
+	}
+
+	// Compute run-level aggregates from agents if they're missing
+	// This handles legacy data where run-level stats weren't populated
+	enrichRunFromAgents(run, agents)
+
+	if historyJSON {
+		return outputJSON(run)
 	}
 
 	return outputRunDetails(run, agents)
@@ -304,4 +318,28 @@ func formatTokens(tokens int) string {
 		return fmt.Sprintf("%.1fK", float64(tokens)/1000)
 	}
 	return fmt.Sprintf("%.1fM", float64(tokens)/1000000)
+}
+
+// enrichRunFromAgents computes run-level aggregates from agent data
+// when the run record doesn't have this information (legacy data).
+// It also computes duration from timestamps if DurationSeconds is 0.
+func enrichRunFromAgents(run *persistence.Run, agents []persistence.Agent) {
+	// Compute duration from timestamps if not already set
+	if run.DurationSeconds == 0 && run.FinishedAt != nil {
+		run.DurationSeconds = run.FinishedAt.Sub(run.StartedAt).Seconds()
+	}
+
+	// If we have agent data and run-level aggregates are missing, compute them
+	if len(agents) > 0 && run.TotalCostUSD == 0 && run.TotalInputTokens == 0 {
+		for _, agent := range agents {
+			run.TotalInputTokens += agent.InputTokens
+			run.TotalOutputTokens += agent.OutputTokens
+			run.CacheCreationTokens += agent.CacheCreationTokens
+			run.CacheReadTokens += agent.CacheReadTokens
+			run.TotalCostUSD += agent.CostUSD
+			run.FilesChanged += agent.FilesChanged
+			run.GitCommits += agent.GitCommitsCreated
+			run.TotalTurns += agent.NumTurns
+		}
+	}
 }

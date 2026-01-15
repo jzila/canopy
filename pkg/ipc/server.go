@@ -471,20 +471,25 @@ func (s *Server) convertToEvent(msg *Message) *events.Event {
 			return nil
 		}
 		// Map to run completed event
+		// Key names must match what persistence_handler.go expects
 		return &events.Event{
 			Type:      events.EventRunCompleted,
 			Timestamp: msg.Timestamp,
 			Payload: map[string]interface{}{
-				"run_id":              payload.RunID,
-				"total_tasks":         payload.Stats.TotalTasks,
-				"succeeded_tasks":     payload.Stats.SucceededTasks,
-				"failed_tasks":        payload.Stats.FailedTasks,
-				"total_duration":      payload.Stats.TotalDuration,
-				"total_input_tokens":  payload.Stats.TotalInputTokens,
-				"total_output_tokens": payload.Stats.TotalOutputTokens,
-				"total_cost_usd":      payload.Stats.TotalCostUSD,
-				"files_changed":       payload.Stats.FilesChanged,
-				"conflicts_resolved":  payload.Stats.ConflictsResolved,
+				"run_id":                            payload.RunID,
+				"total_tasks":                       payload.Stats.TotalTasks,
+				"succeeded_tasks":                   payload.Stats.SucceededTasks,
+				"failed_tasks":                      payload.Stats.FailedTasks,
+				"total_duration_seconds":            payload.Stats.TotalDuration,
+				"total_input_tokens":                payload.Stats.TotalInputTokens,
+				"total_output_tokens":               payload.Stats.TotalOutputTokens,
+				"total_cache_creation_input_tokens": payload.Stats.TotalCacheCreationInputToken,
+				"total_cache_read_input_tokens":     payload.Stats.TotalCacheReadInputTokens,
+				"total_cost_usd":                    payload.Stats.TotalCostUSD,
+				"total_turns":                       payload.Stats.TotalTurns,
+				"files_changed":                     payload.Stats.FilesChanged,
+				"git_commits":                       payload.Stats.GitCommits,
+				"conflicts_resolved":                payload.Stats.ConflictsResolved,
 			},
 		}
 
