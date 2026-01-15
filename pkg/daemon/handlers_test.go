@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -42,31 +43,31 @@ type mockBeadsClient struct {
 	failCalls   []string
 }
 
-func (m *mockBeadsClient) Create(title string, priority int) (string, error) {
+func (m *mockBeadsClient) Create(_ context.Context, title string, priority int) (string, error) {
 	m.createCalls = append(m.createCalls, title)
 	return "test-task-id", nil
 }
 
-func (m *mockBeadsClient) Start(taskID string) error {
+func (m *mockBeadsClient) Start(_ context.Context, taskID string) error {
 	m.startCalls = append(m.startCalls, taskID)
 	return nil
 }
 
-func (m *mockBeadsClient) Done(taskID string) error {
+func (m *mockBeadsClient) Done(_ context.Context, taskID string) error {
 	m.doneCalls = append(m.doneCalls, taskID)
 	return nil
 }
 
-func (m *mockBeadsClient) Fail(taskID string, reason string) error {
+func (m *mockBeadsClient) Fail(_ context.Context, taskID string, reason string) error {
 	m.failCalls = append(m.failCalls, taskID)
 	return nil
 }
 
-func (m *mockBeadsClient) AddDep(child, parent string) error {
+func (m *mockBeadsClient) AddDep(_ context.Context, child, parent string) error {
 	return nil
 }
 
-func (m *mockBeadsClient) List() ([]beads.Task, error) {
+func (m *mockBeadsClient) List(_ context.Context) ([]beads.Task, error) {
 	return nil, nil
 }
 

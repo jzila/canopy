@@ -2,6 +2,7 @@ package beads
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -25,39 +26,40 @@ type Task struct {
 
 // BeadsClient defines the interface for interacting with the beads task tracker.
 // This interface enables dependency injection and mocking for tests.
+// All methods accept a context.Context as the first parameter for cancellation support.
 type BeadsClient interface {
 	// Ready returns all tasks with no open blockers
-	Ready() ([]Task, error)
+	Ready(ctx context.Context) ([]Task, error)
 
 	// List returns all open tasks (status: open, in_progress, blocked)
-	List() ([]Task, error)
+	List(ctx context.Context) ([]Task, error)
 
 	// ReadyWithArgs returns tasks with no open blockers using custom bd ready arguments
-	ReadyWithArgs(args ...string) ([]Task, error)
+	ReadyWithArgs(ctx context.Context, args ...string) ([]Task, error)
 
 	// Show returns detailed information about a task
-	Show(taskID string) (*Task, error)
+	Show(ctx context.Context, taskID string) (*Task, error)
 
 	// Start marks a task as in-progress
-	Start(taskID string) error
+	Start(ctx context.Context, taskID string) error
 
 	// Done marks a task as completed
-	Done(taskID string) error
+	Done(ctx context.Context, taskID string) error
 
 	// Fail marks a task as failed by closing it with a failure reason
-	Fail(taskID string, reason string) error
+	Fail(ctx context.Context, taskID string, reason string) error
 
 	// Create creates a new task and returns its ID
-	Create(title string, priority int) (string, error)
+	Create(ctx context.Context, title string, priority int) (string, error)
 
 	// AddDep adds a dependency: child is blocked by parent
-	AddDep(child, parent string) error
+	AddDep(ctx context.Context, child, parent string) error
 
 	// GetDeps returns the task IDs that the given task depends on (its blockers)
-	GetDeps(taskID string) ([]string, error)
+	GetDeps(ctx context.Context, taskID string) ([]string, error)
 
 	// Sync runs bd sync to commit and push beads changes
-	Sync() error
+	Sync(ctx context.Context) error
 }
 
 // Client wraps the bd CLI for programmatic access.
@@ -86,15 +88,15 @@ func NewClient(workDir string) (*Client, error) {
 }
 
 // Ready returns all tasks with no open blockers
-func (c *Client) Ready() ([]Task, error) {
-	return c.ReadyWithArgs("ready", "--json")
+func (c *Client) Ready(ctx context.Context) ([]Task, error) {
+	return c.ReadyWithArgs(ctx, "ready", "--json")
 }
 
 // List returns all open tasks (status: open, in_progress, blocked).
 // This is used by the daemon to populate the UI with pending work on startup.
-func (c *Client) List() ([]Task, error) {
+func (c *Client) List(ctx context.Context) ([]Task, error) {
 	// Get open tasks (default excludes closed)
-	out, err := c.run("list", "--json", "--limit", "0")
+	out, err := c.run(ctx, "list", "--json", "--limit", "0")
 	if err != nil {
 		return nil, fmt.Errorf("bd list failed: %w", err)
 	}
@@ -125,8 +127,8 @@ func (c *Client) List() ([]Task, error) {
 }
 
 // ReadyWithArgs returns tasks with no open blockers using custom bd ready arguments
-func (c *Client) ReadyWithArgs(args ...string) ([]Task, error) {
-	out, err := c.run(args...)
+func (c *Client) ReadyWithArgs(ctx context.Context, args ...string) ([]Task, error) {
+	out, err := c.run(ctx, args...)
 	if err != nil {
 		return nil, fmt.Errorf("bd ready failed: %w", err)
 	}
@@ -158,27 +160,27 @@ func (c *Client) ReadyWithArgs(args ...string) ([]Task, error) {
 }
 
 // Start marks a task as in-progress
-func (c *Client) Start(taskID string) error {
-	_, err := c.run("update", taskID, "--status", "in_progress")
+func (c *Client) Start(ctx context.Context, taskID string) error {
+	_, err := c.run(ctx, "update", taskID, "--status", "in_progress")
 	return err
 }
 
 // Done marks a task as completed
-func (c *Client) Done(taskID string) error {
-	_, err := c.run("close", taskID)
+func (c *Client) Done(ctx context.Context, taskID string) error {
+	_, err := c.run(ctx, "close", taskID)
 	return err
 }
 
 // Fail marks a task as failed by reopening it so it can be retried.
 // The failure reason is recorded in the reopen event.
-func (c *Client) Fail(taskID string, reason string) error {
-	_, err := c.run("reopen", taskID, "--reason", "FAILED: "+reason)
+func (c *Client) Fail(ctx context.Context, taskID string, reason string) error {
+	_, err := c.run(ctx, "reopen", taskID, "--reason", "FAILED: "+reason)
 	return err
 }
 
 // Show returns detailed information about a task
-func (c *Client) Show(taskID string) (*Task, error) {
-	out, err := c.run("show", taskID, "--json")
+func (c *Client) Show(ctx context.Context, taskID string) (*Task, error) {
+	out, err := c.run(ctx, "show", taskID, "--json")
 	if err != nil {
 		return nil, fmt.Errorf("bd show failed: %w", err)
 	}
@@ -192,8 +194,8 @@ func (c *Client) Show(taskID string) (*Task, error) {
 }
 
 // Create creates a new task
-func (c *Client) Create(title string, priority int) (string, error) {
-	out, err := c.run("create", title, "-p", fmt.Sprintf("%d", priority), "--json")
+func (c *Client) Create(ctx context.Context, title string, priority int) (string, error) {
+	out, err := c.run(ctx, "create", title, "-p", fmt.Sprintf("%d", priority), "--json")
 	if err != nil {
 		return "", fmt.Errorf("bd create failed: %w", err)
 	}
@@ -215,14 +217,14 @@ func (c *Client) Create(title string, priority int) (string, error) {
 }
 
 // AddDep adds a dependency: child is blocked by parent
-func (c *Client) AddDep(child, parent string) error {
-	_, err := c.run("dep", "add", child, parent)
+func (c *Client) AddDep(ctx context.Context, child, parent string) error {
+	_, err := c.run(ctx, "dep", "add", child, parent)
 	return err
 }
 
 // GetDeps returns the task IDs that the given task depends on (its blockers)
-func (c *Client) GetDeps(taskID string) ([]string, error) {
-	task, err := c.Show(taskID)
+func (c *Client) GetDeps(ctx context.Context, taskID string) ([]string, error) {
+	task, err := c.Show(ctx, taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -257,19 +259,20 @@ func (t *Task) GetTimeout() time.Duration {
 }
 
 // Sync runs bd sync to commit and push beads changes
-func (c *Client) Sync() error {
-	_, err := c.run("sync")
+func (c *Client) Sync(ctx context.Context) error {
+	_, err := c.run(ctx, "sync")
 	return err
 }
 
 // run executes a bd command and returns stdout.
 // It serializes access to the bd CLI to prevent concurrent operations
 // from corrupting the underlying SQLite database.
-func (c *Client) run(args ...string) (string, error) {
+// The context is used for cancellation support.
+func (c *Client) run(ctx context.Context, args ...string) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	cmd := exec.Command(c.bdPath, args...)
+	cmd := exec.CommandContext(ctx, c.bdPath, args...)
 	cmd.Dir = c.workDir
 
 	var stdout, stderr bytes.Buffer
@@ -277,6 +280,10 @@ func (c *Client) run(args ...string) (string, error) {
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
+		// Check if the context was cancelled
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("command cancelled: %w", ctx.Err())
+		}
 		return "", fmt.Errorf("%w: %s", err, stderr.String())
 	}
 

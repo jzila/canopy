@@ -189,7 +189,9 @@ func (mc *MergeCoordinator) EnqueueMerge(result *agent.Result) *mergequeue.Merge
 		mc.taskCache.Delete(result.TaskID) // Clean up cache
 	} else {
 		// Fallback: fetch from beads if not cached
-		if fetched, err := mc.beadsClient.Show(result.TaskID); err == nil {
+		// Note: Using context.Background() since this is called from a callback
+		// that doesn't have context propagated
+		if fetched, err := mc.beadsClient.Show(context.Background(), result.TaskID); err == nil {
 			task = fetched
 		}
 	}
@@ -231,32 +233,14 @@ func (mc *MergeCoordinator) HandleFailure(taskID string, result *agent.Result, e
 	mc.cleanup(result)
 
 	// Mark task as failed in beads
-	if err := mc.beadsClient.Fail(taskID, errMsg); err != nil {
+	// Note: Using context.Background() since this is called from a callback
+	// that doesn't have context propagated
+	if err := mc.beadsClient.Fail(context.Background(), taskID, errMsg); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: failed to mark task %s as failed: %v\n", taskID, err)
 	}
 
 	// Send task status update via IPC
 	mc.sendTaskUpdated(taskID, taskTitle, "failed")
-}
-
-// NotifyTaskStarted sends a task "in_progress" status update via IPC.
-// This should be called when a task starts execution.
-func (mc *MergeCoordinator) NotifyTaskStarted(taskID string, task *beads.Task) {
-	if mc.ipcClient == nil {
-		return
-	}
-
-	title := ""
-	if task != nil {
-		title = task.Title
-	}
-
-	// Get agent ID for this task
-	agentID := mc.GetAgentID(taskID)
-
-	if err := mc.ipcClient.SendTaskUpdated(taskID, title, "in_progress", agentID, mc.repoID); err != nil && mc.config.Verbose {
-		fmt.Fprintf(os.Stderr, "warning: failed to send task started for %s: %v\n", taskID, err)
-	}
 }
 
 // sendTaskUpdated sends a task status update via IPC if client is connected.

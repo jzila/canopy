@@ -1,6 +1,7 @@
 package beads
 
 import (
+	"context"
 	"errors"
 	"testing"
 )
@@ -12,13 +13,14 @@ func TestMockClient_ImplementsInterface(t *testing.T) {
 }
 
 func TestMockClient_Ready(t *testing.T) {
+	ctx := context.Background()
 	mock := NewMockClient()
 	mock.SetReadyTasks([]Task{
 		{ID: "task-1", Title: "Task 1"},
 		{ID: "task-2", Title: "Task 2"},
 	})
 
-	tasks, err := mock.Ready()
+	tasks, err := mock.Ready(ctx)
 	if err != nil {
 		t.Fatalf("Ready() error = %v", err)
 	}
@@ -33,21 +35,23 @@ func TestMockClient_Ready(t *testing.T) {
 }
 
 func TestMockClient_ReadyError(t *testing.T) {
+	ctx := context.Background()
 	mock := NewMockClient()
 	expectedErr := errors.New("test error")
 	mock.Errors.Ready = expectedErr
 
-	_, err := mock.Ready()
+	_, err := mock.Ready(ctx)
 	if err != expectedErr {
 		t.Errorf("Ready() error = %v, want %v", err, expectedErr)
 	}
 }
 
 func TestMockClient_Show(t *testing.T) {
+	ctx := context.Background()
 	mock := NewMockClient()
 	mock.SetTask(&Task{ID: "task-1", Title: "Test Task", Priority: 2})
 
-	task, err := mock.Show("task-1")
+	task, err := mock.Show(ctx, "task-1")
 	if err != nil {
 		t.Fatalf("Show() error = %v", err)
 	}
@@ -65,19 +69,21 @@ func TestMockClient_Show(t *testing.T) {
 }
 
 func TestMockClient_ShowNotFound(t *testing.T) {
+	ctx := context.Background()
 	mock := NewMockClient()
 
-	_, err := mock.Show("nonexistent")
+	_, err := mock.Show(ctx, "nonexistent")
 	if err == nil {
 		t.Error("Show() expected error for nonexistent task")
 	}
 }
 
 func TestMockClient_Done(t *testing.T) {
+	ctx := context.Background()
 	mock := NewMockClient()
 	mock.SetTask(&Task{ID: "task-1", Title: "Test", Status: "open"})
 
-	err := mock.Done("task-1")
+	err := mock.Done(ctx, "task-1")
 	if err != nil {
 		t.Fatalf("Done() error = %v", err)
 	}
@@ -93,10 +99,11 @@ func TestMockClient_Done(t *testing.T) {
 }
 
 func TestMockClient_Fail(t *testing.T) {
+	ctx := context.Background()
 	mock := NewMockClient()
 	mock.SetTask(&Task{ID: "task-1", Title: "Test", Status: "in_progress"})
 
-	err := mock.Fail("task-1", "something went wrong")
+	err := mock.Fail(ctx, "task-1", "something went wrong")
 	if err != nil {
 		t.Fatalf("Fail() error = %v", err)
 	}
@@ -118,10 +125,11 @@ func TestMockClient_Fail(t *testing.T) {
 }
 
 func TestMockClient_Create(t *testing.T) {
+	ctx := context.Background()
 	mock := NewMockClient()
 	mock.NextCreateID = "created-task-1"
 
-	id, err := mock.Create("New Task", 1)
+	id, err := mock.Create(ctx, "New Task", 1)
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -147,11 +155,12 @@ func TestMockClient_Create(t *testing.T) {
 }
 
 func TestMockClient_AddDep(t *testing.T) {
+	ctx := context.Background()
 	mock := NewMockClient()
 	mock.SetTask(&Task{ID: "child", Title: "Child"})
 	mock.SetTask(&Task{ID: "parent", Title: "Parent"})
 
-	err := mock.AddDep("child", "parent")
+	err := mock.AddDep(ctx, "child", "parent")
 	if err != nil {
 		t.Fatalf("AddDep() error = %v", err)
 	}
@@ -167,10 +176,11 @@ func TestMockClient_AddDep(t *testing.T) {
 }
 
 func TestMockClient_GetDeps(t *testing.T) {
+	ctx := context.Background()
 	mock := NewMockClient()
 	mock.SetTask(&Task{ID: "task-1", Title: "Task", Blockers: []string{"dep-1", "dep-2"}})
 
-	deps, err := mock.GetDeps("task-1")
+	deps, err := mock.GetDeps(ctx, "task-1")
 	if err != nil {
 		t.Fatalf("GetDeps() error = %v", err)
 	}
@@ -181,9 +191,10 @@ func TestMockClient_GetDeps(t *testing.T) {
 }
 
 func TestMockClient_Sync(t *testing.T) {
+	ctx := context.Background()
 	mock := NewMockClient()
 
-	err := mock.Sync()
+	err := mock.Sync(ctx)
 	if err != nil {
 		t.Fatalf("Sync() error = %v", err)
 	}
@@ -194,14 +205,15 @@ func TestMockClient_Sync(t *testing.T) {
 }
 
 func TestMockClient_Reset(t *testing.T) {
+	ctx := context.Background()
 	mock := NewMockClient()
 	mock.SetTask(&Task{ID: "task-1"})
 	mock.SetReadyTasks([]Task{{ID: "task-1"}})
 
 	// Make some calls
-	mock.Ready()
-	mock.Show("task-1")
-	mock.Done("task-1")
+	mock.Ready(ctx)
+	mock.Show(ctx, "task-1")
+	mock.Done(ctx, "task-1")
 	mock.Errors.Ready = errors.New("test")
 
 	// Reset
@@ -225,6 +237,7 @@ func TestMockClient_Reset(t *testing.T) {
 }
 
 func TestMockClient_ConcurrentAccess(t *testing.T) {
+	ctx := context.Background()
 	mock := NewMockClient()
 	mock.SetReadyTasks([]Task{{ID: "task-1"}})
 	mock.SetTask(&Task{ID: "task-1", Title: "Task 1"})
@@ -234,10 +247,10 @@ func TestMockClient_ConcurrentAccess(t *testing.T) {
 	// Run concurrent operations
 	for i := 0; i < 10; i++ {
 		go func() {
-			mock.Ready()
-			mock.Show("task-1")
-			mock.Done("task-1")
-			mock.Sync()
+			mock.Ready(ctx)
+			mock.Show(ctx, "task-1")
+			mock.Done(ctx, "task-1")
+			mock.Sync(ctx)
 			done <- true
 		}()
 	}

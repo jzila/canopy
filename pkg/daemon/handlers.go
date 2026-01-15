@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -36,12 +37,12 @@ type SchedulerInterface interface {
 
 // BeadsClientInterface abstracts beads client operations for handlers
 type BeadsClientInterface interface {
-	Create(title string, priority int) (string, error)
-	Start(taskID string) error
-	Done(taskID string) error
-	Fail(taskID string, reason string) error
-	AddDep(child, parent string) error
-	List() ([]beads.Task, error)
+	Create(ctx context.Context, title string, priority int) (string, error)
+	Start(ctx context.Context, taskID string) error
+	Done(ctx context.Context, taskID string) error
+	Fail(ctx context.Context, taskID string, reason string) error
+	AddDep(ctx context.Context, child, parent string) error
+	List(ctx context.Context) ([]beads.Task, error)
 }
 
 // NewHandler creates a new handler with the given state
@@ -247,7 +248,7 @@ func (h *Handler) HandleCreateTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create task via beads client
-	taskID, err := h.beadsClient.Create(req.Title, req.Priority)
+	taskID, err := h.beadsClient.Create(r.Context(), req.Title, req.Priority)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to create task: %v", err), http.StatusInternalServerError)
 		return
@@ -255,7 +256,7 @@ func (h *Handler) HandleCreateTask(w http.ResponseWriter, r *http.Request) {
 
 	// Add dependencies if specified
 	for _, depID := range req.Dependencies {
-		if err := h.beadsClient.AddDep(taskID, depID); err != nil {
+		if err := h.beadsClient.AddDep(r.Context(), taskID, depID); err != nil {
 			http.Error(w, fmt.Sprintf("Failed to add dependency: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -332,17 +333,17 @@ func (h *Handler) HandleUpdateTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Status == "in_progress" {
-		if err := h.beadsClient.Start(taskID); err != nil {
+		if err := h.beadsClient.Start(r.Context(), taskID); err != nil {
 			http.Error(w, fmt.Sprintf("Failed to update task in beads: %v", err), http.StatusInternalServerError)
 			return
 		}
 	} else if req.Status == "completed" {
-		if err := h.beadsClient.Done(taskID); err != nil {
+		if err := h.beadsClient.Done(r.Context(), taskID); err != nil {
 			http.Error(w, fmt.Sprintf("Failed to update task in beads: %v", err), http.StatusInternalServerError)
 			return
 		}
 	} else if req.Status == "failed" {
-		if err := h.beadsClient.Fail(taskID, "Task failed"); err != nil {
+		if err := h.beadsClient.Fail(r.Context(), taskID, "Task failed"); err != nil {
 			http.Error(w, fmt.Sprintf("Failed to update task in beads: %v", err), http.StatusInternalServerError)
 			return
 		}

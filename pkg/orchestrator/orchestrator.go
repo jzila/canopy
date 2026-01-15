@@ -210,8 +210,6 @@ func (o *Orchestrator) setupInternalCallbacks() {
 		OnAgentStartFn: func(taskID string, task *beads.Task) {
 			// Store task in merge coordinator for later use in OnDone
 			o.mergeCoordinator.CacheTask(taskID, task)
-			// Send task "in_progress" status via IPC
-			o.mergeCoordinator.NotifyTaskStarted(taskID, task)
 		},
 		OnDoneFn: func(taskID string, result *agent.Result) {
 			// Delegate merge to coordinator - it handles queueing, merge, and task completion
@@ -302,9 +300,9 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		var err error
 		if o.promptFilter != nil && o.config.Prompt != "" {
 			args := o.promptFilter.BuildBdReadyArgs()
-			tasks, err = o.beadsClient.ReadyWithArgs(args...)
+			tasks, err = o.beadsClient.ReadyWithArgs(ctx, args...)
 		} else {
-			tasks, err = o.beadsClient.Ready()
+			tasks, err = o.beadsClient.Ready(ctx)
 		}
 		if err != nil {
 			return fmt.Errorf("failed to get ready tasks: %w", err)
@@ -410,7 +408,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			for _, taskID := range retriesExhausted {
 				fmt.Fprintf(os.Stderr, "  - %s\n", taskID)
 				// Try to mark as failed one more time
-				if err := o.beadsClient.Fail(taskID, fmt.Sprintf("Task failed after %d attempts", o.failureCounts[taskID])); err != nil {
+				if err := o.beadsClient.Fail(ctx, taskID, fmt.Sprintf("Task failed after %d attempts", o.failureCounts[taskID])); err != nil {
 					fmt.Fprintf(os.Stderr, "    warning: could not mark task as failed in beads: %v\n", err)
 				}
 			}

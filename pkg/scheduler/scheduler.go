@@ -173,7 +173,7 @@ func (s *Scheduler) executeTask(ctx context.Context, task *beads.Task) *agent.Re
 	fmt.Printf("[%s] Starting: %s\n", task.ID, task.Title)
 
 	// Gather dependency context from completed tasks
-	deps := s.gatherDependencyContext(task)
+	deps := s.gatherDependencyContext(ctx, task)
 
 	// Create overlay sandbox
 	overlay, err := sandbox.NewOverlay(s.config.TempDir, s.config.WorkDir)
@@ -299,7 +299,7 @@ func (s *Scheduler) executeTask(ctx context.Context, task *beads.Task) *agent.Re
 }
 
 // gatherDependencyContext collects outputs from tasks this task depends on
-func (s *Scheduler) gatherDependencyContext(task *beads.Task) []agent.DependencyContext {
+func (s *Scheduler) gatherDependencyContext(ctx context.Context, task *beads.Task) []agent.DependencyContext {
 	var deps []agent.DependencyContext
 
 	// Get dependency task IDs
@@ -307,7 +307,7 @@ func (s *Scheduler) gatherDependencyContext(task *beads.Task) []agent.Dependency
 	if len(depIDs) == 0 {
 		// Try fetching from beads if not in task struct
 		var err error
-		depIDs, err = s.beadsClient.GetDeps(task.ID)
+		depIDs, err = s.beadsClient.GetDeps(ctx, task.ID)
 		if err != nil && s.config.Verbose {
 			fmt.Fprintf(os.Stderr, "warning: failed to get dependencies for task %s: %v\n", task.ID, err)
 		}

@@ -178,7 +178,7 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 	mergeResult, err := p.merger.MergeSingle(req.Result, mergeOpts)
 	if err != nil {
 		resp.Error = fmt.Sprintf("merge failed: %v", err)
-		p.markTaskFailed(taskID, resp.Error)
+		p.markTaskFailed(ctx, taskID, resp.Error)
 		p.sendTaskUpdated(taskID, req.Task.Title, "failed")
 		p.sendMergeStatusFull(taskID, ipc.MergeStatusFailed, resp.Error, 0, false, false)
 		return resp
@@ -208,7 +208,7 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 	// Check context before spawning resolver
 	if err := ctx.Err(); err != nil {
 		resp.Error = fmt.Sprintf("cancelled before resolver: %v", err)
-		p.markTaskFailed(taskID, resp.Error)
+		p.markTaskFailed(ctx, taskID, resp.Error)
 		p.sendTaskUpdated(taskID, req.Task.Title, "failed")
 		p.sendMergeStatusFull(taskID, ipc.MergeStatusFailed, resp.Error, resp.CommitsApplied, false, false)
 		return resp
@@ -254,7 +254,7 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 
 		if resolverErr != nil {
 			resp.Error = fmt.Sprintf("resolver error: %v", resolverErr)
-			p.markTaskFailed(taskID, resp.Error)
+			p.markTaskFailed(ctx, taskID, resp.Error)
 			p.sendTaskUpdated(taskID, req.Task.Title, "failed")
 			p.sendMergeStatusFull(taskID, ipc.MergeStatusFailed, resp.Error, resp.CommitsApplied, resp.HadConflict, resp.ResolverSpawned)
 			return resp
@@ -281,7 +281,7 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 				if mergeErr != nil {
 					errMsg := fmt.Sprintf("failed to merge resolver result: %v", mergeErr)
 					resp.Error = errMsg
-					p.markTaskFailed(taskID, errMsg)
+					p.markTaskFailed(ctx, taskID, errMsg)
 					p.sendTaskUpdated(taskID, req.Task.Title, "failed")
 					p.sendMergeStatusFull(taskID, ipc.MergeStatusFailed, errMsg, resp.CommitsApplied, resp.HadConflict, resp.ResolverSpawned)
 					return resp
@@ -294,7 +294,7 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 					}
 					errMsg := fmt.Sprintf("resolver merge had errors: %s", strings.Join(resolverMergeResult.Errors, "; "))
 					resp.Error = errMsg
-					p.markTaskFailed(taskID, errMsg)
+					p.markTaskFailed(ctx, taskID, errMsg)
 					p.sendTaskUpdated(taskID, req.Task.Title, "failed")
 					p.sendMergeStatusFull(taskID, ipc.MergeStatusFailed, errMsg, resp.CommitsApplied, resp.HadConflict, resp.ResolverSpawned)
 					return resp
@@ -307,7 +307,7 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 						fmt.Fprintf(os.Stderr, "[%s] Warning: %s\n", taskID, errMsg)
 					}
 					resp.Error = errMsg
-					p.markTaskFailed(taskID, errMsg)
+					p.markTaskFailed(ctx, taskID, errMsg)
 					p.sendTaskUpdated(taskID, req.Task.Title, "failed")
 					p.sendMergeStatusFull(taskID, ipc.MergeStatusFailed, errMsg, resp.CommitsApplied, resp.HadConflict, resp.ResolverSpawned)
 					return resp
@@ -317,7 +317,7 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 			}
 
 			// Mark task as done after successful resolution
-			p.markTaskDone(taskID)
+			p.markTaskDone(ctx, taskID)
 			p.sendTaskUpdated(taskID, req.Task.Title, "completed")
 			p.sendMergeStatusFull(taskID, ipc.MergeStatusMerged, "", resp.CommitsApplied, resp.HadConflict, resp.ResolverSpawned)
 			resp.Success = true
@@ -328,7 +328,7 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 				errMsg = fmt.Sprintf("resolver failed: %s", resolverResult.Error)
 			}
 			resp.Error = errMsg
-			p.markTaskFailed(taskID, errMsg)
+			p.markTaskFailed(ctx, taskID, errMsg)
 			p.sendTaskUpdated(taskID, req.Task.Title, "failed")
 			p.sendMergeStatusFull(taskID, ipc.MergeStatusFailed, errMsg, resp.CommitsApplied, resp.HadConflict, resp.ResolverSpawned)
 
@@ -342,7 +342,7 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 
 	// No conflicts and no errors - mark task as done
 	// (Error cases and no-change cases are handled by resolver above)
-	p.markTaskDone(taskID)
+	p.markTaskDone(ctx, taskID)
 	p.sendTaskUpdated(taskID, req.Task.Title, "completed")
 	p.sendMergeStatusFull(taskID, ipc.MergeStatusMerged, "", resp.CommitsApplied, false, false)
 
@@ -393,15 +393,15 @@ func (p *Processor) commitDirtyBeadsChanges() error {
 }
 
 // markTaskDone marks a task as completed in beads.
-func (p *Processor) markTaskDone(taskID string) {
-	if err := p.beadsClient.Done(taskID); err != nil {
+func (p *Processor) markTaskDone(ctx context.Context, taskID string) {
+	if err := p.beadsClient.Done(ctx, taskID); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to mark task %s done: %v\n", taskID, err)
 	}
 }
 
 // markTaskFailed marks a task as failed in beads.
-func (p *Processor) markTaskFailed(taskID string, reason string) {
-	if err := p.beadsClient.Fail(taskID, reason); err != nil {
+func (p *Processor) markTaskFailed(ctx context.Context, taskID string, reason string) {
+	if err := p.beadsClient.Fail(ctx, taskID, reason); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: failed to mark task %s as failed: %v\n", taskID, err)
 	}
 }

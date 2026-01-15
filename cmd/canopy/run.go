@@ -273,7 +273,7 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 	// Get initial ready tasks to send task count
 	beadsClient, err := beads.NewClient(absWorkdir)
 	if err == nil {
-		tasks, err := beadsClient.Ready()
+		tasks, err := beadsClient.Ready(ctx)
 		if err == nil && len(tasks) > 0 {
 			if err := ipcClient.SendRunStarted(runID, len(tasks), repo); err != nil && verbose {
 				fmt.Fprintf(os.Stderr, "warning: failed to send run started: %v\n", err)

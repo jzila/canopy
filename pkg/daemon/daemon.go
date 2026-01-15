@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/jzila/canopy/pkg/events"
@@ -202,7 +203,7 @@ func (d *Daemon) loadTasksFromBeads() error {
 
 	repoID := d.GetActiveRepositoryID()
 
-	tasks, err := client.List()
+	tasks, err := client.List(context.Background())
 	if err != nil {
 		return fmt.Errorf("failed to list tasks from beads: %w", err)
 	}

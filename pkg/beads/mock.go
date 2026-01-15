@@ -1,6 +1,7 @@
 package beads
 
 import (
+	"context"
 	"fmt"
 	"sync"
 )
@@ -71,7 +72,7 @@ func NewMockClient() *MockClient {
 var _ BeadsClient = (*MockClient)(nil)
 
 // Ready returns ReadyTasks or the configured error
-func (m *MockClient) Ready() ([]Task, error) {
+func (m *MockClient) Ready(_ context.Context) ([]Task, error) {
 	m.mu.Lock()
 	m.Calls.Ready++
 	m.mu.Unlock()
@@ -86,7 +87,7 @@ func (m *MockClient) Ready() ([]Task, error) {
 }
 
 // List returns all tasks or the configured error
-func (m *MockClient) List() ([]Task, error) {
+func (m *MockClient) List(_ context.Context) ([]Task, error) {
 	m.mu.Lock()
 	m.Calls.List++
 	m.mu.Unlock()
@@ -106,7 +107,7 @@ func (m *MockClient) List() ([]Task, error) {
 }
 
 // ReadyWithArgs returns ReadyTasks and records the args
-func (m *MockClient) ReadyWithArgs(args ...string) ([]Task, error) {
+func (m *MockClient) ReadyWithArgs(_ context.Context, args ...string) ([]Task, error) {
 	m.mu.Lock()
 	m.Calls.ReadyWithArgs = append(m.Calls.ReadyWithArgs, args)
 	m.mu.Unlock()
@@ -121,7 +122,7 @@ func (m *MockClient) ReadyWithArgs(args ...string) ([]Task, error) {
 }
 
 // Show returns the task with the given ID or an error
-func (m *MockClient) Show(taskID string) (*Task, error) {
+func (m *MockClient) Show(_ context.Context, taskID string) (*Task, error) {
 	m.mu.Lock()
 	m.Calls.Show = append(m.Calls.Show, taskID)
 	m.mu.Unlock()
@@ -140,7 +141,7 @@ func (m *MockClient) Show(taskID string) (*Task, error) {
 }
 
 // Start marks a task as in-progress
-func (m *MockClient) Start(taskID string) error {
+func (m *MockClient) Start(_ context.Context, taskID string) error {
 	m.mu.Lock()
 	m.Calls.Start = append(m.Calls.Start, taskID)
 	m.mu.Unlock()
@@ -159,7 +160,7 @@ func (m *MockClient) Start(taskID string) error {
 }
 
 // Done marks a task as completed
-func (m *MockClient) Done(taskID string) error {
+func (m *MockClient) Done(_ context.Context, taskID string) error {
 	m.mu.Lock()
 	m.Calls.Done = append(m.Calls.Done, taskID)
 	m.mu.Unlock()
@@ -178,7 +179,7 @@ func (m *MockClient) Done(taskID string) error {
 }
 
 // Fail marks a task as failed by resetting it to open status so it can be retried
-func (m *MockClient) Fail(taskID string, reason string) error {
+func (m *MockClient) Fail(_ context.Context, taskID string, reason string) error {
 	m.mu.Lock()
 	m.Calls.Fail = append(m.Calls.Fail, struct {
 		TaskID string
@@ -200,7 +201,7 @@ func (m *MockClient) Fail(taskID string, reason string) error {
 }
 
 // Create creates a new task
-func (m *MockClient) Create(title string, priority int) (string, error) {
+func (m *MockClient) Create(_ context.Context, title string, priority int) (string, error) {
 	m.mu.Lock()
 	m.Calls.Create = append(m.Calls.Create, struct {
 		Title    string
@@ -226,7 +227,7 @@ func (m *MockClient) Create(title string, priority int) (string, error) {
 }
 
 // AddDep adds a dependency
-func (m *MockClient) AddDep(child, parent string) error {
+func (m *MockClient) AddDep(_ context.Context, child, parent string) error {
 	m.mu.Lock()
 	m.Calls.AddDep = append(m.Calls.AddDep, struct {
 		Child  string
@@ -248,7 +249,7 @@ func (m *MockClient) AddDep(child, parent string) error {
 }
 
 // GetDeps returns the dependencies for a task
-func (m *MockClient) GetDeps(taskID string) ([]string, error) {
+func (m *MockClient) GetDeps(_ context.Context, taskID string) ([]string, error) {
 	m.mu.Lock()
 	m.Calls.GetDeps = append(m.Calls.GetDeps, taskID)
 	m.mu.Unlock()
@@ -271,7 +272,7 @@ func (m *MockClient) GetDeps(taskID string) ([]string, error) {
 }
 
 // Sync is a no-op in the mock
-func (m *MockClient) Sync() error {
+func (m *MockClient) Sync(_ context.Context) error {
 	m.mu.Lock()
 	m.Calls.Sync++
 	m.mu.Unlock()
