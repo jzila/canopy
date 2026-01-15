@@ -73,12 +73,25 @@ code {
   animation: slide-down 0.2s ease-out forwards;
 }
 
-/* Agent card group - ensure proper stacking context */
-.agent-card-group {
-  /* Extra bottom padding when collapsed to show stacked effect */
-  padding-bottom: 16px;
+/* Resolver card slide-in animation for drawer expansion */
+@keyframes resolver-slide-in {
+  0% {
+    opacity: 0;
+    transform: translateX(-12px) scale(0.95);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
 }
 
-.agent-card-group:has(.resolver-cards-expanded) {
-  padding-bottom: 0;
+.resolver-card-slide {
+  animation: resolver-slide-in 0.25s ease-out forwards;
+  animation-fill-mode: both;
+}
+
+/* Agent card group - ensure proper stacking context */
+.agent-card-group {
+  /* Ensure stacking works properly */
+  isolation: isolate;
 }

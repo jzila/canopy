@@ -52,24 +52,45 @@ export const AgentCardGroup: React.FC<AgentCardGroupProps> = ({
     );
   }
 
+  const toggleExpanded = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsExpanded(!isExpanded);
+  };
+
+  // Number of peek cards to show (max 3 for visual balance)
+  const peekCount = Math.min(childAgents.length, 3);
+
   return (
     <div className="relative agent-card-group">
-      {/* Stacked cards container - creates the visual stack effect */}
-      <div className="relative">
-        {/* Background resolver cards (collapsed state - peek out from behind) */}
-        {!isExpanded && childAgents.slice(0, 2).map((child, index) => (
-          <div
-            key={`peek-${child.id}`}
-            className="absolute inset-0 rounded-lg border-2 border-amber-300 dark:border-amber-600 bg-amber-50 dark:bg-amber-900/30 transition-all duration-200"
-            style={{
-              transform: `translateY(${(index + 1) * 8}px) scale(${1 - (index + 1) * 0.02})`,
-              zIndex: -index - 1,
-              opacity: 0.8 - index * 0.2,
-            }}
-          />
-        ))}
+      {/* Card stack container */}
+      <div
+        className="relative cursor-pointer"
+        style={{
+          // Reserve space for peeking cards when collapsed
+          marginBottom: isExpanded ? 0 : `${peekCount * 6}px`,
+        }}
+      >
+        {/* Peeking resolver cards (collapsed state) - stacked behind parent */}
+        {!isExpanded && childAgents.slice(0, peekCount).map((child, index) => {
+          const offset = (index + 1) * 6;
+          const scale = 1 - (index + 1) * 0.015;
+          return (
+            <div
+              key={`peek-${child.id}`}
+              onClick={toggleExpanded}
+              className="absolute inset-x-0 top-0 rounded-lg border-2 border-amber-300 dark:border-amber-600 bg-amber-50 dark:bg-amber-900/30 transition-all duration-300 ease-out hover:translate-y-1"
+              style={{
+                transform: `translateY(${offset}px) scale(${scale})`,
+                transformOrigin: 'top center',
+                zIndex: -index - 1,
+                height: '100%',
+                opacity: 1 - index * 0.15,
+              }}
+            />
+          );
+        })}
 
-        {/* Parent card with resolving indicator */}
+        {/* Parent card */}
         <div className="relative z-10">
           <AgentCard
             agent={parentAgent}
@@ -86,67 +107,76 @@ export const AgentCardGroup: React.FC<AgentCardGroupProps> = ({
             </div>
           )}
 
-          {/* Resolver count badge (collapsed) */}
-          {!isExpanded && (
-            <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 translate-y-1/2 z-20">
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setIsExpanded(true);
-                }}
-                className="flex items-center gap-1 px-2 py-0.5 bg-amber-100 dark:bg-amber-900/50 border border-amber-300 dark:border-amber-600 text-amber-700 dark:text-amber-300 text-xs font-medium rounded-full hover:bg-amber-200 dark:hover:bg-amber-800/50 transition-colors shadow-sm"
-              >
-                <GitMerge className="w-3 h-3" />
-                {childAgents.length} resolver{childAgents.length !== 1 ? 's' : ''}
-                <ChevronDown className="w-3 h-3" />
-              </button>
-            </div>
-          )}
+          {/* Expand/collapse handle - integrated into bottom edge */}
+          <button
+            onClick={toggleExpanded}
+            className={`
+              absolute -bottom-3 left-1/2 -translate-x-1/2 z-20
+              flex items-center gap-1 px-3 py-1
+              bg-amber-100 dark:bg-amber-900/70
+              border-2 border-amber-300 dark:border-amber-600
+              text-amber-700 dark:text-amber-300
+              text-xs font-medium rounded-full
+              hover:bg-amber-200 dark:hover:bg-amber-800/70
+              transition-all duration-200
+              shadow-sm hover:shadow-md
+            `}
+          >
+            <GitMerge className="w-3 h-3" />
+            <span>{childAgents.length}</span>
+            {isExpanded ? (
+              <ChevronUp className="w-3 h-3" />
+            ) : (
+              <ChevronDown className="w-3 h-3" />
+            )}
+          </button>
         </div>
       </div>
 
-      {/* Expanded resolver cards - slide out below */}
-      {isExpanded && (
-        <div className="mt-2 space-y-2 resolver-cards-expanded">
-          {childAgents.map((child, index) => (
-            <div
-              key={child.id}
-              className="relative ml-4 animate-slide-down"
-              style={{
-                animationDelay: `${index * 50}ms`,
-              }}
-            >
-              {/* Connecting line from parent to resolver */}
-              <div className="absolute -left-4 top-0 bottom-0 w-4">
-                {/* Vertical line */}
-                <div className="absolute left-0 top-0 bottom-1/2 w-0.5 bg-gradient-to-b from-amber-400 to-amber-400 dark:from-amber-500 dark:to-amber-500" />
-                {/* Horizontal line to card */}
-                <div className="absolute left-0 top-1/2 w-full h-0.5 bg-amber-400 dark:bg-amber-500" />
-                {/* Continuing vertical line for non-last items */}
-                {index < childAgents.length - 1 && (
-                  <div className="absolute left-0 top-1/2 bottom-0 w-0.5 bg-amber-400 dark:bg-amber-500" style={{ transform: 'translateY(8px)', height: 'calc(100% + 8px)' }} />
-                )}
+      {/* Expanded resolver cards - drawer sliding out */}
+      <div
+        className={`
+          overflow-hidden transition-all duration-300 ease-out
+          ${isExpanded ? 'opacity-100' : 'opacity-0 pointer-events-none'}
+        `}
+        style={{
+          maxHeight: isExpanded ? `${childAgents.length * 150 + 20}px` : '0px',
+        }}
+      >
+        {/* Connector from parent to children */}
+        <div className="relative ml-6 mt-2">
+          {/* Vertical connector line */}
+          <div
+            className="absolute left-0 top-0 w-0.5 bg-gradient-to-b from-amber-400 to-amber-200 dark:from-amber-500 dark:to-amber-700"
+            style={{ height: `calc(100% - 8px)` }}
+          />
+
+          {/* Resolver cards */}
+          <div className="space-y-2 pl-4">
+            {childAgents.map((child, index) => (
+              <div
+                key={child.id}
+                className="relative resolver-card-slide"
+                style={{
+                  animationDelay: `${index * 60}ms`,
+                }}
+              >
+                {/* Horizontal connector to card */}
+                <div className="absolute -left-4 top-6 w-4 h-0.5 bg-amber-400 dark:bg-amber-500" />
+
+                {/* Dot at connection point */}
+                <div className="absolute -left-4 top-5 w-2 h-2 rounded-full bg-amber-400 dark:bg-amber-500 -translate-x-0.5" />
+
+                <ResolverCard
+                  agent={child}
+                  onSelect={onSelect}
+                  isSelected={child.id === selectedAgentId}
+                />
               </div>
-
-              {/* Resolver card with special styling */}
-              <ResolverCard
-                agent={child}
-                onSelect={onSelect}
-                isSelected={child.id === selectedAgentId}
-              />
-            </div>
-          ))}
-
-          {/* Collapse button */}
-          <button
-            onClick={() => setIsExpanded(false)}
-            className="ml-4 flex items-center gap-1 px-2 py-1 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
-          >
-            <ChevronUp className="w-3 h-3" />
-            Collapse
-          </button>
+            ))}
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 };
