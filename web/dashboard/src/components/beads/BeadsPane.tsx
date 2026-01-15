@@ -383,7 +383,7 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
         </div>
       </div>
 
-      {/* Merge Queue Status - Compact strip at top (always visible) */}
+      {/* Merge Queue Status - Compact strip at top (auto-hides when empty) */}
       <MergeQueueStatus
         completed={mergeQueueData.completed}
         resolvers={mergeQueueData.resolvers}

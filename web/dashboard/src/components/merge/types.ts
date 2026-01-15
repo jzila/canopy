@@ -1,5 +1,5 @@
 /**
- * Types for the Merge Queue Tree Visualization
+ * Types for the Merge Queue Status Visualization
  */
 
 // Status types for merge queue items
@@ -37,53 +37,6 @@ export interface ActiveWorker {
   status: MergeStatus;
 }
 
-// Props for the MergeQueueTree component
-export interface MergeQueueTreeProps {
-  completed: CompletedMerge[];
-  resolvers: ResolverBranch[];
-  pending: PendingMerge[];
-  activeWorkers: ActiveWorker[];
-  onNodeClick?: (taskId: string) => void;
-  onNodeHover?: (taskId: string | null) => void;
-  getNodeDetails?: (taskId: string) => NodeDetails | null;
-}
-
-// Internal node representation for rendering
-export interface TreeNode {
-  id: string;
-  taskId: string;
-  agentId: string;
-  type: 'completed' | 'pending' | 'active' | 'resolver';
-  status: 'success' | 'failed' | 'resolving' | 'resolved' | 'pending' | 'active';
-  x: number;
-  y: number;
-  label?: string;
-  parentId?: string;
-  error?: string;
-}
-
-// Connection line between nodes
-export interface TreeConnection {
-  id: string;
-  fromNode: string;
-  toNode: string;
-  type: 'trunk' | 'branch' | 'merge' | 'worker';
-  fromX: number;
-  fromY: number;
-  toX: number;
-  toY: number;
-}
-
-// Layout configuration
-export interface TreeLayout {
-  nodeRadius: number;
-  nodeSpacing: number;
-  trunkY: number;
-  branchOffset: number;
-  padding: number;
-  workerFanSpacing?: number; // Vertical spacing between fan-out worker branches
-}
-
 // Token usage information
 export interface TokenUsage {
   input_tokens: number;
@@ -103,7 +56,7 @@ export interface GitCommit {
   files_changed: string[];
 }
 
-// Detailed information for a node (from agent state)
+// Detailed information for a merge item (from agent state)
 export interface NodeDetails {
   title?: string;
   duration?: number;
