@@ -500,6 +500,67 @@ func getFirstLine(s string) string {
 	return s
 }
 
+// filterGitignored filters out paths that are gitignored.
+// Uses git check-ignore to respect .gitignore, .git/info/exclude, and global gitignore.
+func (m *SequentialMerger) filterGitignored(paths []string) ([]string, error) {
+	if len(paths) == 0 {
+		return nil, nil
+	}
+
+	// Use git check-ignore with stdin to check all paths efficiently in one call
+	// --no-index: don't check if file is tracked (we want to know if pattern matches)
+	// -n: show non-matching files (inverted behavior - we want to see what's NOT ignored)
+	// Actually, simpler approach: check-ignore returns ignored paths, so we filter them out
+	cmd := exec.Command("git", "check-ignore", "--stdin")
+	cmd.Dir = m.outputDir
+
+	var stdin bytes.Buffer
+	for _, p := range paths {
+		stdin.WriteString(p + "\n")
+	}
+	cmd.Stdin = &stdin
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	// git check-ignore exits 0 if any paths are ignored, 1 if none are ignored
+	// Both are valid outcomes, so we don't treat exit 1 as an error
+	err := cmd.Run()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			// Exit code 1 means no paths are ignored - that's fine
+			if exitErr.ExitCode() == 1 {
+				return paths, nil
+			}
+		}
+		// Exit code 128 or other means actual error
+		return nil, fmt.Errorf("git check-ignore failed: %w: %s", err, stderr.String())
+	}
+
+	// Parse ignored paths from output (one per line)
+	ignoredSet := make(map[string]bool)
+	for _, line := range strings.Split(stdout.String(), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			ignoredSet[line] = true
+			if m.verbose {
+				fmt.Printf("Skipping gitignored file: %s\n", line)
+			}
+		}
+	}
+
+	// Filter out ignored paths
+	var filtered []string
+	for _, p := range paths {
+		if !ignoredSet[p] {
+			filtered = append(filtered, p)
+		}
+	}
+
+	return filtered, nil
+}
+
 // commitFileChanges stages and commits file changes for a single task.
 // Returns (true, nil) if a commit was made, (false, nil) if no changes to commit,
 // or (false, error) if an error occurred.
@@ -508,9 +569,23 @@ func (m *SequentialMerger) commitFileChanges(result *agent.Result, paths []strin
 		return false, nil
 	}
 
+	// Filter out gitignored files before staging
+	// This is necessary because git add with explicit paths bypasses .gitignore
+	filteredPaths, err := m.filterGitignored(paths)
+	if err != nil {
+		return false, fmt.Errorf("failed to filter gitignored files: %w", err)
+	}
+
+	if len(filteredPaths) == 0 {
+		if m.verbose {
+			fmt.Printf("No changes to commit for task %s (all files gitignored)\n", result.TaskID)
+		}
+		return false, nil
+	}
+
 	// Stage the files
 	addCmd := exec.Command("git", "add", "--")
-	addCmd.Args = append(addCmd.Args, paths...)
+	addCmd.Args = append(addCmd.Args, filteredPaths...)
 	addCmd.Dir = m.outputDir
 	var addStderr bytes.Buffer
 	addCmd.Stderr = &addStderr

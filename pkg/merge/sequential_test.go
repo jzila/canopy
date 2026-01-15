@@ -541,3 +541,203 @@ func TestGetFirstLine(t *testing.T) {
 		}
 	}
 }
+
+func TestFilterGitignored(t *testing.T) {
+	// Create a temp git repo with .gitignore
+	tempDir := t.TempDir()
+	initGitRepo(t, tempDir)
+
+	// Create a .gitignore file
+	gitignore := `# Build outputs
+dist/
+*.js
+*.d.ts
+
+# Node modules
+node_modules/
+`
+	gitignorePath := filepath.Join(tempDir, ".gitignore")
+	if err := os.WriteFile(gitignorePath, []byte(gitignore), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, tempDir, "add", ".gitignore")
+	runGit(t, tempDir, "commit", "-m", "add gitignore")
+
+	merger := NewSequentialMerger(tempDir, tempDir, true)
+
+	tests := []struct {
+		name          string
+		paths         []string
+		expectedKept  []string
+		expectedCount int
+	}{
+		{
+			name:          "filter dist directory",
+			paths:         []string{"dist/bundle.js", "dist/index.html", "src/main.ts"},
+			expectedKept:  []string{"src/main.ts"},
+			expectedCount: 1,
+		},
+		{
+			name:          "filter .js files",
+			paths:         []string{"src/App.js", "src/App.ts", "src/utils.js"},
+			expectedKept:  []string{"src/App.ts"},
+			expectedCount: 1,
+		},
+		{
+			name:          "filter .d.ts files",
+			paths:         []string{"src/App.d.ts", "src/App.tsx", "types/index.d.ts"},
+			expectedKept:  []string{"src/App.tsx"},
+			expectedCount: 1,
+		},
+		{
+			name:          "filter node_modules",
+			paths:         []string{"node_modules/react/index.js", "package.json"},
+			expectedKept:  []string{"package.json"},
+			expectedCount: 1,
+		},
+		{
+			name:          "no paths ignored",
+			paths:         []string{"src/main.ts", "src/utils.ts", "README.md"},
+			expectedKept:  []string{"src/main.ts", "src/utils.ts", "README.md"},
+			expectedCount: 3,
+		},
+		{
+			name:          "all paths ignored",
+			paths:         []string{"dist/app.js", "node_modules/pkg/index.js"},
+			expectedKept:  []string{},
+			expectedCount: 0,
+		},
+		{
+			name:          "empty paths",
+			paths:         []string{},
+			expectedKept:  nil,
+			expectedCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filtered, err := merger.filterGitignored(tt.paths)
+			if err != nil {
+				t.Fatalf("filterGitignored failed: %v", err)
+			}
+
+			if len(filtered) != tt.expectedCount {
+				t.Errorf("Expected %d paths, got %d: %v", tt.expectedCount, len(filtered), filtered)
+			}
+
+			// Check that expected paths are in the result
+			for _, expected := range tt.expectedKept {
+				found := false
+				for _, p := range filtered {
+					if p == expected {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("Expected path %q to be kept, but it wasn't. Got: %v", expected, filtered)
+				}
+			}
+		})
+	}
+}
+
+func TestMergeSingleWithGitignored(t *testing.T) {
+	// Create a temp git repo with .gitignore
+	tempDir := t.TempDir()
+	overlayDir := filepath.Join(tempDir, "overlay")
+	initGitRepo(t, tempDir)
+
+	// Create a .gitignore that ignores dist/ and *.js files
+	gitignore := `dist/
+*.js
+`
+	gitignorePath := filepath.Join(tempDir, ".gitignore")
+	if err := os.WriteFile(gitignorePath, []byte(gitignore), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, tempDir, "add", ".gitignore")
+	runGit(t, tempDir, "commit", "-m", "add gitignore")
+
+	// Create overlay with both ignored and non-ignored files
+	overlay := &sandbox.Overlay{
+		UpperDir: filepath.Join(overlayDir, "upper"),
+	}
+	if err := os.MkdirAll(overlay.UpperDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create files in overlay
+	// Non-ignored: src/main.ts
+	srcDir := filepath.Join(overlay.UpperDir, "src")
+	if err := os.MkdirAll(srcDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "main.ts"), []byte("typescript code"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Ignored: dist/bundle.js, src/main.js
+	distDir := filepath.Join(overlay.UpperDir, "dist")
+	if err := os.MkdirAll(distDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(distDir, "bundle.js"), []byte("bundled code"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "main.js"), []byte("compiled code"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create agent result with both ignored and non-ignored changes
+	result := &agent.Result{
+		TaskID:  "test-task",
+		Success: true,
+		Overlay: overlay,
+		Changes: []sandbox.FileChange{
+			{Path: "src/main.ts", Type: sandbox.ChangeCreated},
+			{Path: "src/main.js", Type: sandbox.ChangeCreated},  // Ignored
+			{Path: "dist/bundle.js", Type: sandbox.ChangeCreated}, // Ignored
+		},
+	}
+
+	// Create merger
+	merger := NewSequentialMerger(tempDir, tempDir, true)
+
+	// MergeSingle should apply changes but skip gitignored files when committing
+	mergeResult, err := merger.MergeSingle(result, nil)
+	if err != nil {
+		t.Fatalf("MergeSingle failed: %v", err)
+	}
+
+	// Should have applied all files (to working dir)
+	if len(mergeResult.Applied) != 3 {
+		t.Errorf("Expected 3 applied changes, got %d", len(mergeResult.Applied))
+	}
+
+	// Should have created exactly 1 commit (only for non-ignored file)
+	if mergeResult.CommitsApplied != 1 {
+		t.Errorf("Expected 1 commit, got %d", mergeResult.CommitsApplied)
+	}
+
+	// Verify non-ignored file was committed
+	// Check git log to see what was committed
+	cmd := exec.Command("git", "show", "--name-only", "--pretty=format:", "HEAD")
+	cmd.Dir = tempDir
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git show failed: %v", err)
+	}
+
+	committedFiles := strings.TrimSpace(string(output))
+	if !strings.Contains(committedFiles, "src/main.ts") {
+		t.Errorf("Expected src/main.ts to be committed, got: %s", committedFiles)
+	}
+	if strings.Contains(committedFiles, "main.js") {
+		t.Errorf("Expected main.js to NOT be committed, got: %s", committedFiles)
+	}
+	if strings.Contains(committedFiles, "bundle.js") {
+		t.Errorf("Expected bundle.js to NOT be committed, got: %s", committedFiles)
+	}
+}
