@@ -314,7 +314,9 @@ func copyFile(src, dst string) error {
 
 // MergeOptions configures the merge behavior
 type MergeOptions struct {
-	// Reserved for future use
+	// TaskTitle is the task title from beads, used to generate commit messages
+	// when the agent didn't make commits with messages.
+	TaskTitle string
 }
 
 // MergeSingle merges and commits a single agent result atomically.
@@ -379,7 +381,7 @@ func (m *SequentialMerger) MergeSingle(result *agent.Result, opts *MergeOptions)
 		// Commit all changes in one commit
 		if len(paths) > 0 {
 			// Build commit message including agent's original commit messages if any
-			commitMsg := m.buildMergeCommitMessage(result)
+			commitMsg := m.buildMergeCommitMessage(result, opts)
 			committed, err := m.commitFileChanges(result, paths, commitMsg)
 			if err != nil {
 				// Commit failed - reset working directory to clean HEAD state
@@ -442,7 +444,8 @@ func (m *SequentialMerger) resetToHead(headCommit string, paths []string) error 
 // buildMergeCommitMessage creates a commit message for merged changes.
 // Uses the agent's original commit message(s) with bead ID appended.
 // Format: "<original message> (<bead-id>)" or combined messages if multiple commits.
-func (m *SequentialMerger) buildMergeCommitMessage(result *agent.Result) string {
+// Falls back to generating a message from the task title if no agent commits exist.
+func (m *SequentialMerger) buildMergeCommitMessage(result *agent.Result, opts *MergeOptions) string {
 	beadID := result.TaskID
 
 	// If agent made commits, use their message(s) as the primary content
@@ -467,8 +470,65 @@ func (m *SequentialMerger) buildMergeCommitMessage(result *agent.Result) string 
 		return title + body.String()
 	}
 
-	// No commits from agent - use generic message (should be rare)
+	// No commits from agent - generate message from task title
+	if opts != nil && opts.TaskTitle != "" {
+		return generateCommitMessageFromTitle(opts.TaskTitle, beadID)
+	}
+
+	// Last resort fallback (should be rare - task title should always be available)
 	return fmt.Sprintf("canopy: apply changes from %s", beadID)
+}
+
+// generateCommitMessageFromTitle creates a conventional commit message from a task title.
+// It analyzes the title to determine the appropriate commit type (feat, fix, refactor, etc.)
+// and formats it as "type: description (bead-id)".
+func generateCommitMessageFromTitle(title string, beadID string) string {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return fmt.Sprintf("chore: apply changes (%s)", beadID)
+	}
+
+	// Normalize title to lowercase for pattern matching
+	lowerTitle := strings.ToLower(title)
+
+	// Determine commit type based on keywords in the title
+	// Order matters: more specific types should be checked before general ones
+	var commitType string
+	switch {
+	case strings.Contains(lowerTitle, "fix") || strings.Contains(lowerTitle, "bug") ||
+		strings.Contains(lowerTitle, "error") || strings.Contains(lowerTitle, "issue") ||
+		strings.Contains(lowerTitle, "broken") || strings.Contains(lowerTitle, "crash"):
+		commitType = "fix"
+	case strings.Contains(lowerTitle, "test"):
+		commitType = "test"
+	case strings.Contains(lowerTitle, "doc") || strings.Contains(lowerTitle, "readme") ||
+		strings.Contains(lowerTitle, "comment"):
+		commitType = "docs"
+	case strings.Contains(lowerTitle, "refactor") || strings.Contains(lowerTitle, "restructure") ||
+		strings.Contains(lowerTitle, "reorganize") || strings.Contains(lowerTitle, "clean"):
+		commitType = "refactor"
+	case strings.Contains(lowerTitle, "remove") || strings.Contains(lowerTitle, "delete"):
+		commitType = "refactor"
+	case strings.Contains(lowerTitle, "add") || strings.Contains(lowerTitle, "implement") ||
+		strings.Contains(lowerTitle, "create") || strings.Contains(lowerTitle, "new") ||
+		strings.Contains(lowerTitle, "feature") || strings.Contains(lowerTitle, "update") ||
+		strings.Contains(lowerTitle, "change") || strings.Contains(lowerTitle, "modify") ||
+		strings.Contains(lowerTitle, "improve"):
+		commitType = "feat"
+	default:
+		commitType = "chore"
+	}
+
+	// Format the description: lowercase first letter, trim trailing punctuation
+	description := title
+	if len(description) > 0 {
+		// Lowercase the first character for conventional commit style
+		description = strings.ToLower(description[:1]) + description[1:]
+	}
+	// Trim common trailing punctuation
+	description = strings.TrimRight(description, ".!?")
+
+	return fmt.Sprintf("%s: %s (%s)", commitType, description, beadID)
 }
 
 // appendBeadID appends the bead ID to a commit message if not already present.

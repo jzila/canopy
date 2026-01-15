@@ -385,6 +385,7 @@ func TestBuildMergeCommitMessage(t *testing.T) {
 	tests := []struct {
 		name     string
 		result   *agent.Result
+		opts     *MergeOptions
 		expected string
 	}{
 		{
@@ -395,6 +396,7 @@ func TestBuildMergeCommitMessage(t *testing.T) {
 					CommitMessages: []string{"feat(dashboard): add dark mode toggle"},
 				},
 			},
+			opts:     nil,
 			expected: "feat(dashboard): add dark mode toggle (canopy-abc1)",
 		},
 		{
@@ -405,6 +407,7 @@ func TestBuildMergeCommitMessage(t *testing.T) {
 					CommitMessages: []string{"fix(api): handle timeout errors (canopy-xyz9)"},
 				},
 			},
+			opts:     nil,
 			expected: "fix(api): handle timeout errors (canopy-xyz9)",
 		},
 		{
@@ -418,24 +421,45 @@ func TestBuildMergeCommitMessage(t *testing.T) {
 					},
 				},
 			},
+			opts:     nil,
 			expected: "feat(core): implement new feature (canopy-mult)\n\n[1] feat(core): implement new feature\n[2] test(core): add unit tests\n",
 		},
 		{
-			name: "no commits from agent - uses generic message",
+			name: "no commits, with task title - generates from title",
 			result: &agent.Result{
-				TaskID:   "canopy-none",
+				TaskID:   "canopy-fix1",
 				GitState: nil,
 			},
-			expected: "canopy: apply changes from canopy-none",
+			opts:     &MergeOptions{TaskTitle: "Fix the login bug"},
+			expected: "fix: fix the login bug (canopy-fix1)",
 		},
 		{
-			name: "empty commit messages - uses generic message",
+			name: "empty commit messages, with task title - generates from title",
 			result: &agent.Result{
-				TaskID: "canopy-empt",
+				TaskID: "canopy-feat",
 				GitState: &sandbox.GitState{
 					CommitMessages: []string{},
 				},
 			},
+			opts:     &MergeOptions{TaskTitle: "Add user authentication"},
+			expected: "feat: add user authentication (canopy-feat)",
+		},
+		{
+			name: "no commits, no task title - uses generic message",
+			result: &agent.Result{
+				TaskID:   "canopy-none",
+				GitState: nil,
+			},
+			opts:     nil,
+			expected: "canopy: apply changes from canopy-none",
+		},
+		{
+			name: "no commits, empty task title - uses generic message",
+			result: &agent.Result{
+				TaskID:   "canopy-empt",
+				GitState: nil,
+			},
+			opts:     &MergeOptions{TaskTitle: ""},
 			expected: "canopy: apply changes from canopy-empt",
 		},
 		{
@@ -446,6 +470,7 @@ func TestBuildMergeCommitMessage(t *testing.T) {
 					CommitMessages: []string{"fix(auth): resolve session bug\n\nThis fixes the issue where sessions would expire prematurely."},
 				},
 			},
+			opts:     nil,
 			expected: "fix(auth): resolve session bug (canopy-body)\n\nThis fixes the issue where sessions would expire prematurely.",
 		},
 		{
@@ -456,7 +481,53 @@ func TestBuildMergeCommitMessage(t *testing.T) {
 					CommitMessages: []string{"refactor: clean up code"},
 				},
 			},
+			opts:     nil,
 			expected: "refactor: clean up code (canopy-ref)",
+		},
+		{
+			name: "task title with refactor keyword",
+			result: &agent.Result{
+				TaskID:   "canopy-ref2",
+				GitState: nil,
+			},
+			opts:     &MergeOptions{TaskTitle: "Refactor the database layer"},
+			expected: "refactor: refactor the database layer (canopy-ref2)",
+		},
+		{
+			name: "task title with test keyword",
+			result: &agent.Result{
+				TaskID:   "canopy-test",
+				GitState: nil,
+			},
+			opts:     &MergeOptions{TaskTitle: "Add tests for the API"},
+			expected: "test: add tests for the API (canopy-test)",
+		},
+		{
+			name: "task title with docs keyword",
+			result: &agent.Result{
+				TaskID:   "canopy-docs",
+				GitState: nil,
+			},
+			opts:     &MergeOptions{TaskTitle: "Update documentation for CLI"},
+			expected: "docs: update documentation for CLI (canopy-docs)",
+		},
+		{
+			name: "task title with trailing punctuation",
+			result: &agent.Result{
+				TaskID:   "canopy-punc",
+				GitState: nil,
+			},
+			opts:     &MergeOptions{TaskTitle: "Fix the broken tests!"},
+			expected: "fix: fix the broken tests (canopy-punc)",
+		},
+		{
+			name: "task title with generic content",
+			result: &agent.Result{
+				TaskID:   "canopy-gen",
+				GitState: nil,
+			},
+			opts:     &MergeOptions{TaskTitle: "Handle edge cases"},
+			expected: "chore: handle edge cases (canopy-gen)",
 		},
 	}
 
@@ -465,7 +536,7 @@ func TestBuildMergeCommitMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := merger.buildMergeCommitMessage(tt.result)
+			got := merger.buildMergeCommitMessage(tt.result, tt.opts)
 			if got != tt.expected {
 				t.Errorf("buildMergeCommitMessage() = %q, want %q", got, tt.expected)
 			}

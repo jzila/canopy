@@ -140,7 +140,11 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 	p.sendMergeStatus(taskID, ipc.MergeStatusMerging, 0, "")
 
 	// Apply merge via merger.MergeSingle()
-	mergeResult, err := p.merger.MergeSingle(req.Result, nil)
+	// Pass task title for commit message generation if agent didn't make commits
+	mergeOpts := &merge.MergeOptions{
+		TaskTitle: req.Task.Title,
+	}
+	mergeResult, err := p.merger.MergeSingle(req.Result, mergeOpts)
 	if err != nil {
 		resp.Error = fmt.Sprintf("merge failed: %v", err)
 		p.markTaskFailed(taskID, resp.Error)
