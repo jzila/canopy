@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -61,9 +62,11 @@ type BeadsClient interface {
 
 // Client wraps the bd CLI for programmatic access.
 // It implements the BeadsClient interface.
+// Client is safe for concurrent use from multiple goroutines.
 type Client struct {
 	bdPath  string
 	workDir string
+	mu      sync.Mutex // Serializes all bd CLI operations to prevent SQLite corruption
 }
 
 // Ensure Client implements BeadsClient
@@ -259,8 +262,13 @@ func (c *Client) Sync() error {
 	return err
 }
 
-// run executes a bd command and returns stdout
+// run executes a bd command and returns stdout.
+// It serializes access to the bd CLI to prevent concurrent operations
+// from corrupting the underlying SQLite database.
 func (c *Client) run(args ...string) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	cmd := exec.Command(c.bdPath, args...)
 	cmd.Dir = c.workDir
 

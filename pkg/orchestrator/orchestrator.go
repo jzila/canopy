@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
@@ -92,7 +91,6 @@ type Orchestrator struct {
 	callbackManager  *CallbackManager
 	failureCounts    map[string]int // Tracks how many times each task has failed
 	promptFilter     *PromptFilter  // Parsed prompt for filtering tasks
-	beadsMu          sync.Mutex     // Serializes beads updates to prevent corruption
 	sandboxConfig    *sandbox.SandboxConfig
 }
 
