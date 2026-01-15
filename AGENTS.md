@@ -11,6 +11,8 @@ git config user.name && git config user.email  # Must both exist
 ```
 If missing, check `~/.gitconfig` or set locally for this repo.
 
+Use plain `git` commands—the working directory is already set, so `-C` is unnecessary.
+
 ## Commit Standards
 - Format: `type: concise description` (feat, fix, refactor, test, docs, chore)
 - Reference bead ID when relevant: `fix(canopy-abc): description`
