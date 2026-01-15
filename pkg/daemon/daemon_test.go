@@ -308,12 +308,7 @@ func TestRestoreStateFromDB(t *testing.T) {
 		t.Fatalf("failed to reopen store: %v", err)
 	}
 
-	daemon := &Daemon{
-		config:           Config{EnablePersistence: true},
-		eventBus:         NewEventBus(),
-		state:            NewRuntimeState(),
-		persistenceStore: store2,
-	}
+	daemon := newDaemonForTest(Config{EnablePersistence: true}, store2, nil)
 
 	// Manually call restoreStateFromDB - this should mark orphaned states as failed
 	// and restore historical agents for display
@@ -448,12 +443,7 @@ func TestRestoreStateFromDB_CompletedRun(t *testing.T) {
 		}
 	}
 
-	daemon := &Daemon{
-		config:           Config{EnablePersistence: true},
-		eventBus:         NewEventBus(),
-		state:            NewRuntimeState(),
-		persistenceStore: store,
-	}
+	daemon := newDaemonForTest(Config{EnablePersistence: true}, store, nil)
 
 	// Manually call restoreStateFromDB
 	if err := daemon.restoreStateFromDB(); err != nil {
@@ -485,12 +475,7 @@ func TestRestoreStateFromDB_EmptyDB(t *testing.T) {
 	}
 
 	// No runs in database
-	daemon := &Daemon{
-		config:           Config{EnablePersistence: true},
-		eventBus:         NewEventBus(),
-		state:            NewRuntimeState(),
-		persistenceStore: store,
-	}
+	daemon := newDaemonForTest(Config{EnablePersistence: true}, store, nil)
 
 	// Manually call restoreStateFromDB
 	if err := daemon.restoreStateFromDB(); err != nil {
@@ -526,9 +511,7 @@ func TestSetActiveRepository(t *testing.T) {
 		t.Fatalf("failed to create cache dir: %v", err)
 	}
 
-	daemon := &Daemon{
-		beadsClients: make(map[string]BeadsClientInterface),
-	}
+	daemon := newDaemonForTest(Config{}, nil, nil)
 
 	// Initially no active repo
 	if daemon.GetActiveRepositoryID() != "" {
@@ -547,17 +530,15 @@ func TestSetActiveRepository(t *testing.T) {
 
 // TestGetBeadsClient verifies lazy beads client creation
 func TestGetBeadsClient(t *testing.T) {
-	daemon := &Daemon{
-		beadsClient:  &mockBeadsClient{},
-		beadsClients: make(map[string]BeadsClientInterface),
-	}
+	mockClient := &mockBeadsClient{}
+	daemon := newDaemonForTest(Config{}, nil, mockClient)
 
 	// Empty repo ID should return default client
 	client, err := daemon.getBeadsClient("")
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
-	if client != daemon.beadsClient {
+	if client != mockClient {
 		t.Error("expected default beads client for empty repo ID")
 	}
 
@@ -570,17 +551,15 @@ func TestGetBeadsClient(t *testing.T) {
 
 // TestGetActiveBeadsClient verifies getting beads client for active repo
 func TestGetActiveBeadsClient(t *testing.T) {
-	daemon := &Daemon{
-		beadsClient:  &mockBeadsClient{},
-		beadsClients: make(map[string]BeadsClientInterface),
-	}
+	mockClient := &mockBeadsClient{}
+	daemon := newDaemonForTest(Config{}, nil, mockClient)
 
 	// No active repo should return default client
 	client, err := daemon.getActiveBeadsClient()
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
-	if client != daemon.beadsClient {
+	if client != mockClient {
 		t.Error("expected default beads client when no active repo")
 	}
 }
@@ -628,13 +607,7 @@ func TestRestoreStateFromDB_WithRepoContext(t *testing.T) {
 		t.Fatalf("failed to create agent: %v", err)
 	}
 
-	daemon := &Daemon{
-		config:           Config{EnablePersistence: true},
-		eventBus:         NewEventBus(),
-		state:            NewRuntimeState(),
-		persistenceStore: store,
-		beadsClients:     make(map[string]BeadsClientInterface),
-	}
+	daemon := newDaemonForTest(Config{EnablePersistence: true}, store, nil)
 
 	// Manually call restoreStateFromDB
 	if err := daemon.restoreStateFromDB(); err != nil {
@@ -661,7 +634,7 @@ func TestRestoreStateFromDB_WithRepoContext(t *testing.T) {
 
 // TestListRepositories verifies listing repositories
 func TestListRepositories(t *testing.T) {
-	daemon := &Daemon{}
+	daemon := newDaemonForTest(Config{}, nil, nil)
 
 	// Should not panic even with no registry
 	repos, err := daemon.ListRepositories()
@@ -779,13 +752,7 @@ func TestHistoricalLiveFeedEvents(t *testing.T) {
 		t.Fatalf("failed to create agent: %v", err)
 	}
 
-	daemon := &Daemon{
-		config:           Config{EnablePersistence: true},
-		eventBus:         NewEventBus(),
-		state:            NewRuntimeState(),
-		persistenceStore: store,
-		beadsClients:     make(map[string]BeadsClientInterface),
-	}
+	daemon := newDaemonForTest(Config{EnablePersistence: true}, store, nil)
 
 	// Restore state from DB
 	if err := daemon.restoreStateFromDB(); err != nil {

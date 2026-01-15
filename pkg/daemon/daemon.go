@@ -2,10 +2,6 @@ package daemon
 
 import (
 	"fmt"
-	"os"
-	"os/signal"
-	"sync"
-	"syscall"
 
 	"github.com/jzila/canopy/pkg/events"
 	"github.com/jzila/canopy/pkg/logging"
@@ -33,67 +29,58 @@ type IPCServerFactory func(socketPath string, eventBus *events.EventBus) IPCServ
 // This allows lazy creation of beads clients for different repositories.
 type BeadsClientFactory func(repoPath string) (BeadsClientInterface, error)
 
-// Daemon orchestrates all daemon components: IPC server, HTTP server, EventBus, and State
+// Daemon orchestrates all daemon components through focused managers.
+// It coordinates:
+//   - RepositoryManager: repository and beads client management
+//   - PersistenceManager: persistence layer coordination
+//   - LifecycleManager: signal handling, PID files, start/stop
+//   - RuntimeState: agent and task state tracking
+//   - EventBus: event distribution
 type Daemon struct {
-	config           Config
+	config Config
+
+	// Core components
+	eventBus *EventBus
+	state    *RuntimeState
+
+	// Managers (single responsibility)
+	repoManager    *RepositoryManager
+	persistManager *PersistenceManager
+	lifecycle      *LifecycleManager
+
+	// Server components (managed by lifecycle)
 	ipcServer        IPCServer
 	ipcServerFactory IPCServerFactory
 	httpServer       *Server
-	eventBus         *EventBus
-	state            *RuntimeState
 	scheduler        SchedulerInterface
-	beadsClient      BeadsClientInterface // Default beads client (for CWD)
-
-	// Repository management
-	repoMu            sync.RWMutex
-	activeRepoID      string                              // Currently active repository ID
-	beadsClients      map[string]BeadsClientInterface     // repoID -> client (lazy loaded)
-	beadsClientFactory BeadsClientFactory                 // Factory for creating new beads clients
-
-	// Persistence components (optional, controlled by EnablePersistence config)
-	persistenceStore       *persistence.Store
-	persistenceHandler     *PersistenceHandler
-	persistenceUnsubscribe func()
 }
 
-// NewDaemon creates a new daemon instance with the given configuration
+// NewDaemon creates a new daemon instance with the given configuration.
 // ipcServerFactory is a function that creates an IPC server, typically: ipc.NewServer
 func NewDaemon(config Config, ipcServerFactory IPCServerFactory, scheduler SchedulerInterface, beadsClient BeadsClientInterface) *Daemon {
 	return &Daemon{
 		config:           config,
 		ipcServerFactory: ipcServerFactory,
 		scheduler:        scheduler,
-		beadsClient:      beadsClient,
-		beadsClients:     make(map[string]BeadsClientInterface),
+		repoManager:      NewRepositoryManager(beadsClient),
+		persistManager:   NewPersistenceManager(config.EnablePersistence),
+		lifecycle:        NewLifecycleManager(),
 	}
 }
 
 // SetBeadsClientFactory sets the factory function for creating beads clients.
 // This allows lazy creation of beads clients for different repositories.
 func (d *Daemon) SetBeadsClientFactory(factory BeadsClientFactory) {
-	d.repoMu.Lock()
-	defer d.repoMu.Unlock()
-	d.beadsClientFactory = factory
+	d.repoManager.SetClientFactory(factory)
 }
 
 // SetActiveRepository sets the currently active repository by ID.
 // Returns an error if the repository ID is not found in the registry.
 // This also reloads tasks from the new repository's beads database.
 func (d *Daemon) SetActiveRepository(repoID string) error {
-	// Verify the repository exists
-	repo, err := repository.FromID(repoID)
-	if err != nil {
-		return fmt.Errorf("failed to lookup repository: %w", err)
+	if err := d.repoManager.SetActiveRepository(repoID); err != nil {
+		return err
 	}
-	if repo == nil {
-		return fmt.Errorf("repository not found: %s", repoID)
-	}
-
-	d.repoMu.Lock()
-	d.activeRepoID = repoID
-	d.repoMu.Unlock()
-
-	logging.Info("active repository set", "repo_name", repo.Name, "repo_id", repoID)
 
 	// Reload tasks from the new repository's beads database
 	if d.state != nil {
@@ -110,103 +97,35 @@ func (d *Daemon) SetActiveRepository(repoID string) error {
 // GetActiveRepository returns the currently active repository.
 // Returns nil if no repository is active.
 func (d *Daemon) GetActiveRepository() *repository.Repository {
-	d.repoMu.RLock()
-	repoID := d.activeRepoID
-	d.repoMu.RUnlock()
-
-	if repoID == "" {
-		return nil
-	}
-
-	repo, err := repository.FromID(repoID)
-	if err != nil {
-		logging.Warn("failed to lookup active repository", "repo_id", repoID, "error", err)
-		return nil
-	}
-	return repo
+	return d.repoManager.GetActiveRepository()
 }
 
 // GetActiveRepositoryID returns the ID of the currently active repository.
 // Returns empty string if no repository is active.
 func (d *Daemon) GetActiveRepositoryID() string {
-	d.repoMu.RLock()
-	defer d.repoMu.RUnlock()
-	return d.activeRepoID
+	return d.repoManager.GetActiveRepositoryID()
 }
 
 // ListRepositories returns all registered repositories.
 func (d *Daemon) ListRepositories() ([]repository.Repository, error) {
-	return repository.List()
+	return d.repoManager.ListRepositories()
 }
 
 // getBeadsClient returns a beads client for the specified repository ID.
 // If no client exists for that repo, it creates one lazily using the factory.
 // Returns the default beads client if repoID is empty.
 func (d *Daemon) getBeadsClient(repoID string) (BeadsClientInterface, error) {
-	// Return default client if no repo specified
-	if repoID == "" {
-		return d.beadsClient, nil
-	}
-
-	// Check if we already have a client for this repo
-	d.repoMu.RLock()
-	client, exists := d.beadsClients[repoID]
-	d.repoMu.RUnlock()
-
-	if exists {
-		return client, nil
-	}
-
-	// Need to create a new client - lookup repo path
-	repo, err := repository.FromID(repoID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to lookup repository: %w", err)
-	}
-	if repo == nil {
-		return nil, fmt.Errorf("repository not found: %s", repoID)
-	}
-
-	// Create client using factory
-	d.repoMu.Lock()
-	defer d.repoMu.Unlock()
-
-	// Double-check after acquiring write lock
-	if client, exists := d.beadsClients[repoID]; exists {
-		return client, nil
-	}
-
-	// No factory available - return nil (no beads support for this repo)
-	if d.beadsClientFactory == nil {
-		logging.Warn("no beads client factory configured", "repo_id", repoID)
-		return nil, nil
-	}
-
-	client, err = d.beadsClientFactory(repo.Path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create beads client for repo %s: %w", repoID, err)
-	}
-
-	d.beadsClients[repoID] = client
-	logging.Info("created beads client for repository", "repo_name", repo.Name, "repo_id", repoID)
-	return client, nil
+	return d.repoManager.GetClient(repoID)
 }
 
 // getActiveBeadsClient returns the beads client for the currently active repository.
 // Falls back to the default beads client if no repository is active.
 func (d *Daemon) getActiveBeadsClient() (BeadsClientInterface, error) {
-	d.repoMu.RLock()
-	repoID := d.activeRepoID
-	d.repoMu.RUnlock()
-
-	if repoID == "" {
-		return d.beadsClient, nil
-	}
-
-	return d.getBeadsClient(repoID)
+	return d.repoManager.GetActiveClient()
 }
 
-// Init initializes daemon components without starting servers
-// Call this before Start() if you need access to EventBus or RuntimeState
+// Init initializes daemon components without starting servers.
+// Call this before Start() if you need access to EventBus or RuntimeState.
 func (d *Daemon) Init() {
 	if d.eventBus == nil {
 		d.eventBus = NewEventBus()
@@ -215,18 +134,23 @@ func (d *Daemon) Init() {
 		d.state = NewRuntimeState()
 	}
 
-	// Initialize persistence if enabled
-	if d.config.EnablePersistence && d.persistenceStore == nil {
-		store, err := persistence.NewStore()
-		if err != nil {
-			logging.Warn("failed to initialize persistence store", "error", err)
-		} else {
-			d.persistenceStore = store
-			d.persistenceHandler = NewPersistenceHandler(store, d.eventBus)
-			d.persistenceUnsubscribe = d.persistenceHandler.Start()
-			logging.Info("persistence enabled - run history will be saved to SQLite")
+	// Initialize managers if nil (for backwards compatibility with tests)
+	if d.repoManager == nil {
+		d.repoManager = NewRepositoryManager(nil)
+	}
+	if d.persistManager == nil {
+		d.persistManager = NewPersistenceManager(d.config.EnablePersistence)
+	}
+	if d.lifecycle == nil {
+		d.lifecycle = NewLifecycleManager()
+	}
 
-			// Restore state from database if there was a running run
+	// Initialize persistence if enabled
+	if d.config.EnablePersistence && d.persistManager != nil {
+		if err := d.persistManager.Initialize(d.eventBus); err != nil {
+			logging.Warn("failed to initialize persistence", "error", err)
+		} else if d.persistManager.IsEnabled() {
+			// Restore state from database
 			if err := d.restoreStateFromDB(); err != nil {
 				logging.Warn("failed to restore state from database", "error", err)
 			}
@@ -234,197 +158,40 @@ func (d *Daemon) Init() {
 	}
 
 	// Load pending tasks from beads database to populate the UI
-	if err := d.loadTasksFromBeads(); err != nil {
-		logging.Warn("failed to load tasks from beads", "error", err)
+	if d.repoManager != nil {
+		if err := d.loadTasksFromBeads(); err != nil {
+			logging.Warn("failed to load tasks from beads", "error", err)
+		}
 	}
 }
 
-// restoreStateFromDB loads the most recent run and its agents from the database
-// into the RuntimeState. This allows the daemon to display historical data
-// after a restart.
-//
-// On startup, any runs or agents that were still "running" when the daemon
-// terminated are marked as failed, since they cannot be resumed.
-//
-// The active repository is set based on the most recent run's repo context,
-// which enables proper beads client selection for task loading.
+// restoreStateFromDB loads state from the database into RuntimeState.
 func (d *Daemon) restoreStateFromDB() error {
-	if d.persistenceStore == nil {
-		logging.Debug("state restoration skipped - persistence store is nil")
+	restored, err := d.persistManager.RestoreState()
+	if err != nil {
+		return err
+	}
+
+	if restored == nil {
 		return nil
 	}
 
-	logging.Debug("beginning database state restoration")
-
-	// First, mark any orphaned runs/agents as failed.
-	// These are runs/agents that were still "running" when the daemon crashed or was killed.
-	// They cannot be resumed, so we mark them as failed to maintain data integrity.
-	if err := d.markOrphanedStatesAsFailed(); err != nil {
-		return fmt.Errorf("failed to mark orphaned states: %w", err)
+	// Set active repository from the most recent run
+	if restored.Run != nil && restored.Run.RepoID != "" {
+		d.repoManager.SetActiveRepositoryDirect(restored.Run.RepoID)
+		logging.Debug("set active repository from run",
+			"repo_name", restored.Run.RepoName,
+			"repo_id", restored.Run.RepoID)
 	}
 
-	// Get the most recent run regardless of status to set the active repository
-	run, err := d.persistenceStore.GetMostRecentRun()
-	if err != nil {
-		return fmt.Errorf("failed to get most recent run: %w", err)
-	}
-	if run != nil {
-		logging.Debug("most recent run found",
-			"run_id", run.ID,
-			"status", run.Status,
-			"started_at", run.StartedAt.Format("2006-01-02 15:04:05"))
-
-		// Set the active repository based on the most recent run's repo context
-		// This allows loadTasksFromBeads to use the correct beads client
-		if run.RepoID != "" {
-			d.repoMu.Lock()
-			d.activeRepoID = run.RepoID
-			d.repoMu.Unlock()
-			logging.Debug("set active repository from run", "repo_name", run.RepoName, "repo_id", run.RepoID)
-		}
-
-		// Update RuntimeState start time to match the most recent run
-		d.state.StartTime = run.StartedAt
-	} else {
-		logging.Debug("no previous runs found in database")
-	}
-
-	// Load ALL non-archived agents across all runs (not just the most recent run)
-	logging.Debug("querying non-archived agents from database")
-	agents, err := d.persistenceStore.GetAllNonArchivedAgents()
-	if err != nil {
-		return fmt.Errorf("failed to get non-archived agents: %w", err)
-	}
-
-	if len(agents) == 0 {
-		logging.Debug("no agents found in database, starting fresh")
-		return nil
-	}
-
-	logging.Debug("found agents to restore", "count", len(agents))
-
-	// Convert persistence.Agent to daemon.AgentState and add to RuntimeState
-	for _, pAgent := range agents {
-		agentState := d.convertPersistenceAgentToState(&pAgent)
-		d.state.AddAgent(agentState)
-		logging.Debug("restored agent",
-			"agent_id", pAgent.ID,
-			"task_id", pAgent.TaskID,
-			"status", pAgent.Status,
-			"run_id", pAgent.RunID,
-			"parent_agent_id", pAgent.ParentAgentID)
-	}
-
-	// Rebuild parent-child linkages (ChildAgentIDs) from persisted ParentAgentID relationships.
-	// This is necessary because ChildAgentIDs is not persisted to the database; only
-	// ParentAgentID is stored, and we reconstruct the reverse mapping on restore.
-	d.rebuildAgentChildLinks()
-
-	// Restore persisted tasks
-	if err := d.restoreTasksFromDB(); err != nil {
-		logging.Warn("failed to restore tasks from database", "error", err)
-		// Non-fatal: continue with agent restoration
-	}
-
-	// Update stats after restoring all agents
-	d.state.UpdateStats()
-
-	logging.Info("restored agents from database", "count", len(agents))
-	return nil
-}
-
-// rebuildAgentChildLinks iterates through all agents and reconstructs the ChildAgentIDs
-// lists on parent agents based on persisted ParentAgentID values. This is called after
-// restoring agents from the database to rebuild the bidirectional parent-child relationship.
-func (d *Daemon) rebuildAgentChildLinks() {
-	d.state.mu.Lock()
-	defer d.state.mu.Unlock()
-
-	// First pass: clear existing ChildAgentIDs to avoid duplicates
-	for _, agent := range d.state.Agents {
-		agent.ChildAgentIDs = nil
-	}
-
-	// Second pass: rebuild ChildAgentIDs from ParentAgentID relationships
-	for _, agent := range d.state.Agents {
-		if agent.ParentAgentID != "" {
-			if parent, exists := d.state.Agents[agent.ParentAgentID]; exists {
-				parent.ChildAgentIDs = append(parent.ChildAgentIDs, agent.ID)
-			}
-		}
-	}
-}
-
-// restoreTasksFromDB loads persisted tasks from the database into RuntimeState.
-// This ensures tasks survive daemon restart.
-func (d *Daemon) restoreTasksFromDB() error {
-	if d.persistenceStore == nil {
-		return nil
-	}
-
-	// Get all tasks from the database
-	tasks, err := d.persistenceStore.GetAllTasks()
-	if err != nil {
-		return fmt.Errorf("failed to get tasks from database: %w", err)
-	}
-
-	if len(tasks) == 0 {
-		logging.Debug("no tasks found in database")
-		return nil
-	}
-
-	logging.Debug("found tasks to restore", "count", len(tasks))
-
-	// Convert persistence.Task to daemon.TaskState and add to RuntimeState
-	d.state.mu.Lock()
-	for _, pTask := range tasks {
-		d.state.Tasks[pTask.ID] = &TaskState{
-			ID:       pTask.ID,
-			Title:    pTask.Title,
-			Status:   pTask.Status,
-			AgentID:  pTask.AgentID,
-			Priority: pTask.Priority,
-			RepoID:   pTask.RepoID,
-		}
-	}
-	d.state.mu.Unlock()
-
-	logging.Info("restored tasks from database", "count", len(tasks))
-	return nil
-}
-
-// markOrphanedStatesAsFailed marks any orphaned runs and agents as failed.
-// This handles the case where the daemon was terminated (crash, kill, etc.)
-// while a run was in progress. Since those runs cannot be resumed, we mark
-// them as failed to maintain data integrity.
-func (d *Daemon) markOrphanedStatesAsFailed() error {
-	// Mark orphaned agents first (agents in "starting" or "running" state)
-	agentCount, err := d.persistenceStore.MarkOrphanedAgentsFailed()
-	if err != nil {
-		return fmt.Errorf("failed to mark orphaned agents: %w", err)
-	}
-	if agentCount > 0 {
-		logging.Warn("marked orphaned agents as failed (daemon terminated unexpectedly)", "count", agentCount)
-	}
-
-	// Mark orphaned runs (runs in "running" state)
-	runCount, err := d.persistenceStore.MarkOrphanedRunsFailed()
-	if err != nil {
-		return fmt.Errorf("failed to mark orphaned runs: %w", err)
-	}
-	if runCount > 0 {
-		logging.Warn("marked orphaned runs as failed (daemon terminated unexpectedly)", "count", runCount)
-	}
+	// Apply restored state to RuntimeState
+	ApplyRestoredState(d.state, restored)
 
 	return nil
 }
 
 // loadTasksFromBeads loads pending tasks from the beads database into RuntimeState.
-// This populates the UI with available work when the daemon starts.
-// Uses the active repository's beads client if one is set, otherwise falls back
-// to the default beads client.
 func (d *Daemon) loadTasksFromBeads() error {
-	// Get the active beads client (repo-specific or default)
 	client, err := d.getActiveBeadsClient()
 	if err != nil {
 		return fmt.Errorf("failed to get beads client: %w", err)
@@ -433,7 +200,6 @@ func (d *Daemon) loadTasksFromBeads() error {
 		return nil
 	}
 
-	// Get active repo ID for tagging tasks
 	repoID := d.GetActiveRepositoryID()
 
 	tasks, err := client.List()
@@ -446,7 +212,6 @@ func (d *Daemon) loadTasksFromBeads() error {
 		return nil
 	}
 
-	// Add each task to the RuntimeState with repo context
 	for i := range tasks {
 		d.state.AddTaskWithRepo(&tasks[i], repoID)
 	}
@@ -455,116 +220,20 @@ func (d *Daemon) loadTasksFromBeads() error {
 	return nil
 }
 
-// convertPersistenceAgentToState converts a persistence.Agent to a daemon.AgentState
-func (d *Daemon) convertPersistenceAgentToState(pAgent *persistence.Agent) *AgentState {
-	agent := &AgentState{
-		ID:            pAgent.ID,
-		RunID:         pAgent.RunID,
-		TaskID:        pAgent.TaskID,
-		TaskTitle:     pAgent.TaskTitle,
-		RepoID:        pAgent.RepoID,
-		ParentAgentID: pAgent.ParentAgentID,
-		Status:        convertPersistenceStatus(pAgent.Status),
-		StartTime:     pAgent.StartedAt,
-		Duration:      pAgent.DurationSeconds,
-		TokenUsage: TokenUsage{
-			InputTokens:  pAgent.InputTokens,
-			OutputTokens: pAgent.OutputTokens,
-			TotalTokens:  pAgent.TotalTokens,
-			CostUSD:      pAgent.CostUSD,
-		},
-		Changes: pAgent.FilesChanged,
-		Commits: pAgent.GitCommitsCreated,
-		Error:   pAgent.ErrorMessage,
-	}
-
-	if pAgent.FinishedAt != nil {
-		agent.EndTime = pAgent.FinishedAt
-	}
-
-	if pAgent.ExitCode != nil {
-		agent.ExitCode = *pAgent.ExitCode
-	}
-
-	// Restore stdout/stderr if available
-	if pAgent.Stdout != "" || pAgent.Stderr != "" {
-		agent.Output.Stdout = pAgent.Stdout
-		agent.Output.Stderr = pAgent.Stderr
-	}
-
-	// Generate synthetic live feed events from historical data
-	// This allows the UI to display something meaningful for historical agents
-	agent.LiveFeedEvents = d.generateHistoricalLiveFeedEvents(pAgent)
-
-	return agent
-}
-
-// generateHistoricalLiveFeedEvents creates synthetic live feed events from persisted agent data.
-// Since live feed events aren't persisted to the database, we reconstruct meaningful events
-// from the available data (result message, error message, completion status) to provide
-// visibility into historical agent executions.
-func (d *Daemon) generateHistoricalLiveFeedEvents(pAgent *persistence.Agent) []LiveFeedEvent {
-	events := []LiveFeedEvent{}
-
-	// Add a "historical" marker event so the UI knows these are reconstructed
-	events = append(events, NewTextEvent("[Historical session - live feed events were not recorded]", true))
-
-	// If we have a result message, add it as a text event
-	if pAgent.ResultMessage != "" {
-		events = append(events, NewTextEvent(pAgent.ResultMessage, true))
-	}
-
-	// Add an agent_completed event with available metrics
-	events = append(events, NewAgentCompletedEvent(
-		pAgent.FilesChanged,
-		pAgent.GitCommitsCreated,
-		pAgent.ErrorMessage,
-		pAgent.ResultMessage,
-		true, // isHistoric
-	))
-
-	return events
-}
-
-// convertPersistenceStatus converts persistence.AgentStatus to daemon.AgentStatus
-func convertPersistenceStatus(status persistence.AgentStatus) AgentStatus {
-	switch status {
-	case persistence.AgentStatusStarting:
-		return AgentStatusStarting
-	case persistence.AgentStatusRunning:
-		return AgentStatusRunning
-	case persistence.AgentStatusCompleted:
-		return AgentStatusCompleted
-	case persistence.AgentStatusFailed:
-		return AgentStatusFailed
-	case persistence.AgentStatusTimedOut:
-		return AgentStatusTimedOut
-	case persistence.AgentStatusCancelled:
-		return AgentStatusCancelled
-	default:
-		return AgentStatusRunning
-	}
-}
-
-// Start initializes and starts all daemon components
-// Blocks until a termination signal is received
+// Start initializes and starts all daemon components.
+// Blocks until a termination signal is received.
 func (d *Daemon) Start() error {
 	logging.Info("starting canopy daemon")
 
 	// Clean up any stale pidfile from previous crash
-	if cleaned, err := CleanStalePidFile(); err != nil {
-		logging.Warn("failed to check stale pidfile", "error", err)
-	} else if cleaned {
-		logging.Info("cleaned up stale pidfile from previous crash")
-	}
+	d.lifecycle.CleanupStalePidFile()
 
 	// Write pidfile
-	if err := WritePidFile(); err != nil {
-		return fmt.Errorf("failed to write pidfile: %w", err)
+	if err := d.lifecycle.WritePidFile(); err != nil {
+		return err
 	}
-	logging.Debug("pidfile written")
 
-	// Initialize components if not already done (allows pre-initialization via Init())
+	// Initialize components if not already done
 	d.Init()
 	logging.Debug("eventbus initialized")
 	logging.Debug("runtime state initialized")
@@ -574,37 +243,38 @@ func (d *Daemon) Start() error {
 	defer unsubscribeState()
 	logging.Debug("runtime state subscribed to eventbus")
 
-	// Initialize HTTP server (REST API + WebSocket)
-	// Pass persistence store if available (for /api/runs endpoints)
-	d.httpServer = NewServerWithDaemon(d.config.Port, d.state, d.eventBus, d.scheduler, d.beadsClient, d.persistenceStore, d)
+	// Initialize HTTP server
+	d.httpServer = NewServerWithDaemon(
+		d.config.Port,
+		d.state,
+		d.eventBus,
+		d.scheduler,
+		d.repoManager.GetDefaultClient(),
+		d.persistManager.GetStore(),
+		d,
+	)
+	d.lifecycle.SetHTTPServer(d.httpServer)
 
-	// Create IPC server (receives events from canopy run)
-	// The factory function creates an ipc.Server with the EventBus we just initialized
+	// Create IPC server
 	d.ipcServer = d.ipcServerFactory(d.config.SocketPath, d.eventBus)
+	d.lifecycle.SetIPCServer(d.ipcServer)
 
 	// Start IPC server
-	if err := d.ipcServer.Start(); err != nil {
-		return fmt.Errorf("failed to start IPC server: %w", err)
+	if err := d.lifecycle.StartIPC(); err != nil {
+		return err
 	}
 	logging.Info("IPC server listening", "socket", d.config.SocketPath)
 
-	// Start HTTP server in a goroutine (it blocks in ListenAndServe)
-	httpErrChan := make(chan error, 1)
-	go func() {
-		if err := d.httpServer.Start(); err != nil {
-			httpErrChan <- err
-		}
-	}()
+	// Start HTTP server in a goroutine
+	httpErrChan := d.lifecycle.StartHTTP()
 
 	// Wait for termination signal or HTTP server error
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	sigChan := d.lifecycle.SetupSignalHandling()
 
 	select {
 	case err := <-httpErrChan:
 		logging.Error("HTTP server error", "error", err)
-		// Stop IPC server before returning
-		d.ipcServer.Stop()
+		d.lifecycle.StopIPC()
 		return err
 	case sig := <-sigChan:
 		logging.Info("received shutdown signal", "signal", sig)
@@ -612,53 +282,22 @@ func (d *Daemon) Start() error {
 	}
 }
 
-// Stop gracefully shuts down all daemon components
+// Stop gracefully shuts down all daemon components.
 func (d *Daemon) Stop() error {
 	logging.Info("stopping canopy daemon")
 
-	// Remove pidfile first (before any other cleanup that might fail)
-	if err := RemovePidFile(); err != nil {
-		logging.Warn("failed to remove pidfile", "error", err)
-	} else {
-		logging.Debug("pidfile removed")
-	}
-
 	var firstErr error
 
-	// Stop IPC server (stops accepting new connections)
-	if d.ipcServer != nil {
-		logging.Debug("stopping IPC server")
-		if err := d.ipcServer.Stop(); err != nil {
-			logging.Error("IPC server stop error", "error", err)
-			if firstErr == nil {
-				firstErr = err
-			}
-		}
+	// Stop lifecycle-managed components (IPC, HTTP, pidfile)
+	if err := d.lifecycle.Stop(); err != nil && firstErr == nil {
+		firstErr = err
 	}
 
-	// Stop HTTP server (closes WebSocket connections)
-	if d.httpServer != nil {
-		logging.Debug("stopping HTTP server")
-		if err := d.httpServer.Stop(); err != nil {
-			logging.Error("HTTP server stop error", "error", err)
-			if firstErr == nil {
-				firstErr = err
-			}
-		}
-	}
-
-	// Stop persistence handler and close store
-	if d.persistenceUnsubscribe != nil {
-		logging.Debug("stopping persistence handler")
-		d.persistenceUnsubscribe()
-	}
-	if d.persistenceStore != nil {
-		logging.Debug("closing persistence store")
-		if err := d.persistenceStore.Close(); err != nil {
-			logging.Error("persistence store close error", "error", err)
-			if firstErr == nil {
-				firstErr = err
-			}
+	// Stop persistence
+	if err := d.persistManager.Close(); err != nil {
+		logging.Error("persistence close error", "error", err)
+		if firstErr == nil {
+			firstErr = err
 		}
 	}
 
@@ -666,21 +305,21 @@ func (d *Daemon) Stop() error {
 	return firstErr
 }
 
-// BroadcastEvent publishes an event to the EventBus
-// This allows external components to inject events into the system
+// BroadcastEvent publishes an event to the EventBus.
+// This allows external components to inject events into the system.
 func (d *Daemon) BroadcastEvent(event Event) {
 	if d.eventBus != nil {
 		d.eventBus.Publish(event)
 	}
 }
 
-// GetEventBus returns the EventBus instance
-// Returns nil if Start() has not been called yet
+// GetEventBus returns the EventBus instance.
+// Returns nil if Start() has not been called yet.
 func (d *Daemon) GetEventBus() *EventBus {
 	return d.eventBus
 }
 
-// GetState returns a snapshot of the current runtime state
+// GetState returns a snapshot of the current runtime state.
 func (d *Daemon) GetState() RuntimeState {
 	if d.state != nil {
 		return d.state.GetSnapshot()
@@ -688,9 +327,35 @@ func (d *Daemon) GetState() RuntimeState {
 	return RuntimeState{}
 }
 
-// GetRuntimeState returns the RuntimeState instance for direct access
-// This is useful for components that need to subscribe to state changes
-// Returns nil if Start() has not been called yet
+// GetRuntimeState returns the RuntimeState instance for direct access.
+// This is useful for components that need to subscribe to state changes.
+// Returns nil if Start() has not been called yet.
 func (d *Daemon) GetRuntimeState() *RuntimeState {
 	return d.state
+}
+
+// GetPersistenceStore returns the persistence store for external access.
+// Returns nil if persistence is disabled.
+func (d *Daemon) GetPersistenceStore() *PersistenceManager {
+	return d.persistManager
+}
+
+// newDaemonForTest creates a daemon instance for testing with pre-configured components.
+// This is used internally by tests to bypass normal initialization.
+func newDaemonForTest(config Config, store *persistence.Store, beadsClient BeadsClientInterface) *Daemon {
+	d := &Daemon{
+		config:         config,
+		eventBus:       NewEventBus(),
+		state:          NewRuntimeState(),
+		repoManager:    NewRepositoryManager(beadsClient),
+		persistManager: NewPersistenceManager(config.EnablePersistence),
+		lifecycle:      NewLifecycleManager(),
+	}
+
+	// Wire up the store if provided
+	if store != nil {
+		d.persistManager.store = store
+	}
+
+	return d
 }

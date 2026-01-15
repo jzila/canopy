@@ -89,10 +89,8 @@ func TestHandleListRepositories(t *testing.T) {
 	}
 
 	// Create mock daemon and handler
-	daemon := &Daemon{
-		eventBus:     NewEventBus(),
-		activeRepoID: repo.ID,
-	}
+	daemon := newDaemonForTest(Config{}, nil, nil)
+	daemon.repoManager.SetActiveRepositoryDirect(repo.ID)
 	handler := NewRepoHandler(daemon, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/repositories", nil)
@@ -218,10 +216,7 @@ func TestHandleActivateRepository(t *testing.T) {
 		t.Fatalf("Failed to create repository: %v", err)
 	}
 
-	daemon := &Daemon{
-		eventBus:     NewEventBus(),
-		activeRepoID: "",
-	}
+	daemon := newDaemonForTest(Config{}, nil, nil)
 	handler := NewRepoHandler(daemon, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/repositories/"+repo.ID+"/activate", nil)
