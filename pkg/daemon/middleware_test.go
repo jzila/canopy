@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"bufio"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -148,5 +150,52 @@ func TestResponseWriter_WriteHeader(t *testing.T) {
 	}
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("expected recorded code %d, got %d", http.StatusNotFound, rec.Code)
+	}
+}
+
+// hijackableResponseWriter is a mock ResponseWriter that implements http.Hijacker
+type hijackableResponseWriter struct {
+	http.ResponseWriter
+	hijacked bool
+}
+
+func (h *hijackableResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	h.hijacked = true
+	// Return nil values since we're just testing that delegation works
+	return nil, nil, nil
+}
+
+func TestResponseWriter_Hijack_Supported(t *testing.T) {
+	// Create a hijackable mock
+	mock := &hijackableResponseWriter{ResponseWriter: httptest.NewRecorder()}
+	rw := &responseWriter{ResponseWriter: mock, statusCode: http.StatusOK}
+
+	// Verify responseWriter implements http.Hijacker
+	hijacker, ok := interface{}(rw).(http.Hijacker)
+	if !ok {
+		t.Fatal("responseWriter should implement http.Hijacker")
+	}
+
+	// Call Hijack and verify it delegates
+	_, _, err := hijacker.Hijack()
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if !mock.hijacked {
+		t.Error("Hijack should delegate to underlying ResponseWriter")
+	}
+}
+
+func TestResponseWriter_Hijack_NotSupported(t *testing.T) {
+	// Use httptest.ResponseRecorder which does NOT implement http.Hijacker
+	rec := httptest.NewRecorder()
+	rw := &responseWriter{ResponseWriter: rec, statusCode: http.StatusOK}
+
+	hijacker := interface{}(rw).(http.Hijacker)
+
+	// Hijack should fail because underlying writer doesn't support it
+	_, _, err := hijacker.Hijack()
+	if err == nil {
+		t.Error("expected error when underlying ResponseWriter doesn't implement Hijacker")
 	}
 }
