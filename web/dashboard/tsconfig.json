@@ -1,6 +1,10 @@
 {
   // Visit https://aka.ms/tsconfig to read more about this file
   "compilerOptions": {
+    // CRITICAL: Prevent tsc from generating .js, .d.ts, and .map files
+    // Vite handles all transpilation - tsc is only for type-checking
+    "noEmit": true,
+
     // File Layout
     // "rootDir": "./src",
     // "outDir": "./dist",
@@ -16,10 +20,10 @@
     // "types": ["node"],
     // and npm install -D @types/node
 
-    // Other Outputs
-    "sourceMap": true,
-    "declaration": true,
-    "declarationMap": true,
+    // Other Outputs (disabled - noEmit prevents all output)
+    // "sourceMap": true,
+    // "declaration": true,
+    // "declarationMap": true,
 
     // Stricter Typechecking Options
     "noUncheckedIndexedAccess": true,
