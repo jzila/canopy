@@ -366,63 +366,67 @@ export const Dashboard: React.FC = () => {
   return (
     <div className="flex flex-col h-screen bg-gray-50 dark:bg-gray-900">
       {/* Header */}
-      <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-6 py-4 flex-shrink-0">
+      <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-8 py-5 flex-shrink-0">
         <div className="flex items-center justify-between">
           {/* Title, Repository Selector, and Connection Status */}
-          <div className="flex items-center gap-4">
-            <h1 className="text-2xl font-bold font-mono text-gray-900 dark:text-gray-100 tracking-tight">Canopy Dashboard</h1>
-            <RepoSelector
-              repositories={repositories}
-              activeRepoId={activeRepoId}
-              onSelect={handleRepoSelect}
-              isLoading={isRepoSwitching}
-              disabled={!connected}
-            />
-            <RunSelector
-              runs={runs}
-              activeRunId={activeRunId}
-              onSelect={handleRunSelect}
-              isLoading={isRunsLoading}
-              disabled={!connected || isRepoSwitching}
-            />
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 dark:bg-gray-700 rounded-full">
-              <div
-                className={`w-2 h-2 rounded-full ${
-                  connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'
-                }`}
+          <div className="flex items-center gap-6">
+            <h1 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-100">Canopy Dashboard</h1>
+            <div className="flex items-center gap-4">
+              <RepoSelector
+                repositories={repositories}
+                activeRepoId={activeRepoId}
+                onSelect={handleRepoSelect}
+                isLoading={isRepoSwitching}
+                disabled={!connected}
               />
-              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                {connected ? 'Connected' : 'Disconnected'}
-              </span>
+              <RunSelector
+                runs={runs}
+                activeRunId={activeRunId}
+                onSelect={handleRunSelect}
+                isLoading={isRunsLoading}
+                disabled={!connected || isRepoSwitching}
+              />
             </div>
-            <button
-              onClick={() => setIsDark(!isDark)}
-              className="p-2 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
-              title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-            >
-              {isDark ? <Sun className="w-5 h-5 text-yellow-500" /> : <Moon className="w-5 h-5 text-gray-600" />}
-            </button>
+            <div className="flex items-center gap-3">
+              <div className="header-control gap-2 px-4 py-2 bg-gray-100 dark:bg-gray-700 rounded-lg">
+                <div
+                  className={`w-2 h-2 rounded-full ${
+                    connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'
+                  }`}
+                />
+                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {connected ? 'Connected' : 'Disconnected'}
+                </span>
+              </div>
+              <button
+                onClick={() => setIsDark(!isDark)}
+                className="header-control justify-center w-10 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+                title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+              >
+                {isDark ? <Sun className="w-5 h-5 text-yellow-500" /> : <Moon className="w-5 h-5 text-gray-600" />}
+              </button>
+            </div>
           </div>
 
           {/* Pause/Resume Button */}
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-6">
             {/* Stats Summary (non-interactive) */}
-            <div className="flex items-center gap-4 text-sm">
-              <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-400">
+            <div className="flex items-center gap-6 text-sm">
+              <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
                 <Zap className="w-4 h-4" />
-                <span className="font-medium">{formatTokens(stats.total_tokens)}</span>
+                <span className="font-medium tracking-wide">{formatTokens(stats.total_tokens)}</span>
               </div>
-              <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-400">
+              <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
                 <DollarSign className="w-4 h-4" />
-                <span className="font-medium">{formatCost(stats.total_cost_usd)}</span>
+                <span className="font-medium tracking-wide">{formatCost(stats.total_cost_usd)}</span>
               </div>
-              <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-400">
+              <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
                 <FileEdit className="w-4 h-4" />
-                <span className="font-medium">{stats.file_changes}</span>
+                <span className="font-medium tracking-wide">{stats.file_changes}</span>
               </div>
-              <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-400">
+              <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400">
                 <GitCommit className="w-4 h-4" />
-                <span className="font-medium">{stats.git_commits}</span>
+                <span className="font-medium tracking-wide">{stats.git_commits}</span>
               </div>
             </div>
 
@@ -465,12 +469,12 @@ export const Dashboard: React.FC = () => {
         </div>
 
         {/* Stats Filter Toggles */}
-        <div className="flex items-center gap-3 mt-4">
+        <div className="flex items-center gap-4 mt-5">
           {/* All Tasks */}
           <button
             onClick={() => setStatusFilter('all')}
             className={`
-              flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all cursor-pointer
+              flex items-center gap-2.5 px-5 py-2.5 rounded-lg font-medium transition-all cursor-pointer
               ${statusFilter === 'all'
                 ? 'bg-gray-200 dark:bg-gray-600 ring-2 ring-gray-400 dark:ring-gray-500'
                 : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'
@@ -478,15 +482,15 @@ export const Dashboard: React.FC = () => {
             `}
           >
             <ListTodo className="w-4 h-4 text-gray-600 dark:text-gray-400" />
-            <span className="text-sm text-gray-600 dark:text-gray-300">All</span>
-            <span className="text-lg font-bold text-gray-900 dark:text-gray-100">{stats.total_tasks}</span>
+            <span className="text-sm tracking-wide text-gray-600 dark:text-gray-300">All</span>
+            <span className="text-lg font-bold tabular-nums text-gray-900 dark:text-gray-100">{stats.total_tasks}</span>
           </button>
 
           {/* Running */}
           <button
             onClick={() => toggleFilter('running')}
             className={`
-              flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all cursor-pointer
+              flex items-center gap-2.5 px-5 py-2.5 rounded-lg font-medium transition-all cursor-pointer
               ${statusFilter === 'running'
                 ? 'bg-blue-100 dark:bg-blue-900/50 ring-2 ring-blue-500'
                 : 'bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 dark:hover:bg-blue-900/50'
@@ -494,15 +498,15 @@ export const Dashboard: React.FC = () => {
             `}
           >
             <Activity className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-            <span className="text-sm text-blue-600 dark:text-blue-400">Running</span>
-            <span className="text-lg font-bold text-blue-700 dark:text-blue-300">{stats.running_tasks}</span>
+            <span className="text-sm tracking-wide text-blue-600 dark:text-blue-400">Running</span>
+            <span className="text-lg font-bold tabular-nums text-blue-700 dark:text-blue-300">{stats.running_tasks}</span>
           </button>
 
           {/* Completed */}
           <button
             onClick={() => toggleFilter('completed')}
             className={`
-              flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all cursor-pointer
+              flex items-center gap-2.5 px-5 py-2.5 rounded-lg font-medium transition-all cursor-pointer
               ${statusFilter === 'completed'
                 ? 'bg-green-100 dark:bg-green-900/50 ring-2 ring-green-500'
                 : 'bg-green-50 dark:bg-green-900/30 hover:bg-green-100 dark:hover:bg-green-900/50'
@@ -510,15 +514,15 @@ export const Dashboard: React.FC = () => {
             `}
           >
             <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
-            <span className="text-sm text-green-600 dark:text-green-400">Completed</span>
-            <span className="text-lg font-bold text-green-700 dark:text-green-300">{stats.completed_tasks}</span>
+            <span className="text-sm tracking-wide text-green-600 dark:text-green-400">Completed</span>
+            <span className="text-lg font-bold tabular-nums text-green-700 dark:text-green-300">{stats.completed_tasks}</span>
           </button>
 
           {/* Failed */}
           <button
             onClick={() => toggleFilter('failed')}
             className={`
-              flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all cursor-pointer
+              flex items-center gap-2.5 px-5 py-2.5 rounded-lg font-medium transition-all cursor-pointer
               ${statusFilter === 'failed'
                 ? 'bg-red-100 dark:bg-red-900/50 ring-2 ring-red-500'
                 : 'bg-red-50 dark:bg-red-900/30 hover:bg-red-100 dark:hover:bg-red-900/50'
@@ -526,8 +530,8 @@ export const Dashboard: React.FC = () => {
             `}
           >
             <XCircle className="w-4 h-4 text-red-600 dark:text-red-400" />
-            <span className="text-sm text-red-600 dark:text-red-400">Failed</span>
-            <span className="text-lg font-bold text-red-700 dark:text-red-300">{stats.failed_tasks}</span>
+            <span className="text-sm tracking-wide text-red-600 dark:text-red-400">Failed</span>
+            <span className="text-lg font-bold tabular-nums text-red-700 dark:text-red-300">{stats.failed_tasks}</span>
           </button>
 
           {/* Spacer */}
@@ -537,7 +541,7 @@ export const Dashboard: React.FC = () => {
           <button
             onClick={() => setShowArchivedAgents(!showArchivedAgents)}
             className={`
-              flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all cursor-pointer
+              flex items-center gap-2.5 px-5 py-2.5 rounded-lg font-medium transition-all cursor-pointer
               ${showArchivedAgents
                 ? 'bg-purple-100 dark:bg-purple-900/50 ring-2 ring-purple-500'
                 : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'
@@ -546,10 +550,10 @@ export const Dashboard: React.FC = () => {
             title={showArchivedAgents ? 'Hide archived agents' : 'Show archived agents'}
           >
             <Archive className={`w-4 h-4 ${showArchivedAgents ? 'text-purple-600 dark:text-purple-400' : 'text-gray-600 dark:text-gray-400'}`} />
-            <span className={`text-sm ${showArchivedAgents ? 'text-purple-600 dark:text-purple-400' : 'text-gray-600 dark:text-gray-400'}`}>
+            <span className={`text-sm tracking-wide ${showArchivedAgents ? 'text-purple-600 dark:text-purple-400' : 'text-gray-600 dark:text-gray-400'}`}>
               {showArchivedAgents ? 'Hide' : 'Show'} Archived
             </span>
-            <span className={`text-lg font-bold ${showArchivedAgents ? 'text-purple-700 dark:text-purple-300' : 'text-gray-700 dark:text-gray-300'}`}>
+            <span className={`text-lg font-bold tabular-nums ${showArchivedAgents ? 'text-purple-700 dark:text-purple-300' : 'text-gray-700 dark:text-gray-300'}`}>
               {archivedAgentCount}
             </span>
           </button>
@@ -568,15 +572,15 @@ export const Dashboard: React.FC = () => {
         {/* Main Content */}
         <main className="flex-1 flex flex-col overflow-hidden">
           {/* Agent Grid */}
-          <div className="flex-1 overflow-y-auto p-6">
+          <div className="flex-1 overflow-y-auto p-8">
           {groupedAgents.length === 0 ? (
             <div className="flex items-center justify-center h-full">
               <div className="text-center">
-                <Activity className="w-16 h-16 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
-                <h3 className="text-lg font-medium font-mono text-gray-500 dark:text-gray-400 mb-2">
+                <Activity className="w-16 h-16 text-gray-300 dark:text-gray-600 mx-auto mb-5" />
+                <h3 className="text-lg font-medium tracking-tight text-gray-500 dark:text-gray-400 mb-2">
                   {agentList.length === 0 ? 'No Agents' : `No ${statusFilter === 'all' ? '' : statusFilter} Agents`}
                 </h3>
-                <p className="text-sm text-gray-400 dark:text-gray-500">
+                <p className="text-sm tracking-wide text-gray-400 dark:text-gray-500">
                   {agentList.length === 0
                     ? 'Agents will appear here when tasks are running'
                     : 'Try selecting a different filter above'
@@ -585,7 +589,7 @@ export const Dashboard: React.FC = () => {
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 items-start">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5 items-start">
               {groupedAgents.map(({ parent, children }) => (
                 <AgentCardGroup
                   key={parent.id}

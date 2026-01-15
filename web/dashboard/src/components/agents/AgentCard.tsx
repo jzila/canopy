@@ -142,7 +142,7 @@ export const AgentCard: React.FC<AgentCardProps> = ({
     <div
       onClick={handleCardClick}
       className={`
-        p-4 rounded-lg border-2 transition-all cursor-pointer
+        p-5 rounded-lg border-2 transition-all cursor-pointer
         ${agent.archived
           ? 'border-gray-300 dark:border-gray-600 bg-gray-100 dark:bg-gray-900 opacity-60'
           : isSelected
@@ -151,18 +151,18 @@ export const AgentCard: React.FC<AgentCardProps> = ({
         }
       `}
     >
-      <div className="flex items-start justify-between mb-3">
+      <div className="flex items-start justify-between mb-4">
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
+          <div className="flex items-center gap-2.5 mb-2">
             {agent.archived && (
-              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200">
+              <span className="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium tracking-wide bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200">
                 Archived
               </span>
             )}
             {taskExistsInBeads ? (
               <button
                 onClick={handleTaskIdClick}
-                className="inline-flex items-center gap-1 text-sm font-mono text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 hover:underline transition-colors"
+                className="inline-flex items-center gap-1.5 text-sm font-mono text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 hover:underline transition-colors"
                 title="Click to highlight in Beads pane"
               >
                 {agent.task_id}
@@ -173,11 +173,11 @@ export const AgentCard: React.FC<AgentCardProps> = ({
                 {agent.task_id}
               </code>
             )}
-            <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium text-white ${statusColor}`}>
+            <span className={`inline-flex items-center px-2.5 py-1 rounded text-xs font-medium tracking-wide text-white ${statusColor}`}>
               {agent.status}
             </span>
           </div>
-          <h3 className={`text-sm font-medium truncate ${agent.archived ? 'text-gray-500 dark:text-gray-400 line-through' : 'text-gray-900 dark:text-gray-100'}`}>
+          <h3 className={`text-sm font-medium tracking-tight truncate ${agent.archived ? 'text-gray-500 dark:text-gray-400 line-through' : 'text-gray-900 dark:text-gray-100'}`}>
             {agent.task_title}
           </h3>
         </div>
@@ -216,53 +216,53 @@ export const AgentCard: React.FC<AgentCardProps> = ({
         </div>
       </div>
 
-      <div className="grid grid-cols-4 gap-3 text-xs">
-        <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-400" title="Elapsed time">
+      <div className="grid grid-cols-4 gap-4 text-xs">
+        <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400" title="Elapsed time">
           <Clock className="w-4 h-4" />
-          <span>{elapsedTime}</span>
+          <span className="tabular-nums tracking-wide">{elapsedTime}</span>
         </div>
 
-        <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-400" title="Token usage">
+        <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400" title="Token usage">
           <Zap className="w-4 h-4" />
-          <span>{formatTokenCount(agent.token_usage.total_tokens)}</span>
+          <span className="tabular-nums tracking-wide">{formatTokenCount(agent.token_usage.total_tokens)}</span>
         </div>
 
-        <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-400" title="Cost (USD)">
+        <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400" title="Cost (USD)">
           <DollarSign className="w-4 h-4" />
-          <span>{formatCost(agent.token_usage.cost_usd)}</span>
+          <span className="tabular-nums tracking-wide">{formatCost(agent.token_usage.cost_usd)}</span>
         </div>
 
         {agent.commits > 0 && (
-          <div className="flex items-center gap-1.5 text-blue-400" title={`${agent.commits} git commit${agent.commits !== 1 ? 's' : ''}`}>
+          <div className="flex items-center gap-2 text-blue-400" title={`${agent.commits} git commit${agent.commits !== 1 ? 's' : ''}`}>
             <GitCommit className="w-4 h-4" />
-            <span>{agent.commits}</span>
+            <span className="tabular-nums">{agent.commits}</span>
           </div>
         )}
       </div>
 
       {/* Merge status indicator for historical data */}
       {(agent.mergeStatus || agent.merge_status) && (
-        <div className="mt-2 flex items-center gap-2 text-xs">
+        <div className="mt-3 flex items-center gap-3 text-xs">
           {(agent.mergeStatus === 'merged' || agent.merge_status === 'merged') ? (
-            <div className="flex items-center gap-1 text-green-600 dark:text-green-400" title={`Merged${agent.mergeCommitsApplied ? ` (${agent.mergeCommitsApplied} commits)` : ''}`}>
+            <div className="flex items-center gap-1.5 text-green-600 dark:text-green-400" title={`Merged${agent.mergeCommitsApplied ? ` (${agent.mergeCommitsApplied} commits)` : ''}`}>
               <GitMerge className="w-3.5 h-3.5" />
-              <span>Merged</span>
-              {agent.mergeCommitsApplied ? <span>({agent.mergeCommitsApplied})</span> : null}
+              <span className="tracking-wide">Merged</span>
+              {agent.mergeCommitsApplied ? <span className="tabular-nums">({agent.mergeCommitsApplied})</span> : null}
             </div>
           ) : (agent.mergeStatus === 'failed' || agent.merge_status === 'failed') ? (
-            <div className="flex items-center gap-1 text-red-600 dark:text-red-400" title={agent.mergeError || agent.merge_error || 'Merge failed'}>
+            <div className="flex items-center gap-1.5 text-red-600 dark:text-red-400" title={agent.mergeError || agent.merge_error || 'Merge failed'}>
               <GitMerge className="w-3.5 h-3.5" />
-              <span>Merge Failed</span>
+              <span className="tracking-wide">Merge Failed</span>
             </div>
           ) : null}
           {agent.mergeHadConflict && (
-            <div className="flex items-center gap-1 text-yellow-600 dark:text-yellow-400" title="Merge had conflicts">
+            <div className="flex items-center gap-1.5 text-yellow-600 dark:text-yellow-400" title="Merge had conflicts">
               <AlertTriangle className="w-3.5 h-3.5" />
-              <span>Conflict</span>
+              <span className="tracking-wide">Conflict</span>
             </div>
           )}
           {agent.mergeResolverSpawned && (
-            <span className="text-purple-600 dark:text-purple-400" title="Resolver agent was spawned">
+            <span className="text-purple-600 dark:text-purple-400 tracking-wide" title="Resolver agent was spawned">
               (Resolved)
             </span>
           )}
@@ -270,7 +270,7 @@ export const AgentCard: React.FC<AgentCardProps> = ({
       )}
 
       {agent.error && (
-        <div className="mt-3 text-xs text-red-600 dark:text-red-400 truncate" title={agent.error}>
+        <div className="mt-4 text-xs text-red-600 dark:text-red-400 truncate" title={agent.error}>
           Error: {agent.error}
         </div>
       )}

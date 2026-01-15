@@ -95,9 +95,9 @@ export const RunSelector: React.FC<RunSelectorProps> = ({
   // If there are no runs, show disabled state
   if (runs.length === 0) {
     return (
-      <div className="flex items-center gap-2 px-3 py-2 bg-gray-100 dark:bg-gray-700 rounded-lg text-gray-500 dark:text-gray-400">
+      <div className="header-control gap-2.5 px-4 bg-gray-100 dark:bg-gray-700 rounded-lg text-gray-500 dark:text-gray-400">
         <Clock className="w-4 h-4" />
-        <span className="text-sm">No runs</span>
+        <span className="text-sm tracking-wide">No runs</span>
       </div>
     );
   }
@@ -108,7 +108,7 @@ export const RunSelector: React.FC<RunSelectorProps> = ({
         onClick={() => !disabled && !isLoading && setIsOpen(!isOpen)}
         disabled={disabled || isLoading}
         className={`
-          flex items-center gap-2 px-3 py-2 bg-gray-100 dark:bg-gray-700 rounded-lg
+          header-control gap-2.5 px-4 bg-gray-100 dark:bg-gray-700 rounded-lg
           transition-colors min-w-[160px] max-w-[220px]
           ${disabled || isLoading
             ? 'opacity-50 cursor-not-allowed'

@@ -64,9 +64,9 @@ export const RepoSelector: React.FC<RepoSelectorProps> = ({
 
   if (repositories.length === 0) {
     return (
-      <div className="flex items-center gap-2 px-3 py-2 bg-gray-100 dark:bg-gray-700 rounded-lg text-gray-500 dark:text-gray-400">
+      <div className="header-control gap-2.5 px-4 bg-gray-100 dark:bg-gray-700 rounded-lg text-gray-500 dark:text-gray-400">
         <FolderGit2 className="w-4 h-4" />
-        <span className="text-sm">No repositories</span>
+        <span className="text-sm tracking-wide">No repositories</span>
       </div>
     );
   }
@@ -77,7 +77,7 @@ export const RepoSelector: React.FC<RepoSelectorProps> = ({
         onClick={() => !disabled && !isLoading && setIsOpen(!isOpen)}
         disabled={disabled || isLoading}
         className={`
-          flex items-center gap-2 px-3 py-2 bg-gray-100 dark:bg-gray-700 rounded-lg
+          header-control gap-2.5 px-4 bg-gray-100 dark:bg-gray-700 rounded-lg
           transition-colors min-w-[200px] max-w-[350px]
           ${disabled || isLoading
             ? 'opacity-50 cursor-not-allowed'

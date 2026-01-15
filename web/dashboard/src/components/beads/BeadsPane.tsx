@@ -349,21 +349,21 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
 
   // Expanded view
   return (
-    <div className="h-full flex flex-col bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 w-72">
+    <div className="h-full flex flex-col bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 w-80">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
-        <div className="flex items-center gap-2">
-          <h2 className="text-sm font-semibold font-mono text-gray-900 dark:text-gray-100">Beads</h2>
-          <span className="px-1.5 py-0.5 text-xs font-medium rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
+      <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700">
+        <div className="flex items-center gap-3">
+          <h2 className="text-sm font-semibold tracking-tight text-gray-900 dark:text-gray-100">Beads</h2>
+          <span className="px-2 py-0.5 text-xs font-medium tracking-wide rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
             {incompleteBeads.length}
           </span>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-2">
           {/* View mode toggle - only show if there are dependencies */}
           {hasDependencies && (
             <button
               onClick={() => setViewMode(viewMode === 'hierarchy' ? 'flat' : 'hierarchy')}
-              className={`p-1.5 rounded-lg transition-colors ${
+              className={`p-2 rounded-lg transition-colors ${
                 viewMode === 'hierarchy'
                   ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400'
                   : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'
@@ -375,7 +375,7 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
           )}
           <button
             onClick={onToggle}
-            className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors group"
+            className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors group"
             title="Collapse beads pane"
           >
             <ChevronLeft className="w-4 h-4 text-gray-500 dark:text-gray-400 group-hover:text-gray-700 dark:group-hover:text-gray-200" />
@@ -393,33 +393,33 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
       />
 
       {/* Status Summary */}
-      <div className="flex items-center gap-2 px-4 py-2 border-b border-gray-100 dark:border-gray-700/50 bg-gray-50 dark:bg-gray-800/50">
+      <div className="flex items-center gap-4 px-5 py-3 border-b border-gray-100 dark:border-gray-700/50 bg-gray-50 dark:bg-gray-800/50">
         {statusCounts.running > 0 && (
-          <div className="flex items-center gap-1 text-xs">
+          <div className="flex items-center gap-1.5 text-xs">
             <Loader2 className="w-3 h-3 animate-spin text-blue-500" />
-            <span className="text-blue-600 dark:text-blue-400">{statusCounts.running}</span>
+            <span className="tabular-nums tracking-wide text-blue-600 dark:text-blue-400">{statusCounts.running}</span>
           </div>
         )}
         {statusCounts.blocked > 0 && (
-          <div className="flex items-center gap-1 text-xs">
+          <div className="flex items-center gap-1.5 text-xs">
             <Clock className="w-3 h-3 text-yellow-500" />
-            <span className="text-yellow-600 dark:text-yellow-400">{statusCounts.blocked}</span>
+            <span className="tabular-nums tracking-wide text-yellow-600 dark:text-yellow-400">{statusCounts.blocked}</span>
           </div>
         )}
         {statusCounts.ready > 0 && (
-          <div className="flex items-center gap-1 text-xs">
+          <div className="flex items-center gap-1.5 text-xs">
             <Circle className="w-3 h-3 text-gray-400" />
-            <span className="text-gray-600 dark:text-gray-400">{statusCounts.ready}</span>
+            <span className="tabular-nums tracking-wide text-gray-600 dark:text-gray-400">{statusCounts.ready}</span>
           </div>
         )}
         {statusCounts.failed > 0 && (
-          <div className="flex items-center gap-1 text-xs">
+          <div className="flex items-center gap-1.5 text-xs">
             <AlertCircle className="w-3 h-3 text-red-500" />
-            <span className="text-red-600 dark:text-red-400">{statusCounts.failed}</span>
+            <span className="tabular-nums tracking-wide text-red-600 dark:text-red-400">{statusCounts.failed}</span>
           </div>
         )}
         {incompleteBeads.length === 0 && (
-          <span className="text-xs text-gray-500 dark:text-gray-400">All done!</span>
+          <span className="text-xs tracking-wide text-gray-500 dark:text-gray-400">All done!</span>
         )}
       </div>
 
@@ -453,21 +453,21 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
                       taskRefs.current.delete(task.id);
                     }
                   }}
-                  className={`px-3 py-2.5 transition-all cursor-default ${
+                  className={`px-4 py-3 transition-all cursor-default ${
                     isHighlighted
                       ? 'bg-blue-100 dark:bg-blue-900/50 ring-2 ring-blue-500 ring-inset'
                       : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'
                   }`}
                 >
                   {/* Top row: Priority, Status, ID */}
-                  <div className="flex items-center gap-1.5 mb-1.5">
+                  <div className="flex items-center gap-2 mb-2">
                     {/* Priority badge */}
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${priorityStyle.bg} ${priorityStyle.text}`}>
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold tracking-wide ${priorityStyle.bg} ${priorityStyle.text}`}>
                       {priorityStyle.label}
                     </span>
 
                     {/* Status badge */}
-                    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${statusConfig.bg} ${statusConfig.text}`}>
+                    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-medium tracking-wide ${statusConfig.bg} ${statusConfig.text}`}>
                       {statusConfig.icon}
                       {statusConfig.label}
                     </span>
@@ -479,14 +479,14 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
                   </div>
 
                   {/* Title */}
-                  <p className="text-xs text-gray-800 dark:text-gray-200 leading-snug line-clamp-2">
+                  <p className="text-xs text-gray-800 dark:text-gray-200 leading-relaxed line-clamp-2">
                     {task.title}
                   </p>
 
                   {/* Dependencies (if any) */}
                   {task.dependencies && task.dependencies.length > 0 && (
-                    <div className="mt-1.5 flex items-center gap-1 text-[10px] text-gray-500 dark:text-gray-400">
-                      <span className="font-medium">Blocked by:</span>
+                    <div className="mt-2 flex items-center gap-1.5 text-[10px] text-gray-500 dark:text-gray-400">
+                      <span className="font-medium tracking-wide">Blocked by:</span>
                       <span className="font-mono truncate">
                         {task.dependencies.map(d => truncateId(d, 8)).join(', ')}
                       </span>
