@@ -370,7 +370,7 @@ export const Dashboard: React.FC = () => {
         <div className="flex items-center justify-between">
           {/* Title, Repository Selector, and Connection Status */}
           <div className="flex items-center gap-4">
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Canopy Dashboard</h1>
+            <h1 className="text-2xl font-bold font-mono text-gray-900 dark:text-gray-100 tracking-tight">Canopy Dashboard</h1>
             <RepoSelector
               repositories={repositories}
               activeRepoId={activeRepoId}
@@ -573,7 +573,7 @@ export const Dashboard: React.FC = () => {
             <div className="flex items-center justify-center h-full">
               <div className="text-center">
                 <Activity className="w-16 h-16 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
-                <h3 className="text-lg font-medium text-gray-500 dark:text-gray-400 mb-2">
+                <h3 className="text-lg font-medium font-mono text-gray-500 dark:text-gray-400 mb-2">
                   {agentList.length === 0 ? 'No Agents' : `No ${statusFilter === 'all' ? '' : statusFilter} Agents`}
                 </h3>
                 <p className="text-sm text-gray-400 dark:text-gray-500">
