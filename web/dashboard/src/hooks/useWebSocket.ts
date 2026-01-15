@@ -14,8 +14,10 @@ interface AgentStartedEvent {
   timestamp: string;
   payload: {
     agent_id: string;
+    run_id?: string;
     task_id: string;
     task_title: string;
+    parent_agent_id?: string;
   };
 }
 
@@ -101,6 +103,7 @@ interface BackendGitCommit {
 // Backend RuntimeState format (snake_case)
 interface BackendAgentState {
   id: string;
+  run_id?: string;
   task_id: string;
   task_title: string;
   status: string;
@@ -124,6 +127,7 @@ interface BackendAgentState {
   commits: number;
   git_commits: BackendGitCommit[];
   archived: boolean;
+  parent_agent_id?: string;
 }
 
 interface BackendRuntimeState {
@@ -304,6 +308,9 @@ export function useWebSocket() {
                   commits: agent.commits,
                   git_commits: agent.git_commits || [],
                   archived: agent.archived || false,
+                  // Optional properties - only set if defined (exactOptionalPropertyTypes compliance)
+                  ...(agent.run_id && { run_id: agent.run_id }),
+                  ...(agent.parent_agent_id && { parent_agent_id: agent.parent_agent_id }),
                 };
               }
 
@@ -334,7 +341,7 @@ export function useWebSocket() {
             }
 
             case 'agent:started': {
-              const { agent_id, task_id, task_title } = message.payload;
+              const { agent_id, run_id, task_id, task_title, parent_agent_id } = message.payload;
               // Create new agent entry
               updateAgent(agent_id, {
                 id: agent_id,
@@ -357,6 +364,9 @@ export function useWebSocket() {
                 changes: 0,
                 commits: 0,
                 git_commits: [],
+                // Optional properties - only set if defined (exactOptionalPropertyTypes compliance)
+                ...(run_id && { run_id }),
+                ...(parent_agent_id && { parent_agent_id }),
               });
               break;
             }
