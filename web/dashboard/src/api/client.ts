@@ -230,4 +230,48 @@ export async function getMergeQueue(): Promise<MergeQueueState> {
   return fetchJson<MergeQueueState>('/api/merge-queue');
 }
 
+// Run types for historical run data
+export interface Run {
+  id: string;
+  started_at: string;
+  finished_at?: string;
+  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'partial';
+  total_tasks: number;
+  completed_tasks: number;
+  failed_tasks: number;
+  repo_id?: string;
+  repo_path?: string;
+  repo_name?: string;
+  total_cost_usd: number;
+  duration_seconds: number;
+}
+
+export interface RunListResponse {
+  runs: Run[];
+  pagination: {
+    total: number;
+    limit: number;
+    offset: number;
+  };
+}
+
+export interface RunListFilter {
+  repo_id?: string;
+  status?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export async function getRuns(filter?: RunListFilter): Promise<RunListResponse> {
+  const params = new URLSearchParams();
+  if (filter?.repo_id) params.set('repo_id', filter.repo_id);
+  if (filter?.status) params.set('status', filter.status);
+  if (filter?.limit) params.set('limit', String(filter.limit));
+  if (filter?.offset) params.set('offset', String(filter.offset));
+
+  const queryString = params.toString();
+  const endpoint = queryString ? `/api/runs?${queryString}` : '/api/runs';
+  return fetchJson<RunListResponse>(endpoint);
+}
+
 export { ApiError };

@@ -380,6 +380,7 @@ func (d *Daemon) loadTasksFromBeads() error {
 func (d *Daemon) convertPersistenceAgentToState(pAgent *persistence.Agent) *AgentState {
 	agent := &AgentState{
 		ID:        pAgent.ID,
+		RunID:     pAgent.RunID,
 		TaskID:    pAgent.TaskID,
 		TaskTitle: pAgent.TaskTitle,
 		RepoID:    pAgent.RepoID,

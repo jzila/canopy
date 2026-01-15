@@ -3,13 +3,14 @@ import { Play, Pause, Activity, DollarSign, Zap, GitCommit, FileEdit, Sun, Moon,
 import { useStateStore } from '../../stores/stateStore';
 import type { AgentState } from '../../stores/stateStore';
 import { useWebSocket, useMergeQueue } from '../../hooks';
-import { pauseOrch, resumeOrch, getState, getRepositories, activateRepository } from '../../api/client';
+import { pauseOrch, resumeOrch, getState, getRepositories, activateRepository, getRuns } from '../../api/client';
 import { AgentCardGroup } from '../agents/AgentCardGroup';
 import { AgentTerminal } from '../agents/AgentTerminal';
 import { LiveFeed } from '../agents/LiveFeed';
 import { CommitList } from '../agents/CommitList';
 import { BeadsPane } from '../beads/BeadsPane';
 import { RepoSelector } from './RepoSelector';
+import { RunSelector } from './RunSelector';
 import { MergeQueueTree } from '../merge';
 import type { NodeDetails } from '../merge/types';
 
@@ -141,6 +142,13 @@ export const Dashboard: React.FC = () => {
   const setRepositories = useStateStore((state) => state.setRepositories);
   const setActiveRepo = useStateStore((state) => state.setActiveRepo);
   const setRepoSwitching = useStateStore((state) => state.setRepoSwitching);
+  // Run filtering state
+  const runs = useStateStore((state) => state.runs);
+  const activeRunId = useStateStore((state) => state.activeRunId);
+  const isRunsLoading = useStateStore((state) => state.isRunsLoading);
+  const setRuns = useStateStore((state) => state.setRuns);
+  const setActiveRunId = useStateStore((state) => state.setActiveRunId);
+  const setRunsLoading = useStateStore((state) => state.setRunsLoading);
 
   // Load initial state on mount
   useEffect(() => {
@@ -189,6 +197,28 @@ export const Dashboard: React.FC = () => {
     loadInitialState();
   }, [syncState, setRepositories]);
 
+  // Load runs when activeRepoId changes
+  useEffect(() => {
+    const loadRuns = async () => {
+      if (!activeRepoId) return;
+
+      try {
+        setRunsLoading(true);
+        const response = await getRuns({ repo_id: activeRepoId, limit: 50 });
+        setRuns(response.runs);
+        // Reset to "All runs" when repo changes
+        setActiveRunId('');
+      } catch (error) {
+        console.error('Failed to load runs:', error);
+        setRuns([]);
+      } finally {
+        setRunsLoading(false);
+      }
+    };
+
+    loadRuns();
+  }, [activeRepoId, setRuns, setActiveRunId, setRunsLoading]);
+
   const handlePause = async () => {
     if (isPauseLoading) return;
 
@@ -224,6 +254,8 @@ export const Dashboard: React.FC = () => {
       setRepoSwitching(true);
       await activateRepository(repoId);
       setActiveRepo(repoId);
+      // Reset run selection when repo changes
+      setActiveRunId('');
       // After switching repos, reload state to get the new repo's data
       const state = await getState();
       syncState(state);
@@ -232,6 +264,10 @@ export const Dashboard: React.FC = () => {
     } finally {
       setRepoSwitching(false);
     }
+  };
+
+  const handleRunSelect = (runId: string) => {
+    setActiveRunId(runId);
   };
 
   const handleSelectAgent = (agentId: string) => {
@@ -245,11 +281,16 @@ export const Dashboard: React.FC = () => {
     return agentList.filter(agent => agent.archived).length;
   }, [agentList]);
 
-  // Filter agents based on selected status and archived state
+  // Filter agents based on selected status, archived state, and run
   const filteredAgents = useMemo(() => {
     return agentList
       .filter(agent => {
-        // Filter by archived status first
+        // Filter by run ID first (if a specific run is selected)
+        if (activeRunId !== '' && agent.run_id !== activeRunId) {
+          return false;
+        }
+
+        // Filter by archived status
         if (!showArchivedAgents && agent.archived) {
           return false;
         }
@@ -276,7 +317,7 @@ export const Dashboard: React.FC = () => {
         // Sort by start time (most recent first)
         return new Date(b.start_time).getTime() - new Date(a.start_time).getTime();
       });
-  }, [agentList, statusFilter, showArchivedAgents]);
+  }, [agentList, statusFilter, showArchivedAgents, activeRunId]);
 
   // Group agents by parent/child relationships
   // Returns parent agents with their children, excluding standalone child agents
@@ -403,6 +444,13 @@ export const Dashboard: React.FC = () => {
               onSelect={handleRepoSelect}
               isLoading={isRepoSwitching}
               disabled={!connected}
+            />
+            <RunSelector
+              runs={runs}
+              activeRunId={activeRunId}
+              onSelect={handleRunSelect}
+              isLoading={isRunsLoading}
+              disabled={!connected || isRepoSwitching}
             />
             <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 dark:bg-gray-700 rounded-full">
               <div

@@ -131,6 +131,7 @@ const (
 // AgentState tracks the state of a single agent execution
 type AgentState struct {
 	ID              string          `json:"id"`                         // Unique agent ID
+	RunID           string          `json:"run_id,omitempty"`           // ID of the run this agent belongs to
 	TaskID          string          `json:"task_id"`                    // Beads task ID
 	TaskTitle       string          `json:"task_title"`                 // Task title for display
 	RepoID          string          `json:"repo_id,omitempty"`          // Repository this agent is working in
@@ -207,12 +208,13 @@ type Stats struct {
 
 // RuntimeState aggregates the complete state of an orchestration run
 type RuntimeState struct {
-	Agents    map[string]*AgentState `json:"agents"`     // Agent ID -> AgentState
-	Tasks     map[string]*TaskState  `json:"tasks"`      // Task ID -> TaskState
-	Stats     Stats                  `json:"stats"`      // Aggregate statistics
-	IsPaused  bool                   `json:"is_paused"`  // Whether orchestration is paused
-	StartTime time.Time              `json:"start_time"` // When orchestration started
-	mu        sync.RWMutex
+	Agents       map[string]*AgentState `json:"agents"`        // Agent ID -> AgentState
+	Tasks        map[string]*TaskState  `json:"tasks"`         // Task ID -> TaskState
+	Stats        Stats                  `json:"stats"`         // Aggregate statistics
+	IsPaused     bool                   `json:"is_paused"`     // Whether orchestration is paused
+	StartTime    time.Time              `json:"start_time"`    // When orchestration started
+	CurrentRunID string                 `json:"current_run_id"` // Current run ID for new agents
+	mu           sync.RWMutex
 }
 
 // NewRuntimeState creates a new runtime state tracker
@@ -529,6 +531,8 @@ func (r *RuntimeState) handleEvent(event Event) {
 	}
 
 	switch event.Type {
+	case EventRunStarted:
+		r.handleRunStarted(payload)
 	case EventAgentStarted:
 		r.handleAgentStarted(payload, event.Timestamp)
 	case EventAgentOutput:
@@ -547,6 +551,17 @@ func (r *RuntimeState) handleEvent(event Event) {
 	}
 }
 
+func (r *RuntimeState) handleRunStarted(payload map[string]interface{}) {
+	runID, _ := payload["run_id"].(string)
+	if runID == "" {
+		return
+	}
+
+	r.mu.Lock()
+	r.CurrentRunID = runID
+	r.mu.Unlock()
+}
+
 func (r *RuntimeState) handleAgentStarted(payload map[string]interface{}, timestamp time.Time) {
 	agentID, _ := payload["agent_id"].(string)
 	taskID, _ := payload["task_id"].(string)
@@ -558,8 +573,14 @@ func (r *RuntimeState) handleAgentStarted(payload map[string]interface{}, timest
 		return
 	}
 
+	// Get current run ID
+	r.mu.RLock()
+	runID := r.CurrentRunID
+	r.mu.RUnlock()
+
 	agent := &AgentState{
 		ID:            agentID,
+		RunID:         runID,
 		TaskID:        taskID,
 		TaskTitle:     taskTitle,
 		RepoID:        repoID,

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Repository, MergeQueueState } from '../api/client';
+import type { Repository, MergeQueueState, Run } from '../api/client';
 
 // Types based on Go backend structures
 
@@ -45,6 +45,7 @@ export interface GitCommit {
 
 export interface AgentState {
   id: string;
+  run_id?: string;             // ID of the run this agent belongs to
   task_id: string;
   task_title: string;
   parent_agent_id?: string;    // ID of parent agent if spawned by another agent
@@ -109,11 +110,14 @@ interface StateStore {
   stats: Stats;
   isPaused: boolean;
   selectedAgentId: string | null;
-  highlightedTaskId: string | null;
   repositories: Repository[];
   activeRepoId: string;
   isRepoSwitching: boolean;
   mergeQueue: MergeQueueState | null;
+  // Run filtering state
+  runs: Run[];
+  activeRunId: string; // empty string means "All runs" / current run
+  isRunsLoading: boolean;
 
   // Actions
   setConnected: (connected: boolean) => void;
@@ -123,7 +127,6 @@ interface StateStore {
   appendOutput: (agentId: string, output: string, isError?: boolean) => void;
   appendLiveFeedEvent: (agentId: string, event: LiveFeedEvent) => void;
   setSelectedAgent: (id: string | null) => void;
-  setHighlightedTask: (id: string | null) => void;
   setIsPaused: (paused: boolean) => void;
   setRepositories: (repositories: Repository[], activeRepoId: string) => void;
   setActiveRepo: (repoId: string) => void;
@@ -135,6 +138,10 @@ interface StateStore {
     queuePos?: number,
     error?: string
   ) => void;
+  // Run filtering actions
+  setRuns: (runs: Run[]) => void;
+  setActiveRunId: (runId: string) => void;
+  setRunsLoading: (loading: boolean) => void;
 }
 
 // Initial stats
@@ -203,11 +210,14 @@ export const useStateStore = create<StateStore>((set) => ({
   stats: initialStats,
   isPaused: false,
   selectedAgentId: null,
-  highlightedTaskId: null,
   repositories: [],
   activeRepoId: '',
   isRepoSwitching: false,
   mergeQueue: null,
+  // Run filtering state
+  runs: [],
+  activeRunId: '', // empty means "All runs"
+  isRunsLoading: false,
 
   // Actions
   setConnected: (connected) => set({ connected }),
@@ -322,8 +332,6 @@ export const useStateStore = create<StateStore>((set) => ({
 
   setSelectedAgent: (selectedAgentId) => set({ selectedAgentId }),
 
-  setHighlightedTask: (highlightedTaskId) => set({ highlightedTaskId }),
-
   setIsPaused: (isPaused) => set({ isPaused }),
 
   setRepositories: (repositories, activeRepoId) =>
@@ -376,4 +384,11 @@ export const useStateStore = create<StateStore>((set) => ({
         },
       };
     }),
+
+  // Run filtering actions
+  setRuns: (runs) => set({ runs }),
+
+  setActiveRunId: (activeRunId) => set({ activeRunId }),
+
+  setRunsLoading: (isRunsLoading) => set({ isRunsLoading }),
 }));
