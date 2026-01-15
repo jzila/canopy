@@ -190,30 +190,30 @@ export async function activateRepository(repoId: string): Promise<Repository> {
 
 // Merge Queue types
 export interface MergeCompletedItem {
-  task_id: string;
-  agent_id: string;
+  taskId: string;
+  agentId: string;
   timestamp: string;
   success: boolean;
   error?: string;
 }
 
 export interface MergeResolverItem {
-  parent_task_id: string;
-  resolver_task_id: string;
-  parent_agent_id: string;
-  resolver_agent_id: string;
+  parentTaskId: string;
+  resolverTaskId: string;
+  parentAgentId: string;
+  resolverAgentId: string;
   status: 'running' | 'completed' | 'failed';
 }
 
 export interface MergePendingItem {
-  task_id: string;
-  agent_id: string;
+  taskId: string;
+  agentId: string;
   position: number;
 }
 
 export interface MergeWorkerItem {
-  agent_id: string;
-  task_id: string;
+  agentId: string;
+  taskId: string;
   status: string;
 }
 
@@ -221,9 +221,9 @@ export interface MergeQueueState {
   completed: MergeCompletedItem[];
   resolvers: MergeResolverItem[];
   pending: MergePendingItem[];
-  active_workers: MergeWorkerItem[];
-  is_paused: boolean;
-  queue_length: number;
+  activeWorkers: MergeWorkerItem[];
+  isPaused: boolean;
+  queueLength: number;
 }
 
 export async function getMergeQueue(): Promise<MergeQueueState> {

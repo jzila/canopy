@@ -325,27 +325,27 @@ export const Dashboard: React.FC = () => {
 
     return {
       completed: mergeQueue.completed.map((item) => ({
-        taskId: item.task_id,
-        agentId: item.agent_id,
+        taskId: item.taskId,
+        agentId: item.agentId,
         timestamp: item.timestamp,
         success: item.success,
         ...(item.error !== undefined && { error: item.error }),
       })),
       resolvers: mergeQueue.resolvers.map((item) => ({
-        parentTaskId: item.parent_task_id,
-        resolverTaskId: item.resolver_task_id,
-        parentAgentId: item.parent_agent_id,
-        resolverAgentId: item.resolver_agent_id,
+        parentTaskId: item.parentTaskId,
+        resolverTaskId: item.resolverTaskId,
+        parentAgentId: item.parentAgentId,
+        resolverAgentId: item.resolverAgentId,
         status: item.status === 'completed' ? 'resolved' as const : item.status === 'failed' ? 'failed' as const : 'resolving' as const,
       })),
       pending: mergeQueue.pending.map((item) => ({
-        taskId: item.task_id,
-        agentId: item.agent_id,
+        taskId: item.taskId,
+        agentId: item.agentId,
         position: item.position,
       })),
-      activeWorkers: mergeQueue.active_workers.map((item) => ({
-        taskId: item.task_id,
-        agentId: item.agent_id,
+      activeWorkers: mergeQueue.activeWorkers.map((item) => ({
+        taskId: item.taskId,
+        agentId: item.agentId,
         status: item.status as 'pending' | 'acquiring' | 'merging' | 'resolving' | 'merged' | 'failed',
       })),
     };

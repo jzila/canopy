@@ -73,6 +73,33 @@ See `pkg/errors/errors.go` for defined error types and full guidelines.
 - **Log errors** only for truly non-fatal side effects (cleanup, telemetry, etc.)
 - Use `warning:` prefix for non-fatal errors in verbose output
 
+## API Conventions (Go ↔ TypeScript)
+
+**JSON field names MUST use camelCase** to match TypeScript conventions.
+
+When defining API types that cross the Go/TypeScript boundary:
+
+1. **Go struct tags**: Use camelCase in `json:"..."` tags
+   ```go
+   type MergeItem struct {
+       TaskID   string `json:"taskId"`   // ✓ camelCase
+       AgentID  string `json:"agentId"`  // ✓ camelCase
+   }
+   // NOT: `json:"task_id"` - snake_case breaks TypeScript
+   ```
+
+2. **TypeScript interfaces**: Use camelCase property names
+   ```ts
+   interface MergeItem {
+       taskId: string;   // ✓ matches Go JSON tag
+       agentId: string;  // ✓ matches Go JSON tag
+   }
+   ```
+
+3. **When adding new API types**: Define Go struct first with camelCase JSON tags, then mirror exactly in TypeScript. Both sides must match character-for-character.
+
+4. **Rebuild dashboard after API changes**: Run `cd web/dashboard && npm run build` to catch TypeScript errors early.
+
 ## Persistence Invariant
 
 **ALL canopy persistence MUST live at `$XDG_CACHE_HOME/canopy/` or `~/.cache/canopy/`.**
