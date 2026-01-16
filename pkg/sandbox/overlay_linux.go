@@ -17,9 +17,13 @@ func IsStub() bool {
 	return false
 }
 
-// Mount mounts the overlay filesystem
-// Tries kernel overlayfs first, falls back to fuse-overlayfs for rootless operation
+// Mount mounts the overlay filesystem.
+// This method is thread-safe.
+// Tries kernel overlayfs first, falls back to fuse-overlayfs for rootless operation.
 func (o *Overlay) Mount() error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
 	if o.mounted {
 		return fmt.Errorf("overlay %s already mounted (flag)", o.ID)
 	}
@@ -58,7 +62,7 @@ func (o *Overlay) Mount() error {
 	}
 
 	// Fall back to fuse-overlayfs
-	if err := o.mountFuse(); err != nil {
+	if err := o.mountFuseLocked(); err != nil {
 		return err
 	}
 	return nil
@@ -92,8 +96,9 @@ func (o *Overlay) unmountPassthroughs() {
 	o.bindMounts = nil
 }
 
-// mountFuse uses fuse-overlayfs for rootless operation
-func (o *Overlay) mountFuse() error {
+// mountFuseLocked uses fuse-overlayfs for rootless operation.
+// Caller must hold o.mu.
+func (o *Overlay) mountFuseLocked() error {
 	fusePath, err := exec.LookPath("fuse-overlayfs")
 	if err != nil {
 		return fmt.Errorf("fuse-overlayfs not found and kernel overlay failed: %w", err)
@@ -116,10 +121,14 @@ func (o *Overlay) mountFuse() error {
 }
 
 // Unmount unmounts the overlay filesystem.
-// This method is idempotent - it's safe to call even if not mounted.
+// This method is idempotent and thread-safe - it's safe to call even if not mounted
+// or if called concurrently from multiple goroutines (e.g., defer and signal handler).
 // It checks actual mount state rather than relying solely on the mounted flag,
 // which may be stale after crashes or inconsistent state.
 func (o *Overlay) Unmount() error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
 	// Check actual mount state - don't rely solely on the flag
 	// The flag may be stale after crashes or state inconsistency
 	actuallyMounted := o.isMounted()
@@ -142,17 +151,29 @@ func (o *Overlay) Unmount() error {
 	const maxRetries = 5
 	baseDelay := 50 * time.Millisecond
 
+	// Capture useFuse value before unlocking for sleep
+	useFuse := o.useFuse
+
 	var lastErr error
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
 			// Exponential backoff: 50ms, 100ms, 200ms, 400ms, 800ms
+			// Release lock during sleep to avoid blocking other operations
+			o.mu.Unlock()
 			delay := baseDelay * time.Duration(1<<uint(attempt-1))
 			time.Sleep(delay)
+			o.mu.Lock()
+
+			// Re-check if another goroutine unmounted while we were sleeping
+			if !o.isMounted() {
+				o.mounted = false
+				return nil
+			}
 		}
 
 		// Try primary unmount method
 		var err error
-		if o.useFuse {
+		if useFuse {
 			err = exec.Command("fusermount", "-u", o.MergedDir).Run()
 		} else {
 			err = syscall.Unmount(o.MergedDir, syscall.MNT_DETACH)

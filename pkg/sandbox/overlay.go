@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // FileChange represents a modification in the overlay
@@ -39,6 +40,7 @@ type Overlay struct {
 	mounted    bool
 	useFuse    bool
 	bindMounts []string // Paths that are bind-mounted through the overlay
+	mu         sync.Mutex // Protects mounted and useFuse flags
 }
 
 // StaleMountInfo contains information about a stale overlay mount

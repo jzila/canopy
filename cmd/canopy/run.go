@@ -18,6 +18,7 @@ import (
 	"github.com/jzila/canopy/pkg/ipc"
 	"github.com/jzila/canopy/pkg/orchestrator"
 	"github.com/jzila/canopy/pkg/repository"
+	"github.com/jzila/canopy/pkg/sandbox"
 )
 
 var (
@@ -113,6 +114,18 @@ func init() {
 func runOrchestrator(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Clean up any stale mounts from previous crashes before starting
+	// This prevents "permission denied" errors from orphaned FUSE mounts
+	tempDir := filepath.Join(os.TempDir(), "canopy")
+	if cleaned, stale, errs := sandbox.RecoverFromCrash(tempDir); stale > 0 {
+		if verbose {
+			fmt.Fprintf(os.Stderr, "Recovered %d/%d stale overlay mounts from previous run\n", cleaned, stale)
+			for _, err := range errs {
+				fmt.Fprintf(os.Stderr, "  warning: %v\n", err)
+			}
+		}
+	}
 
 	// Orchestrator will be set once created, for signal cleanup
 	var orch *orchestrator.Orchestrator
