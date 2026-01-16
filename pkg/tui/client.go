@@ -13,6 +13,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/jzila/canopy/pkg/daemon"
+	"github.com/jzila/canopy/pkg/events"
 )
 
 // RemoteClient connects to a running daemon via HTTP/WebSocket
@@ -21,7 +22,7 @@ type RemoteClient struct {
 	wsURL     string
 	conn      *websocket.Conn
 	state     *daemon.RuntimeState
-	eventBus  *daemon.EventBus
+	eventBus  *events.EventBus
 	mu        sync.RWMutex
 	done      chan struct{}
 	connected bool
@@ -37,7 +38,7 @@ func NewRemoteClient(addr string) *RemoteClient {
 		baseURL:  baseURL,
 		wsURL:    wsURL,
 		state:    daemon.NewRuntimeState(),
-		eventBus: daemon.NewEventBus(),
+		eventBus: events.NewEventBus(),
 		done:     make(chan struct{}),
 	}
 }
@@ -188,7 +189,7 @@ func (c *RemoteClient) readLoop() {
 		}
 
 		// Parse event
-		var event daemon.Event
+		var event events.Event
 		if err := json.Unmarshal(message, &event); err != nil {
 			continue
 		}
@@ -202,12 +203,12 @@ func (c *RemoteClient) readLoop() {
 }
 
 // handleEvent processes an event and updates the local state
-func (c *RemoteClient) handleEvent(event daemon.Event) {
+func (c *RemoteClient) handleEvent(event events.Event) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	// Handle state sync event specially - it replaces the entire state
-	if event.Type == daemon.EventStateSync {
+	if event.Type == events.EventStateSync {
 		if stateData, ok := event.Payload.(map[string]interface{}); ok {
 			c.applyStateSync(stateData)
 		}
@@ -399,7 +400,7 @@ func (c *RemoteClient) GetState() *daemon.RuntimeState {
 }
 
 // GetEventBus returns the event bus for use by the TUI
-func (c *RemoteClient) GetEventBus() *daemon.EventBus {
+func (c *RemoteClient) GetEventBus() *events.EventBus {
 	return c.eventBus
 }
 

@@ -10,12 +10,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/jzila/canopy/pkg/daemon"
+	"github.com/jzila/canopy/pkg/events"
 )
 
 // Dashboard is the main TUI model that displays agent status, output, and progress
 type Dashboard struct {
 	state         *daemon.RuntimeState
-	eventBus      *daemon.EventBus
+	eventBus      *events.EventBus
 	unsubscribe   func()
 	agents        []*daemon.AgentState // sorted list of agents
 	selectedIndex int
@@ -28,7 +29,7 @@ type Dashboard struct {
 }
 
 // NewDashboard creates a new dashboard TUI with in-process state and event bus
-func NewDashboard(state *daemon.RuntimeState, eventBus *daemon.EventBus) *Dashboard {
+func NewDashboard(state *daemon.RuntimeState, eventBus *events.EventBus) *Dashboard {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
@@ -69,7 +70,7 @@ func RunRemote(addr string) error {
 func (d *Dashboard) Init() tea.Cmd {
 	// Subscribe to event bus for real-time updates
 	if d.eventBus != nil {
-		d.unsubscribe = d.eventBus.Subscribe(func(event daemon.Event) {
+		d.unsubscribe = d.eventBus.Subscribe(func(event events.Event) {
 			// Events are processed via polling (tickMsg)
 		})
 	}

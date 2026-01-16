@@ -10,7 +10,7 @@ import (
 
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
-	"github.com/jzila/canopy/pkg/daemon"
+	"github.com/jzila/canopy/pkg/events"
 	"github.com/jzila/canopy/pkg/ipc"
 	"github.com/jzila/canopy/pkg/merge"
 	"github.com/jzila/canopy/pkg/resolver"
@@ -314,7 +314,7 @@ func TestIPCChildEventsOnResolverSpawn(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 
 	// Setup IPC server
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 	server := ipc.NewServer(socketPath, eventBus)
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
@@ -322,8 +322,8 @@ func TestIPCChildEventsOnResolverSpawn(t *testing.T) {
 	defer server.Stop()
 
 	// Subscribe to events
-	receivedEvents := make(chan daemon.Event, 100)
-	eventBus.Subscribe(func(event daemon.Event) {
+	receivedEvents := make(chan events.Event, 100)
+	eventBus.Subscribe(func(event events.Event) {
 		receivedEvents <- event
 	})
 
@@ -352,7 +352,7 @@ func TestIPCChildEventsOnResolverSpawn(t *testing.T) {
 	// Verify start event received with parent info
 	select {
 	case event := <-receivedEvents:
-		if event.Type != daemon.EventAgentStarted {
+		if event.Type != events.EventAgentStarted {
 			t.Errorf("Expected EventAgentStarted, got %s", event.Type)
 		}
 		payload := event.Payload.(map[string]interface{})
@@ -384,7 +384,7 @@ func TestIPCChildEventsOnResolverSpawn(t *testing.T) {
 	// Verify done event received with parent info
 	select {
 	case event := <-receivedEvents:
-		if event.Type != daemon.EventAgentCompleted {
+		if event.Type != events.EventAgentCompleted {
 			t.Errorf("Expected EventAgentCompleted, got %s", event.Type)
 		}
 		payload := event.Payload.(map[string]interface{})
@@ -404,7 +404,7 @@ func TestIPCChildEventsOnResolverFailure(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 
 	// Setup IPC server
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 	server := ipc.NewServer(socketPath, eventBus)
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
@@ -412,8 +412,8 @@ func TestIPCChildEventsOnResolverFailure(t *testing.T) {
 	defer server.Stop()
 
 	// Subscribe to events
-	receivedEvents := make(chan daemon.Event, 100)
-	eventBus.Subscribe(func(event daemon.Event) {
+	receivedEvents := make(chan events.Event, 100)
+	eventBus.Subscribe(func(event events.Event) {
 		receivedEvents <- event
 	})
 
@@ -455,7 +455,7 @@ func TestIPCChildEventsOnResolverFailure(t *testing.T) {
 	// Verify fail event received with parent info
 	select {
 	case event := <-receivedEvents:
-		if event.Type != daemon.EventAgentCompleted {
+		if event.Type != events.EventAgentCompleted {
 			t.Errorf("Expected EventAgentCompleted, got %s", event.Type)
 		}
 		payload := event.Payload.(map[string]interface{})
@@ -487,7 +487,7 @@ func TestMergeStatusTransitions(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 
 	// Setup IPC server
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 	server := ipc.NewServer(socketPath, eventBus)
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
@@ -495,8 +495,8 @@ func TestMergeStatusTransitions(t *testing.T) {
 	defer server.Stop()
 
 	// Subscribe to events
-	receivedEvents := make(chan daemon.Event, 100)
-	eventBus.Subscribe(func(event daemon.Event) {
+	receivedEvents := make(chan events.Event, 100)
+	eventBus.Subscribe(func(event events.Event) {
 		receivedEvents <- event
 	})
 
@@ -531,7 +531,7 @@ func TestMergeStatusTransitions(t *testing.T) {
 
 		select {
 		case event := <-receivedEvents:
-			if event.Type != daemon.EventAgentMergeStatus {
+			if event.Type != events.EventAgentMergeStatus {
 				t.Errorf("Expected EventAgentMergeStatus, got %s", event.Type)
 			}
 			payload := event.Payload.(map[string]interface{})
@@ -552,15 +552,15 @@ func TestMergeStatusFailedOnResolverFailure(t *testing.T) {
 	socketPath := filepath.Join(t.TempDir(), "test.sock")
 
 	// Setup IPC server
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 	server := ipc.NewServer(socketPath, eventBus)
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
 	defer server.Stop()
 
-	receivedEvents := make(chan daemon.Event, 100)
-	eventBus.Subscribe(func(event daemon.Event) {
+	receivedEvents := make(chan events.Event, 100)
+	eventBus.Subscribe(func(event events.Event) {
 		receivedEvents <- event
 	})
 
@@ -586,7 +586,7 @@ func TestMergeStatusFailedOnResolverFailure(t *testing.T) {
 
 	select {
 	case event := <-receivedEvents:
-		if event.Type != daemon.EventAgentMergeStatus {
+		if event.Type != events.EventAgentMergeStatus {
 			t.Errorf("Expected EventAgentMergeStatus, got %s", event.Type)
 		}
 		payload := event.Payload.(map[string]interface{})

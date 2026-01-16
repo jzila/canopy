@@ -6,11 +6,12 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/jzila/canopy/pkg/daemon"
+	"github.com/jzila/canopy/pkg/events"
 )
 
 func TestNewDashboard(t *testing.T) {
 	state := daemon.NewRuntimeState()
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 
 	dashboard := NewDashboard(state, eventBus)
 
@@ -29,7 +30,7 @@ func TestNewDashboard(t *testing.T) {
 
 func TestDashboardInit(t *testing.T) {
 	state := daemon.NewRuntimeState()
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 
 	dashboard := NewDashboard(state, eventBus)
 	cmd := dashboard.Init()
@@ -46,7 +47,7 @@ func TestDashboardInit(t *testing.T) {
 
 func TestDashboardUpdate(t *testing.T) {
 	state := daemon.NewRuntimeState()
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 
 	dashboard := NewDashboard(state, eventBus)
 	dashboard.Init()
@@ -69,7 +70,7 @@ func TestDashboardUpdate(t *testing.T) {
 
 func TestDashboardRefreshAgents(t *testing.T) {
 	state := daemon.NewRuntimeState()
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 
 	// Add some agents
 	agent1 := &daemon.AgentState{
@@ -104,7 +105,7 @@ func TestDashboardRefreshAgents(t *testing.T) {
 
 func TestDashboardView(t *testing.T) {
 	state := daemon.NewRuntimeState()
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 
 	dashboard := NewDashboard(state, eventBus)
 
@@ -145,7 +146,7 @@ func TestFormatDuration(t *testing.T) {
 
 func TestDashboardQuit(t *testing.T) {
 	state := daemon.NewRuntimeState()
-	eventBus := daemon.NewEventBus()
+	eventBus := events.NewEventBus()
 
 	dashboard := NewDashboard(state, eventBus)
 	dashboard.Init()

@@ -9,6 +9,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/jzila/canopy/pkg/daemon"
+	"github.com/jzila/canopy/pkg/events"
 )
 
 func TestNormalizeAddr(t *testing.T) {
@@ -241,8 +242,8 @@ func TestConnectWebSocket(t *testing.T) {
 		defer conn.Close()
 
 		// Send a state sync event
-		event := daemon.Event{
-			Type:      daemon.EventStateSync,
+		event := events.Event{
+			Type:      events.EventStateSync,
 			Timestamp: time.Now(),
 			Payload: map[string]interface{}{
 				"is_paused": false,
