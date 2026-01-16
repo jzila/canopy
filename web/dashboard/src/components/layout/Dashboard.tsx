@@ -9,6 +9,7 @@ import { TerminalPanel } from './TerminalPanel';
 import { AgentGrid } from '../agents/AgentGrid';
 
 const SHOW_ARCHIVED_AGENTS_KEY = 'canopy-show-archived-agents';
+const SHOW_COMPLETED_BEADS_KEY = 'canopy-show-completed-beads';
 
 export const Dashboard: React.FC = () => {
   const { connected } = useWebSocket();
@@ -36,6 +37,10 @@ export const Dashboard: React.FC = () => {
     const saved = localStorage.getItem('beadsPaneExpanded');
     return saved !== null ? saved === 'true' : true;
   });
+  const [showCompletedBeads, setShowCompletedBeads] = useState(() => {
+    const saved = localStorage.getItem(SHOW_COMPLETED_BEADS_KEY);
+    return saved === 'true';
+  });
 
   // Resizable terminal pane
   const { height: paneHeight, isResizing, handleResizeStart } = useResizablePane({
@@ -49,6 +54,18 @@ export const Dashboard: React.FC = () => {
   useEffect(() => {
     localStorage.setItem('beadsPaneExpanded', String(beadsPaneExpanded));
   }, [beadsPaneExpanded]);
+
+  // Persist show completed beads state
+  useEffect(() => {
+    localStorage.setItem(SHOW_COMPLETED_BEADS_KEY, String(showCompletedBeads));
+  }, [showCompletedBeads]);
+
+  // Auto-switch to 'all' agents mode when showing completed beads
+  useEffect(() => {
+    if (showCompletedBeads && statusFilter !== 'all') {
+      setStatusFilter('all');
+    }
+  }, [showCompletedBeads, statusFilter]);
 
   // Persist show archived agents state
   useEffect(() => {
@@ -258,6 +275,8 @@ export const Dashboard: React.FC = () => {
           isExpanded={beadsPaneExpanded}
           onToggle={() => setBeadsPaneExpanded(!beadsPaneExpanded)}
           onTaskClick={handleMergeTaskClick}
+          showCompleted={showCompletedBeads}
+          onToggleShowCompleted={() => setShowCompletedBeads(!showCompletedBeads)}
         />
 
         {/* Main Content */}

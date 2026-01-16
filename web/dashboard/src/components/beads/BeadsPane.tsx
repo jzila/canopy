@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
-import { Circle, Clock, AlertCircle, Loader2, ChevronRight, ChevronLeft, ChevronDown, GitBranch } from 'lucide-react';
+import { Circle, Clock, AlertCircle, Loader2, ChevronRight, ChevronLeft, ChevronDown, GitBranch, CheckCircle2, Archive } from 'lucide-react';
 import { useStateStore } from '../../stores/stateStore';
 import type { TaskState } from '../../stores/stateStore';
 import { useMergeQueue } from '../../hooks/useMergeQueue';
@@ -9,6 +9,8 @@ interface BeadsPaneProps {
   isExpanded: boolean;
   onToggle: () => void;
   onTaskClick?: (taskId: string) => void;
+  showCompleted?: boolean;
+  onToggleShowCompleted?: () => void;
 }
 
 type ViewMode = 'hierarchy' | 'flat';
@@ -49,6 +51,18 @@ const STATUS_CONFIG: Record<string, { icon: React.ReactNode; bg: string; text: s
     bg: 'bg-red-100 dark:bg-red-900/50',
     text: 'text-red-600 dark:text-red-400',
     label: 'Failed',
+  },
+  done: {
+    icon: <CheckCircle2 className="w-3 h-3" />,
+    bg: 'bg-green-100 dark:bg-green-900/50',
+    text: 'text-green-600 dark:text-green-400',
+    label: 'Done',
+  },
+  completed: {
+    icon: <CheckCircle2 className="w-3 h-3" />,
+    bg: 'bg-green-100 dark:bg-green-900/50',
+    text: 'text-green-600 dark:text-green-400',
+    label: 'Completed',
   },
 };
 
@@ -183,7 +197,7 @@ const truncateId = (id: string, length: number = 11): string => {
   return id.length > length ? id.slice(0, length) : id;
 };
 
-export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTaskClick }) => {
+export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTaskClick, showCompleted = false, onToggleShowCompleted }) => {
   const tasks = useStateStore((state) => state.tasks);
   const highlightedTaskId = useStateStore((state) => state.highlightedTaskId);
   const [viewMode, setViewMode] = useState<ViewMode>('hierarchy');
@@ -207,36 +221,71 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
     };
   }, [mergeQueue]);
 
-  // Filter to only show incomplete beads (not done/completed) and not archived
-  const incompleteBeads = useMemo(() => {
+  // Count of completed/archived beads (for toggle button badge)
+  const completedBeadsCount = useMemo(() => {
+    return Object.values(tasks).filter((task: TaskState) => {
+      const status = task.status.toLowerCase();
+      return status === 'done' || status === 'completed' || task.archived;
+    }).length;
+  }, [tasks]);
+
+  // Filter beads based on showCompleted toggle
+  const filteredBeads = useMemo(() => {
     return Object.values(tasks)
       .filter((task: TaskState) => {
         const status = task.status.toLowerCase();
-        return status !== 'done' && status !== 'completed' && !task.archived;
+        const isCompleted = status === 'done' || status === 'completed';
+        const isArchived = task.archived;
+
+        if (showCompleted) {
+          // Show all beads when toggle is on
+          return true;
+        } else {
+          // Only show incomplete and non-archived beads
+          return !isCompleted && !isArchived;
+        }
       })
       .sort((a: TaskState, b: TaskState) => {
+        // Put completed/archived at the bottom when showing all
+        if (showCompleted) {
+          const aCompleted = a.status.toLowerCase() === 'done' || a.status.toLowerCase() === 'completed' || a.archived;
+          const bCompleted = b.status.toLowerCase() === 'done' || b.status.toLowerCase() === 'completed' || b.archived;
+          if (aCompleted !== bCompleted) {
+            return aCompleted ? 1 : -1;
+          }
+        }
         // Sort by priority first (lower = higher priority)
         if (a.priority !== b.priority) {
           return a.priority - b.priority;
         }
-        // Then by status (running > blocked > ready > failed)
+        // Then by status (running > blocked > ready > failed > done)
         const statusOrder: Record<string, number> = {
           running: 0,
           in_progress: 0,
           blocked: 1,
           ready: 2,
           failed: 3,
+          done: 4,
+          completed: 4,
         };
         const aOrder = statusOrder[a.status.toLowerCase()] ?? 999;
         const bOrder = statusOrder[b.status.toLowerCase()] ?? 999;
         return aOrder - bOrder;
       });
-  }, [tasks]);
+  }, [tasks, showCompleted]);
+
+  // For backward compatibility, keep incompleteBeads as an alias
+  const incompleteBeads = useMemo(() => {
+    return filteredBeads.filter((task: TaskState) => {
+      const status = task.status.toLowerCase();
+      return status !== 'done' && status !== 'completed' && !task.archived;
+    });
+  }, [filteredBeads]);
 
   // Build dependency tree
   const dependencyTree = useMemo(() => {
-    return buildDependencyTree(incompleteBeads);
-  }, [incompleteBeads]);
+    return buildDependencyTree(filteredBeads);
+  }, [filteredBeads]);
 
   // Flatten tree for rendering (respecting collapsed state)
   const flattenedTree = useMemo(() => {
@@ -253,8 +302,8 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
 
   // Check if any task has dependencies (useful for showing hierarchy mode)
   const hasDependencies = useMemo(() => {
-    return incompleteBeads.some(task => task.dependencies && task.dependencies.length > 0);
-  }, [incompleteBeads]);
+    return filteredBeads.some(task => task.dependencies && task.dependencies.length > 0);
+  }, [filteredBeads]);
 
   // Scroll to highlighted task when it changes
   useEffect(() => {
@@ -355,10 +404,25 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
         <div className="flex items-center gap-3">
           <h2 className="text-sm font-semibold tracking-tight text-gray-900 dark:text-gray-100">Beads</h2>
           <span className="px-2 py-0.5 text-xs font-medium tracking-wide rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
-            {incompleteBeads.length}
+            {filteredBeads.length}
           </span>
         </div>
         <div className="flex items-center gap-2">
+          {/* Show completed/archived toggle */}
+          {completedBeadsCount > 0 && onToggleShowCompleted && (
+            <button
+              onClick={onToggleShowCompleted}
+              className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                showCompleted
+                  ? 'bg-green-100 dark:bg-green-900/50 ring-1 ring-green-500 text-green-700 dark:text-green-300'
+                  : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'
+              }`}
+              title={showCompleted ? 'Hide completed beads' : 'Show completed beads'}
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span className="tabular-nums">{completedBeadsCount}</span>
+            </button>
+          )}
           {/* View mode toggle - only show if there are dependencies */}
           {hasDependencies && (
             <button
@@ -418,14 +482,20 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
             <span className="tabular-nums tracking-wide text-red-600 dark:text-red-400">{statusCounts.failed}</span>
           </div>
         )}
-        {incompleteBeads.length === 0 && (
+        {incompleteBeads.length === 0 && !showCompleted && (
           <span className="text-xs tracking-wide text-gray-500 dark:text-gray-400">All done!</span>
+        )}
+        {showCompleted && completedBeadsCount > 0 && (
+          <div className="flex items-center gap-1.5 text-xs">
+            <CheckCircle2 className="w-3 h-3 text-green-500" />
+            <span className="tabular-nums tracking-wide text-green-600 dark:text-green-400">{completedBeadsCount}</span>
+          </div>
         )}
       </div>
 
       {/* Beads List */}
       <div ref={listContainerRef} className="flex-1 overflow-y-auto">
-        {incompleteBeads.length === 0 ? (
+        {filteredBeads.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-center px-4">
             <div className="w-12 h-12 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center mb-3">
               <svg className="w-6 h-6 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -438,10 +508,11 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
         ) : viewMode === 'flat' ? (
           /* Flat view - original layout */
           <div className="divide-y divide-gray-100 dark:divide-gray-700/50">
-            {incompleteBeads.map((task: TaskState) => {
+            {filteredBeads.map((task: TaskState) => {
               const statusConfig = getStatusConfig(task.status);
               const priorityStyle = getPriorityStyle(task.priority);
               const isHighlighted = highlightedTaskId === task.id;
+              const isCompletedOrArchived = task.status.toLowerCase() === 'done' || task.status.toLowerCase() === 'completed' || task.archived;
 
               return (
                 <div
@@ -456,7 +527,9 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
                   className={`px-4 py-3 transition-all cursor-default ${
                     isHighlighted
                       ? 'bg-blue-100 dark:bg-blue-900/50 ring-2 ring-blue-500 ring-inset'
-                      : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                      : isCompletedOrArchived
+                        ? 'bg-gray-50 dark:bg-gray-800/50 opacity-75'
+                        : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'
                   }`}
                 >
                   {/* Top row: Priority, Status, ID */}
@@ -472,6 +545,14 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
                       {statusConfig.label}
                     </span>
 
+                    {/* Archived badge */}
+                    {task.archived && (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium tracking-wide bg-purple-100 dark:bg-purple-900/50 text-purple-600 dark:text-purple-400">
+                        <Archive className="w-2.5 h-2.5" />
+                        Archived
+                      </span>
+                    )}
+
                     {/* ID */}
                     <code className="ml-auto text-[10px] font-mono text-gray-400 dark:text-gray-500">
                       {truncateId(task.id)}
@@ -479,7 +560,7 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
                   </div>
 
                   {/* Title */}
-                  <p className="text-xs text-gray-800 dark:text-gray-200 leading-relaxed line-clamp-2">
+                  <p className={`text-xs leading-relaxed line-clamp-2 ${isCompletedOrArchived ? 'text-gray-500 dark:text-gray-400' : 'text-gray-800 dark:text-gray-200'}`}>
                     {task.title}
                   </p>
 
@@ -506,6 +587,7 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
               const hasChildren = children.length > 0;
               const isCollapsed = collapsedNodes.has(task.id);
               const isHighlighted = highlightedTaskId === task.id;
+              const isCompletedOrArchived = task.status.toLowerCase() === 'done' || task.status.toLowerCase() === 'completed' || task.archived;
 
               return (
                 <div
@@ -520,7 +602,9 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
                   className={`transition-all cursor-default ${
                     isHighlighted
                       ? 'bg-blue-100 dark:bg-blue-900/50 ring-2 ring-blue-500 ring-inset'
-                      : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                      : isCompletedOrArchived
+                        ? 'bg-gray-50 dark:bg-gray-800/50 opacity-75'
+                        : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'
                   }`}
                   style={{ paddingLeft: `${depth * 16 + 8}px` }}
                 >
@@ -550,7 +634,7 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
                       {/* Task content */}
                       <div className="flex-1 min-w-0">
                         {/* Top row: Priority, Status, ID */}
-                        <div className="flex items-center gap-1.5 mb-1">
+                        <div className="flex items-center gap-1.5 mb-1 flex-wrap">
                           {/* Priority badge */}
                           <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${priorityStyle.bg} ${priorityStyle.text}`}>
                             {priorityStyle.label}
@@ -562,6 +646,14 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
                             {statusConfig.label}
                           </span>
 
+                          {/* Archived badge */}
+                          {task.archived && (
+                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-100 dark:bg-purple-900/50 text-purple-600 dark:text-purple-400">
+                              <Archive className="w-2.5 h-2.5" />
+                              Archived
+                            </span>
+                          )}
+
                           {/* ID */}
                           <code className="ml-auto text-[10px] font-mono text-gray-400 dark:text-gray-500">
                             {truncateId(task.id)}
@@ -569,7 +661,7 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
                         </div>
 
                         {/* Title */}
-                        <p className="text-xs text-gray-800 dark:text-gray-200 leading-snug line-clamp-2">
+                        <p className={`text-xs leading-snug line-clamp-2 ${isCompletedOrArchived ? 'text-gray-500 dark:text-gray-400' : 'text-gray-800 dark:text-gray-200'}`}>
                           {task.title}
                         </p>
 
