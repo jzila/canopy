@@ -1,6 +1,7 @@
 package mergecoordinator
 
 import (
+	"context"
 	"testing"
 
 	"github.com/jzila/canopy/pkg/agent"
@@ -114,7 +115,7 @@ func TestMergeCoordinator_TaskCache(t *testing.T) {
 func TestMergeCoordinator_SetCleanupCallback(t *testing.T) {
 	mc := &MergeCoordinator{}
 
-	mc.SetCleanupCallback(func(result *agent.Result) {
+	mc.SetCleanupCallback(func(_ context.Context, result *agent.Result) {
 		// Callback set
 	})
 

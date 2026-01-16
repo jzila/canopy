@@ -210,7 +210,7 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 	// Note: parentAgentID is empty for top-level orchestrated agents
 	// Child agents (e.g., resolvers) will populate this when spawned
 	callbacks := &orchestrator.EventCallbacks{
-		OnAgentStartFn: func(taskID string, task *beads.Task) {
+		OnAgentStartFn: func(_ context.Context, taskID string, task *beads.Task) {
 			runStats.recordTaskStart(taskID, task)
 			agentID := makeAgentID(runID, taskID)
 			// Record agent ID for parent-child tracking (resolver agents need this)
@@ -220,19 +220,19 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 				fmt.Fprintf(os.Stderr, "warning: failed to send agent start: %v\n", err)
 			}
 		},
-		OnOutputFn: func(taskID string, output string, isError bool) {
+		OnOutputFn: func(_ context.Context, taskID string, output string, isError bool) {
 			agentID := makeAgentID(runID, taskID)
 			if err := ipcClient.SendAgentOutput(agentID, output, isError); err != nil && verbose {
 				fmt.Fprintf(os.Stderr, "warning: failed to send agent output: %v\n", err)
 			}
 		},
-		OnLiveFeedFn: func(taskID string, event *agent.LiveFeedEvent) {
+		OnLiveFeedFn: func(_ context.Context, taskID string, event *agent.LiveFeedEvent) {
 			agentID := makeAgentID(runID, taskID)
 			if err := ipcClient.SendAgentLiveFeed(agentID, string(event.EventType), event.RawData); err != nil && verbose {
 				fmt.Fprintf(os.Stderr, "warning: failed to send agent live feed: %v\n", err)
 			}
 		},
-		OnDoneFn: func(taskID string, result *agent.Result) {
+		OnDoneFn: func(_ context.Context, taskID string, result *agent.Result) {
 			runStats.recordResult(taskID, result, true)
 			agentID := makeAgentID(runID, taskID)
 			parentAgentID := "" // Top-level agents have no parent
@@ -243,7 +243,7 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 				fmt.Fprintf(os.Stderr, "warning: failed to send agent done: %v\n", err)
 			}
 		},
-		OnFailFn: func(taskID string, result *agent.Result) {
+		OnFailFn: func(_ context.Context, taskID string, result *agent.Result) {
 			runStats.recordResult(taskID, result, false)
 			agentID := makeAgentID(runID, taskID)
 			parentAgentID := "" // Top-level agents have no parent
@@ -310,7 +310,7 @@ func convertToIPCResult(result *agent.Result) *ipc.AgentResult {
 	if result.Output != nil {
 		ipcResult.InputTokens = result.Output.TotalInputTokens
 		ipcResult.OutputTokens = result.Output.TotalOutputTokens
-		ipcResult.CacheCreationInputTokens = result.Output.CacheCreationInputTokens
+		ipcResult.CacheCreationInputToken = result.Output.CacheCreationInputTokens
 		ipcResult.CacheReadInputTokens = result.Output.CacheReadInputTokens
 		ipcResult.CostUSD = result.Output.CostUSD
 		ipcResult.DurationMS = result.Output.DurationMS
@@ -323,11 +323,11 @@ func convertToIPCResult(result *agent.Result) *ipc.AgentResult {
 			ipcResult.ModelUsage = make(map[string]ipc.ModelUsage)
 			for model, usage := range result.Output.ModelUsage {
 				ipcResult.ModelUsage[model] = ipc.ModelUsage{
-					InputTokens:              usage.InputTokens,
-					OutputTokens:             usage.OutputTokens,
-					CacheReadInputTokens:     usage.CacheReadInputTokens,
-					CacheCreationInputTokens: usage.CacheCreationInputTokens,
-					CostUSD:                  usage.CostUSD,
+					InputTokens:             usage.InputTokens,
+					OutputTokens:            usage.OutputTokens,
+					CacheReadInputTokens:    usage.CacheReadInputTokens,
+					CacheCreationInputToken: usage.CacheCreationInputTokens,
+					CostUSD:                 usage.CostUSD,
 				}
 			}
 		}

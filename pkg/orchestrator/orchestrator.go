@@ -14,56 +14,57 @@ import (
 	"github.com/jzila/canopy/pkg/scheduler"
 )
 
-// EventCallbacks defines lifecycle callbacks for agent execution events
+// EventCallbacks defines lifecycle callbacks for agent execution events.
+// All callbacks receive a context.Context for proper cancellation and timeout propagation.
 type EventCallbacks struct {
 	// OnAgentStartFn is called when an agent begins execution
-	OnAgentStartFn func(taskID string, task *beads.Task)
+	OnAgentStartFn func(ctx context.Context, taskID string, task *beads.Task)
 
 	// OnOutputFn is called when an agent produces output (stdout/stderr)
-	OnOutputFn func(taskID string, output string, isError bool)
+	OnOutputFn func(ctx context.Context, taskID string, output string, isError bool)
 
 	// OnLiveFeedFn is called for real-time streaming events from agents
-	OnLiveFeedFn func(taskID string, event *agent.LiveFeedEvent)
+	OnLiveFeedFn func(ctx context.Context, taskID string, event *agent.LiveFeedEvent)
 
 	// OnDoneFn is called when an agent completes successfully
-	OnDoneFn func(taskID string, result *agent.Result)
+	OnDoneFn func(ctx context.Context, taskID string, result *agent.Result)
 
 	// OnFailFn is called when an agent fails
-	OnFailFn func(taskID string, result *agent.Result)
+	OnFailFn func(ctx context.Context, taskID string, result *agent.Result)
 }
 
 // OnAgentStart implements scheduler.CallbackHandler
-func (e *EventCallbacks) OnAgentStart(taskID string, task *beads.Task) {
+func (e *EventCallbacks) OnAgentStart(ctx context.Context, taskID string, task *beads.Task) {
 	if e != nil && e.OnAgentStartFn != nil {
-		e.OnAgentStartFn(taskID, task)
+		e.OnAgentStartFn(ctx, taskID, task)
 	}
 }
 
 // OnOutput implements scheduler.CallbackHandler
-func (e *EventCallbacks) OnOutput(taskID string, output string, isError bool) {
+func (e *EventCallbacks) OnOutput(ctx context.Context, taskID string, output string, isError bool) {
 	if e != nil && e.OnOutputFn != nil {
-		e.OnOutputFn(taskID, output, isError)
+		e.OnOutputFn(ctx, taskID, output, isError)
 	}
 }
 
 // OnLiveFeed implements scheduler.CallbackHandler
-func (e *EventCallbacks) OnLiveFeed(taskID string, event *agent.LiveFeedEvent) {
+func (e *EventCallbacks) OnLiveFeed(ctx context.Context, taskID string, event *agent.LiveFeedEvent) {
 	if e != nil && e.OnLiveFeedFn != nil {
-		e.OnLiveFeedFn(taskID, event)
+		e.OnLiveFeedFn(ctx, taskID, event)
 	}
 }
 
 // OnDone implements scheduler.CallbackHandler
-func (e *EventCallbacks) OnDone(taskID string, result *agent.Result) {
+func (e *EventCallbacks) OnDone(ctx context.Context, taskID string, result *agent.Result) {
 	if e != nil && e.OnDoneFn != nil {
-		e.OnDoneFn(taskID, result)
+		e.OnDoneFn(ctx, taskID, result)
 	}
 }
 
 // OnFail implements scheduler.CallbackHandler
-func (e *EventCallbacks) OnFail(taskID string, result *agent.Result) {
+func (e *EventCallbacks) OnFail(ctx context.Context, taskID string, result *agent.Result) {
 	if e != nil && e.OnFailFn != nil {
-		e.OnFailFn(taskID, result)
+		e.OnFailFn(ctx, taskID, result)
 	}
 }
 
@@ -207,22 +208,22 @@ func (o *Orchestrator) SetCallbacks(callbacks *EventCallbacks) {
 func (o *Orchestrator) setupInternalCallbacks() {
 	// Register internal callbacks as a single EventCallbacks struct
 	internalCallbacks := &EventCallbacks{
-		OnAgentStartFn: func(taskID string, task *beads.Task) {
+		OnAgentStartFn: func(ctx context.Context, taskID string, task *beads.Task) {
 			// Store task in merge coordinator for later use in OnDone
 			o.mergeCoordinator.CacheTask(taskID, task)
 		},
-		OnDoneFn: func(taskID string, result *agent.Result) {
+		OnDoneFn: func(ctx context.Context, taskID string, result *agent.Result) {
 			// Delegate merge to coordinator - it handles queueing, merge, and task completion
-			resp := o.mergeCoordinator.EnqueueMerge(result)
+			resp := o.mergeCoordinator.EnqueueMerge(ctx, result)
 
 			// Log merge result if verbose and there was an error
 			if resp != nil && !resp.Success && o.config.Verbose {
 				fmt.Fprintf(os.Stderr, "[%s] merge failed: %s\n", taskID, resp.Error)
 			}
 		},
-		OnFailFn: func(taskID string, result *agent.Result) {
+		OnFailFn: func(ctx context.Context, taskID string, result *agent.Result) {
 			// Delegate failure handling to coordinator
-			o.mergeCoordinator.HandleFailure(taskID, result, result.Error)
+			o.mergeCoordinator.HandleFailure(ctx, taskID, result, result.Error)
 		},
 	}
 	o.callbackManager.Register(internalCallbacks)
@@ -235,7 +236,8 @@ func (o *Orchestrator) setupInternalCallbacks() {
 
 // cleanupOverlay cleans up the overlay for a result.
 // This is safe to call from concurrent goroutines.
-func (o *Orchestrator) cleanupOverlay(result *agent.Result) {
+// The context parameter is available for future use (e.g., logging with trace ID).
+func (o *Orchestrator) cleanupOverlay(ctx context.Context, result *agent.Result) {
 	if result.Overlay != nil {
 		if err := result.Overlay.Cleanup(); err != nil && o.config.Verbose {
 			fmt.Fprintf(os.Stderr, "warning: failed to cleanup overlay for task %s: %v\n", result.TaskID, err)

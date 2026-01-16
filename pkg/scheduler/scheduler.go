@@ -20,12 +20,13 @@ import (
 
 // CallbackHandler defines lifecycle callbacks for agent execution events.
 // This allows the scheduler to be decoupled from orchestrator package.
+// All callbacks receive a context.Context for proper cancellation and timeout propagation.
 type CallbackHandler interface {
-	OnAgentStart(taskID string, task *beads.Task)
-	OnOutput(taskID string, output string, isError bool)
-	OnLiveFeed(taskID string, event *agent.LiveFeedEvent)
-	OnDone(taskID string, result *agent.Result)
-	OnFail(taskID string, result *agent.Result)
+	OnAgentStart(ctx context.Context, taskID string, task *beads.Task)
+	OnOutput(ctx context.Context, taskID string, output string, isError bool)
+	OnLiveFeed(ctx context.Context, taskID string, event *agent.LiveFeedEvent)
+	OnDone(ctx context.Context, taskID string, result *agent.Result)
+	OnFail(ctx context.Context, taskID string, result *agent.Result)
 }
 
 // Scheduler executes tasks from beads in parallel with bounded concurrency
@@ -140,9 +141,9 @@ func (s *Scheduler) ExecuteBatch(ctx context.Context, tasks []beads.Task) ([]*ag
 			// Invoke completion callbacks
 			if s.callbacks != nil {
 				if result.Success {
-					s.callbacks.OnDone(task.ID, result)
+					s.callbacks.OnDone(agentCtx, task.ID, result)
 				} else {
-					s.callbacks.OnFail(task.ID, result)
+					s.callbacks.OnFail(agentCtx, task.ID, result)
 				}
 			}
 
@@ -163,7 +164,7 @@ func (s *Scheduler) ExecuteBatch(ctx context.Context, tasks []beads.Task) ([]*ag
 func (s *Scheduler) executeTask(ctx context.Context, task *beads.Task) *agent.Result {
 	// Invoke OnAgentStart callback
 	if s.callbacks != nil {
-		s.callbacks.OnAgentStart(task.ID, task)
+		s.callbacks.OnAgentStart(ctx, task.ID, task)
 	}
 
 	// NOTE: beadsClient.Start() removed to prevent SQLite corruption
@@ -231,7 +232,7 @@ func (s *Scheduler) executeTask(ctx context.Context, task *beads.Task) *agent.Re
 	var liveFeedCallback agent.LiveFeedCallback
 	if s.callbacks != nil {
 		liveFeedCallback = func(taskID string, event *agent.LiveFeedEvent) {
-			s.callbacks.OnLiveFeed(taskID, event)
+			s.callbacks.OnLiveFeed(ctx, taskID, event)
 		}
 	}
 
@@ -244,10 +245,10 @@ func (s *Scheduler) executeTask(ctx context.Context, task *beads.Task) *agent.Re
 	// Invoke OnOutput callback for captured output
 	if s.callbacks != nil {
 		if result.Stdout != "" {
-			s.callbacks.OnOutput(task.ID, result.Stdout, false)
+			s.callbacks.OnOutput(ctx, task.ID, result.Stdout, false)
 		}
 		if result.Stderr != "" {
-			s.callbacks.OnOutput(task.ID, result.Stderr, true)
+			s.callbacks.OnOutput(ctx, task.ID, result.Stderr, true)
 		}
 	}
 

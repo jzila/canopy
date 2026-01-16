@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"sync"
 
 	"github.com/jzila/canopy/pkg/agent"
@@ -41,7 +42,7 @@ func (m *CallbackManager) Register(callbacks *EventCallbacks) {
 
 // OnAgentStart implements scheduler.CallbackHandler.
 // Invokes all registered OnAgentStart callbacks in a thread-safe manner.
-func (m *CallbackManager) OnAgentStart(taskID string, task *beads.Task) {
+func (m *CallbackManager) OnAgentStart(ctx context.Context, taskID string, task *beads.Task) {
 	m.mu.RLock()
 	// Copy slice to avoid holding lock during invocation
 	callbacks := make([]*EventCallbacks, len(m.callbacks))
@@ -49,59 +50,59 @@ func (m *CallbackManager) OnAgentStart(taskID string, task *beads.Task) {
 	m.mu.RUnlock()
 
 	for _, cb := range callbacks {
-		cb.OnAgentStart(taskID, task)
+		cb.OnAgentStart(ctx, taskID, task)
 	}
 }
 
 // OnOutput implements scheduler.CallbackHandler.
 // Invokes all registered OnOutput callbacks in a thread-safe manner.
-func (m *CallbackManager) OnOutput(taskID string, output string, isError bool) {
+func (m *CallbackManager) OnOutput(ctx context.Context, taskID string, output string, isError bool) {
 	m.mu.RLock()
 	callbacks := make([]*EventCallbacks, len(m.callbacks))
 	copy(callbacks, m.callbacks)
 	m.mu.RUnlock()
 
 	for _, cb := range callbacks {
-		cb.OnOutput(taskID, output, isError)
+		cb.OnOutput(ctx, taskID, output, isError)
 	}
 }
 
 // OnLiveFeed implements scheduler.CallbackHandler.
 // Invokes all registered OnLiveFeed callbacks in a thread-safe manner.
-func (m *CallbackManager) OnLiveFeed(taskID string, event *agent.LiveFeedEvent) {
+func (m *CallbackManager) OnLiveFeed(ctx context.Context, taskID string, event *agent.LiveFeedEvent) {
 	m.mu.RLock()
 	callbacks := make([]*EventCallbacks, len(m.callbacks))
 	copy(callbacks, m.callbacks)
 	m.mu.RUnlock()
 
 	for _, cb := range callbacks {
-		cb.OnLiveFeed(taskID, event)
+		cb.OnLiveFeed(ctx, taskID, event)
 	}
 }
 
 // OnDone implements scheduler.CallbackHandler.
 // Invokes all registered OnDone callbacks in a thread-safe manner.
-func (m *CallbackManager) OnDone(taskID string, result *agent.Result) {
+func (m *CallbackManager) OnDone(ctx context.Context, taskID string, result *agent.Result) {
 	m.mu.RLock()
 	callbacks := make([]*EventCallbacks, len(m.callbacks))
 	copy(callbacks, m.callbacks)
 	m.mu.RUnlock()
 
 	for _, cb := range callbacks {
-		cb.OnDone(taskID, result)
+		cb.OnDone(ctx, taskID, result)
 	}
 }
 
 // OnFail implements scheduler.CallbackHandler.
 // Invokes all registered OnFail callbacks in a thread-safe manner.
-func (m *CallbackManager) OnFail(taskID string, result *agent.Result) {
+func (m *CallbackManager) OnFail(ctx context.Context, taskID string, result *agent.Result) {
 	m.mu.RLock()
 	callbacks := make([]*EventCallbacks, len(m.callbacks))
 	copy(callbacks, m.callbacks)
 	m.mu.RUnlock()
 
 	for _, cb := range callbacks {
-		cb.OnFail(taskID, result)
+		cb.OnFail(ctx, taskID, result)
 	}
 }
 

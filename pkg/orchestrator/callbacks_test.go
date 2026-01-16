@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -16,46 +17,47 @@ import (
 func TestEventCallbacks_Interface(t *testing.T) {
 	// Test that EventCallbacks implements the scheduler.CallbackHandler interface
 	var called bool
+	ctx := context.Background()
 
 	callbacks := &EventCallbacks{
-		OnAgentStartFn: func(taskID string, task *beads.Task) {
+		OnAgentStartFn: func(_ context.Context, taskID string, task *beads.Task) {
 			called = true
 		},
-		OnOutputFn: func(taskID string, output string, isError bool) {
+		OnOutputFn: func(_ context.Context, taskID string, output string, isError bool) {
 			called = true
 		},
-		OnDoneFn: func(taskID string, result *agent.Result) {
+		OnDoneFn: func(_ context.Context, taskID string, result *agent.Result) {
 			called = true
 		},
-		OnFailFn: func(taskID string, result *agent.Result) {
+		OnFailFn: func(_ context.Context, taskID string, result *agent.Result) {
 			called = true
 		},
 	}
 
 	// Test OnAgentStart
 	called = false
-	callbacks.OnAgentStart("test-1", &beads.Task{ID: "test-1", Title: "Test Task"})
+	callbacks.OnAgentStart(ctx, "test-1", &beads.Task{ID: "test-1", Title: "Test Task"})
 	if !called {
 		t.Error("OnAgentStart callback was not invoked")
 	}
 
 	// Test OnOutput
 	called = false
-	callbacks.OnOutput("test-1", "test output", false)
+	callbacks.OnOutput(ctx, "test-1", "test output", false)
 	if !called {
 		t.Error("OnOutput callback was not invoked")
 	}
 
 	// Test OnDone
 	called = false
-	callbacks.OnDone("test-1", &agent.Result{TaskID: "test-1", Success: true})
+	callbacks.OnDone(ctx, "test-1", &agent.Result{TaskID: "test-1", Success: true})
 	if !called {
 		t.Error("OnDone callback was not invoked")
 	}
 
 	// Test OnFail
 	called = false
-	callbacks.OnFail("test-1", &agent.Result{TaskID: "test-1", Success: false})
+	callbacks.OnFail(ctx, "test-1", &agent.Result{TaskID: "test-1", Success: false})
 	if !called {
 		t.Error("OnFail callback was not invoked")
 	}
@@ -64,33 +66,35 @@ func TestEventCallbacks_Interface(t *testing.T) {
 func TestEventCallbacks_NilSafety(t *testing.T) {
 	// Test that nil callbacks don't panic
 	var callbacks *EventCallbacks
+	ctx := context.Background()
 
 	// These should not panic
-	callbacks.OnAgentStart("test-1", &beads.Task{ID: "test-1"})
-	callbacks.OnOutput("test-1", "test", false)
-	callbacks.OnDone("test-1", &agent.Result{TaskID: "test-1"})
-	callbacks.OnFail("test-1", &agent.Result{TaskID: "test-1"})
+	callbacks.OnAgentStart(ctx, "test-1", &beads.Task{ID: "test-1"})
+	callbacks.OnOutput(ctx, "test-1", "test", false)
+	callbacks.OnDone(ctx, "test-1", &agent.Result{TaskID: "test-1"})
+	callbacks.OnFail(ctx, "test-1", &agent.Result{TaskID: "test-1"})
 
 	// Test with non-nil struct but nil functions
 	callbacks = &EventCallbacks{}
-	callbacks.OnAgentStart("test-1", &beads.Task{ID: "test-1"})
-	callbacks.OnOutput("test-1", "test", false)
-	callbacks.OnDone("test-1", &agent.Result{TaskID: "test-1"})
-	callbacks.OnFail("test-1", &agent.Result{TaskID: "test-1"})
+	callbacks.OnAgentStart(ctx, "test-1", &beads.Task{ID: "test-1"})
+	callbacks.OnOutput(ctx, "test-1", "test", false)
+	callbacks.OnDone(ctx, "test-1", &agent.Result{TaskID: "test-1"})
+	callbacks.OnFail(ctx, "test-1", &agent.Result{TaskID: "test-1"})
 }
 
 func TestOrchestrator_SetCallbacks(t *testing.T) {
 	// Create a minimal test config (without actually initializing the orchestrator)
 	// This tests the API surface only
 	var called bool
+	ctx := context.Background()
 	callbacks := &EventCallbacks{
-		OnAgentStartFn: func(taskID string, task *beads.Task) {
+		OnAgentStartFn: func(_ context.Context, taskID string, task *beads.Task) {
 			called = true
 		},
 	}
 
 	// Verify callbacks are properly structured
-	callbacks.OnAgentStart("test", &beads.Task{ID: "test"})
+	callbacks.OnAgentStart(ctx, "test", &beads.Task{ID: "test"})
 	if !called {
 		t.Error("Callback was not invoked through the struct")
 	}
@@ -101,7 +105,7 @@ func TestOrchestrator_WithCallbacks(t *testing.T) {
 	// We'll create a minimal mock rather than a full orchestrator
 
 	callbacks := &EventCallbacks{
-		OnAgentStartFn: func(taskID string, task *beads.Task) {},
+		OnAgentStartFn: func(_ context.Context, taskID string, task *beads.Task) {},
 	}
 
 	// Test that the API design allows chaining (compile-time check)
@@ -206,6 +210,7 @@ func TestOrchestrator_StructHasMergeCoordinator(t *testing.T) {
 func TestOnDoneFn_EnqueuesMergeRequest(t *testing.T) {
 	// Create merge queue for direct testing of the queue flow
 	queue := mergequeue.NewQueue(10)
+	ctx := context.Background()
 
 	// Track whether user callback was invoked
 	var userCallbackInvoked bool
@@ -213,7 +218,7 @@ func TestOnDoneFn_EnqueuesMergeRequest(t *testing.T) {
 
 	// Set up user callbacks
 	userCallbacks := &EventCallbacks{
-		OnDoneFn: func(taskID string, result *agent.Result) {
+		OnDoneFn: func(_ context.Context, taskID string, result *agent.Result) {
 			userCallbackInvoked = true
 			userCallbackTaskID = taskID
 		},
@@ -244,7 +249,7 @@ func TestOnDoneFn_EnqueuesMergeRequest(t *testing.T) {
 	}()
 
 	// Simulate the MergeCoordinator's EnqueueMerge flow
-	wrappedOnDone := func(taskID string, result *agent.Result) {
+	wrappedOnDone := func(ctx context.Context, taskID string, result *agent.Result) {
 		// Create merge request and enqueue (as MergeCoordinator.EnqueueMerge does)
 		req := mergequeue.NewMergeRequest(result, testTask)
 		if !queue.Enqueue(req) {
@@ -261,12 +266,12 @@ func TestOnDoneFn_EnqueuesMergeRequest(t *testing.T) {
 
 		// Call user callback after merge
 		if userCallbacks != nil && userCallbacks.OnDoneFn != nil {
-			userCallbacks.OnDoneFn(taskID, result)
+			userCallbacks.OnDoneFn(ctx, taskID, result)
 		}
 	}
 
 	// Execute the wrapped callback
-	wrappedOnDone(testResult.TaskID, testResult)
+	wrappedOnDone(ctx, testResult.TaskID, testResult)
 
 	// Verify user callback was invoked after merge
 	if !userCallbackInvoked {
@@ -453,20 +458,21 @@ func TestCallbackManager_New(t *testing.T) {
 
 func TestCallbackManager_RegisterAndInvoke(t *testing.T) {
 	m := NewCallbackManager()
+	ctx := context.Background()
 
 	var called bool
 	var receivedTaskID string
 
 	// Register callbacks
 	m.Register(&EventCallbacks{
-		OnAgentStartFn: func(taskID string, task *beads.Task) {
+		OnAgentStartFn: func(_ context.Context, taskID string, task *beads.Task) {
 			called = true
 			receivedTaskID = taskID
 		},
 	})
 
 	// Invoke and check
-	m.OnAgentStart("test-task", &beads.Task{ID: "test-task"})
+	m.OnAgentStart(ctx, "test-task", &beads.Task{ID: "test-task"})
 
 	if !called {
 		t.Error("Callback was not invoked")
@@ -478,28 +484,29 @@ func TestCallbackManager_RegisterAndInvoke(t *testing.T) {
 
 func TestCallbackManager_MultipleCallbacks(t *testing.T) {
 	m := NewCallbackManager()
+	ctx := context.Background()
 
 	var count int
 
 	// Register multiple callback sets
 	m.Register(&EventCallbacks{
-		OnDoneFn: func(taskID string, result *agent.Result) {
+		OnDoneFn: func(_ context.Context, taskID string, result *agent.Result) {
 			count++
 		},
 	})
 	m.Register(&EventCallbacks{
-		OnDoneFn: func(taskID string, result *agent.Result) {
+		OnDoneFn: func(_ context.Context, taskID string, result *agent.Result) {
 			count++
 		},
 	})
 	m.Register(&EventCallbacks{
-		OnDoneFn: func(taskID string, result *agent.Result) {
+		OnDoneFn: func(_ context.Context, taskID string, result *agent.Result) {
 			count++
 		},
 	})
 
 	// Invoke
-	m.OnDone("test", &agent.Result{TaskID: "test"})
+	m.OnDone(ctx, "test", &agent.Result{TaskID: "test"})
 
 	if count != 3 {
 		t.Errorf("Expected 3 callbacks to be invoked, got %d", count)
@@ -519,25 +526,26 @@ func TestCallbackManager_RegisterNil(t *testing.T) {
 
 func TestCallbackManager_PartialCallbacks(t *testing.T) {
 	m := NewCallbackManager()
+	ctx := context.Background()
 
 	var startCalled, doneCalled bool
 
 	// Register callbacks with only some handlers
 	m.Register(&EventCallbacks{
-		OnAgentStartFn: func(taskID string, task *beads.Task) {
+		OnAgentStartFn: func(_ context.Context, taskID string, task *beads.Task) {
 			startCalled = true
 		},
-		OnDoneFn: func(taskID string, result *agent.Result) {
+		OnDoneFn: func(_ context.Context, taskID string, result *agent.Result) {
 			doneCalled = true
 		},
 	})
 
 	// Invoke all types - none should panic
-	m.OnAgentStart("test", &beads.Task{ID: "test"})
-	m.OnOutput("test", "output", false)
-	m.OnLiveFeed("test", &agent.LiveFeedEvent{})
-	m.OnDone("test", &agent.Result{TaskID: "test"})
-	m.OnFail("test", &agent.Result{TaskID: "test"})
+	m.OnAgentStart(ctx, "test", &beads.Task{ID: "test"})
+	m.OnOutput(ctx, "test", "output", false)
+	m.OnLiveFeed(ctx, "test", &agent.LiveFeedEvent{})
+	m.OnDone(ctx, "test", &agent.Result{TaskID: "test"})
+	m.OnFail(ctx, "test", &agent.Result{TaskID: "test"})
 
 	if !startCalled {
 		t.Error("OnAgentStart callback not invoked")
@@ -549,33 +557,34 @@ func TestCallbackManager_PartialCallbacks(t *testing.T) {
 
 func TestCallbackManager_AllCallbackTypes(t *testing.T) {
 	m := NewCallbackManager()
+	ctx := context.Background()
 
 	var startCalled, outputCalled, liveFeedCalled, doneCalled, failCalled bool
 
 	m.Register(&EventCallbacks{
-		OnAgentStartFn: func(taskID string, task *beads.Task) {
+		OnAgentStartFn: func(_ context.Context, taskID string, task *beads.Task) {
 			startCalled = true
 		},
-		OnOutputFn: func(taskID string, output string, isError bool) {
+		OnOutputFn: func(_ context.Context, taskID string, output string, isError bool) {
 			outputCalled = true
 		},
-		OnLiveFeedFn: func(taskID string, event *agent.LiveFeedEvent) {
+		OnLiveFeedFn: func(_ context.Context, taskID string, event *agent.LiveFeedEvent) {
 			liveFeedCalled = true
 		},
-		OnDoneFn: func(taskID string, result *agent.Result) {
+		OnDoneFn: func(_ context.Context, taskID string, result *agent.Result) {
 			doneCalled = true
 		},
-		OnFailFn: func(taskID string, result *agent.Result) {
+		OnFailFn: func(_ context.Context, taskID string, result *agent.Result) {
 			failCalled = true
 		},
 	})
 
 	// Invoke each type
-	m.OnAgentStart("test", &beads.Task{ID: "test"})
-	m.OnOutput("test", "output", false)
-	m.OnLiveFeed("test", &agent.LiveFeedEvent{})
-	m.OnDone("test", &agent.Result{TaskID: "test"})
-	m.OnFail("test", &agent.Result{TaskID: "test"})
+	m.OnAgentStart(ctx, "test", &beads.Task{ID: "test"})
+	m.OnOutput(ctx, "test", "output", false)
+	m.OnLiveFeed(ctx, "test", &agent.LiveFeedEvent{})
+	m.OnDone(ctx, "test", &agent.Result{TaskID: "test"})
+	m.OnFail(ctx, "test", &agent.Result{TaskID: "test"})
 
 	if !startCalled {
 		t.Error("OnAgentStart callback not invoked")
@@ -606,7 +615,7 @@ func TestCallbackManager_ConcurrentRegistration(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			m.Register(&EventCallbacks{
-				OnDoneFn: func(taskID string, result *agent.Result) {},
+				OnDoneFn: func(_ context.Context, taskID string, result *agent.Result) {},
 			})
 		}()
 	}
@@ -625,12 +634,13 @@ func TestCallbackManager_ConcurrentRegistration(t *testing.T) {
 
 func TestCallbackManager_ConcurrentInvocation(t *testing.T) {
 	m := NewCallbackManager()
+	ctx := context.Background()
 
 	var counter int64
 
 	// Register a callback that increments counter
 	m.Register(&EventCallbacks{
-		OnAgentStartFn: func(taskID string, task *beads.Task) {
+		OnAgentStartFn: func(_ context.Context, taskID string, task *beads.Task) {
 			atomic.AddInt64(&counter, 1)
 		},
 	})
@@ -643,7 +653,7 @@ func TestCallbackManager_ConcurrentInvocation(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			m.OnAgentStart("test", &beads.Task{ID: "test"})
+			m.OnAgentStart(ctx, "test", &beads.Task{ID: "test"})
 		}(i)
 	}
 
@@ -656,6 +666,7 @@ func TestCallbackManager_ConcurrentInvocation(t *testing.T) {
 
 func TestCallbackManager_ConcurrentRegistrationAndInvocation(t *testing.T) {
 	m := NewCallbackManager()
+	ctx := context.Background()
 
 	var counter int64
 	var wg sync.WaitGroup
@@ -666,7 +677,7 @@ func TestCallbackManager_ConcurrentRegistrationAndInvocation(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 10; j++ {
-				m.OnOutput("test", "output", false)
+				m.OnOutput(ctx, "test", "output", false)
 			}
 		}()
 	}
@@ -677,7 +688,7 @@ func TestCallbackManager_ConcurrentRegistrationAndInvocation(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			m.Register(&EventCallbacks{
-				OnOutputFn: func(taskID string, output string, isError bool) {
+				OnOutputFn: func(_ context.Context, taskID string, output string, isError bool) {
 					atomic.AddInt64(&counter, 1)
 				},
 			})
@@ -694,36 +705,38 @@ func TestCallbackManager_ConcurrentRegistrationAndInvocation(t *testing.T) {
 func TestCallbackManager_ImplementsInterface(t *testing.T) {
 	// Compile-time check that CallbackManager implements scheduler.CallbackHandler
 	m := NewCallbackManager()
+	ctx := context.Background()
 
 	// These should all work without compile errors
-	m.OnAgentStart("test", &beads.Task{ID: "test"})
-	m.OnOutput("test", "output", false)
-	m.OnLiveFeed("test", &agent.LiveFeedEvent{})
-	m.OnDone("test", &agent.Result{TaskID: "test"})
-	m.OnFail("test", &agent.Result{TaskID: "test"})
+	m.OnAgentStart(ctx, "test", &beads.Task{ID: "test"})
+	m.OnOutput(ctx, "test", "output", false)
+	m.OnLiveFeed(ctx, "test", &agent.LiveFeedEvent{})
+	m.OnDone(ctx, "test", &agent.Result{TaskID: "test"})
+	m.OnFail(ctx, "test", &agent.Result{TaskID: "test"})
 }
 
 func TestCallbackManager_InternalAndUserCallbacks(t *testing.T) {
 	m := NewCallbackManager()
+	ctx := context.Background()
 
 	var internalCalled, userCalled bool
 
 	// Register internal callbacks (like orchestrator does)
 	m.Register(&EventCallbacks{
-		OnDoneFn: func(taskID string, result *agent.Result) {
+		OnDoneFn: func(_ context.Context, taskID string, result *agent.Result) {
 			internalCalled = true
 		},
 	})
 
 	// Register user callbacks
 	m.Register(&EventCallbacks{
-		OnDoneFn: func(taskID string, result *agent.Result) {
+		OnDoneFn: func(_ context.Context, taskID string, result *agent.Result) {
 			userCalled = true
 		},
 	})
 
 	// Invoke
-	m.OnDone("test", &agent.Result{TaskID: "test"})
+	m.OnDone(ctx, "test", &agent.Result{TaskID: "test"})
 
 	if !internalCalled {
 		t.Error("Internal callback should have been invoked")
@@ -735,11 +748,12 @@ func TestCallbackManager_InternalAndUserCallbacks(t *testing.T) {
 
 func TestCallbackManager_EmptyInvocation(t *testing.T) {
 	m := NewCallbackManager()
+	ctx := context.Background()
 
 	// Should not panic with no registered callbacks
-	m.OnAgentStart("test", &beads.Task{ID: "test"})
-	m.OnOutput("test", "output", false)
-	m.OnLiveFeed("test", &agent.LiveFeedEvent{})
-	m.OnDone("test", &agent.Result{TaskID: "test"})
-	m.OnFail("test", &agent.Result{TaskID: "test"})
+	m.OnAgentStart(ctx, "test", &beads.Task{ID: "test"})
+	m.OnOutput(ctx, "test", "output", false)
+	m.OnLiveFeed(ctx, "test", &agent.LiveFeedEvent{})
+	m.OnDone(ctx, "test", &agent.Result{TaskID: "test"})
+	m.OnFail(ctx, "test", &agent.Result{TaskID: "test"})
 }

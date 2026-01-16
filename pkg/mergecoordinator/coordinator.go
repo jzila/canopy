@@ -64,7 +64,7 @@ type MergeCoordinator struct {
 	taskCache sync.Map
 
 	// cleanupCallback is called after merge completes to cleanup overlay
-	cleanupCallback func(*agent.Result)
+	cleanupCallback func(ctx context.Context, result *agent.Result)
 }
 
 // New creates a new MergeCoordinator.
@@ -156,7 +156,7 @@ func (mc *MergeCoordinator) SetRunID(runID string) {
 }
 
 // SetCleanupCallback sets a callback to cleanup overlays after merge.
-func (mc *MergeCoordinator) SetCleanupCallback(callback func(*agent.Result)) {
+func (mc *MergeCoordinator) SetCleanupCallback(callback func(ctx context.Context, result *agent.Result)) {
 	mc.cleanupCallback = callback
 }
 
@@ -181,7 +181,7 @@ func (mc *MergeCoordinator) CacheTask(taskID string, task *beads.Task) {
 // EnqueueMerge adds a completed agent result to the merge queue.
 // This blocks until the merge completes and returns the merge response.
 // Returns nil if the queue is full or closed.
-func (mc *MergeCoordinator) EnqueueMerge(result *agent.Result) *mergequeue.MergeResponse {
+func (mc *MergeCoordinator) EnqueueMerge(ctx context.Context, result *agent.Result) *mergequeue.MergeResponse {
 	// Retrieve task from cache
 	var task *beads.Task
 	if cached, ok := mc.taskCache.Load(result.TaskID); ok {
@@ -189,9 +189,7 @@ func (mc *MergeCoordinator) EnqueueMerge(result *agent.Result) *mergequeue.Merge
 		mc.taskCache.Delete(result.TaskID) // Clean up cache
 	} else {
 		// Fallback: fetch from beads if not cached
-		// Note: Using context.Background() since this is called from a callback
-		// that doesn't have context propagated
-		if fetched, err := mc.beadsClient.Show(context.Background(), result.TaskID); err == nil {
+		if fetched, err := mc.beadsClient.Show(ctx, result.TaskID); err == nil {
 			task = fetched
 		}
 	}
@@ -203,7 +201,7 @@ func (mc *MergeCoordinator) EnqueueMerge(result *agent.Result) *mergequeue.Merge
 		if mc.config.Verbose {
 			fmt.Fprintf(os.Stderr, "warning: merge queue full for task %s\n", result.TaskID)
 		}
-		mc.cleanup(result)
+		mc.cleanup(ctx, result)
 		return nil
 	}
 
@@ -211,14 +209,14 @@ func (mc *MergeCoordinator) EnqueueMerge(result *agent.Result) *mergequeue.Merge
 	resp := <-req.Response
 
 	// Cleanup overlay after merge completes
-	mc.cleanup(result)
+	mc.cleanup(ctx, result)
 
 	return resp
 }
 
 // HandleFailure handles a failed task - cleans up and marks failed in beads.
 // Failed tasks don't need merge since there are no changes to merge.
-func (mc *MergeCoordinator) HandleFailure(taskID string, result *agent.Result, errMsg string) {
+func (mc *MergeCoordinator) HandleFailure(ctx context.Context, taskID string, result *agent.Result, errMsg string) {
 	// Get task title from cache before cleanup for IPC notification
 	var taskTitle string
 	if cached, ok := mc.taskCache.Load(taskID); ok {
@@ -230,12 +228,10 @@ func (mc *MergeCoordinator) HandleFailure(taskID string, result *agent.Result, e
 	mc.taskCache.Delete(taskID)
 
 	// Clean up overlay for failed task
-	mc.cleanup(result)
+	mc.cleanup(ctx, result)
 
 	// Mark task as failed in beads
-	// Note: Using context.Background() since this is called from a callback
-	// that doesn't have context propagated
-	if err := mc.beadsClient.Fail(context.Background(), taskID, errMsg); err != nil {
+	if err := mc.beadsClient.Fail(ctx, taskID, errMsg); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: failed to mark task %s as failed: %v\n", taskID, err)
 	}
 
@@ -258,9 +254,9 @@ func (mc *MergeCoordinator) sendTaskUpdated(taskID, title, status string) {
 }
 
 // cleanup runs the cleanup callback if set.
-func (mc *MergeCoordinator) cleanup(result *agent.Result) {
+func (mc *MergeCoordinator) cleanup(ctx context.Context, result *agent.Result) {
 	if mc.cleanupCallback != nil {
-		mc.cleanupCallback(result)
+		mc.cleanupCallback(ctx, result)
 	}
 }
 
