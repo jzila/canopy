@@ -243,6 +243,7 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 			FailedPatches:   failedPatches,
 			PatchErrors:     mergeResult.Errors,
 			FileChanges:     req.Result.Changes,
+			ParentAgentID:   p.makeAgentID(taskID),
 		}
 
 		// Spawn resolver agent asynchronously
