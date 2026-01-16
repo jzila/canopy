@@ -191,7 +191,8 @@ func (d *Daemon) restoreStateFromDB() error {
 	return nil
 }
 
-// loadTasksFromBeads loads pending tasks from the beads database into RuntimeState.
+// loadTasksFromBeads loads pending tasks from the beads database into RuntimeState
+// and persists them to the SQLite tasks table for the dashboard.
 func (d *Daemon) loadTasksFromBeads() error {
 	client, err := d.getActiveBeadsClient()
 	if err != nil {
@@ -213,8 +214,25 @@ func (d *Daemon) loadTasksFromBeads() error {
 		return nil
 	}
 
+	// Get persistence store for persisting tasks to SQLite
+	store := d.persistManager.GetStore()
+
 	for i := range tasks {
 		d.state.AddTaskWithRepo(&tasks[i], repoID)
+
+		// Persist to SQLite so the dashboard can display tasks
+		if store != nil {
+			pTask := &persistence.Task{
+				ID:       tasks[i].ID,
+				RepoID:   repoID,
+				Title:    tasks[i].Title,
+				Status:   tasks[i].Status,
+				Priority: tasks[i].Priority,
+			}
+			if err := store.UpsertTask(pTask); err != nil {
+				logging.Warn("failed to persist task to database", "task_id", tasks[i].ID, "error", err)
+			}
+		}
 	}
 
 	logging.Info("loaded pending tasks from beads database", "count", len(tasks))
