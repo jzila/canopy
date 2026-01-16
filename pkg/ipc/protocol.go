@@ -64,6 +64,8 @@ package ipc
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/jzila/canopy/pkg/types"
 )
 
 // Message size limits for DoS protection
@@ -148,16 +150,19 @@ type AgentCommitPayload struct {
 	FilesChanged []string `json:"files_changed"`  // List of files modified in this commit
 }
 
-// MergeStatus represents the current phase of merge processing
-type MergeStatus string
+// MergeStatus is an alias to types.MergeStatus for backwards compatibility.
+// New code should import types.MergeStatus directly.
+type MergeStatus = types.MergeStatus
 
+// MergeStatus constants - aliases to types package for backwards compatibility.
 const (
-	MergeStatusPending   MergeStatus = "pending"   // Waiting in queue for merge slot
-	MergeStatusAcquiring MergeStatus = "acquiring" // Attempting to acquire merge slot
-	MergeStatusMerging   MergeStatus = "merging"   // Applying patches/changes
-	MergeStatusResolving MergeStatus = "resolving" // Spawned resolver for conflicts
-	MergeStatusMerged    MergeStatus = "merged"    // Successfully merged
-	MergeStatusFailed    MergeStatus = "failed"    // Merge failed
+	MergeStatusNone      = types.MergeStatusNone
+	MergeStatusPending   = types.MergeStatusPending
+	MergeStatusAcquiring = types.MergeStatusAcquiring
+	MergeStatusMerging   = types.MergeStatusMerging
+	MergeStatusResolving = types.MergeStatusResolving
+	MergeStatusMerged    = types.MergeStatusMerged
+	MergeStatusFailed    = types.MergeStatusFailed
 )
 
 // AgentMergeStatusPayload is sent when an agent's merge status changes
@@ -171,34 +176,13 @@ type AgentMergeStatusPayload struct {
 	ResolverSpawned bool        `json:"resolver_spawned,omitempty"`  // Whether resolver was spawned
 }
 
-// AgentResult contains execution metrics for an agent
-type AgentResult struct {
-	ExitCode                int                     `json:"exit_code"`
-	DurationSeconds         float64                 `json:"duration_seconds"`
-	DurationMS              int64                   `json:"duration_ms,omitempty"`
-	DurationAPIMS           int64                   `json:"duration_api_ms,omitempty"`
-	NumTurns                int                     `json:"num_turns,omitempty"`
-	InputTokens             int                     `json:"input_tokens,omitempty"`
-	OutputTokens            int                     `json:"output_tokens,omitempty"`
-	CacheCreationInputToken int                     `json:"cache_creation_input_tokens,omitempty"`
-	CacheReadInputTokens    int                     `json:"cache_read_input_tokens,omitempty"`
-	CostUSD                 float64                 `json:"cost_usd,omitempty"`
-	FilesChanged            int                     `json:"files_changed"`
-	CommitsCreated          int                     `json:"commits_created,omitempty"`
-	ModelUsage              map[string]ModelUsage   `json:"model_usage,omitempty"`
-	ResultMessage           string                  `json:"result_message,omitempty"`
-	Stdout                  string                  `json:"stdout,omitempty"`
-	Stderr                  string                  `json:"stderr,omitempty"`
-}
+// AgentResult is an alias to types.AgentResult for backwards compatibility.
+// New code should import types.AgentResult directly.
+type AgentResult = types.AgentResult
 
-// ModelUsage represents per-model token usage and cost
-type ModelUsage struct {
-	InputTokens             int     `json:"input_tokens"`
-	OutputTokens            int     `json:"output_tokens"`
-	CacheReadInputTokens    int     `json:"cache_read_input_tokens"`
-	CacheCreationInputToken int     `json:"cache_creation_input_tokens"`
-	CostUSD                 float64 `json:"cost_usd"`
-}
+// ModelUsage is an alias to types.ModelUsage for backwards compatibility.
+// New code should import types.ModelUsage directly.
+type ModelUsage = types.ModelUsage
 
 // AgentDonePayload is sent when an agent completes successfully
 type AgentDonePayload struct {

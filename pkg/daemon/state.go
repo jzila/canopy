@@ -6,6 +6,7 @@ import (
 
 	"github.com/jzila/canopy/pkg/beads"
 	"github.com/jzila/canopy/pkg/metrics"
+	"github.com/jzila/canopy/pkg/types"
 )
 
 // AgentStatus represents the current state of an agent
@@ -366,37 +367,28 @@ func getInt64FromPayload(payload map[string]interface{}, key string) (int64, boo
 	}
 }
 
-// TokenUsage tracks token consumption and cost for an agent execution
-type TokenUsage struct {
-	InputTokens              int                       `json:"input_tokens"`
-	OutputTokens             int                       `json:"output_tokens"`
-	CacheCreationInputTokens int                       `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     int                       `json:"cache_read_input_tokens"`
-	TotalTokens              int                       `json:"total_tokens"`
-	CostUSD                  float64                   `json:"cost_usd"`
-	ModelUsage               map[string]ModelUsageData `json:"model_usage,omitempty"`
-}
+// TokenUsage is an alias to types.TokenUsage for backwards compatibility.
+// New code should import types.TokenUsage directly.
+type TokenUsage = types.TokenUsage
 
-// ModelUsageData represents per-model token usage and cost
-type ModelUsageData struct {
-	InputTokens              int     `json:"input_tokens"`
-	OutputTokens             int     `json:"output_tokens"`
-	CacheReadInputTokens     int     `json:"cache_read_input_tokens"`
-	CacheCreationInputTokens int     `json:"cache_creation_input_tokens"`
-	CostUSD                  float64 `json:"cost_usd"`
-}
+// ModelUsageData is an alias to types.ModelUsage for backwards compatibility.
+// Note: This was previously named ModelUsageData in daemon but ModelUsage in ipc.
+// The canonical name is now types.ModelUsage.
+type ModelUsageData = types.ModelUsage
 
-// MergeStatus represents the agent's merge queue status
-type MergeStatus string
+// MergeStatus is an alias to types.MergeStatus for backwards compatibility.
+// New code should import types.MergeStatus directly.
+type MergeStatus = types.MergeStatus
 
+// MergeStatus constants - aliases to types package for backwards compatibility.
 const (
-	MergeStatusNone      MergeStatus = ""          // Not yet in merge queue
-	MergeStatusPending   MergeStatus = "pending"   // Waiting in queue for merge slot
-	MergeStatusAcquiring MergeStatus = "acquiring" // Attempting to acquire merge slot
-	MergeStatusMerging   MergeStatus = "merging"   // Applying patches/changes
-	MergeStatusResolving MergeStatus = "resolving" // Spawned resolver for conflicts
-	MergeStatusMerged    MergeStatus = "merged"    // Successfully merged
-	MergeStatusFailed    MergeStatus = "failed"    // Merge failed
+	MergeStatusNone      = types.MergeStatusNone
+	MergeStatusPending   = types.MergeStatusPending
+	MergeStatusAcquiring = types.MergeStatusAcquiring
+	MergeStatusMerging   = types.MergeStatusMerging
+	MergeStatusResolving = types.MergeStatusResolving
+	MergeStatusMerged    = types.MergeStatusMerged
+	MergeStatusFailed    = types.MergeStatusFailed
 )
 
 // AgentState tracks the state of a single agent execution

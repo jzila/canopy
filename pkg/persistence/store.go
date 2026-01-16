@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jzila/canopy/pkg/types"
 	_ "modernc.org/sqlite"
 )
 
@@ -67,14 +68,18 @@ type Run struct {
 	DurationSeconds      float64 `json:"duration_seconds"`
 }
 
-// MergeStatus represents the final merge status of an agent's changes
-type MergeStatus string
+// MergeStatus is an alias to types.MergeStatus for backwards compatibility.
+// The persistence layer only uses a subset of MergeStatus values (None, Merged, Failed, Resolved)
+// but shares the same underlying type for consistency.
+type MergeStatus = types.MergeStatus
 
+// MergeStatus constants - aliases to types package for backwards compatibility.
+// Note: persistence only uses None, Merged, Failed, and Resolved (not queue states).
 const (
-	MergeStatusNone     MergeStatus = ""         // Not yet merged or no changes
-	MergeStatusMerged   MergeStatus = "merged"   // Successfully merged
-	MergeStatusFailed   MergeStatus = "failed"   // Merge failed
-	MergeStatusResolved MergeStatus = "resolved" // Merged after conflict resolution
+	MergeStatusNone     = types.MergeStatusNone
+	MergeStatusMerged   = types.MergeStatusMerged
+	MergeStatusFailed   = types.MergeStatusFailed
+	MergeStatusResolved = types.MergeStatusResolved
 )
 
 // Task represents a beads task persisted in the database
