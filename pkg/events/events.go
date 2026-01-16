@@ -3,8 +3,11 @@
 package events
 
 import (
+	"runtime/debug"
 	"sync"
 	"time"
+
+	"github.com/jzila/canopy/pkg/logging"
 )
 
 // EventType represents the type of event being sent over WebSocket
@@ -100,8 +103,11 @@ func (eb *EventBus) Publish(event Event) {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					// Handler panicked - log but continue to other handlers
-					// TODO: Consider logging framework integration
+					logging.Error("event handler panicked",
+						"event_type", event.Type,
+						"panic", r,
+						"stack", string(debug.Stack()),
+					)
 				}
 			}()
 			handler(event)
