@@ -18,7 +18,6 @@ import (
 	"github.com/jzila/canopy/pkg/ipc"
 	"github.com/jzila/canopy/pkg/orchestrator"
 	"github.com/jzila/canopy/pkg/repository"
-	sandboxpkg "github.com/jzila/canopy/pkg/sandbox"
 )
 
 var (
@@ -369,37 +368,6 @@ func sendAgentCommits(client *ipc.Client, agentID string, result *agent.Result, 
 
 	for _, commitHash := range result.GitState.NewCommits {
 		// Get detailed commit info
-		info, err := overlay.GetCommitInfo(commitHash)
-		if err != nil {
-			if verboseMode {
-				fmt.Fprintf(os.Stderr, "warning: failed to get commit info for %s: %v\n", commitHash, err)
-			}
-			continue
-		}
-
-		commit := &ipc.AgentCommitPayload{
-			Hash:         info.Hash,
-			ShortHash:    info.ShortHash,
-			Message:      info.Message,
-			Author:       info.Author,
-			AuthorEmail:  info.AuthorEmail,
-			Timestamp:    info.Timestamp,
-			FilesChanged: info.FilesChanged,
-		}
-
-		if err := client.SendAgentCommit(agentID, commit); err != nil && verboseMode {
-			fmt.Fprintf(os.Stderr, "warning: failed to send agent commit: %v\n", err)
-		}
-	}
-}
-
-// sendAgentCommitsFromOverlay sends commits using the overlay directly (for when result.Overlay is nil)
-func sendAgentCommitsFromOverlay(client *ipc.Client, agentID string, overlay *sandboxpkg.Overlay, gitState *sandboxpkg.GitState, verboseMode bool) {
-	if client == nil || overlay == nil || gitState == nil {
-		return
-	}
-
-	for _, commitHash := range gitState.NewCommits {
 		info, err := overlay.GetCommitInfo(commitHash)
 		if err != nil {
 			if verboseMode {
