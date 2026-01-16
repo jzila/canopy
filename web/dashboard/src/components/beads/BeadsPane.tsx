@@ -28,6 +28,12 @@ const STATUS_CONFIG: Record<string, { icon: React.ReactNode; bg: string; text: s
     text: 'text-gray-600 dark:text-gray-400',
     label: 'Ready',
   },
+  open: {
+    icon: <Circle className="w-3 h-3" />,
+    bg: 'bg-gray-100 dark:bg-gray-700',
+    text: 'text-gray-600 dark:text-gray-400',
+    label: 'Open',
+  },
   running: {
     icon: <Loader2 className="w-3 h-3 animate-spin" />,
     bg: 'bg-blue-100 dark:bg-blue-900/50',
@@ -147,7 +153,7 @@ const buildDependencyTree = (tasks: TaskState[]): TreeNode[] => {
         return a.task.priority - b.task.priority;
       }
       const statusOrder: Record<string, number> = {
-        running: 0, in_progress: 0, blocked: 1, ready: 2, failed: 3,
+        running: 0, in_progress: 0, blocked: 1, ready: 2, open: 2, failed: 3,
       };
       return (statusOrder[a.task.status.toLowerCase()] ?? 999) -
              (statusOrder[b.task.status.toLowerCase()] ?? 999);
@@ -160,7 +166,7 @@ const buildDependencyTree = (tasks: TaskState[]): TreeNode[] => {
   rootTasks.sort((a, b) => {
     if (a.priority !== b.priority) return a.priority - b.priority;
     const statusOrder: Record<string, number> = {
-      running: 0, in_progress: 0, blocked: 1, ready: 2, failed: 3,
+      running: 0, in_progress: 0, blocked: 1, ready: 2, open: 2, failed: 3,
     };
     return (statusOrder[a.status.toLowerCase()] ?? 999) -
            (statusOrder[b.status.toLowerCase()] ?? 999);
@@ -258,12 +264,13 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
         if (a.priority !== b.priority) {
           return a.priority - b.priority;
         }
-        // Then by status (running > blocked > ready > failed > done)
+        // Then by status (running > blocked > ready/open > failed > done)
         const statusOrder: Record<string, number> = {
           running: 0,
           in_progress: 0,
           blocked: 1,
           ready: 2,
+          open: 2,
           failed: 3,
           done: 4,
           completed: 4,
@@ -341,7 +348,7 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
         counts.running++;
       } else if (status === 'blocked') {
         counts.blocked++;
-      } else if (status === 'ready') {
+      } else if (status === 'ready' || status === 'open') {
         counts.ready++;
       } else if (status === 'failed') {
         counts.failed++;
