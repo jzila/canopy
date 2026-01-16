@@ -26,15 +26,24 @@ const (
 
 	// Default buffer size for client send channel
 	defaultClientSendBuffer = 256
+
+	// Timeout for blocking sends of critical events
+	criticalEventTimeout = 5 * time.Second
 )
+
+// broadcastMessage wraps serialized event data with its criticality
+type broadcastMessage struct {
+	data       []byte
+	isCritical bool
+}
 
 // Hub maintains the set of active clients and broadcasts messages to them
 type Hub struct {
 	// Registered clients
 	clients map[*Client]bool
 
-	// Inbound messages from clients (currently unused, but reserved for future client->server messages)
-	broadcast chan []byte
+	// Inbound messages from clients (carries both data and criticality flag)
+	broadcast chan broadcastMessage
 
 	// Register requests from clients
 	register chan *Client
@@ -49,8 +58,8 @@ type Hub struct {
 	unsubscribe func()
 
 	// Backpressure metrics
-	droppedBroadcastEvents int64
-	droppedClientMessages  int64
+	droppedBroadcastEvents  int64
+	droppedClientMessages   int64
 	disconnectedSlowClients int64
 }
 
@@ -70,7 +79,7 @@ type Client struct {
 func NewHub(eventBus *EventBus) *Hub {
 	return &Hub{
 		clients:    make(map[*Client]bool),
-		broadcast:  make(chan []byte, defaultHubBroadcastBuffer),
+		broadcast:  make(chan broadcastMessage, defaultHubBroadcastBuffer),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 		eventBus:   eventBus,
@@ -88,15 +97,37 @@ func (h *Hub) Run() {
 			logging.Error("error marshaling event", "error", err, "event_type", event.Type)
 			return
 		}
-		// Send to broadcast channel (non-blocking)
-		select {
-		case h.broadcast <- data:
-		default:
-			// Drop event if broadcast channel is full
-			h.droppedBroadcastEvents++
-			logging.Warn("dropped event due to full broadcast channel",
-				"event_type", event.Type,
-				"total_dropped", h.droppedBroadcastEvents)
+
+		msg := broadcastMessage{
+			data:       data,
+			isCritical: event.Type.IsCritical(),
+		}
+
+		// Critical events use a blocking send with timeout to guarantee delivery
+		// Non-critical events use non-blocking send and may be dropped under backpressure
+		if msg.isCritical {
+			select {
+			case h.broadcast <- msg:
+				// Successfully queued
+			case <-time.After(criticalEventTimeout):
+				// Even critical events can timeout to prevent complete system deadlock
+				h.droppedBroadcastEvents++
+				logging.Error("CRITICAL: dropped critical event due to broadcast channel timeout",
+					"event_type", event.Type,
+					"timeout", criticalEventTimeout,
+					"total_dropped", h.droppedBroadcastEvents)
+			}
+		} else {
+			select {
+			case h.broadcast <- msg:
+				// Successfully queued
+			default:
+				// Drop non-critical event if broadcast channel is full
+				h.droppedBroadcastEvents++
+				logging.Warn("dropped event due to full broadcast channel",
+					"event_type", event.Type,
+					"total_dropped", h.droppedBroadcastEvents)
+			}
 		}
 	})
 
@@ -112,21 +143,48 @@ func (h *Hub) Run() {
 				close(client.send)
 			}
 
-		case message := <-h.broadcast:
+		case msg := <-h.broadcast:
 			// Broadcast to all connected clients
-			for client := range h.clients {
-				select {
-				case client.send <- message:
-				default:
-					// Client's send buffer is full, close the connection
-					h.droppedClientMessages++
-					h.disconnectedSlowClients++
-					logging.Warn("disconnecting slow client due to full send buffer",
-						"dropped_messages", h.droppedClientMessages,
-						"disconnected_clients", h.disconnectedSlowClients)
-					close(client.send)
-					delete(h.clients, client)
-				}
+			h.broadcastToClients(msg)
+		}
+	}
+}
+
+// broadcastToClients sends a message to all connected clients.
+// For critical events, it uses a blocking send with timeout.
+// For non-critical events, slow clients are disconnected.
+func (h *Hub) broadcastToClients(msg broadcastMessage) {
+	for client := range h.clients {
+		if msg.isCritical {
+			// Critical events: use blocking send with timeout
+			select {
+			case client.send <- msg.data:
+				// Successfully sent
+			case <-time.After(criticalEventTimeout):
+				// Client is too slow even for critical events - disconnect
+				h.droppedClientMessages++
+				h.disconnectedSlowClients++
+				logging.Error("disconnecting client: failed to deliver critical event within timeout",
+					"timeout", criticalEventTimeout,
+					"dropped_messages", h.droppedClientMessages,
+					"disconnected_clients", h.disconnectedSlowClients)
+				close(client.send)
+				delete(h.clients, client)
+			}
+		} else {
+			// Non-critical events: non-blocking send, drop if buffer full
+			select {
+			case client.send <- msg.data:
+				// Successfully sent
+			default:
+				// Client's send buffer is full, disconnect
+				h.droppedClientMessages++
+				h.disconnectedSlowClients++
+				logging.Warn("disconnecting slow client due to full send buffer",
+					"dropped_messages", h.droppedClientMessages,
+					"disconnected_clients", h.disconnectedSlowClients)
+				close(client.send)
+				delete(h.clients, client)
 			}
 		}
 	}

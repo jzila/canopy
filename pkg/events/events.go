@@ -30,6 +30,21 @@ const (
 	EventStatsUpdated     EventType = "stats:updated"
 )
 
+// IsCritical returns true if this event type must never be dropped.
+// Critical events represent state transitions that cannot be reconstructed
+// from subsequent events (e.g., agent lifecycle, run lifecycle).
+func (et EventType) IsCritical() bool {
+	switch et {
+	case EventRunStarted, EventRunCompleted,
+		EventAgentStarted, EventAgentCompleted,
+		EventOrchPaused, EventOrchResumed,
+		EventTaskUpdated:
+		return true
+	default:
+		return false
+	}
+}
+
 // Event represents a WebSocket event sent to browser clients
 type Event struct {
 	Type      EventType   `json:"type"`
