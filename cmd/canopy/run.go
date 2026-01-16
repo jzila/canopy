@@ -310,7 +310,7 @@ func convertToIPCResult(result *agent.Result) *ipc.AgentResult {
 	if result.Output != nil {
 		ipcResult.InputTokens = result.Output.TotalInputTokens
 		ipcResult.OutputTokens = result.Output.TotalOutputTokens
-		ipcResult.CacheCreationInputToken = result.Output.CacheCreationInputTokens
+		ipcResult.CacheCreationInputTokens = result.Output.CacheCreationInputTokens
 		ipcResult.CacheReadInputTokens = result.Output.CacheReadInputTokens
 		ipcResult.CostUSD = result.Output.CostUSD
 		ipcResult.DurationMS = result.Output.DurationMS
@@ -323,11 +323,11 @@ func convertToIPCResult(result *agent.Result) *ipc.AgentResult {
 			ipcResult.ModelUsage = make(map[string]ipc.ModelUsage)
 			for model, usage := range result.Output.ModelUsage {
 				ipcResult.ModelUsage[model] = ipc.ModelUsage{
-					InputTokens:             usage.InputTokens,
-					OutputTokens:            usage.OutputTokens,
-					CacheReadInputTokens:    usage.CacheReadInputTokens,
-					CacheCreationInputToken: usage.CacheCreationInputTokens,
-					CostUSD:                 usage.CostUSD,
+					InputTokens:              usage.InputTokens,
+					OutputTokens:             usage.OutputTokens,
+					CacheReadInputTokens:     usage.CacheReadInputTokens,
+					CacheCreationInputTokens: usage.CacheCreationInputTokens,
+					CostUSD:                  usage.CostUSD,
 				}
 			}
 		}
