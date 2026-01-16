@@ -43,6 +43,7 @@ func TestCleanupAll(t *testing.T) {
 			TempDir: filepath.Join(tempDir, "overlays"),
 			WorkDir: workDir,
 		},
+		activeOverlays: make(map[string]*sandbox.Overlay),
 	}
 
 	// Manually create and register overlays (simulating task execution)
@@ -58,7 +59,9 @@ func TestCleanupAll(t *testing.T) {
 		}
 
 		taskID := "test-task-" + string(rune('a'+i))
-		sched.activeOverlays.Store(taskID, overlay)
+		sched.overlaysMu.Lock()
+		sched.activeOverlays[taskID] = overlay
+		sched.overlaysMu.Unlock()
 		overlays[i] = overlay
 	}
 
@@ -88,11 +91,9 @@ func TestCleanupAll(t *testing.T) {
 
 	// Verify activeOverlays map is still tracked (CleanupAll doesn't remove from map)
 	// The normal deferred Delete() in executeTask handles that
-	activeCount := 0
-	sched.activeOverlays.Range(func(key, value interface{}) bool {
-		activeCount++
-		return true
-	})
+	sched.overlaysMu.RLock()
+	activeCount := len(sched.activeOverlays)
+	sched.overlaysMu.RUnlock()
 
 	if activeCount != 3 {
 		t.Errorf("Expected activeOverlays to still have 3 entries, got %d", activeCount)
@@ -101,7 +102,9 @@ func TestCleanupAll(t *testing.T) {
 
 // TestCleanupAllEmpty verifies that CleanupAll works with no active overlays
 func TestCleanupAllEmpty(t *testing.T) {
-	sched := &Scheduler{}
+	sched := &Scheduler{
+		activeOverlays: make(map[string]*sandbox.Overlay),
+	}
 	count, err := sched.CleanupAll(1 * time.Second)
 	if err != nil {
 		t.Errorf("CleanupAll should not fail with empty map: %v", err)

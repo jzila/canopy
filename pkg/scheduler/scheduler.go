@@ -34,19 +34,23 @@ type Scheduler struct {
 	beadsClient beads.BeadsClient
 	executor    *agent.Executor
 	config      *Config
-	results     sync.Map // map[string]*agent.Result
 	callbacks   CallbackHandler
 
-	// Pause/resume support
-	pauseMu sync.Mutex
-	pauseCond *sync.Cond
-	paused  bool
+	// Results storage - uses RWMutex because AllResults() requires iteration
+	resultsMu sync.RWMutex
+	results   map[string]*agent.Result
 
-	// Per-agent kill support
+	// Pause/resume support
+	pauseMu   sync.Mutex
+	pauseCond *sync.Cond
+	paused    bool
+
+	// Per-agent kill support - sync.Map appropriate for store-then-delete pattern
 	agentContexts sync.Map // map[string]context.CancelFunc
 
-	// Active overlay tracking for signal cleanup
-	activeOverlays sync.Map // map[string]*sandbox.Overlay
+	// Active overlay tracking - uses RWMutex because CleanupAll() requires iteration
+	overlaysMu     sync.RWMutex
+	activeOverlays map[string]*sandbox.Overlay
 }
 
 // Config holds scheduler configuration
@@ -68,10 +72,12 @@ func NewScheduler(beadsClient beads.BeadsClient, executor *agent.Executor, confi
 	}
 
 	s := &Scheduler{
-		beadsClient: beadsClient,
-		executor:    executor,
-		config:      config,
-		callbacks:   nil, // Set via SetCallbacks
+		beadsClient:    beadsClient,
+		executor:       executor,
+		config:         config,
+		callbacks:      nil, // Set via SetCallbacks
+		results:        make(map[string]*agent.Result),
+		activeOverlays: make(map[string]*sandbox.Overlay),
 	}
 	s.pauseCond = sync.NewCond(&s.pauseMu)
 	return s
@@ -135,8 +141,11 @@ func (s *Scheduler) ExecuteBatch(ctx context.Context, tasks []beads.Task) ([]*ag
 			// Store result
 			mu.Lock()
 			results = append(results, result)
-			s.results.Store(task.ID, result)
 			mu.Unlock()
+
+			s.resultsMu.Lock()
+			s.results[task.ID] = result
+			s.resultsMu.Unlock()
 
 			// Invoke completion callbacks
 			if s.callbacks != nil {
@@ -218,10 +227,14 @@ func (s *Scheduler) executeTask(ctx context.Context, task *beads.Task) *agent.Re
 	}
 
 	// Register overlay in active list for signal cleanup
-	s.activeOverlays.Store(task.ID, overlay)
+	s.overlaysMu.Lock()
+	s.activeOverlays[task.ID] = overlay
+	s.overlaysMu.Unlock()
 	metrics.IncOverlayMounts()
 	defer func() {
-		s.activeOverlays.Delete(task.ID)
+		s.overlaysMu.Lock()
+		delete(s.activeOverlays, task.ID)
+		s.overlaysMu.Unlock()
 		metrics.DecOverlayMounts()
 	}()
 
@@ -348,19 +361,19 @@ func (s *Scheduler) gatherDependencyContext(ctx context.Context, task *beads.Tas
 
 // GetResult returns the result for a specific task
 func (s *Scheduler) GetResult(taskID string) *agent.Result {
-	if result, ok := s.results.Load(taskID); ok {
-		return result.(*agent.Result)
-	}
-	return nil
+	s.resultsMu.RLock()
+	defer s.resultsMu.RUnlock()
+	return s.results[taskID]
 }
 
 // AllResults returns all stored results
 func (s *Scheduler) AllResults() map[string]*agent.Result {
-	results := make(map[string]*agent.Result)
-	s.results.Range(func(key, value interface{}) bool {
-		results[key.(string)] = value.(*agent.Result)
-		return true
-	})
+	s.resultsMu.RLock()
+	defer s.resultsMu.RUnlock()
+	results := make(map[string]*agent.Result, len(s.results))
+	for k, v := range s.results {
+		results[k] = v
+	}
 	return results
 }
 
@@ -404,15 +417,23 @@ func (s *Scheduler) CleanupAll(timeout time.Duration) (int, error) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var errors []error
-	count := 0
 
 	// Create a channel to signal completion
 	done := make(chan struct{})
 
+	// Take a snapshot of active overlays under lock
+	s.overlaysMu.RLock()
+	overlays := make(map[string]*sandbox.Overlay, len(s.activeOverlays))
+	for k, v := range s.activeOverlays {
+		overlays[k] = v
+	}
+	s.overlaysMu.RUnlock()
+
+	count := len(overlays)
+
 	go func() {
-		s.activeOverlays.Range(func(key, value interface{}) bool {
+		for taskID, overlay := range overlays {
 			wg.Add(1)
-			count++
 
 			go func(taskID string, overlay *sandbox.Overlay) {
 				defer wg.Done()
@@ -430,10 +451,8 @@ func (s *Scheduler) CleanupAll(timeout time.Duration) (int, error) {
 					errors = append(errors, fmt.Errorf("task %s cleanup: %w", taskID, err))
 					mu.Unlock()
 				}
-			}(key.(string), value.(*sandbox.Overlay))
-
-			return true
-		})
+			}(taskID, overlay)
+		}
 
 		wg.Wait()
 		close(done)

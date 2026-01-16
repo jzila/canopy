@@ -272,7 +272,8 @@ type MergeCoordinator struct {
     resolver    *resolver.Resolver     // Conflict handler
     beadsClient beads.BeadsClient
     ipcClient   *ipc.Client
-    agentIDMap  sync.Map               // taskID → agentID
+    agentIDMap  sync.Map               // taskID → agentID (write-once, disjoint keys)
+    taskCache   sync.Map               // taskID → *beads.Task (store-then-delete)
 }
 ```
 
@@ -564,6 +565,9 @@ max_processes = 100
 |-----------|---------|----------|
 | `RuntimeState` | `sync.Map` | High-read agent/task state |
 | `MergeQueue` | `atomic.Bool` + `sync.Cond` | Pauseable queue |
+| `Scheduler.results` | `sync.RWMutex` | Iteration via AllResults() |
+| `Scheduler.activeOverlays` | `sync.RWMutex` | Iteration via CleanupAll() |
+| `Scheduler.agentContexts` | `sync.Map` | Store-then-delete pattern |
 | `Scheduler` | `errgroup` + `semaphore` | Bounded parallelism |
 | `IPC Client` | `sync.Mutex` + queue | Reconnection buffering |
 
