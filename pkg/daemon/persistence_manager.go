@@ -169,10 +169,10 @@ func (m *PersistenceManager) RestoreState() (*RestoredState, error) {
 		logging.Debug("no previous runs found in database")
 	}
 
-	// Load non-archived agents
-	agents, err := m.store.GetAllNonArchivedAgents()
+	// Load all agents (including archived) so they can be displayed and un-archived
+	agents, err := m.store.GetAllAgents()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get non-archived agents: %w", err)
+		return nil, fmt.Errorf("failed to get agents: %w", err)
 	}
 	state.Agents = agents
 
@@ -212,9 +212,10 @@ func ConvertPersistenceAgentToState(pAgent *persistence.Agent) *AgentState {
 			TotalTokens:  pAgent.TotalTokens,
 			CostUSD:      pAgent.CostUSD,
 		},
-		Changes: pAgent.FilesChanged,
-		Commits: pAgent.GitCommitsCreated,
-		Error:   pAgent.ErrorMessage,
+		Changes:  pAgent.FilesChanged,
+		Commits:  pAgent.GitCommitsCreated,
+		Error:    pAgent.ErrorMessage,
+		Archived: pAgent.Archived,
 	}
 
 	if pAgent.FinishedAt != nil {
