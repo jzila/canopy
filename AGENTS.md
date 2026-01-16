@@ -152,28 +152,27 @@ activeCount atomic.Int64
 
 ## API Conventions (Go ↔ TypeScript)
 
-**JSON field names MUST use camelCase** to match TypeScript conventions.
+**JSON field names use snake_case** throughout the codebase.
 
 When defining API types that cross the Go/TypeScript boundary:
 
-1. **Go struct tags**: Use camelCase in `json:"..."` tags
+1. **Go struct tags**: Use snake_case in `json:"..."` tags
    ```go
-   type MergeItem struct {
-       TaskID   string `json:"taskId"`   // ✓ camelCase
-       AgentID  string `json:"agentId"`  // ✓ camelCase
+   type AgentState struct {
+       TaskID    string `json:"task_id"`    // ✓ snake_case
+       StartTime string `json:"start_time"` // ✓ snake_case
    }
-   // NOT: `json:"task_id"` - snake_case breaks TypeScript
    ```
 
-2. **TypeScript interfaces**: Use camelCase property names
+2. **TypeScript interfaces**: Use snake_case property names to match Go
    ```ts
-   interface MergeItem {
-       taskId: string;   // ✓ matches Go JSON tag
-       agentId: string;  // ✓ matches Go JSON tag
+   interface AgentState {
+       task_id: string;    // ✓ matches Go JSON tag
+       start_time: string; // ✓ matches Go JSON tag
    }
    ```
 
-3. **When adding new API types**: Define Go struct first with camelCase JSON tags, then mirror exactly in TypeScript. Both sides must match character-for-character.
+3. **When adding new API types**: Define Go struct first with snake_case JSON tags, then mirror exactly in TypeScript. Both sides must match character-for-character.
 
 4. **Rebuild dashboard after API changes**: Run `cd web/dashboard && npm run build` to catch TypeScript errors early.
 
