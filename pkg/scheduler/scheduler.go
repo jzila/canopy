@@ -68,7 +68,13 @@ func NewScheduler(beadsClient beads.BeadsClient, executor *agent.Executor, confi
 		config.Concurrency = 4
 	}
 	if config.TempDir == "" {
-		config.TempDir = filepath.Join(os.TempDir(), "canopy")
+		// Use XDG cache directory per persistence invariant
+		// Fallback to os.TempDir() only if home directory lookup fails
+		overlayDir, err := sandbox.GetOverlayBaseDir()
+		if err != nil {
+			overlayDir = filepath.Join(os.TempDir(), "canopy")
+		}
+		config.TempDir = overlayDir
 	}
 
 	s := &Scheduler{

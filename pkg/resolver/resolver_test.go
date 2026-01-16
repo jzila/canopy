@@ -78,9 +78,9 @@ func TestResultResolverAgentID(t *testing.T) {
 
 func TestNewResolver(t *testing.T) {
 	config := &Config{
-		WorkDir: "/tmp/test",
-		TempDir: "/tmp/canopy",
-		Verbose: true,
+		WorkDir:  t.TempDir(),
+		TempDir:  t.TempDir(),
+		Verbose:  true,
 		UseBwrap: false,
 	}
 

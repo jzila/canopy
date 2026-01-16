@@ -170,16 +170,16 @@ The daemon is automatically started if not running. The run command requires dae
 Each agent operates in a copy-on-write filesystem:
 
 ```
-┌────────────────────────────────────────────────┐
-│          MergedDir (Agent's View)              │
-│  /tmp/canopy-overlay-{id}/merged               │
-├────────────────────────────────────────────────┤
-│          UpperDir (Agent's Changes)            │
-│  /tmp/canopy-overlay-{id}/upper                │
-├────────────────────────────────────────────────┤
-│          LowerDir (Original Repo)              │
-│  /home/user/project (read-only)                │
-└────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                MergedDir (Agent's View)                      │
+│  ~/.cache/canopy/overlays/{id}/merged                        │
+├──────────────────────────────────────────────────────────────┤
+│                UpperDir (Agent's Changes)                    │
+│  ~/.cache/canopy/overlays/{id}/upper                         │
+├──────────────────────────────────────────────────────────────┤
+│                LowerDir (Original Repo)                      │
+│  /home/user/project (read-only)                              │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 Agents cannot see each other's changes until merge.
@@ -261,14 +261,15 @@ canopy daemon logs -f
 
 ## Persistence
 
-All state lives in `~/.cache/canopy/`:
+All state lives in `~/.cache/canopy/` (or `$XDG_CACHE_HOME/canopy/`):
 
 ```
 ~/.cache/canopy/
 ├── runs.db           # SQLite database for run history
 ├── repositories.json # Repository identity registry
 ├── daemon.log        # Daemon log file
-└── history/          # JSON run records (backup)
+├── history/          # JSON run records (backup)
+└── overlays/         # Temporary overlay mounts (auto-cleaned)
 ```
 
 ## Documentation

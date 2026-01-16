@@ -117,7 +117,12 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 
 	// Clean up any stale mounts from previous crashes before starting
 	// This prevents "permission denied" errors from orphaned FUSE mounts
-	tempDir := filepath.Join(os.TempDir(), "canopy")
+	// Use XDG cache directory per persistence invariant
+	tempDir, err := sandbox.GetOverlayBaseDir()
+	if err != nil {
+		// Fallback to os.TempDir() if home directory lookup fails
+		tempDir = filepath.Join(os.TempDir(), "canopy")
+	}
 	if cleaned, stale, errs := sandbox.RecoverFromCrash(tempDir); stale > 0 {
 		if verbose {
 			fmt.Fprintf(os.Stderr, "Recovered %d/%d stale overlay mounts from previous run\n", cleaned, stale)

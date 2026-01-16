@@ -35,17 +35,21 @@ Canopy orchestrates multiple Claude Code agents running in parallel, each operat
 Each agent operates in a copy-on-write filesystem:
 
 ```
-┌────────────────────────────────────────────────────┐
-│                  MergedDir (Agent View)            │
-│  /tmp/canopy-overlay-{id}/merged                   │
-├────────────────────────────────────────────────────┤
-│           UpperDir (Agent's Changes)               │
-│  /tmp/canopy-overlay-{id}/upper                    │
-├────────────────────────────────────────────────────┤
-│           LowerDir (Original Repo - Read Only)     │
-│  /home/user/project                                │
-└────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                  MergedDir (Agent View)                      │
+│  ~/.cache/canopy/overlays/{id}/merged                        │
+├──────────────────────────────────────────────────────────────┤
+│           UpperDir (Agent's Changes)                         │
+│  ~/.cache/canopy/overlays/{id}/upper                         │
+├──────────────────────────────────────────────────────────────┤
+│           LowerDir (Original Repo - Read Only)               │
+│  /home/user/project                                          │
+└──────────────────────────────────────────────────────────────┘
 ```
+
+Overlay directories are stored under `$XDG_CACHE_HOME/canopy/overlays/`
+(defaulting to `~/.cache/canopy/overlays/`) per the persistence invariant
+that all canopy state lives in the XDG cache directory.
 
 **Implementation:** `pkg/sandbox/overlay.go`, `pkg/sandbox/overlay_linux.go`
 
@@ -607,8 +611,8 @@ bwrap \
     --rlimit nproc=100 \        # 100 processes
     --rlimit nofile=1024 \      # 1024 file descriptors
 
-    # Workspace (from overlay)
-    --bind /tmp/canopy-xxx/merged /workspace \
+    # Workspace (from overlay at ~/.cache/canopy/overlays/)
+    --bind ~/.cache/canopy/overlays/xxx/merged /workspace \
     --chdir /workspace \
 
     # System paths (read-only)
