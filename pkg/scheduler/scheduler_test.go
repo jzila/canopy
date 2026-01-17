@@ -309,6 +309,9 @@ func TestConcurrentPauseResume(t *testing.T) {
 	// Let it run for a bit
 	time.Sleep(500 * time.Millisecond)
 	cancel()
+	// Resume after cancel to wake up any goroutines stuck in pauseCond.Wait()
+	// This is necessary because sync.Cond.Wait() doesn't respect context cancellation
+	sched.Resume()
 	wg.Wait()
 
 	// Should have executed some tasks (exact number varies due to timing)
