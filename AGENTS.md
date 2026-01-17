@@ -17,7 +17,20 @@ Use plain `git` commands—the working directory is already set, so `-C` is unne
 - Format: `type: concise description` (feat, fix, refactor, test, docs, chore)
 - Reference bead ID when relevant: `fix(canopy-abc): description`
 - Run `go test ./...` before committing code changes
-- Run `go build ./...` to verify compilation
+- Run `go build ./...` to verify compilation (enforced by pre-commit hook)
+
+## Git Hooks
+
+The pre-commit hook (`scripts/hooks/pre-commit`) enforces:
+1. **Go build check**: Runs `go build ./...` when `.go` files are staged
+2. **Beads sync**: Flushes pending beads changes to JSONL
+
+Install hooks after cloning:
+```bash
+cp scripts/hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+```
+
+Or use devenv which automatically installs hooks on shell entry.
 
 ## Error Handling Guidelines
 

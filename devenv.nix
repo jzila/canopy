@@ -52,7 +52,14 @@
   '';
 
   # https://devenv.sh/git-hooks/
-  # git-hooks.hooks.shellcheck.enable = true;
+  git-hooks.hooks.go-build = {
+    enable = true;
+    name = "go build";
+    description = "Verify Go code compiles";
+    entry = "go build ./...";
+    pass_filenames = false;
+    files = "\\.go$";
+  };
 
   # See full reference at https://devenv.sh/reference/options/
 }
