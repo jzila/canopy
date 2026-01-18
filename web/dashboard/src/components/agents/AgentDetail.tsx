@@ -114,14 +114,14 @@ const MergeStatusBadge: React.FC<{ status: MergeStatus; queuePos?: number; error
   queuePos,
   error,
 }) => {
-  const statusConfig: Record<MergeStatus, { color: string; label: string }> = {
-    pending: { color: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300', label: 'Pending' },
-    acquiring: { color: 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300', label: 'Acquiring Lock' },
-    merging: { color: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300', label: 'Merging' },
-    resolving: { color: 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300', label: 'Resolving Conflicts' },
-    merged: { color: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300', label: 'Merged' },
-    failed: { color: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300', label: 'Merge Failed' },
-    skipped: { color: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300', label: 'No Changes' },
+  const statusConfig: Record<MergeStatus, { color: string; label: string; icon: React.ReactNode }> = {
+    pending: { color: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300', label: 'Pending', icon: <GitMerge className="w-4 h-4" /> },
+    acquiring: { color: 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300', label: 'Acquiring Lock', icon: <GitMerge className="w-4 h-4" /> },
+    merging: { color: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300', label: 'Merging', icon: <GitMerge className="w-4 h-4" /> },
+    resolving: { color: 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300', label: 'Resolving Conflicts', icon: <GitMerge className="w-4 h-4" /> },
+    merged: { color: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300', label: 'Merged', icon: <GitMerge className="w-4 h-4" /> },
+    failed: { color: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300', label: 'Merge Failed', icon: <GitMerge className="w-4 h-4" /> },
+    skipped: { color: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300', label: 'No Changes Needed', icon: <CheckCircle2 className="w-4 h-4" /> },
   };
 
   const config = statusConfig[status];
@@ -129,13 +129,14 @@ const MergeStatusBadge: React.FC<{ status: MergeStatus; queuePos?: number; error
   return (
     <div className="space-y-1">
       <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-sm font-medium ${config.color}`}>
-        <GitMerge className="w-4 h-4" />
+        {config.icon}
         {config.label}
         {queuePos !== undefined && queuePos > 0 && ` (Queue: #${queuePos})`}
       </span>
       {error && (
-        <div className={`text-xs flex items-start gap-1 mt-1 ${isSkipped ? 'text-gray-500 dark:text-gray-400' : 'text-red-600 dark:text-red-400'}`}>
+        <div className={`text-xs flex items-start gap-1 mt-1 ${isSkipped ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
           {!isSkipped && <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />}
+          {isSkipped && <CheckCircle2 className="w-3 h-3 mt-0.5 flex-shrink-0" />}
           <span>{error}</span>
         </div>
       )}

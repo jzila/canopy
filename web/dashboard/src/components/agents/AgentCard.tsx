@@ -246,6 +246,11 @@ export const AgentCard: React.FC<AgentCardProps> = ({
               <span className="tracking-wide">Merged</span>
               {agent.merge_commits_applied ? <span className="tabular-nums">({agent.merge_commits_applied})</span> : null}
             </div>
+          ) : agent.merge_status === 'skipped' ? (
+            <div className="flex items-center gap-1.5 text-green-600 dark:text-green-400" title={agent.merge_error || 'Work already done - no changes needed'}>
+              <GitMerge className="w-3.5 h-3.5" />
+              <span className="tracking-wide">No Changes</span>
+            </div>
           ) : agent.merge_status === 'failed' ? (
             <div className="flex items-center gap-1.5 text-red-600 dark:text-red-400" title={agent.merge_error || 'Merge failed'}>
               <GitMerge className="w-3.5 h-3.5" />
