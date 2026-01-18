@@ -291,7 +291,12 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 		// Handle result events specially
 		if eventType.Type == "result" {
 			var result ClaudeStreamResult
-			if err := json.Unmarshal(line, &result); err == nil {
+			if err := json.Unmarshal(line, &result); err != nil {
+				// Log parse errors - these indicate a mismatch between expected and actual format
+				if e.config.Verbose {
+					fmt.Fprintf(os.Stderr, "warning: failed to parse result event: %v\n", err)
+				}
+			} else {
 				finalResult = &result
 			}
 			continue
@@ -325,6 +330,14 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 	}
 
 	// Convert stream result to ClaudeOutput
+	// Note: finalResult will be nil if:
+	// - Agent was killed/timed out before emitting result event
+	// - Claude CLI crashed or exited abnormally
+	// - JSON parsing of the result event failed
+	// In these cases, token/cost metrics will be zero.
+	if finalResult == nil && e.config.Verbose {
+		fmt.Fprintf(os.Stderr, "warning: no result event received from claude CLI, token/cost metrics will be zero\n")
+	}
 	if finalResult != nil {
 		result.Output = &ClaudeOutput{
 			SessionID:                finalResult.SessionID,
