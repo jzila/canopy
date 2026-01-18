@@ -459,6 +459,83 @@ func TestRestoreStateFromDB_CompletedRun(t *testing.T) {
 	store.Close()
 }
 
+// TestRestoreStateFromDB_WithStdoutStderr verifies stdout/stderr are restored from database
+func TestRestoreStateFromDB_WithStdoutStderr(t *testing.T) {
+	// Create temp directory for test database
+	tmpDir, err := os.MkdirTemp("", "canopy-daemon-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	dbPath := filepath.Join(tmpDir, "test.db")
+	store, err := persistence.NewStoreWithPath(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+
+	// Create a completed run with agents that have stdout/stderr
+	now := time.Now()
+	run := &persistence.Run{
+		ID:        "run-with-logs",
+		StartedAt: now.Add(-time.Hour),
+		Status:    persistence.RunStatusCompleted,
+	}
+	if err := store.CreateRun(run); err != nil {
+		t.Fatalf("failed to create run: %v", err)
+	}
+
+	// Create agent with stdout/stderr
+	agent := &persistence.Agent{
+		ID:        "agent-with-logs",
+		RunID:     "run-with-logs",
+		TaskID:    "task-1",
+		TaskTitle: "Task with logs",
+		Status:    persistence.AgentStatusCompleted,
+		StartedAt: now.Add(-50 * time.Minute),
+		Stdout:    "This is stdout output from the agent",
+		Stderr:    "This is stderr output from the agent",
+	}
+	if err := store.CreateAgent(agent); err != nil {
+		t.Fatalf("failed to create agent: %v", err)
+	}
+
+	store.Close()
+
+	// Reopen store and create daemon to simulate restart
+	store2, err := persistence.NewStoreWithPath(dbPath)
+	if err != nil {
+		t.Fatalf("failed to reopen store: %v", err)
+	}
+
+	daemon := newDaemonForTest(Config{EnablePersistence: true}, store2, nil)
+
+	// Restore state from DB
+	if err := daemon.restoreStateFromDB(); err != nil {
+		t.Fatalf("restoreStateFromDB failed: %v", err)
+	}
+
+	// Verify agent was restored with stdout/stderr
+	state := daemon.GetRuntimeState()
+	if len(state.Agents) != 1 {
+		t.Fatalf("expected 1 agent, got %d", len(state.Agents))
+	}
+
+	restoredAgent := state.GetAgent("agent-with-logs")
+	if restoredAgent == nil {
+		t.Fatal("agent not found in restored state")
+	}
+
+	if restoredAgent.Output.Stdout != "This is stdout output from the agent" {
+		t.Errorf("expected stdout to be restored, got %q", restoredAgent.Output.Stdout)
+	}
+	if restoredAgent.Output.Stderr != "This is stderr output from the agent" {
+		t.Errorf("expected stderr to be restored, got %q", restoredAgent.Output.Stderr)
+	}
+
+	store2.Close()
+}
+
 // TestRestoreStateFromDB_EmptyDB verifies no restoration happens when database is empty
 func TestRestoreStateFromDB_EmptyDB(t *testing.T) {
 	// Create temp directory for test database
