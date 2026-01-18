@@ -263,6 +263,87 @@ With `--sandbox`:
 - Resource limits enforced
 - Sensitive directories blocked (~/.ssh, ~/.aws, etc.)
 
+## Post-Merge Validation
+
+Canopy can automatically validate merged changes by running build, test, and lint commands. If validation fails, a repair agent attempts to fix the issues automatically.
+
+### Enable Validation
+
+During `canopy init`, you'll be asked about validation. You can also create `.canopy/validation.toml` manually:
+
+```toml
+[validation]
+enabled = true
+strict = false          # Keep merge on failure, file issue
+timeout = "5m"
+max_repair_attempts = 3
+
+[[validation.steps]]
+name = "build"
+command = "go build ./..."
+timeout = "2m"
+required = true
+
+[[validation.steps]]
+name = "test"
+command = "go test ./..."
+timeout = "5m"
+required = true
+```
+
+### How Validation Works
+
+After each successful merge:
+
+1. **Validation runs** - Each step executes sequentially
+2. **On failure** - A repair agent spawns to fix the issue
+3. **Repair attempts** - Agent sees error output and tries to fix it
+4. **Retry validation** - If repair succeeds, validation re-runs
+5. **Exhaustion** - After max attempts, a high-priority bead is filed
+
+### Repair Agent Flow
+
+When validation fails, the repair agent:
+- Sees the failed step's output and exit code
+- Has access to the merged diff
+- Knows what previous repair attempts tried
+- Commits fixes directly to the repository
+
+Example repair cycle:
+```
+Merge applied -> Validation runs "npm test"
+  -> Test fails: "TypeError: undefined is not a function"
+  -> Repair agent spawned (attempt 1/3)
+  -> Agent fixes the bug, commits
+  -> Validation re-runs "npm test"
+  -> Tests pass -> Task marked complete
+```
+
+### Validation Modes
+
+| Mode | Behavior on Failure |
+|------|---------------------|
+| **Lenient** (default) | Merge kept, issue filed for manual fix |
+| **Strict** | Merge reverted after all repair attempts fail |
+
+Use strict mode for critical projects where broken code must never reach main:
+```toml
+[validation]
+strict = true
+```
+
+### Viewing Validation Status
+
+The dashboard shows validation status in real-time:
+- `running` - Validation executing
+- `passed` - All steps succeeded
+- `failed` - Step failed, repair may be in progress
+- `repairing` - Repair agent attempting fix
+
+When repair is exhausted, a bead titled "Repair exhausted: {task}" is created with full context about what failed and what was tried.
+
+See [Validation Guide](VALIDATION.md) for comprehensive documentation.
+
 ## Agentic Initialization
 
 When using Canopy with AI agents (like Claude Code), use the agentic init flow for structured configuration.

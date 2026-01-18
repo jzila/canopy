@@ -218,6 +218,66 @@ ALL state changes MUST flow through this pipeline:
 
 **Critical invariant**: Fields MUST be present at every layer or data will be lost.
 
+### Validation and Repair Flow
+
+After each successful merge, validation runs if configured:
+
+```
+┌─────────────┐
+│   Merge     │
+│  Complete   │
+└──────┬──────┘
+       │
+       ▼
+┌─────────────┐     ┌─────────────┐
+│  Validation │ No  │    Done     │
+│  Enabled?   │────>│  (success)  │
+└──────┬──────┘     └─────────────┘
+       │ Yes
+       ▼
+┌─────────────┐     ┌─────────────┐
+│    Run      │ All │    Done     │
+│ Validation  │────>│  (success)  │
+│   Steps     │Pass └─────────────┘
+└──────┬──────┘
+       │ Fail
+       ▼
+┌─────────────┐     ┌─────────────┐
+│   Spawn     │     │  Re-run     │
+│   Repair    │────>│ Validation  │
+│   Agent     │     │             │
+└──────┬──────┘     └──────┬──────┘
+       │                   │
+       │◄──────────────────┘
+       │ Pass: Done (repaired)
+       │ Fail: Loop until max_repair_attempts
+       ▼
+┌─────────────┐     ┌─────────────┐
+│  Max        │ Yes │ File Bead:  │
+│ Attempts?   │────>│  "Repair    │
+└─────────────┘     │  Exhausted" │
+                    └─────────────┘
+```
+
+**Repair Agent Behavior:**
+- Runs directly on the working directory (not in overlay)
+- Sees failed step output, exit code, and merged diff
+- Knows what previous attempts tried (to avoid repetition)
+- Commits fixes directly to the repository
+- Tracked as child of the original implementor agent
+
+**Validation Status Values:**
+- `pending` - Not yet started
+- `running` - Steps executing
+- `passed` - All steps succeeded
+- `failed` - Required step failed
+- `repairing` - Repair agent active
+- `skipped` - Validation disabled
+
+**Merge Status Values:**
+- `MergeStatusMerged` - Success (with or without repair)
+- `MergeStatusMergedNeedsRepair` - Merge kept but validation failed after all repairs
+
 ### Field Naming Checklist
 
 When adding new fields to any struct that crosses boundaries:

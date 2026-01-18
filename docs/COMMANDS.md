@@ -610,4 +610,5 @@ When the daemon is running, these endpoints are available:
 
 - [Architecture](ARCHITECTURE.md) - System design
 - [Configuration](CONFIGURATION.md) - Config file reference
+- [Validation Guide](VALIDATION.md) - Post-merge validation and repair agents
 - [Getting Started](GETTING-STARTED.md) - Tutorial

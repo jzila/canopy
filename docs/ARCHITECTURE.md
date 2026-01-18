@@ -818,5 +818,6 @@ File changes:
 ## See Also
 
 - [Sandbox Design](SANDBOX-DESIGN.md) - Security architecture and OverlayFS details
+- [Validation Guide](VALIDATION.md) - Post-merge validation and repair agents
 - [Commands](COMMANDS.md) - CLI reference
 - [Configuration](CONFIGURATION.md) - Configuration options
