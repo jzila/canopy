@@ -54,7 +54,7 @@ export function useAgentFiltering({
 
   // Filter and sort agents
   const filteredAgents = useMemo(() => {
-    return agentList
+    const result = agentList
       .filter((agent) => {
         // If a bead is selected, ONLY show agents for that bead (override all other filters)
         if (selectedBeadId) {
@@ -97,6 +97,17 @@ export function useAgentFiltering({
         // Sort by start time (most recent first)
         return new Date(b.start_time).getTime() - new Date(a.start_time).getTime();
       });
+
+    // Debug: Log if filtering removed agents unexpectedly
+    if (result.length !== agentList.length && activeRunId !== '' && !selectedBeadId) {
+      // Check if some agents are missing run_id
+      const agentsWithoutRunId = agentList.filter(a => !a.run_id);
+      if (agentsWithoutRunId.length > 0) {
+        console.warn('[AgentFiltering] Some agents missing run_id:', agentsWithoutRunId.map(a => a.id));
+      }
+    }
+
+    return result;
   }, [agentList, statusFilter, showArchived, activeRunId, selectedBeadId]);
 
   // Group agents by parent/child relationships

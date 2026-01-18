@@ -263,6 +263,115 @@ describe('useAgentFiltering', () => {
     });
   });
 
+  describe('bug investigation: 4 agents same run_id showing only 2', () => {
+    it('shows all 4 agents when they have same run_id and activeRunId is empty', () => {
+      const agents = {
+        'agent-1': createMockAgent({ id: 'agent-1', run_id: 'run-abc', status: 'running' }),
+        'agent-2': createMockAgent({ id: 'agent-2', run_id: 'run-abc', status: 'running' }),
+        'agent-3': createMockAgent({ id: 'agent-3', run_id: 'run-abc', status: 'running' }),
+        'agent-4': createMockAgent({ id: 'agent-4', run_id: 'run-abc', status: 'running' }),
+      };
+
+      const { result } = renderHook(() =>
+        useAgentFiltering({
+          agents,
+          statusFilter: 'all',
+          showArchived: false,
+          activeRunId: '',  // "All runs" mode
+        })
+      );
+
+      expect(result.current.filteredAgents).toHaveLength(4);
+      expect(result.current.groupedAgents).toHaveLength(4);
+    });
+
+    it('shows all 4 agents when activeRunId matches their run_id', () => {
+      const agents = {
+        'agent-1': createMockAgent({ id: 'agent-1', run_id: 'run-abc', status: 'running' }),
+        'agent-2': createMockAgent({ id: 'agent-2', run_id: 'run-abc', status: 'running' }),
+        'agent-3': createMockAgent({ id: 'agent-3', run_id: 'run-abc', status: 'running' }),
+        'agent-4': createMockAgent({ id: 'agent-4', run_id: 'run-abc', status: 'running' }),
+      };
+
+      const { result } = renderHook(() =>
+        useAgentFiltering({
+          agents,
+          statusFilter: 'all',
+          showArchived: false,
+          activeRunId: 'run-abc',  // Matching run ID
+        })
+      );
+
+      expect(result.current.filteredAgents).toHaveLength(4);
+      expect(result.current.groupedAgents).toHaveLength(4);
+    });
+
+    it('shows 0 agents when activeRunId does not match their run_id', () => {
+      const agents = {
+        'agent-1': createMockAgent({ id: 'agent-1', run_id: 'run-abc', status: 'running' }),
+        'agent-2': createMockAgent({ id: 'agent-2', run_id: 'run-abc', status: 'running' }),
+        'agent-3': createMockAgent({ id: 'agent-3', run_id: 'run-abc', status: 'running' }),
+        'agent-4': createMockAgent({ id: 'agent-4', run_id: 'run-abc', status: 'running' }),
+      };
+
+      const { result } = renderHook(() =>
+        useAgentFiltering({
+          agents,
+          statusFilter: 'all',
+          showArchived: false,
+          activeRunId: 'run-xyz',  // Different run ID
+        })
+      );
+
+      expect(result.current.filteredAgents).toHaveLength(0);
+      expect(result.current.groupedAgents).toHaveLength(0);
+    });
+
+    it('filters out agents without run_id when activeRunId is set', () => {
+      const agents = {
+        'agent-1': createMockAgent({ id: 'agent-1', run_id: 'run-abc', status: 'running' }),
+        'agent-2': createMockAgent({ id: 'agent-2', run_id: 'run-abc', status: 'running' }),
+        'agent-3': createMockAgent({ id: 'agent-3', status: 'running' }),  // No run_id
+        'agent-4': createMockAgent({ id: 'agent-4', status: 'running' }),  // No run_id
+      };
+
+      const { result } = renderHook(() =>
+        useAgentFiltering({
+          agents,
+          statusFilter: 'all',
+          showArchived: false,
+          activeRunId: 'run-abc',  // Only agents with this run_id
+        })
+      );
+
+      // Only 2 agents have run_id matching 'run-abc'
+      expect(result.current.filteredAgents).toHaveLength(2);
+      expect(result.current.groupedAgents).toHaveLength(2);
+    });
+
+    it('shows all agents including those without run_id when activeRunId is empty', () => {
+      const agents = {
+        'agent-1': createMockAgent({ id: 'agent-1', run_id: 'run-abc', status: 'running' }),
+        'agent-2': createMockAgent({ id: 'agent-2', run_id: 'run-abc', status: 'running' }),
+        'agent-3': createMockAgent({ id: 'agent-3', status: 'running' }),  // No run_id
+        'agent-4': createMockAgent({ id: 'agent-4', status: 'running' }),  // No run_id
+      };
+
+      const { result } = renderHook(() =>
+        useAgentFiltering({
+          agents,
+          statusFilter: 'all',
+          showArchived: false,
+          activeRunId: '',  // All runs
+        })
+      );
+
+      // All 4 agents should show regardless of run_id
+      expect(result.current.filteredAgents).toHaveLength(4);
+      expect(result.current.groupedAgents).toHaveLength(4);
+    });
+  });
+
   describe('parent/child grouping', () => {
     it('groups children under their parent', () => {
       const agents = {
