@@ -65,16 +65,13 @@ export interface AgentState {
   commits: number;
   git_commits: GitCommit[];
   archived: boolean;
-  // Merge queue state (real-time)
+  // Merge status fields (snake_case per API conventions)
   merge_status?: MergeStatus;
   merge_queue_pos?: number;
   merge_error?: string;
-  // Merge result fields (persisted, from history API)
-  mergeStatus?: string;         // Final merge status: merged, failed
-  mergeCommitsApplied?: number; // Number of commits applied during merge
-  mergeHadConflict?: boolean;   // Whether merge had conflicts
-  mergeResolverSpawned?: boolean; // Whether resolver agent was spawned
-  mergeError?: string;          // Error message if merge failed (persisted)
+  merge_commits_applied?: number;   // Number of commits applied during merge
+  merge_had_conflict?: boolean;     // Whether merge had conflicts
+  merge_resolver_spawned?: boolean; // Whether resolver agent was spawned
 }
 
 export interface TaskState {
