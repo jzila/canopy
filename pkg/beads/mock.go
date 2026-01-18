@@ -37,8 +37,12 @@ type MockClient struct {
 			Child  string
 			Parent string
 		}
-		GetDeps []string
-		Sync    int
+		GetDeps    []string
+		Sync       int
+		AddComment []struct {
+			TaskID  string
+			Comment string
+		}
 	}
 
 	// Errors allows tests to inject errors for specific methods
@@ -54,6 +58,7 @@ type MockClient struct {
 		AddDep        error
 		GetDeps       error
 		Sync          error
+		AddComment    error
 	}
 
 	// NextCreateID is the ID to return from the next Create call
@@ -280,6 +285,18 @@ func (m *MockClient) Sync(_ context.Context) error {
 	return m.Errors.Sync
 }
 
+// AddComment adds a comment to a task
+func (m *MockClient) AddComment(_ context.Context, taskID, comment string) error {
+	m.mu.Lock()
+	m.Calls.AddComment = append(m.Calls.AddComment, struct {
+		TaskID  string
+		Comment string
+	}{taskID, comment})
+	m.mu.Unlock()
+
+	return m.Errors.AddComment
+}
+
 // SetTask adds or updates a task in the mock
 func (m *MockClient) SetTask(task *Task) {
 	m.mu.Lock()
@@ -310,6 +327,7 @@ func (m *MockClient) Reset() {
 	m.Calls.AddDep = nil
 	m.Calls.GetDeps = nil
 	m.Calls.Sync = 0
+	m.Calls.AddComment = nil
 
 	m.Errors.Ready = nil
 	m.Errors.List = nil
@@ -322,4 +340,5 @@ func (m *MockClient) Reset() {
 	m.Errors.AddDep = nil
 	m.Errors.GetDeps = nil
 	m.Errors.Sync = nil
+	m.Errors.AddComment = nil
 }

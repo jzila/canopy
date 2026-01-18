@@ -60,6 +60,9 @@ type BeadsClient interface {
 
 	// Sync runs bd sync to commit and push beads changes
 	Sync(ctx context.Context) error
+
+	// AddComment adds a comment to a task
+	AddComment(ctx context.Context, taskID, comment string) error
 }
 
 // Client wraps the bd CLI for programmatic access.
@@ -261,6 +264,12 @@ func (t *Task) GetTimeout() time.Duration {
 // Sync runs bd sync to commit and push beads changes
 func (c *Client) Sync(ctx context.Context) error {
 	_, err := c.run(ctx, "sync")
+	return err
+}
+
+// AddComment adds a comment to a task
+func (c *Client) AddComment(ctx context.Context, taskID, comment string) error {
+	_, err := c.run(ctx, "comments", "add", taskID, comment)
 	return err
 }
 

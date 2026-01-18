@@ -236,6 +236,38 @@ func TestMockClient_Reset(t *testing.T) {
 	}
 }
 
+func TestMockClient_AddComment(t *testing.T) {
+	ctx := context.Background()
+	mock := NewMockClient()
+
+	err := mock.AddComment(ctx, "task-1", "This is a test comment")
+	if err != nil {
+		t.Fatalf("AddComment() error = %v", err)
+	}
+
+	if len(mock.Calls.AddComment) != 1 {
+		t.Fatalf("AddComment() calls count = %d, want 1", len(mock.Calls.AddComment))
+	}
+	if mock.Calls.AddComment[0].TaskID != "task-1" {
+		t.Errorf("AddComment() taskID = %s, want task-1", mock.Calls.AddComment[0].TaskID)
+	}
+	if mock.Calls.AddComment[0].Comment != "This is a test comment" {
+		t.Errorf("AddComment() comment = %s, want 'This is a test comment'", mock.Calls.AddComment[0].Comment)
+	}
+}
+
+func TestMockClient_AddCommentError(t *testing.T) {
+	ctx := context.Background()
+	mock := NewMockClient()
+	expectedErr := errors.New("comment error")
+	mock.Errors.AddComment = expectedErr
+
+	err := mock.AddComment(ctx, "task-1", "comment")
+	if err != expectedErr {
+		t.Errorf("AddComment() error = %v, want %v", err, expectedErr)
+	}
+}
+
 func TestMockClient_ConcurrentAccess(t *testing.T) {
 	ctx := context.Background()
 	mock := NewMockClient()
