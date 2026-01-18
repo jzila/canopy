@@ -66,6 +66,8 @@ interface AgentCompletedEvent {
     duration: number;
     input_tokens: number;
     output_tokens: number;
+    cache_creation_input_tokens: number;
+    cache_read_input_tokens: number;
     cost_usd: number;
     files_changed: number;
     commits_created: number;
@@ -105,31 +107,6 @@ interface StatsUpdatedEvent {
   payload: unknown;
 }
 
-interface RunStartedEvent {
-  type: 'run:started';
-  timestamp: string;
-  payload: {
-    run_id: string;
-    task_count: number;
-    repo_id?: string;
-    repo_path?: string;
-    repo_name?: string;
-  };
-}
-
-interface RunCompletedEvent {
-  type: 'run:completed';
-  timestamp: string;
-  payload: {
-    run_id: string;
-    total_tasks: number;
-    succeeded_tasks: number;
-    failed_tasks: number;
-    total_duration_seconds: number;
-    total_cost_usd: number;
-  };
-}
-
 // Backend git commit format
 interface BackendGitCommit {
   hash: string;
@@ -159,6 +136,8 @@ interface BackendAgentState {
   token_usage: {
     input_tokens: number;
     output_tokens: number;
+    cache_creation_input_tokens: number;
+    cache_read_input_tokens: number;
     total_tokens: number;
     cost_usd: number;
   };
@@ -239,9 +218,7 @@ type EventType =
   | TaskUpdatedEvent
   | StatsUpdatedEvent
   | OrchPausedEvent
-  | OrchResumedEvent
-  | RunStartedEvent
-  | RunCompletedEvent;
+  | OrchResumedEvent;
 
 const MAX_BACKOFF = 30000; // 30 seconds
 const INITIAL_BACKOFF = 1000; // 1 second
@@ -275,8 +252,6 @@ export function useWebSocket() {
     setIsPaused,
     setActiveRepo,
     updateAgentMergeStatus,
-    addRun,
-    updateRun,
   } = useStateStore();
 
   const connect = useCallback(() => {
@@ -347,6 +322,8 @@ export function useWebSocket() {
                   token_usage: agent.token_usage || {
                     input_tokens: 0,
                     output_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                    cache_read_input_tokens: 0,
                     total_tokens: 0,
                     cost_usd: 0,
                   },
@@ -404,6 +381,8 @@ export function useWebSocket() {
                 token_usage: {
                   input_tokens: 0,
                   output_tokens: 0,
+                  cache_creation_input_tokens: 0,
+                  cache_read_input_tokens: 0,
                   total_tokens: 0,
                   cost_usd: 0,
                 },
@@ -454,7 +433,7 @@ export function useWebSocket() {
             }
 
             case 'agent:completed': {
-              const { agent_id, error, exit_code, duration, input_tokens, output_tokens, cost_usd, files_changed, commits_created } = message.payload;
+              const { agent_id, error, exit_code, duration, input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, cost_usd, files_changed, commits_created } = message.payload;
               updateAgent(agent_id, {
                 status: error ? 'failed' : 'completed',
                 end_time: message.timestamp,
@@ -466,6 +445,8 @@ export function useWebSocket() {
                 token_usage: {
                   input_tokens,
                   output_tokens,
+                  cache_creation_input_tokens,
+                  cache_read_input_tokens,
                   total_tokens: input_tokens + output_tokens,
                   cost_usd,
                 },
@@ -507,50 +488,6 @@ export function useWebSocket() {
             case 'orch:resumed': {
               console.log('[WebSocket] Orchestrator resumed');
               setIsPaused(false);
-              break;
-            }
-
-            case 'run:started': {
-              const { run_id, task_count, repo_id, repo_path, repo_name } = message.payload;
-              console.log('[WebSocket] Run started:', run_id, 'tasks:', task_count);
-              // Add the new run to the runs list so it appears in the dropdown
-              addRun({
-                id: run_id,
-                started_at: message.timestamp,
-                status: 'running',
-                total_tasks: task_count,
-                completed_tasks: 0,
-                failed_tasks: 0,
-                total_cost_usd: 0,
-                duration_seconds: 0,
-                // Optional properties - only set if defined
-                ...(repo_id && { repo_id }),
-                ...(repo_path && { repo_path }),
-                ...(repo_name && { repo_name }),
-              });
-              break;
-            }
-
-            case 'run:completed': {
-              const { run_id, total_tasks, succeeded_tasks, failed_tasks, total_duration_seconds, total_cost_usd } = message.payload;
-              console.log('[WebSocket] Run completed:', run_id);
-              // Determine status based on success/failure counts
-              let status: 'completed' | 'failed' | 'partial' = 'completed';
-              if (failed_tasks > 0 && succeeded_tasks > 0) {
-                status = 'partial';
-              } else if (failed_tasks > 0) {
-                status = 'failed';
-              }
-              // Update the existing run in the runs list
-              updateRun(run_id, {
-                finished_at: message.timestamp,
-                status,
-                total_tasks,
-                completed_tasks: succeeded_tasks,
-                failed_tasks,
-                duration_seconds: total_duration_seconds,
-                total_cost_usd,
-              });
               break;
             }
 
@@ -596,7 +533,7 @@ export function useWebSocket() {
         }, backoffTime);
       }
     }
-  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, appendGitCommit, syncState, setIsPaused, setActiveRepo, updateAgentMergeStatus, addRun, updateRun]);
+  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, appendGitCommit, syncState, setIsPaused, setActiveRepo, updateAgentMergeStatus]);
 
   const disconnect = useCallback(() => {
     isManuallyClosedRef.current = true;

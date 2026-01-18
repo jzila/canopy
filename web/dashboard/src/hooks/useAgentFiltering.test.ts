@@ -14,7 +14,7 @@ function createMockAgent(overrides: Partial<AgentState>): AgentState {
     duration: 0,
     output: { stdout: '', stderr: '' },
     liveFeed: [],
-    token_usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0, cost_usd: 0 },
+    token_usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, total_tokens: 0, cost_usd: 0 },
     exit_code: 0,
     error: '',
     changes: 0,

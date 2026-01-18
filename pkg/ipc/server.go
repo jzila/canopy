@@ -389,20 +389,20 @@ func (s *Server) convertToEvent(msg *Message) *events.Event {
 			return nil
 		}
 		eventPayload := map[string]interface{}{
-			"agent_id":              payload.AgentID,
-			"exit_code":             payload.Result.ExitCode,
-			"duration":              payload.Result.DurationSeconds,
-			"input_tokens":          payload.Result.InputTokens,
-			"output_tokens":         payload.Result.OutputTokens,
-			"cache_creation_tokens": payload.Result.CacheCreationInputTokens,
-			"cache_read_tokens":     payload.Result.CacheReadInputTokens,
-			"cost_usd":              payload.Result.CostUSD,
-			"files_changed":         payload.Result.FilesChanged,
-			"commits_created":       payload.Result.CommitsCreated,
-			"num_turns":             payload.Result.NumTurns,
-			"result_message":        payload.Result.ResultMessage,
-			"stdout":                payload.Result.Stdout,
-			"stderr":                payload.Result.Stderr,
+			"agent_id":                    payload.AgentID,
+			"exit_code":                   payload.Result.ExitCode,
+			"duration":                    payload.Result.DurationSeconds,
+			"input_tokens":                payload.Result.InputTokens,
+			"output_tokens":               payload.Result.OutputTokens,
+			"cache_creation_input_tokens": payload.Result.CacheCreationInputTokens,
+			"cache_read_input_tokens":     payload.Result.CacheReadInputTokens,
+			"cost_usd":                    payload.Result.CostUSD,
+			"files_changed":               payload.Result.FilesChanged,
+			"commits_created":             payload.Result.CommitsCreated,
+			"num_turns":                   payload.Result.NumTurns,
+			"result_message":              payload.Result.ResultMessage,
+			"stdout":                      payload.Result.Stdout,
+			"stderr":                      payload.Result.Stderr,
 		}
 		if payload.ParentAgentID != "" {
 			eventPayload["parent_agent_id"] = payload.ParentAgentID
@@ -419,21 +419,21 @@ func (s *Server) convertToEvent(msg *Message) *events.Event {
 			return nil
 		}
 		eventPayload := map[string]interface{}{
-			"agent_id":              payload.AgentID,
-			"error":                 payload.Error,
-			"exit_code":             payload.Result.ExitCode,
-			"duration":              payload.Result.DurationSeconds,
-			"input_tokens":          payload.Result.InputTokens,
-			"output_tokens":         payload.Result.OutputTokens,
-			"cache_creation_tokens": payload.Result.CacheCreationInputTokens,
-			"cache_read_tokens":     payload.Result.CacheReadInputTokens,
-			"cost_usd":              payload.Result.CostUSD,
-			"files_changed":         payload.Result.FilesChanged,
-			"commits_created":       payload.Result.CommitsCreated,
-			"num_turns":             payload.Result.NumTurns,
-			"result_message":        payload.Result.ResultMessage,
-			"stdout":                payload.Result.Stdout,
-			"stderr":                payload.Result.Stderr,
+			"agent_id":                    payload.AgentID,
+			"error":                       payload.Error,
+			"exit_code":                   payload.Result.ExitCode,
+			"duration":                    payload.Result.DurationSeconds,
+			"input_tokens":                payload.Result.InputTokens,
+			"output_tokens":               payload.Result.OutputTokens,
+			"cache_creation_input_tokens": payload.Result.CacheCreationInputTokens,
+			"cache_read_input_tokens":     payload.Result.CacheReadInputTokens,
+			"cost_usd":                    payload.Result.CostUSD,
+			"files_changed":               payload.Result.FilesChanged,
+			"commits_created":             payload.Result.CommitsCreated,
+			"num_turns":                   payload.Result.NumTurns,
+			"result_message":              payload.Result.ResultMessage,
+			"stdout":                      payload.Result.Stdout,
+			"stderr":                      payload.Result.Stderr,
 		}
 		if payload.ParentAgentID != "" {
 			eventPayload["parent_agent_id"] = payload.ParentAgentID
