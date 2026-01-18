@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -191,6 +192,124 @@ func TestHandleGetTasks(t *testing.T) {
 
 	if len(tasks) != 1 {
 		t.Errorf("Expected 1 task, got %d", len(tasks))
+	}
+}
+
+// TestHandleGetTasksAllPriorities verifies that tasks with all priority levels (P0-P4)
+// are returned without filtering. This test was added to verify fix for issue where
+// the beads pane was reported to only show P0 priority issues.
+func TestHandleGetTasksAllPriorities(t *testing.T) {
+	state := NewRuntimeState()
+
+	// Add tasks with different priorities (P0-P4)
+	testTasks := []struct {
+		id       string
+		title    string
+		priority int
+	}{
+		{"task-p0", "P0 Critical Task", 0},
+		{"task-p1", "P1 High Priority Task", 1},
+		{"task-p2", "P2 Medium Priority Task", 2},
+		{"task-p3", "P3 Low Priority Task", 3},
+		{"task-p4", "P4 Backlog Task", 4},
+	}
+
+	for _, tt := range testTasks {
+		task := &beads.Task{
+			ID:       tt.id,
+			Title:    tt.title,
+			Status:   "open",
+			Priority: tt.priority,
+		}
+		state.AddTask(task)
+	}
+
+	scheduler := &mockScheduler{}
+	beadsClient := &mockBeadsClient{}
+	handler := NewHandler(state, scheduler, beadsClient, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/tasks", nil)
+	w := httptest.NewRecorder()
+
+	handler.HandleGetTasks(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+
+	var tasks []*TaskState
+	if err := json.NewDecoder(w.Body).Decode(&tasks); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	// Verify all 5 tasks are returned
+	if len(tasks) != 5 {
+		t.Errorf("Expected 5 tasks (one for each priority P0-P4), got %d", len(tasks))
+	}
+
+	// Verify each priority level is represented
+	priorityCounts := make(map[int]int)
+	for _, task := range tasks {
+		priorityCounts[task.Priority]++
+	}
+
+	for p := 0; p <= 4; p++ {
+		if priorityCounts[p] != 1 {
+			t.Errorf("Expected 1 task with priority P%d, got %d", p, priorityCounts[p])
+		}
+	}
+}
+
+// TestHandleGetStateIncludesAllTaskPriorities verifies that the state sync endpoint
+// returns tasks with all priority levels, ensuring the dashboard receives complete data.
+func TestHandleGetStateIncludesAllTaskPriorities(t *testing.T) {
+	state := NewRuntimeState()
+
+	// Add tasks with different priorities
+	for p := 0; p <= 4; p++ {
+		task := &beads.Task{
+			ID:       fmt.Sprintf("task-p%d", p),
+			Title:    fmt.Sprintf("Priority %d Task", p),
+			Status:   "open",
+			Priority: p,
+		}
+		state.AddTask(task)
+	}
+
+	scheduler := &mockScheduler{}
+	beadsClient := &mockBeadsClient{}
+	handler := NewHandler(state, scheduler, beadsClient, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/state", nil)
+	w := httptest.NewRecorder()
+
+	handler.HandleGetState(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+
+	var stateResp StateResponse
+	if err := json.NewDecoder(w.Body).Decode(&stateResp); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	// Verify all 5 tasks are in the state
+	if len(stateResp.Tasks) != 5 {
+		t.Errorf("Expected 5 tasks in state, got %d", len(stateResp.Tasks))
+	}
+
+	// Verify priority values are preserved correctly in JSON
+	for p := 0; p <= 4; p++ {
+		taskID := fmt.Sprintf("task-p%d", p)
+		task, exists := stateResp.Tasks[taskID]
+		if !exists {
+			t.Errorf("Task %s not found in state", taskID)
+			continue
+		}
+		if task.Priority != p {
+			t.Errorf("Task %s has priority %d, expected %d", taskID, task.Priority, p)
+		}
 	}
 }
 
