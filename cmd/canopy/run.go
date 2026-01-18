@@ -164,6 +164,12 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 				}
 			}
 		}
+
+		// Exit after cleanup completes
+		// We must call os.Exit here because orch.Run returns immediately when
+		// context is cancelled, which would cause the process to exit before
+		// cleanup completes (cleanup goroutine races with process exit)
+		os.Exit(0)
 	}()
 
 	// Resolve working directory
