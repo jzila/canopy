@@ -1,6 +1,11 @@
 package sandbox
 
 import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -145,5 +150,265 @@ rename to new/path.go
 	// We extract the b/ path (destination)
 	if result[0] != "new/path.go" {
 		t.Errorf("expected 'new/path.go', got %q", result[0])
+	}
+}
+
+// setupTestGitRepo creates a temporary git repository for testing.
+// Returns the overlay, cleanup function, and any error.
+func setupTestGitRepo(t *testing.T) (*Overlay, func()) {
+	t.Helper()
+
+	tempDir, err := os.MkdirTemp("", "git-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+
+	cleanup := func() {
+		os.RemoveAll(tempDir)
+	}
+
+	// Initialize git repo
+	cmd := exec.Command("git", "init")
+	cmd.Dir = tempDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		cleanup()
+		t.Fatalf("git init failed: %v: %s", err, out)
+	}
+
+	// Configure git user for commits
+	cmd = exec.Command("git", "config", "user.name", "Test User")
+	cmd.Dir = tempDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		cleanup()
+		t.Fatalf("git config user.name failed: %v: %s", err, out)
+	}
+
+	cmd = exec.Command("git", "config", "user.email", "test@example.com")
+	cmd.Dir = tempDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		cleanup()
+		t.Fatalf("git config user.email failed: %v: %s", err, out)
+	}
+
+	// Create an initial commit so we have a valid HEAD
+	testFile := filepath.Join(tempDir, "initial.txt")
+	if err := os.WriteFile(testFile, []byte("initial content\n"), 0644); err != nil {
+		cleanup()
+		t.Fatalf("failed to write initial file: %v", err)
+	}
+
+	cmd = exec.Command("git", "add", "initial.txt")
+	cmd.Dir = tempDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		cleanup()
+		t.Fatalf("git add failed: %v: %s", err, out)
+	}
+
+	cmd = exec.Command("git", "commit", "-m", "Initial commit")
+	cmd.Dir = tempDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		cleanup()
+		t.Fatalf("git commit failed: %v: %s", err, out)
+	}
+
+	// Create a minimal overlay pointing to this repo
+	overlay := &Overlay{
+		ID:        "test",
+		MergedDir: tempDir,
+	}
+
+	return overlay, cleanup
+}
+
+func TestExtractNewCommits_NormalCase(t *testing.T) {
+	overlay, cleanup := setupTestGitRepo(t)
+	defer cleanup()
+
+	// Get the base commit (initial commit)
+	baseCommit, err := overlay.GetBaseCommit()
+	if err != nil {
+		t.Fatalf("GetBaseCommit failed: %v", err)
+	}
+
+	// Create two new commits
+	for i := 1; i <= 2; i++ {
+		testFile := filepath.Join(overlay.MergedDir, fmt.Sprintf("file%d.txt", i))
+		if err := os.WriteFile(testFile, []byte(fmt.Sprintf("content %d\n", i)), 0644); err != nil {
+			t.Fatalf("failed to write file%d.txt: %v", i, err)
+		}
+
+		cmd := exec.Command("git", "add", fmt.Sprintf("file%d.txt", i))
+		cmd.Dir = overlay.MergedDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git add failed: %v: %s", err, out)
+		}
+
+		cmd = exec.Command("git", "commit", "-m", fmt.Sprintf("Add file %d", i))
+		cmd.Dir = overlay.MergedDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git commit failed: %v: %s", err, out)
+		}
+	}
+
+	// Extract new commits
+	state, err := overlay.ExtractNewCommits(baseCommit)
+	if err != nil {
+		t.Fatalf("ExtractNewCommits failed: %v", err)
+	}
+
+	// Verify we got the right number of commits
+	if len(state.NewCommits) != 2 {
+		t.Errorf("expected 2 new commits, got %d", len(state.NewCommits))
+	}
+
+	// Verify we have patches for each commit
+	if len(state.Patches) != 2 {
+		t.Errorf("expected 2 patches, got %d", len(state.Patches))
+	}
+
+	// Verify patches contain the expected files
+	files := ExtractFilesFromPatches(state.Patches)
+	if len(files) != 2 {
+		t.Errorf("expected 2 files in patches, got %d: %v", len(files), files)
+	}
+
+	// Verify commit messages were extracted
+	if len(state.CommitMessages) != 2 {
+		t.Errorf("expected 2 commit messages, got %d", len(state.CommitMessages))
+	}
+
+	// Verify base commit is preserved
+	if state.BaseCommit != baseCommit {
+		t.Errorf("expected BaseCommit=%q, got %q", baseCommit, state.BaseCommit)
+	}
+}
+
+func TestExtractNewCommits_NoCommits(t *testing.T) {
+	overlay, cleanup := setupTestGitRepo(t)
+	defer cleanup()
+
+	// Get the base commit - this will be HEAD (no new commits after this)
+	baseCommit, err := overlay.GetBaseCommit()
+	if err != nil {
+		t.Fatalf("GetBaseCommit failed: %v", err)
+	}
+
+	// Extract new commits without making any
+	state, err := overlay.ExtractNewCommits(baseCommit)
+	if err != nil {
+		t.Fatalf("ExtractNewCommits should not error for no commits: %v", err)
+	}
+
+	// Verify we got empty state, not nil
+	if state == nil {
+		t.Fatal("expected non-nil GitState")
+	}
+
+	// Verify no new commits
+	if len(state.NewCommits) != 0 {
+		t.Errorf("expected 0 new commits, got %d", len(state.NewCommits))
+	}
+
+	// Verify no patches
+	if len(state.Patches) != 0 {
+		t.Errorf("expected 0 patches, got %d", len(state.Patches))
+	}
+
+	// BaseCommit should still be set
+	if state.BaseCommit != baseCommit {
+		t.Errorf("expected BaseCommit=%q, got %q", baseCommit, state.BaseCommit)
+	}
+}
+
+func TestExtractNewCommits_InvalidBaseCommit(t *testing.T) {
+	overlay, cleanup := setupTestGitRepo(t)
+	defer cleanup()
+
+	// Use an invalid commit hash
+	invalidCommit := "0000000000000000000000000000000000000000"
+
+	state, err := overlay.ExtractNewCommits(invalidCommit)
+
+	// Should return an error for invalid ref
+	if err == nil {
+		t.Fatal("expected error for invalid base commit, got nil")
+	}
+
+	// State may be nil or partially populated, but error is the key check
+	if state != nil {
+		t.Logf("state returned despite error: %+v", state)
+	}
+
+	// Verify error message mentions the failed command
+	if !strings.Contains(err.Error(), "rev-list") {
+		t.Errorf("expected error to mention 'rev-list', got: %v", err)
+	}
+}
+
+func TestExtractNewCommits_GitError(t *testing.T) {
+	// Create an overlay pointing to a non-git directory
+	tempDir, err := os.MkdirTemp("", "not-a-git-repo-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	overlay := &Overlay{
+		ID:        "test",
+		MergedDir: tempDir,
+	}
+
+	// Attempt to extract commits from non-git directory
+	state, err := overlay.ExtractNewCommits("HEAD~1")
+
+	// Should return an error (not silently return empty)
+	if err == nil {
+		t.Fatal("expected error for non-git directory, got nil")
+	}
+
+	// State should be nil on error
+	if state != nil {
+		t.Errorf("expected nil state on error, got: %+v", state)
+	}
+}
+
+func TestExtractNewCommits_VerboseLogging(t *testing.T) {
+	overlay, cleanup := setupTestGitRepo(t)
+	defer cleanup()
+
+	// Enable verbose mode
+	overlay.Verbose = true
+
+	baseCommit, err := overlay.GetBaseCommit()
+	if err != nil {
+		t.Fatalf("GetBaseCommit failed: %v", err)
+	}
+
+	// Add a commit
+	testFile := filepath.Join(overlay.MergedDir, "verbose-test.txt")
+	if err := os.WriteFile(testFile, []byte("verbose test\n"), 0644); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+
+	cmd := exec.Command("git", "add", "verbose-test.txt")
+	cmd.Dir = overlay.MergedDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add failed: %v: %s", err, out)
+	}
+
+	cmd = exec.Command("git", "commit", "-m", "Verbose test commit")
+	cmd.Dir = overlay.MergedDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit failed: %v: %s", err, out)
+	}
+
+	// Should work correctly even with verbose mode on
+	state, err := overlay.ExtractNewCommits(baseCommit)
+	if err != nil {
+		t.Fatalf("ExtractNewCommits with verbose failed: %v", err)
+	}
+
+	if len(state.NewCommits) != 1 {
+		t.Errorf("expected 1 new commit, got %d", len(state.NewCommits))
 	}
 }
