@@ -301,6 +301,7 @@ func ConvertPersistenceTaskToState(pTask *persistence.Task) *TaskState {
 		ID:       pTask.ID,
 		Title:    pTask.Title,
 		Status:   pTask.Status,
+		Type:     pTask.Type,
 		AgentID:  pTask.AgentID,
 		Priority: pTask.Priority,
 		RepoID:   pTask.RepoID,

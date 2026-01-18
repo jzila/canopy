@@ -442,6 +442,7 @@ type TaskState struct {
 	ID           string   `json:"id"`
 	Title        string   `json:"title"`
 	Status       string   `json:"status"`   // ready, in_progress, completed, failed
+	Type         string   `json:"type,omitempty"` // Task type (task, bug, feature, etc.)
 	AgentID      string   `json:"agent_id"` // ID of agent executing this task
 	Priority     int      `json:"priority"`
 	Dependencies []string `json:"dependencies"` // Task IDs this task depends on
