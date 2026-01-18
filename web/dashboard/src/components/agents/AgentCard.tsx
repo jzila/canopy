@@ -153,31 +153,31 @@ export const AgentCard: React.FC<AgentCardProps> = ({
     >
       <div className="flex items-start justify-between mb-4">
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2.5 mb-2">
+          <div className="flex items-center gap-3 mb-2.5 h-7">
             {agent.archived && (
-              <span className="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium tracking-wide bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200">
+              <span className="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium tracking-wider bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200">
                 Archived
               </span>
             )}
             {taskExistsInBeads ? (
               <button
                 onClick={handleTaskIdClick}
-                className="inline-flex items-center gap-1.5 text-sm font-mono text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 hover:underline transition-colors"
+                className="inline-flex items-center gap-1.5 text-sm font-mono tracking-mono-normal text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 hover:underline transition-colors"
                 title="Click to highlight in Beads pane"
               >
                 {agent.task_id}
                 <ExternalLink className="w-3 h-3" />
               </button>
             ) : (
-              <code className="text-sm font-mono text-gray-500 dark:text-gray-400">
+              <code className="text-sm font-mono tracking-mono-normal text-gray-500 dark:text-gray-400">
                 {agent.task_id}
               </code>
             )}
-            <span className={`inline-flex items-center px-2.5 py-1 rounded text-xs font-medium tracking-wide text-white ${statusColor}`}>
+            <span className={`inline-flex items-center px-2.5 py-1 rounded text-xs font-medium tracking-wider text-white ${statusColor}`}>
               {agent.status}
             </span>
           </div>
-          <h3 className={`text-sm font-medium tracking-tight truncate ${agent.archived ? 'text-gray-500 dark:text-gray-400 line-through' : 'text-gray-900 dark:text-gray-100'}`}>
+          <h3 className={`text-sm font-medium tracking-wide leading-relaxed truncate ${agent.archived ? 'text-gray-500 dark:text-gray-400 line-through' : 'text-gray-900 dark:text-gray-100'}`}>
             {agent.task_title}
           </h3>
         </div>
@@ -216,26 +216,26 @@ export const AgentCard: React.FC<AgentCardProps> = ({
         </div>
       </div>
 
-      <div className="grid grid-cols-4 gap-4 text-xs">
-        <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400" title="Elapsed time">
-          <Clock className="w-4 h-4" />
-          <span className="tabular-nums tracking-wide">{elapsedTime}</span>
+      <div className="grid grid-cols-4 gap-4 text-xs h-6">
+        <div className="flex items-center gap-2.5 text-gray-600 dark:text-gray-400" title="Elapsed time">
+          <Clock className="w-4 h-4 flex-shrink-0" />
+          <span className="font-mono tabular-nums tracking-mono-normal">{elapsedTime}</span>
         </div>
 
-        <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400" title="Token usage">
-          <Zap className="w-4 h-4" />
-          <span className="tabular-nums tracking-wide">{formatTokenCount(agent.token_usage.total_tokens)}</span>
+        <div className="flex items-center gap-2.5 text-gray-600 dark:text-gray-400" title="Token usage">
+          <Zap className="w-4 h-4 flex-shrink-0" />
+          <span className="font-mono tabular-nums tracking-mono-normal">{formatTokenCount(agent.token_usage.total_tokens)}</span>
         </div>
 
-        <div className="flex items-center gap-2 text-gray-600 dark:text-gray-400" title="Cost (USD)">
-          <DollarSign className="w-4 h-4" />
-          <span className="tabular-nums tracking-wide">{formatCost(agent.token_usage.cost_usd)}</span>
+        <div className="flex items-center gap-2.5 text-gray-600 dark:text-gray-400" title="Cost (USD)">
+          <DollarSign className="w-4 h-4 flex-shrink-0" />
+          <span className="font-mono tabular-nums tracking-mono-normal">{formatCost(agent.token_usage.cost_usd)}</span>
         </div>
 
         {agent.commits > 0 && (
-          <div className="flex items-center gap-2 text-blue-400" title={`${agent.commits} git commit${agent.commits !== 1 ? 's' : ''}`}>
-            <GitCommit className="w-4 h-4" />
-            <span className="tabular-nums">{agent.commits}</span>
+          <div className="flex items-center gap-2.5 text-blue-400" title={`${agent.commits} git commit${agent.commits !== 1 ? 's' : ''}`}>
+            <GitCommit className="w-4 h-4 flex-shrink-0" />
+            <span className="font-mono tabular-nums tracking-mono-normal">{agent.commits}</span>
           </div>
         )}
       </div>
