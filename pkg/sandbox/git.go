@@ -222,6 +222,85 @@ func (o *Overlay) GetCommitInfo(commitHash string) (*CommitInfo, error) {
 	return info, nil
 }
 
+// ExtractFilesFromPatches returns unique file paths mentioned in git format-patch output.
+// It parses 'diff --git a/path b/path' lines to extract the paths.
+func ExtractFilesFromPatches(patches []string) []string {
+	seen := make(map[string]bool)
+	var files []string
+
+	for _, patch := range patches {
+		lines := strings.Split(patch, "\n")
+		for _, line := range lines {
+			// Parse 'diff --git a/path b/path' lines
+			if strings.HasPrefix(line, "diff --git ") {
+				// Format: diff --git a/path/to/file b/path/to/file
+				// We extract the b/ path as it represents the destination
+				parts := strings.Split(line, " ")
+				if len(parts) >= 4 {
+					// Get the b/path part (last element) and strip "b/" prefix
+					bPath := parts[len(parts)-1]
+					if strings.HasPrefix(bPath, "b/") {
+						filePath := strings.TrimPrefix(bPath, "b/")
+						if !seen[filePath] {
+							seen[filePath] = true
+							files = append(files, filePath)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return files
+}
+
+// GetFileAtCommit returns the content of a file at a specific commit.
+// Returns empty string and nil error if the file doesn't exist at that commit (e.g., new files).
+// Returns error for actual git failures.
+func GetFileAtCommit(repoDir, commitHash, filePath string) (string, error) {
+	cmd := exec.Command("git", "show", commitHash+":"+filePath)
+	cmd.Dir = repoDir
+
+	out, err := cmd.Output()
+	if err != nil {
+		// Check if it's an exit error (file doesn't exist at that commit)
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			stderr := string(exitErr.Stderr)
+			// Git returns error when file doesn't exist at that commit
+			// This is not an error condition for our use case (new files)
+			if strings.Contains(stderr, "does not exist") ||
+				strings.Contains(stderr, "exists on disk, but not in") ||
+				strings.Contains(stderr, "fatal: path") {
+				return "", nil
+			}
+		}
+		return "", fmt.Errorf("git show %s:%s failed: %w", commitHash, filePath, err)
+	}
+
+	return string(out), nil
+}
+
+// GetBaseFileContents retrieves the content of files at a specific commit.
+// Only retrieves content for files that exist at that commit.
+// Returns a map from file path to file content.
+func GetBaseFileContents(repoDir, commitHash string, filePaths []string) (map[string]string, error) {
+	result := make(map[string]string)
+
+	for _, filePath := range filePaths {
+		content, err := GetFileAtCommit(repoDir, commitHash, filePath)
+		if err != nil {
+			// Log warning but continue - some files may not exist
+			continue
+		}
+		// Only include files that had content (existed at base commit)
+		if content != "" {
+			result[filePath] = content
+		}
+	}
+
+	return result, nil
+}
+
 // extractCommitMessageFromPatch extracts the commit message from a git format-patch output
 // The patch format includes "Subject: [PATCH] <commit message>" followed by the commit body
 func extractCommitMessageFromPatch(patch string) string {

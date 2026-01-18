@@ -49,6 +49,10 @@ type ConflictContext struct {
 	// ConcurrentDiff is the git diff from BaseCommit to current HEAD,
 	// showing what other agents merged while this agent was working.
 	ConcurrentDiff string
+	// BaseFileContents maps file paths to their content at BaseCommit.
+	// Only populated for files mentioned in FailedPatches that existed at BaseCommit.
+	// Files that were created by the agent (didn't exist at base) will not appear here.
+	BaseFileContents map[string]string
 }
 
 // Result holds the outcome of a resolver agent execution
@@ -296,6 +300,26 @@ func (r *Resolver) writePatchFiles(overlay *sandbox.Overlay, conflict *ConflictC
 		}
 	}
 
+	// Write base file contents to .canopy/conflict/base/<filepath>
+	// This provides the original state of files at the base commit
+	if len(conflict.BaseFileContents) > 0 {
+		baseDir := filepath.Join(canopyDir, "base")
+		if err := os.MkdirAll(baseDir, 0755); err != nil {
+			return fmt.Errorf("failed to create base directory: %w", err)
+		}
+
+		for filePath, content := range conflict.BaseFileContents {
+			// Create subdirectories if needed
+			fullPath := filepath.Join(baseDir, filePath)
+			if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
+				return fmt.Errorf("failed to create directory for base file %s: %w", filePath, err)
+			}
+			if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
+				return fmt.Errorf("failed to write base file %s: %w", filePath, err)
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -343,6 +367,7 @@ The failed patches are in .canopy/conflict/patch-*.patch - these contain the EXA
 - .canopy/conflict/errors.txt - Why the patches failed to apply
 - .canopy/conflict/original-task.txt - Original task context
 - .canopy/conflict/concurrent-changes.diff - Changes merged by other agents since the original agent started (if available)
+- .canopy/conflict/base/<filepath> - Original file contents at the base commit (for files that existed before the agent's changes)
 
 ### Resolution Strategy
 1. For each patch file, identify which hunks failed to apply

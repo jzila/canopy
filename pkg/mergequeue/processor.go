@@ -255,16 +255,34 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 			}
 		}
 
+		// Extract base file contents for files mentioned in patches
+		// This gives the resolver the original state of files before any changes
+		var baseFileContents map[string]string
+		if baseCommit != "" && len(failedPatches) > 0 {
+			affectedFiles := sandbox.ExtractFilesFromPatches(failedPatches)
+			if len(affectedFiles) > 0 {
+				contents, err := sandbox.GetBaseFileContents(p.outputDir, baseCommit, affectedFiles)
+				if err != nil {
+					if p.verbose {
+						fmt.Fprintf(os.Stderr, "warning: failed to get base file contents: %v\n", err)
+					}
+				} else {
+					baseFileContents = contents
+				}
+			}
+		}
+
 		conflictCtx := &resolver.ConflictContext{
-			TaskID:          taskID,
-			TaskTitle:       req.Task.Title,
-			TaskDescription: req.Task.Description,
-			FailedPatches:   failedPatches,
-			PatchErrors:     mergeResult.Errors,
-			FileChanges:     req.Result.Changes,
-			ParentAgentID:   p.makeAgentID(taskID),
-			BaseCommit:      baseCommit,
-			ConcurrentDiff:  concurrentDiff,
+			TaskID:           taskID,
+			TaskTitle:        req.Task.Title,
+			TaskDescription:  req.Task.Description,
+			FailedPatches:    failedPatches,
+			PatchErrors:      mergeResult.Errors,
+			FileChanges:      req.Result.Changes,
+			ParentAgentID:    p.makeAgentID(taskID),
+			BaseCommit:       baseCommit,
+			ConcurrentDiff:   concurrentDiff,
+			BaseFileContents: baseFileContents,
 		}
 
 		// Spawn resolver agent asynchronously
