@@ -197,12 +197,21 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 		resolverReason = "merge errors: " + strings.Join(mergeResult.Errors, "; ")
 	}
 
-	// Case 2: No actual changes applied (might be filtering issue)
+	// Case 2: No actual changes applied despite agent having git patches
+	// Only spawn resolver if the agent made git commits that we couldn't apply.
+	// If the agent had no patches (no commits), then "no changes applied" just means
+	// the work was already done or there was nothing to do - not a conflict.
 	if !needsResolver && mergeResult.CommitsApplied == 0 && len(mergeResult.Applied) == 0 {
-		// Only spawn resolver if the agent actually produced something
-		if len(req.Result.Changes) > 0 {
+		// Check if agent actually made git commits we failed to apply
+		hasPatches := req.Result.GitState != nil && len(req.Result.GitState.Patches) > 0
+		if hasPatches {
 			needsResolver = true
-			resolverReason = "no changes applied despite agent output"
+			resolverReason = "no changes applied despite agent commits"
+		} else if len(req.Result.Changes) > 0 && p.verbose {
+			// Agent reported changes but made no commits and nothing was applied.
+			// This is the "work already done" or "nothing to do" case - not a conflict.
+			fmt.Printf("[%s] Agent reported %d file changes but made no commits and nothing was applied (work already done or filtered)\n",
+				taskID, len(req.Result.Changes))
 		}
 	}
 

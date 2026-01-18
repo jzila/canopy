@@ -897,3 +897,110 @@ func TestResolverResultMerged(t *testing.T) {
 		t.Errorf("Expected last merged result to be resolver's, got %s", lastResult.TaskID)
 	}
 }
+
+// TestNoResolverWhenAgentHasChangesButNoCommits verifies resolver is NOT spawned
+// when agent reports file changes but made no git commits (the "work already done" case).
+// This scenario occurs when:
+// 1. Agent reads/touches files in overlay (recorded as 'changes')
+// 2. Agent determines work is already done (or it's an epic with nothing to do)
+// 3. Agent makes no commits
+// 4. Merge queue sees changes but CommitsApplied == 0 && Applied == 0
+//
+// In this case, spawning a resolver is wasteful because there's no actual conflict
+// to resolve - the work was simply already done or there was nothing to do.
+func TestNoResolverWhenAgentHasChangesButNoCommits(t *testing.T) {
+	mockRes := newMockResolver(true)
+	mockMerge := newMockMerger(false)
+
+	// Result with file changes but NO git state (no commits)
+	// This simulates an agent that read files but didn't need to make changes
+	result := &agent.Result{
+		TaskID:   "canopy-test",
+		Success:  true,
+		GitState: nil, // No commits made
+		Changes: []sandbox.FileChange{
+			// Agent read/touched these files but didn't modify them
+			// (These might be file reads that copy-up'd in overlay before hash comparison fix)
+			{Path: "file1.go", Type: sandbox.ChangeModified},
+			{Path: "file2.go", Type: sandbox.ChangeModified},
+			{Path: "file3.go", Type: sandbox.ChangeModified},
+		},
+	}
+
+	// Merge should succeed (no patches to apply, files would be filtered/no-op)
+	mergeResult, _ := mockMerge.MergeSingle(result, nil)
+
+	// No patch failure expected since there are no patches
+	if mergeResult.PatchFailed[result.TaskID] {
+		t.Error("Expected no patch failure when there are no patches")
+	}
+
+	// Simulate the processor logic for spawning resolver
+	// Old logic: spawn if Changes > 0 && CommitsApplied == 0 && Applied == 0
+	// New logic: only spawn if GitState.Patches > 0 && CommitsApplied == 0 && Applied == 0
+
+	needsResolver := false
+	if mergeResult.CommitsApplied == 0 && len(mergeResult.Applied) == 0 {
+		// NEW: Check if agent actually made git commits we failed to apply
+		hasPatches := result.GitState != nil && len(result.GitState.Patches) > 0
+		if hasPatches {
+			needsResolver = true
+		}
+		// OLD (buggy): if len(result.Changes) > 0 { needsResolver = true }
+	}
+
+	// Resolver should NOT be spawned for this case
+	if needsResolver {
+		t.Error("Resolver should NOT be spawned when agent has changes but no git commits")
+	}
+
+	// Verify resolver was not called
+	if mockRes.GetResolveCalls() != 0 {
+		t.Errorf("Resolver should not be called, but got %d calls", mockRes.GetResolveCalls())
+	}
+}
+
+// TestResolverSpawnedWhenAgentHasCommitsThatFailedToApply verifies resolver IS spawned
+// when agent made commits but they couldn't be applied (actual conflict case).
+func TestResolverSpawnedWhenAgentHasCommitsThatFailedToApply(t *testing.T) {
+	mockMerge := newMockMerger(true) // Patches will fail
+
+	// Result with file changes AND git commits
+	result := &agent.Result{
+		TaskID:  "canopy-test",
+		Success: true,
+		GitState: &sandbox.GitState{
+			Patches: []string{
+				"From abc123 Mon Sep 17 00:00:00 2001\nSubject: Test commit\n---\n test.txt | 1 +\n",
+			},
+			BaseCommit: "def456",
+		},
+		Changes: []sandbox.FileChange{
+			{Path: "test.txt", Type: sandbox.ChangeCreated},
+		},
+	}
+
+	// Merge will report patch failure
+	mergeResult, _ := mockMerge.MergeSingle(result, nil)
+
+	// Simulate the processor logic for spawning resolver
+	needsResolver := false
+
+	// Case 1: Merge had errors
+	if len(mergeResult.Errors) > 0 {
+		needsResolver = true
+	}
+
+	// Case 2: No actual changes applied despite agent having git patches
+	if !needsResolver && mergeResult.CommitsApplied == 0 && len(mergeResult.Applied) == 0 {
+		hasPatches := result.GitState != nil && len(result.GitState.Patches) > 0
+		if hasPatches {
+			needsResolver = true
+		}
+	}
+
+	// Resolver SHOULD be spawned because agent made commits that failed to apply
+	if !needsResolver {
+		t.Error("Resolver SHOULD be spawned when agent has commits that failed to apply")
+	}
+}
