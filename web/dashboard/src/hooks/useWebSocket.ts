@@ -89,7 +89,18 @@ interface TaskUpdatedEvent {
 }
 
 // Merge status types matching Go backend (ipc/protocol.go)
-type MergeStatus = 'pending' | 'acquiring' | 'merging' | 'resolving' | 'merged' | 'failed';
+type MergeStatus = 'pending' | 'acquiring' | 'merging' | 'resolving' | 'merged' | 'failed' | 'skipped' | 'merged_needs_repair';
+
+// Validation status types matching Go backend (validation/executor.go)
+type ValidationStatus = 'pending' | 'running' | 'passed' | 'failed' | 'skipped' | 'repairing';
+
+// Validation step result matching Go backend (ipc/protocol.go)
+interface ValidationStep {
+  name: string;
+  status: string;
+  duration_ms: number;
+  output?: string;
+}
 
 interface AgentMergeStatusEvent {
   type: 'agent:merge_status';
@@ -99,6 +110,14 @@ interface AgentMergeStatusEvent {
     merge_status: MergeStatus;
     queue_pos?: number;
     error?: string;
+    // Validation results
+    validation_status?: ValidationStatus;
+    validation_steps?: ValidationStep[];
+    validation_duration_ms?: number;
+    validation_error?: string;
+    // Repair agent tracking
+    repair_attempts?: number;
+    last_repair_output?: string;
   };
 }
 
@@ -505,9 +524,31 @@ export function useWebSocket() {
             }
 
             case 'agent:merge_status': {
-              const { agent_id, merge_status, queue_pos, error } = message.payload;
-              console.log('[WebSocket] Agent merge status:', agent_id, merge_status, 'pos:', queue_pos);
-              updateAgentMergeStatus(agent_id, merge_status, queue_pos, error);
+              const {
+                agent_id,
+                merge_status,
+                queue_pos,
+                error,
+                validation_status,
+                validation_steps,
+                validation_duration_ms,
+                validation_error,
+                repair_attempts,
+                last_repair_output,
+              } = message.payload;
+              console.log('[WebSocket] Agent merge status:', agent_id, merge_status, 'pos:', queue_pos, 'validation:', validation_status);
+              updateAgentMergeStatus(
+                agent_id,
+                merge_status,
+                queue_pos,
+                error,
+                validation_status as import('../stores/stateStore').ValidationStatus | undefined,
+                validation_steps as import('../stores/stateStore').ValidationStep[] | undefined,
+                validation_duration_ms,
+                validation_error,
+                repair_attempts,
+                last_repair_output
+              );
               break;
             }
 

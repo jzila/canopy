@@ -12,7 +12,27 @@ export type AgentStatus =
   | 'cancelled';
 
 // Merge status types matching Go backend (ipc/protocol.go)
-export type MergeStatus = 'pending' | 'acquiring' | 'merging' | 'resolving' | 'merged' | 'failed' | 'skipped';
+export type MergeStatus = 'pending' | 'acquiring' | 'merging' | 'resolving' | 'merged' | 'failed' | 'skipped' | 'merged_needs_repair';
+
+// Validation status types matching Go backend (validation/executor.go)
+export type ValidationStatus = 'pending' | 'running' | 'passed' | 'failed' | 'skipped' | 'repairing';
+
+// ValidationStep represents a single validation step result
+export interface ValidationStep {
+  name: string;           // e.g., "build", "test", "lint"
+  status: string;         // pending, running, passed, failed, skipped
+  duration_ms: number;    // Duration in milliseconds
+  output?: string;        // Output or error message
+}
+
+// WorkerChainItem represents an item in the worker chain timeline
+export interface WorkerChainItem {
+  type: 'agent' | 'resolver' | 'validation' | 'repair';
+  status: 'pending' | 'running' | 'success' | 'failed';
+  duration_ms?: number;
+  output?: string;
+  attempt?: number;  // For repair agents
+}
 
 export interface OutputBuffer {
   stdout: string;
@@ -74,6 +94,14 @@ export interface AgentState {
   merge_commits_applied?: number;   // Number of commits applied during merge
   merge_had_conflict?: boolean;     // Whether merge had conflicts
   merge_resolver_spawned?: boolean; // Whether resolver agent was spawned
+  // Validation and repair fields
+  validation_status?: ValidationStatus;      // Overall validation status
+  validation_steps?: ValidationStep[];       // Results of individual validation steps
+  validation_duration_ms?: number;           // Total validation duration in milliseconds
+  validation_error?: string;                 // Error message if validation failed
+  repair_attempts?: number;                  // Number of repair attempts made (0 = no repairs)
+  last_repair_output?: string;               // Output/error from last repair attempt
+  worker_chain?: WorkerChainItem[];          // Full worker chain timeline
 }
 
 export interface TaskState {
@@ -163,7 +191,13 @@ interface StateStore {
     agentId: string,
     mergeStatus: MergeStatus,
     queuePos?: number,
-    error?: string
+    error?: string,
+    validationStatus?: ValidationStatus,
+    validationSteps?: ValidationStep[],
+    validationDurationMs?: number,
+    validationError?: string,
+    repairAttempts?: number,
+    lastRepairOutput?: string
   ) => void;
   // Run filtering actions
   setRuns: (runs: Run[]) => void;
@@ -418,7 +452,7 @@ export const useStateStore = create<StateStore>((set) => ({
 
   setMergeQueue: (mergeQueue) => set({ mergeQueue }),
 
-  updateAgentMergeStatus: (agentId, mergeStatus, queuePos, error) =>
+  updateAgentMergeStatus: (agentId, mergeStatus, queuePos, error, validationStatus, validationSteps, validationDurationMs, validationError, repairAttempts, lastRepairOutput) =>
     set((state) => {
       const agent = state.agents[agentId];
       if (!agent) {
@@ -434,12 +468,30 @@ export const useStateStore = create<StateStore>((set) => ({
         merge_status: mergeStatus,
       };
 
-      // Only set queue_pos and error if provided (exactOptionalPropertyTypes compliance)
+      // Only set fields if provided (exactOptionalPropertyTypes compliance)
       if (queuePos !== undefined) {
         updatedAgent.merge_queue_pos = queuePos;
       }
       if (error !== undefined) {
         updatedAgent.merge_error = error;
+      }
+      if (validationStatus !== undefined) {
+        updatedAgent.validation_status = validationStatus;
+      }
+      if (validationSteps !== undefined) {
+        updatedAgent.validation_steps = validationSteps;
+      }
+      if (validationDurationMs !== undefined) {
+        updatedAgent.validation_duration_ms = validationDurationMs;
+      }
+      if (validationError !== undefined) {
+        updatedAgent.validation_error = validationError;
+      }
+      if (repairAttempts !== undefined) {
+        updatedAgent.repair_attempts = repairAttempts;
+      }
+      if (lastRepairOutput !== undefined) {
+        updatedAgent.last_repair_output = lastRepairOutput;
       }
 
       return {

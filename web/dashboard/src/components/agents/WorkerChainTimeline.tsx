@@ -1,0 +1,278 @@
+import React, { useState } from 'react';
+import { ChevronDown, ChevronRight, Check, X, Clock, Loader2, Wrench, GitMerge, Play, AlertTriangle } from 'lucide-react';
+import type { AgentState, ValidationStep, ValidationStatus } from '../../stores/stateStore';
+
+interface WorkerChainTimelineProps {
+  agent: AgentState;
+  childAgents?: AgentState[];
+}
+
+const formatDuration = (ms: number): string => {
+  const seconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+
+  if (minutes > 0) {
+    return `${minutes}m ${remainingSeconds}s`;
+  }
+  return `${seconds}s`;
+};
+
+const getStatusIcon = (status: string) => {
+  switch (status) {
+    case 'completed':
+    case 'success':
+    case 'passed':
+    case 'merged':
+      return <Check className="w-3.5 h-3.5 text-green-500" />;
+    case 'failed':
+      return <X className="w-3.5 h-3.5 text-red-500" />;
+    case 'running':
+    case 'pending':
+    case 'acquiring':
+    case 'merging':
+      return <Loader2 className="w-3.5 h-3.5 text-blue-500 animate-spin" />;
+    case 'repairing':
+      return <Wrench className="w-3.5 h-3.5 text-orange-500 animate-pulse" />;
+    case 'skipped':
+      return <Clock className="w-3.5 h-3.5 text-gray-400" />;
+    default:
+      return <Clock className="w-3.5 h-3.5 text-gray-400" />;
+  }
+};
+
+const getStatusColor = (status: string) => {
+  switch (status) {
+    case 'completed':
+    case 'success':
+    case 'passed':
+    case 'merged':
+      return 'text-green-600 dark:text-green-400';
+    case 'failed':
+      return 'text-red-600 dark:text-red-400';
+    case 'running':
+    case 'pending':
+    case 'acquiring':
+    case 'merging':
+      return 'text-blue-600 dark:text-blue-400';
+    case 'repairing':
+      return 'text-orange-600 dark:text-orange-400';
+    case 'skipped':
+      return 'text-gray-500 dark:text-gray-400';
+    default:
+      return 'text-gray-500 dark:text-gray-400';
+  }
+};
+
+interface TimelineItemProps {
+  icon: React.ReactNode;
+  title: string;
+  status: string;
+  duration?: number | undefined;
+  output?: string | undefined;
+  isLast?: boolean;
+  children?: React.ReactNode;
+}
+
+const TimelineItem: React.FC<TimelineItemProps> = ({
+  icon,
+  title,
+  status,
+  duration,
+  output,
+  isLast = false,
+  children,
+}) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const hasExpandableContent = output || children;
+
+  return (
+    <div className="relative">
+      {/* Vertical connector line */}
+      {!isLast && (
+        <div className="absolute left-[9px] top-6 bottom-0 w-0.5 bg-gray-200 dark:bg-gray-700" />
+      )}
+
+      <div className="flex items-start gap-3">
+        {/* Status indicator */}
+        <div className="flex-shrink-0 w-5 h-5 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center border border-gray-200 dark:border-gray-700">
+          {icon}
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 min-w-0 pb-4">
+          <div
+            className={`flex items-center gap-2 ${hasExpandableContent ? 'cursor-pointer' : ''}`}
+            onClick={() => hasExpandableContent && setIsExpanded(!isExpanded)}
+          >
+            {hasExpandableContent && (
+              isExpanded
+                ? <ChevronDown className="w-3 h-3 text-gray-400" />
+                : <ChevronRight className="w-3 h-3 text-gray-400" />
+            )}
+            <span className="text-xs font-medium text-gray-700 dark:text-gray-300">{title}</span>
+            <span className={`text-xs ${getStatusColor(status)}`}>{status}</span>
+            {duration !== undefined && (
+              <span className="text-xs text-gray-400 font-mono tabular-nums ml-auto">
+                {formatDuration(duration)}
+              </span>
+            )}
+          </div>
+
+          {isExpanded && (
+            <div className="mt-2 text-xs">
+              {output && (
+                <pre className="p-2 bg-gray-100 dark:bg-gray-900 rounded text-gray-600 dark:text-gray-400 overflow-x-auto max-h-32 overflow-y-auto whitespace-pre-wrap">
+                  {output}
+                </pre>
+              )}
+              {children}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export const WorkerChainTimeline: React.FC<WorkerChainTimelineProps> = ({
+  agent,
+  childAgents = [],
+}) => {
+  // Build the worker chain from agent state
+  const items: Array<{
+    type: 'agent' | 'resolver' | 'validation' | 'repair';
+    title: string;
+    status: string;
+    duration?: number | undefined;
+    output?: string | undefined;
+    steps?: ValidationStep[] | undefined;
+    attempt?: number | undefined;
+  }> = [];
+
+  // 1. Original worker agent
+  items.push({
+    type: 'agent',
+    title: 'Worker Agent',
+    status: agent.status,
+    duration: agent.duration * 1000, // Convert seconds to ms
+  });
+
+  // 2. Check for resolver (child agent that resolves conflicts)
+  const resolverAgents = childAgents.filter(child =>
+    child.parent_agent_id === agent.id && !child.task_id.includes('repair')
+  );
+
+  for (const resolver of resolverAgents) {
+    items.push({
+      type: 'resolver',
+      title: 'Conflict Resolver',
+      status: resolver.status === 'completed' ? 'resolved' : resolver.status,
+      duration: resolver.duration * 1000,
+      output: resolver.error || undefined,
+    });
+  }
+
+  // 3. Validation (if applicable)
+  if (agent.validation_status) {
+    items.push({
+      type: 'validation',
+      title: 'Validation',
+      status: agent.validation_status,
+      duration: agent.validation_duration_ms,
+      output: agent.validation_error,
+      steps: agent.validation_steps,
+    });
+  }
+
+  // 4. Repair agents (if any)
+  const repairAgents = childAgents.filter(child =>
+    child.task_id.includes('repair') || child.parent_agent_id === agent.id
+  ).sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
+
+  let repairAttempt = 0;
+  for (const repair of repairAgents) {
+    repairAttempt++;
+    items.push({
+      type: 'repair',
+      title: `Repair Agent #${repairAttempt}`,
+      status: repair.status === 'completed' ? 'fixed' : repair.status,
+      duration: repair.duration * 1000,
+      output: repair.error || agent.last_repair_output,
+      attempt: repairAttempt,
+    });
+
+    // If repair was successful, add a validation pass after it
+    if (repair.status === 'completed' && agent.validation_status === 'passed') {
+      items.push({
+        type: 'validation',
+        title: 'Validation',
+        status: 'passed',
+        duration: agent.validation_duration_ms,
+      });
+    }
+  }
+
+  // If no explicit repair agents but repair_attempts > 0, show repair info
+  if (repairAgents.length === 0 && agent.repair_attempts && agent.repair_attempts > 0) {
+    items.push({
+      type: 'repair',
+      title: `Repair Agent`,
+      status: agent.validation_status === 'passed' ? 'fixed' : 'repairing',
+      output: agent.last_repair_output,
+      attempt: agent.repair_attempts,
+    });
+  }
+
+  // Don't render if there's just the worker agent with no special status
+  if (items.length === 1 && !agent.merge_status && !agent.validation_status) {
+    return null;
+  }
+
+  return (
+    <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
+      <div className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2 flex items-center gap-1.5">
+        <Play className="w-3 h-3" />
+        Worker Chain
+      </div>
+      <div className="ml-1">
+        {items.map((item, index) => (
+          <TimelineItem
+            key={`${item.type}-${index}`}
+            icon={
+              item.type === 'agent' ? <Play className="w-3 h-3" /> :
+              item.type === 'resolver' ? <GitMerge className="w-3 h-3" /> :
+              item.type === 'validation' ? getStatusIcon(item.status) :
+              <Wrench className="w-3 h-3" />
+            }
+            title={item.title}
+            status={item.status}
+            duration={item.duration}
+            output={item.output}
+            isLast={index === items.length - 1}
+          >
+            {/* Render validation steps if available */}
+            {item.type === 'validation' && item.steps && item.steps.length > 0 && (
+              <div className="mt-2 space-y-1">
+                {item.steps.map((step, stepIndex) => (
+                  <div key={stepIndex} className="flex items-center gap-2 text-xs">
+                    {getStatusIcon(step.status)}
+                    <span className="text-gray-600 dark:text-gray-400">{step.name}</span>
+                    <span className={getStatusColor(step.status)}>{step.status}</span>
+                    {step.duration_ms > 0 && (
+                      <span className="text-gray-400 font-mono tabular-nums ml-auto">
+                        {formatDuration(step.duration_ms)}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </TimelineItem>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+export default WorkerChainTimeline;

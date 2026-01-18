@@ -120,6 +120,7 @@ const MergeStatusBadge: React.FC<{ status: MergeStatus; queuePos?: number; error
     merging: { color: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300', label: 'Merging', icon: <GitMerge className="w-4 h-4" /> },
     resolving: { color: 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300', label: 'Resolving Conflicts', icon: <GitMerge className="w-4 h-4" /> },
     merged: { color: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300', label: 'Merged', icon: <GitMerge className="w-4 h-4" /> },
+    merged_needs_repair: { color: 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300', label: 'Merged (Needs Repair)', icon: <GitMerge className="w-4 h-4" /> },
     failed: { color: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300', label: 'Merge Failed', icon: <GitMerge className="w-4 h-4" /> },
     skipped: { color: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300', label: 'No Changes Needed', icon: <CheckCircle2 className="w-4 h-4" /> },
   };

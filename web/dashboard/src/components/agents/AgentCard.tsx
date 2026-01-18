@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { Clock, Zap, DollarSign, XCircle, GitCommit, Archive, ExternalLink, GitMerge, AlertTriangle } from 'lucide-react';
+import { Clock, Zap, DollarSign, XCircle, GitCommit, Archive, ExternalLink, GitMerge, AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react';
 import type { AgentState } from '../../stores/stateStore';
 import { useStateStore } from '../../stores/stateStore';
 import { killAgent, archiveAgent } from '../../api/client';
+import { WorkerChainTimeline } from './WorkerChainTimeline';
+import { ValidationStatusBadge } from './ValidationStatusBadge';
 
 interface AgentCardProps {
   agent: AgentState;
@@ -66,8 +68,15 @@ export const AgentCard: React.FC<AgentCardProps> = ({
   );
   const [isKilling, setIsKilling] = useState(false);
   const [isArchiving, setIsArchiving] = useState(false);
+  const [showWorkerChain, setShowWorkerChain] = useState(false);
   const setHighlightedTask = useStateStore((state) => state.setHighlightedTask);
   const tasks = useStateStore((state) => state.tasks);
+  const agents = useStateStore((state) => state.agents);
+
+  // Get child agents for this agent (resolvers, repair agents)
+  const childAgents = Object.values(agents).filter(
+    a => a.parent_agent_id === agent.id
+  );
 
   // Update elapsed time every second for running agents
   useEffect(() => {
@@ -130,6 +139,19 @@ export const AgentCard: React.FC<AgentCardProps> = ({
 
   // Check if task exists in the BeadsPane (incomplete tasks only)
   const taskExistsInBeads = Boolean(tasks[agent.task_id]);
+
+  // Check if we have worker chain data to display
+  const hasWorkerChainData = Boolean(
+    agent.merge_status ||
+    agent.validation_status ||
+    agent.repair_attempts ||
+    childAgents.length > 0
+  );
+
+  // Get failed validation step name if applicable
+  const failedValidationStep = agent.validation_steps?.find(
+    step => step.status === 'failed'
+  )?.name;
 
   const isRunning = agent.status === 'running' || agent.status === 'starting';
   const isFinished = agent.status === 'completed' || agent.status === 'failed' || agent.status === 'timed_out' || agent.status === 'cancelled';
@@ -237,10 +259,11 @@ export const AgentCard: React.FC<AgentCardProps> = ({
         )}
       </div>
 
-      {/* Merge status indicator for historical data */}
-      {agent.merge_status && (
-        <div className="mt-3 flex items-center gap-3 text-xs">
-          {agent.merge_status === 'merged' ? (
+      {/* Merge and validation status indicators */}
+      {(agent.merge_status || agent.validation_status) && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+          {/* Merge status */}
+          {agent.merge_status === 'merged' || agent.merge_status === 'merged_needs_repair' ? (
             <div className="flex items-center gap-1.5 text-green-600 dark:text-green-400" title={`Merged${agent.merge_commits_applied ? ` (${agent.merge_commits_applied} commits)` : ''}`}>
               <GitMerge className="w-3.5 h-3.5" />
               <span className="tracking-wide">Merged</span>
@@ -257,18 +280,51 @@ export const AgentCard: React.FC<AgentCardProps> = ({
               <span className="tracking-wide">Merge Failed</span>
             </div>
           ) : null}
+
+          {/* Conflict indicator */}
           {agent.merge_had_conflict && (
             <div className="flex items-center gap-1.5 text-yellow-600 dark:text-yellow-400" title="Merge had conflicts">
               <AlertTriangle className="w-3.5 h-3.5" />
               <span className="tracking-wide">Conflict</span>
             </div>
           )}
+
+          {/* Resolver indicator */}
           {agent.merge_resolver_spawned && (
             <span className="text-purple-600 dark:text-purple-400 tracking-wide" title="Resolver agent was spawned">
               (Resolved)
             </span>
           )}
+
+          {/* Validation status badge */}
+          {agent.validation_status && (
+            <ValidationStatusBadge
+              status={agent.validation_status}
+              repairAttempts={agent.repair_attempts}
+              failedStep={failedValidationStep}
+            />
+          )}
+
+          {/* Worker chain toggle */}
+          {hasWorkerChainData && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowWorkerChain(!showWorkerChain);
+              }}
+              className="flex items-center gap-1 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 ml-auto"
+              title={showWorkerChain ? 'Hide worker chain' : 'Show worker chain'}
+            >
+              {showWorkerChain ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+              <span className="tracking-wide">Details</span>
+            </button>
+          )}
         </div>
+      )}
+
+      {/* Worker chain timeline (expandable) */}
+      {showWorkerChain && hasWorkerChainData && (
+        <WorkerChainTimeline agent={agent} childAgents={childAgents} />
       )}
 
       {agent.error && (
