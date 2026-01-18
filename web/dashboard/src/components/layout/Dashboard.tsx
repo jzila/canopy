@@ -111,6 +111,9 @@ export const Dashboard: React.FC = () => {
   const setRuns = useStateStore((state) => state.setRuns);
   const setActiveRunId = useStateStore((state) => state.setActiveRunId);
   const setRunsLoading = useStateStore((state) => state.setRunsLoading);
+  const selectedBeadId = useStateStore((state) => state.selectedBeadId);
+  const setSelectedBead = useStateStore((state) => state.setSelectedBead);
+  const tasks = useStateStore((state) => state.tasks);
 
   // Use the agent filtering hook
   const { groupedAgents, archivedCount } = useAgentFiltering({
@@ -118,6 +121,7 @@ export const Dashboard: React.FC = () => {
     statusFilter,
     showArchived: showArchivedAgents,
     activeRunId,
+    selectedBeadId,
   });
 
   // Load initial state on mount
@@ -288,6 +292,8 @@ export const Dashboard: React.FC = () => {
           width={beadsPaneWidth}
           isResizing={isBeadsResizing}
           onResizeStart={handleBeadsResizeStart}
+          selectedBeadId={selectedBeadId}
+          onBeadSelect={setSelectedBead}
         />
 
         {/* Main Content */}
@@ -301,6 +307,9 @@ export const Dashboard: React.FC = () => {
               selectedAgentId={selectedAgentId}
               onSelectAgent={handleSelectAgent}
               onArchiveToggle={handleAgentArchiveToggle}
+              selectedBeadId={selectedBeadId}
+              selectedBeadTitle={selectedBeadId ? tasks[selectedBeadId]?.title : undefined}
+              onClearBeadFilter={() => setSelectedBead(null)}
             />
           </div>
 

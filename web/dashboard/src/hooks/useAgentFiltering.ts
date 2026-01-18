@@ -13,6 +13,8 @@ export interface UseAgentFilteringOptions {
   statusFilter: StatusFilter;
   showArchived: boolean;
   activeRunId: string;
+  /** When set, only show agents for this bead (overrides other filters) */
+  selectedBeadId?: string | null;
 }
 
 export interface UseAgentFilteringResult {
@@ -28,6 +30,7 @@ export interface UseAgentFilteringResult {
  * Custom hook for filtering and grouping agents.
  *
  * Handles:
+ * - Filtering by selected bead (overrides all other filters)
  * - Filtering by run ID
  * - Filtering by archived status
  * - Filtering by agent status (running, completed, failed)
@@ -40,6 +43,7 @@ export function useAgentFiltering({
   statusFilter,
   showArchived,
   activeRunId,
+  selectedBeadId,
 }: UseAgentFilteringOptions): UseAgentFilteringResult {
   const agentList = useMemo(() => Object.values(agents), [agents]);
 
@@ -52,6 +56,11 @@ export function useAgentFiltering({
   const filteredAgents = useMemo(() => {
     return agentList
       .filter((agent) => {
+        // If a bead is selected, ONLY show agents for that bead (override all other filters)
+        if (selectedBeadId) {
+          return agent.task_id === selectedBeadId;
+        }
+
         // Filter by run ID first (if a specific run is selected)
         if (activeRunId !== '' && agent.run_id !== activeRunId) {
           return false;
@@ -88,7 +97,7 @@ export function useAgentFiltering({
         // Sort by start time (most recent first)
         return new Date(b.start_time).getTime() - new Date(a.start_time).getTime();
       });
-  }, [agentList, statusFilter, showArchived, activeRunId]);
+  }, [agentList, statusFilter, showArchived, activeRunId, selectedBeadId]);
 
   // Group agents by parent/child relationships
   const groupedAgents = useMemo(() => {

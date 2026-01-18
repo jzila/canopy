@@ -17,6 +17,10 @@ interface BeadsPaneProps {
   isResizing?: boolean;
   /** Handler to start resizing (attach to mousedown on resize handle) */
   onResizeStart?: (e: React.MouseEvent) => void;
+  /** Currently selected bead ID for filtering agents */
+  selectedBeadId?: string | null;
+  /** Callback when a bead is selected/deselected */
+  onBeadSelect?: (beadId: string | null) => void;
 }
 
 type ViewMode = 'hierarchy' | 'flat';
@@ -209,7 +213,7 @@ const truncateId = (id: string, length: number = 11): string => {
   return id.length > length ? id.slice(0, length) : id;
 };
 
-export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTaskClick, showCompleted = false, onToggleShowCompleted, width = 320, isResizing = false, onResizeStart }) => {
+export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTaskClick, showCompleted = false, onToggleShowCompleted, width = 320, isResizing = false, onResizeStart, selectedBeadId, onBeadSelect }) => {
   const tasks = useStateStore((state) => state.tasks);
   const highlightedTaskId = useStateStore((state) => state.highlightedTaskId);
   const [viewMode, setViewMode] = useState<ViewMode>('hierarchy');
@@ -339,6 +343,18 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
       return next;
     });
   };
+
+  // Handle bead click - toggle selection
+  const handleBeadClick = useCallback((taskId: string, e: React.MouseEvent) => {
+    // If clicking on the expand/collapse button, don't toggle selection
+    if ((e.target as HTMLElement).closest('button')) {
+      return;
+    }
+    if (onBeadSelect) {
+      // Toggle: if already selected, deselect; otherwise select
+      onBeadSelect(selectedBeadId === taskId ? null : taskId);
+    }
+  }, [onBeadSelect, selectedBeadId]);
 
   // Count by status
   const statusCounts = useMemo(() => {
@@ -526,6 +542,7 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
               const statusConfig = getStatusConfig(task.status);
               const priorityStyle = getPriorityStyle(task.priority);
               const isHighlighted = highlightedTaskId === task.id;
+              const isSelected = selectedBeadId === task.id;
               const isCompletedOrArchived = task.status.toLowerCase() === 'done' || task.status.toLowerCase() === 'completed' || task.archived;
 
               return (
@@ -538,12 +555,15 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
                       taskRefs.current.delete(task.id);
                     }
                   }}
-                  className={`px-4 py-3.5 transition-all cursor-default ${
-                    isHighlighted
-                      ? 'bg-blue-100 dark:bg-blue-900/50 ring-2 ring-blue-500 ring-inset'
-                      : isCompletedOrArchived
-                        ? 'bg-gray-50 dark:bg-gray-800/50 opacity-75'
-                        : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                  onClick={(e) => handleBeadClick(task.id, e)}
+                  className={`px-4 py-3.5 transition-all cursor-pointer ${
+                    isSelected
+                      ? 'bg-indigo-100 dark:bg-indigo-900/50 ring-2 ring-indigo-500 ring-inset'
+                      : isHighlighted
+                        ? 'bg-blue-100 dark:bg-blue-900/50 ring-2 ring-blue-500 ring-inset'
+                        : isCompletedOrArchived
+                          ? 'bg-gray-50 dark:bg-gray-800/50 opacity-75 hover:bg-gray-100 dark:hover:bg-gray-700/50'
+                          : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'
                   }`}
                 >
                   {/* Top row: Priority, Status, ID */}
@@ -601,6 +621,7 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
               const hasChildren = children.length > 0;
               const isCollapsed = collapsedNodes.has(task.id);
               const isHighlighted = highlightedTaskId === task.id;
+              const isSelected = selectedBeadId === task.id;
               const isCompletedOrArchived = task.status.toLowerCase() === 'done' || task.status.toLowerCase() === 'completed' || task.archived;
 
               return (
@@ -613,12 +634,15 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
                       taskRefs.current.delete(task.id);
                     }
                   }}
-                  className={`transition-all cursor-default ${
-                    isHighlighted
-                      ? 'bg-blue-100 dark:bg-blue-900/50 ring-2 ring-blue-500 ring-inset'
-                      : isCompletedOrArchived
-                        ? 'bg-gray-50 dark:bg-gray-800/50 opacity-75'
-                        : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                  onClick={(e) => handleBeadClick(task.id, e)}
+                  className={`transition-all cursor-pointer ${
+                    isSelected
+                      ? 'bg-indigo-100 dark:bg-indigo-900/50 ring-2 ring-indigo-500 ring-inset'
+                      : isHighlighted
+                        ? 'bg-blue-100 dark:bg-blue-900/50 ring-2 ring-blue-500 ring-inset'
+                        : isCompletedOrArchived
+                          ? 'bg-gray-50 dark:bg-gray-800/50 opacity-75 hover:bg-gray-100 dark:hover:bg-gray-700/50'
+                          : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'
                   }`}
                   style={{ paddingLeft: `${depth * 16 + 8}px` }}
                 >

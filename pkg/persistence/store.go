@@ -85,13 +85,13 @@ const (
 // Task represents a beads task persisted in the database
 type Task struct {
 	ID        string `json:"id"`
-	RepoID    string `json:"repo_id,omitempty"`
+	RepoID    string `json:"repoId,omitempty"`
 	Title     string `json:"title"`
 	Status    string `json:"status"` // ready, in_progress, completed, failed, blocked
 	Type      string `json:"type,omitempty"`
 	Priority  int    `json:"priority"`
-	AgentID   string `json:"agent_id,omitempty"`
-	UpdatedAt int64  `json:"updated_at"`
+	AgentID   string `json:"agentId,omitempty"`
+	UpdatedAt int64  `json:"updatedAt"`
 }
 
 // Agent represents a single agent execution within a run
@@ -120,13 +120,13 @@ type Agent struct {
 	ResultMessage       string      `json:"result_message,omitempty"`
 	RepoID              string      `json:"repo_id,omitempty"`
 	Archived            bool        `json:"archived"`
-	ParentAgentID        string      `json:"parent_agent_id,omitempty"` // ID of parent agent for resolver agents
+	ParentAgentID       string      `json:"parentAgentId,omitempty"` // ID of parent agent for resolver agents
 	// Merge result fields
-	MergeStatus          MergeStatus `json:"merge_status,omitempty"`
-	MergeCommitsApplied  int         `json:"merge_commits_applied"`
-	MergeHadConflict     bool        `json:"merge_had_conflict"`
-	MergeResolverSpawned bool        `json:"merge_resolver_spawned"`
-	MergeError           string      `json:"merge_error,omitempty"`
+	MergeStatus         MergeStatus `json:"mergeStatus,omitempty"`
+	MergeCommitsApplied int         `json:"mergeCommitsApplied"`
+	MergeHadConflict    bool        `json:"mergeHadConflict"`
+	MergeResolverSpawned bool       `json:"mergeResolverSpawned"`
+	MergeError          string      `json:"mergeError,omitempty"`
 }
 
 // RunFilter specifies criteria for querying runs
