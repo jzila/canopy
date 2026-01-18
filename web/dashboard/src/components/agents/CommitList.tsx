@@ -60,14 +60,14 @@ const CommitItem: React.FC<CommitItemProps> = ({ commit, isExpanded, onToggle })
   const hasFiles = commit.files_changed && commit.files_changed.length > 0;
 
   return (
-    <div className="border border-gray-700 rounded-lg mb-2 overflow-hidden">
+    <div className="border border-gray-200 dark:border-gray-700 rounded-lg mb-2 overflow-hidden">
       {/* Commit header - always visible */}
       <div
         onClick={onToggle}
-        className="flex items-center gap-3 p-3 bg-gray-800/50 hover:bg-gray-800 cursor-pointer transition-colors"
+        className="flex items-center gap-3 p-3 bg-gray-100/50 dark:bg-gray-800/50 hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer transition-colors"
       >
         {/* Expand/collapse icon */}
-        <div className="flex-shrink-0 text-gray-500">
+        <div className="flex-shrink-0 text-gray-400 dark:text-gray-500">
           {isExpanded ? (
             <ChevronDown className="w-4 h-4" />
           ) : (
@@ -76,13 +76,13 @@ const CommitItem: React.FC<CommitItemProps> = ({ commit, isExpanded, onToggle })
         </div>
 
         {/* Commit icon */}
-        <div className="flex-shrink-0 text-blue-400">
+        <div className="flex-shrink-0 text-blue-600 dark:text-blue-400">
           <GitCommit className="w-4 h-4" />
         </div>
 
         {/* Short hash */}
         <code
-          className="flex-shrink-0 text-xs font-mono text-yellow-400 bg-yellow-900/20 px-1.5 py-0.5 rounded cursor-pointer hover:bg-yellow-900/40"
+          className="flex-shrink-0 text-xs font-mono text-yellow-700 dark:text-yellow-400 bg-yellow-100 dark:bg-yellow-900/20 px-1.5 py-0.5 rounded cursor-pointer hover:bg-yellow-200 dark:hover:bg-yellow-900/40"
           onClick={(e) => {
             e.stopPropagation();
             copy(commit.hash, commit.hash);
@@ -100,13 +100,13 @@ const CommitItem: React.FC<CommitItemProps> = ({ commit, isExpanded, onToggle })
         </code>
 
         {/* Commit message */}
-        <span className="flex-1 text-sm text-gray-200 truncate" title={commit.message}>
+        <span className="flex-1 text-sm text-gray-800 dark:text-gray-200 truncate" title={commit.message}>
           {truncateMessage(commit.message)}
         </span>
 
         {/* Files count badge */}
         {hasFiles && (
-          <span className="flex-shrink-0 text-xs bg-purple-900/30 text-purple-300 px-2 py-0.5 rounded flex items-center gap-1">
+          <span className="flex-shrink-0 text-xs bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 px-2 py-0.5 rounded flex items-center gap-1">
             <FileText className="w-3 h-3" />
             {commit.files_changed.length}
           </span>
@@ -120,11 +120,11 @@ const CommitItem: React.FC<CommitItemProps> = ({ commit, isExpanded, onToggle })
 
       {/* Expanded details */}
       {isExpanded && (
-        <div className="p-3 bg-gray-900/50 border-t border-gray-700">
+        <div className="p-3 bg-gray-50 dark:bg-gray-900/50 border-t border-gray-200 dark:border-gray-700">
           {/* Full commit message */}
           <div className="mb-3">
             <div className="text-xs text-gray-500 mb-1">Message</div>
-            <pre className="text-sm text-gray-200 whitespace-pre-wrap font-sans bg-gray-800/50 rounded p-2">
+            <pre className="text-sm text-gray-800 dark:text-gray-200 whitespace-pre-wrap font-sans bg-gray-100 dark:bg-gray-800/50 rounded p-2">
               {commit.message}
             </pre>
           </div>
@@ -133,12 +133,12 @@ const CommitItem: React.FC<CommitItemProps> = ({ commit, isExpanded, onToggle })
           <div className="flex items-center gap-4 mb-3 text-sm">
             <div>
               <span className="text-gray-500">Author: </span>
-              <span className="text-gray-300">{commit.author}</span>
+              <span className="text-gray-700 dark:text-gray-300">{commit.author}</span>
             </div>
             {commit.author_email && (
               <div>
                 <span className="text-gray-500">Email: </span>
-                <span className="text-gray-400">{commit.author_email}</span>
+                <span className="text-gray-500 dark:text-gray-400">{commit.author_email}</span>
               </div>
             )}
           </div>
@@ -146,15 +146,15 @@ const CommitItem: React.FC<CommitItemProps> = ({ commit, isExpanded, onToggle })
           {/* Full hash */}
           <div className="flex items-center gap-2 mb-3">
             <span className="text-xs text-gray-500">Hash:</span>
-            <code className="text-xs font-mono text-gray-400 bg-gray-800 px-2 py-1 rounded flex items-center gap-2">
+            <code className="text-xs font-mono text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded flex items-center gap-2">
               {commit.hash}
               <button
                 onClick={() => copy(commit.hash, `full-${commit.hash}`)}
-                className="text-gray-500 hover:text-gray-300 transition-colors"
+                className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
                 title="Copy full hash"
               >
                 {copied === `full-${commit.hash}` ? (
-                  <Check className="w-3 h-3 text-green-400" />
+                  <Check className="w-3 h-3 text-green-600 dark:text-green-400" />
                 ) : (
                   <Copy className="w-3 h-3" />
                 )}
@@ -172,10 +172,10 @@ const CommitItem: React.FC<CommitItemProps> = ({ commit, isExpanded, onToggle })
                 {commit.files_changed.map((file, index) => (
                   <div
                     key={index}
-                    className="flex items-center gap-2 text-xs py-1 px-2 hover:bg-gray-800/50 rounded"
+                    className="flex items-center gap-2 text-xs py-1 px-2 hover:bg-gray-100 dark:hover:bg-gray-800/50 rounded"
                   >
-                    <FileText className="w-3 h-3 text-purple-400 flex-shrink-0" />
-                    <code className="text-gray-300 truncate" title={file}>
+                    <FileText className="w-3 h-3 text-purple-600 dark:text-purple-400 flex-shrink-0" />
+                    <code className="text-gray-700 dark:text-gray-300 truncate" title={file}>
                       {file}
                     </code>
                   </div>
@@ -192,9 +192,9 @@ const CommitItem: React.FC<CommitItemProps> = ({ commit, isExpanded, onToggle })
 // Empty state component
 const EmptyState: React.FC = () => (
   <div className="flex flex-col items-center justify-center py-8 text-center">
-    <GitCommit className="w-10 h-10 text-gray-600 mb-2" />
-    <p className="text-gray-400 text-sm">No commits yet</p>
-    <p className="text-gray-500 text-xs mt-1">
+    <GitCommit className="w-10 h-10 text-gray-400 dark:text-gray-600 mb-2" />
+    <p className="text-gray-500 dark:text-gray-400 text-sm">No commits yet</p>
+    <p className="text-gray-400 dark:text-gray-500 text-xs mt-1">
       Git commits will appear here as the agent creates them
     </p>
   </div>
