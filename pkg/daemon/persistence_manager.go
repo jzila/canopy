@@ -207,15 +207,19 @@ func ConvertPersistenceAgentToState(pAgent *persistence.Agent) *AgentState {
 		StartTime:     pAgent.StartedAt,
 		Duration:      pAgent.DurationSeconds,
 		TokenUsage: TokenUsage{
-			InputTokens:  pAgent.InputTokens,
-			OutputTokens: pAgent.OutputTokens,
-			TotalTokens:  pAgent.TotalTokens,
-			CostUSD:      pAgent.CostUSD,
+			InputTokens:              pAgent.InputTokens,
+			OutputTokens:             pAgent.OutputTokens,
+			CacheCreationInputTokens: pAgent.CacheCreationTokens,
+			CacheReadInputTokens:     pAgent.CacheReadTokens,
+			TotalTokens:              pAgent.TotalTokens,
+			CostUSD:                  pAgent.CostUSD,
 		},
-		Changes:  pAgent.FilesChanged,
-		Commits:  pAgent.GitCommitsCreated,
-		Error:    pAgent.ErrorMessage,
-		Archived: pAgent.Archived,
+		Changes:       pAgent.FilesChanged,
+		Commits:       pAgent.GitCommitsCreated,
+		NumTurns:      pAgent.NumTurns,
+		ResultMessage: pAgent.ResultMessage,
+		Error:         pAgent.ErrorMessage,
+		Archived:      pAgent.Archived,
 	}
 
 	if pAgent.FinishedAt != nil {
