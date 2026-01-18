@@ -105,10 +105,13 @@ func New(config *Config) (*Orchestrator, error) {
 		return nil, fmt.Errorf("failed to create beads client: %w", err)
 	}
 
-	// Set up temp directory for overlays
-	tempDir := filepath.Join(os.TempDir(), "canopy")
+	// Set up overlay directory per persistence invariant (XDG_CACHE_HOME/canopy/overlays)
+	tempDir, err := sandbox.GetOverlayBaseDir()
+	if err != nil {
+		tempDir = filepath.Join(os.TempDir(), "canopy")
+	}
 	if err := os.MkdirAll(tempDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create temp directory: %w", err)
+		return nil, fmt.Errorf("failed to create overlay directory: %w", err)
 	}
 
 	// Try to load sandbox config from .canopy/sandbox.toml
