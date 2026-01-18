@@ -17,16 +17,17 @@ import (
 
 // Server manages the HTTP server that serves the web UI and REST API
 type Server struct {
-	port        int
-	httpServer  *http.Server
-	hub         *Hub
-	handler     *Handler
-	runsHandler *RunsHandler
-	repoHandler *RepoHandler
-	state       *RuntimeState
-	eventBus    *EventBus
-	upgrader    websocket.Upgrader
-	daemon      *Daemon
+	port         int
+	httpServer   *http.Server
+	hub          *Hub
+	handler      *Handler
+	runsHandler  *RunsHandler
+	repoHandler  *RepoHandler
+	beadsHandler *BeadsHandler
+	state        *RuntimeState
+	eventBus     *EventBus
+	upgrader     websocket.Upgrader
+	daemon       *Daemon
 }
 
 // NewServer creates a new HTTP server instance
@@ -77,6 +78,12 @@ func NewServerWithDaemon(port int, state *RuntimeState, eventBus *EventBus, sche
 		repoHandler = NewRepoHandler(daemon, repoStore)
 	}
 
+	// Create beads handler for beads sync operations (requires daemon reference)
+	var beadsHandler *BeadsHandler
+	if daemon != nil {
+		beadsHandler = NewBeadsHandler(daemon)
+	}
+
 	// Configure WebSocket upgrader
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:  1024,
@@ -88,15 +95,16 @@ func NewServerWithDaemon(port int, state *RuntimeState, eventBus *EventBus, sche
 	}
 
 	return &Server{
-		port:        port,
-		hub:         hub,
-		handler:     handler,
-		runsHandler: runsHandler,
-		repoHandler: repoHandler,
-		state:       state,
-		eventBus:    eventBus,
-		upgrader:    upgrader,
-		daemon:      daemon,
+		port:         port,
+		hub:          hub,
+		handler:      handler,
+		runsHandler:  runsHandler,
+		repoHandler:  repoHandler,
+		beadsHandler: beadsHandler,
+		state:        state,
+		eventBus:     eventBus,
+		upgrader:     upgrader,
+		daemon:       daemon,
 	}
 }
 
@@ -176,6 +184,9 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// REST API routes - repository management
 	mux.HandleFunc("/api/repositories", s.handleRepositoriesRoutes)  // Handles GET /api/repositories
 	mux.HandleFunc("/api/repositories/", s.handleRepositoriesRoutes) // Handles /api/repositories/:id and /api/repositories/:id/activate
+
+	// REST API routes - beads operations
+	mux.HandleFunc("/api/beads/sync", s.handleBeadsSyncRoute) // Handles POST /api/beads/sync
 
 	// Prometheus metrics endpoint
 	mux.Handle("/metrics", promhttp.Handler())
@@ -274,6 +285,15 @@ func (s *Server) handleStatsHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.runsHandler.HandleGetHistoricalStats(w, r)
+}
+
+// handleBeadsSyncRoute routes beads sync requests
+func (s *Server) handleBeadsSyncRoute(w http.ResponseWriter, r *http.Request) {
+	if s.beadsHandler == nil {
+		http.Error(w, "Beads operations not available", http.StatusServiceUnavailable)
+		return
+	}
+	s.beadsHandler.HandleSyncBeads(w, r)
 }
 
 // handleRepositoriesRoutes routes repository management requests
