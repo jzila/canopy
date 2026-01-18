@@ -311,6 +311,127 @@ canopy run --dry-run  # Preview what would execute
 canopy help --agent   # Detailed workflow explanation for AI agents
 ```
 
+## Agentic Initialization
+
+When setting up a new repository for Canopy, use the agentic init flow to configure sandbox and validation settings.
+
+### Overview
+
+The agentic init flow is a three-step JSON-based interface:
+
+1. **`canopy init --agent`** - Get detection results + questionnaire
+2. **Present questions** - Use `AskUserQuestion` to collect user preferences
+3. **`canopy init --apply`** - Apply answers to create config files
+
+### Step 1: Get Questionnaire
+
+```bash
+canopy init --agent
+```
+
+Returns JSON with project detection and questions:
+```json
+{
+  "detection": {
+    "project": {"type": "Go", "root": "/path/to/project"},
+    "sandbox": {"tools": ["~/.goenv"], "configs": ["~/.gitconfig"]},
+    "validation": {
+      "suggested": [
+        {"name": "build", "command": "go build ./...", "confidence": "high"},
+        {"name": "test", "command": "go test ./...", "confidence": "high"}
+      ]
+    }
+  },
+  "questions": [
+    {
+      "id": "confirm_validation",
+      "question": "Enable post-merge validation?",
+      "type": "single_select",
+      "options": [
+        {"value": "yes", "label": "Yes, validate after each merge"},
+        {"value": "no", "label": "No, skip validation"}
+      ],
+      "default": "yes",
+      "depends_on": null
+    },
+    {
+      "id": "validation_mode",
+      "question": "How should validation failures be handled?",
+      "type": "single_select",
+      "options": [
+        {"value": "strict", "label": "Strict - revert merge on failure"},
+        {"value": "lenient", "label": "Lenient - file issue, keep merge"}
+      ],
+      "depends_on": {"question_id": "confirm_validation", "value": "yes"}
+    },
+    {
+      "id": "validation_steps",
+      "question": "Which validation steps should run?",
+      "type": "multi_select",
+      "options": [
+        {"value": "build", "label": "build (go build ./...)"},
+        {"value": "test", "label": "test (go test ./...)"}
+      ],
+      "depends_on": {"question_id": "confirm_validation", "value": "yes"}
+    },
+    {
+      "id": "extra_commands",
+      "question": "Additional validation commands? (comma-separated)",
+      "type": "freeform",
+      "depends_on": {"question_id": "confirm_validation", "value": "yes"}
+    }
+  ]
+}
+```
+
+### Step 2: Present Questions
+
+Use `AskUserQuestion` to collect answers. Handle `depends_on` to skip questions:
+- `depends_on: null` - always show
+- `depends_on: {"question_id": "x", "value": "y"}` - show only if question `x` answered `y`
+
+Map question types to `AskUserQuestion`:
+- `single_select` → `multiSelect: false`
+- `multi_select` → `multiSelect: true`
+- `freeform` → Allow "Other" option for free text
+
+### Step 3: Apply Answers
+
+```bash
+canopy init --apply '{"confirm_validation":"yes","validation_mode":"strict","validation_steps":["build","test"]}'
+```
+
+Returns:
+```json
+{
+  "success": true,
+  "files_created": [".canopy/sandbox.toml", ".canopy/validation.toml"]
+}
+```
+
+### Complete Example
+
+```bash
+# 1. Get questionnaire
+questionnaire=$(canopy init --agent)
+
+# 2. Agent uses AskUserQuestion to present questions, collects:
+answers='{"confirm_validation":"yes","validation_mode":"strict","validation_steps":["build","test"]}'
+
+# 3. Apply answers
+canopy init --apply "$answers"
+# Output: {"success":true,"files_created":[".canopy/sandbox.toml",".canopy/validation.toml"]}
+```
+
+### Detection-Only Mode
+
+For pre-flight checks without the questionnaire:
+```bash
+canopy init --detect
+```
+
+Returns just the detection results (project type, tools, validation commands) without questions.
+
 ## Landing the Plane (Session Completion)
 
 **When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.

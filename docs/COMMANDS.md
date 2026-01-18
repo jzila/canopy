@@ -231,7 +231,7 @@ canopy daemon logs -f -n 20
 
 ### canopy init
 
-Initialize sandbox configuration interactively.
+Initialize sandbox and validation configuration.
 
 ```bash
 canopy init [flags]
@@ -241,18 +241,26 @@ canopy init [flags]
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--reconfigure` | `false` | Re-run wizard even if config exists |
+| `--reconfigure` | `false` | Re-run detection and reconfigure (overwrites existing config) |
+| `--non-interactive` | `false` | Accept all defaults without prompting |
+| `--yes` / `-y` | `false` | Alias for `--non-interactive` |
+| `--skip-beads` | `false` | Skip beads initialization |
+| `--detect` | `false` | Output JSON detection results (does not create config) |
+| `--agent` | `false` | Output questionnaire JSON for agentic integration |
+| `--apply` | | Apply answers from agentic questionnaire JSON |
 
-#### Behavior
+#### Behavior (Interactive Mode)
 
-1. Scans project for type (Node, Rust, Go, Python, etc.)
-2. Discovers installed tools and versions
-3. Detects config files and caches
-4. Generates `.canopy/sandbox.toml`
-5. Shows recommended configuration
-6. Prompts for confirmation
+1. Initializes beads for task tracking (if not already done)
+2. Scans project for type (Node, Rust, Go, Python, etc.)
+3. Discovers installed tools and versions
+4. Detects config files and caches
+5. Detects validation commands (build, test)
+6. Generates `.canopy/sandbox.toml` and `.canopy/validation.toml`
+7. Shows recommended configuration
+8. Prompts for confirmation
 
-#### Example
+#### Example (Interactive)
 
 ```bash
 canopy init
@@ -283,6 +291,192 @@ Config Copies:
   ~/.gitconfig        Git identity
 
 Proceed with this configuration? [Y/n/customize]
+```
+
+---
+
+### canopy init --detect
+
+Output project detection results as JSON without creating config files. Useful for tooling integration, CI/CD pipelines, and pre-flight checks.
+
+```bash
+canopy init --detect
+```
+
+#### JSON Output Structure
+
+```json
+{
+  "project": {
+    "type": "Go",
+    "root": "/path/to/project",
+    "markers": ["go.mod", "go.sum"]
+  },
+  "sandbox": {
+    "tools": ["~/.goenv", "~/.asdf"],
+    "configs": ["~/.gitconfig"],
+    "caches": ["~/.cache/go-build"]
+  },
+  "validation": {
+    "suggested": [
+      {"name": "build", "command": "go build ./...", "confidence": "high"},
+      {"name": "test", "command": "go test ./...", "confidence": "high"}
+    ],
+    "detected_files": {
+      "justfile": false,
+      "makefile": false,
+      "package_json": false,
+      "cargo_toml": false,
+      "go_mod": true,
+      "pyproject_toml": false,
+      "gemfile": false,
+      "pom_xml": false,
+      "build_gradle": false
+    }
+  }
+}
+```
+
+#### Output Fields
+
+| Field | Description |
+|-------|-------------|
+| `project.type` | Human-readable project type (e.g., "Go", "Node.js + Python") |
+| `project.root` | Absolute path to project root |
+| `project.markers` | Files that identified the project type |
+| `sandbox.tools` | Read-only tool paths to expose |
+| `sandbox.configs` | Config files to copy into sandbox |
+| `sandbox.caches` | Cache directories for read-write mount |
+| `validation.suggested` | Detected validation commands with confidence levels |
+| `validation.detected_files` | Build system files found in project |
+
+---
+
+### canopy init --agent
+
+Output a questionnaire JSON for AI agent integration. The agent can present these questions via `AskUserQuestion` tool, then apply answers with `--apply`.
+
+```bash
+canopy init --agent
+```
+
+#### JSON Output Structure
+
+```json
+{
+  "detection": { /* same as --detect output */ },
+  "questions": [
+    {
+      "id": "confirm_validation",
+      "question": "I detected build and test commands. Enable post-merge validation?",
+      "type": "single_select",
+      "options": [
+        {"value": "yes", "label": "Yes, validate after each merge"},
+        {"value": "no", "label": "No, skip validation"}
+      ],
+      "default": "yes",
+      "depends_on": null
+    },
+    {
+      "id": "validation_mode",
+      "question": "How should validation failures be handled?",
+      "type": "single_select",
+      "options": [
+        {"value": "strict", "label": "Strict - revert merge on failure"},
+        {"value": "lenient", "label": "Lenient - file issue, keep merge"}
+      ],
+      "default": "strict",
+      "depends_on": {"question_id": "confirm_validation", "value": "yes"}
+    },
+    {
+      "id": "validation_steps",
+      "question": "Which validation steps should run after each merge?",
+      "type": "multi_select",
+      "options": [
+        {"value": "build", "label": "build (go build ./...)"},
+        {"value": "test", "label": "test (go test ./...)"}
+      ],
+      "depends_on": {"question_id": "confirm_validation", "value": "yes"}
+    },
+    {
+      "id": "extra_commands",
+      "question": "Any additional validation commands? (comma-separated, or leave empty)",
+      "type": "freeform",
+      "depends_on": {"question_id": "confirm_validation", "value": "yes"}
+    }
+  ]
+}
+```
+
+#### Question Types
+
+| Type | Description |
+|------|-------------|
+| `single_select` | User picks one option from the list |
+| `multi_select` | User picks multiple options |
+| `freeform` | User provides free-form text input |
+
+#### Conditional Questions
+
+Questions can depend on previous answers via the `depends_on` field:
+- If `depends_on` is `null`, the question is always shown
+- If `depends_on.question_id` and `depends_on.value` match a previous answer, show the question
+- Agents should skip questions whose dependencies are not met
+
+---
+
+### canopy init --apply
+
+Apply answers from an agentic questionnaire to create configuration files.
+
+```bash
+canopy init --apply '<json-answers>'
+```
+
+#### Input Format
+
+```json
+{
+  "confirm_validation": "yes",
+  "validation_mode": "strict",
+  "validation_steps": ["build", "test"],
+  "extra_commands": "golangci-lint run"
+}
+```
+
+#### Answer Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `confirm_validation` | `"yes"` or `"no"` | Whether to enable validation |
+| `validation_mode` | `"strict"` or `"lenient"` | How to handle validation failures |
+| `validation_steps` | `string[]` | Array of step names to enable |
+| `extra_commands` | `string` | Comma-separated additional commands |
+
+#### Output
+
+```json
+{
+  "success": true,
+  "files_created": [".canopy/sandbox.toml", ".canopy/validation.toml"]
+}
+```
+
+#### Files Created
+
+- **`.canopy/sandbox.toml`**: Always created with detected tool/config/cache paths
+- **`.canopy/validation.toml`**: Only created if `confirm_validation` is `"yes"`
+
+#### Example Workflow
+
+```bash
+# Step 1: Get questionnaire
+questionnaire=$(canopy init --agent)
+
+# Step 2: Agent presents questions to user, collects answers
+
+# Step 3: Apply answers
+canopy init --apply '{"confirm_validation":"yes","validation_mode":"strict","validation_steps":["build","test"]}'
 ```
 
 ---

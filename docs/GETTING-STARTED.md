@@ -248,7 +248,8 @@ canopy init
 This wizard:
 1. Detects your project type (Node, Rust, Go, Python, etc.)
 2. Discovers required tools
-3. Generates `.canopy/sandbox.toml`
+3. Detects validation commands (build, test)
+4. Generates `.canopy/sandbox.toml` and `.canopy/validation.toml`
 
 ### Run with Sandbox
 
@@ -261,6 +262,131 @@ With `--sandbox`:
 - All capabilities dropped
 - Resource limits enforced
 - Sensitive directories blocked (~/.ssh, ~/.aws, etc.)
+
+## Agentic Initialization
+
+When using Canopy with AI agents (like Claude Code), use the agentic init flow for structured configuration.
+
+### How Agentic Init Works
+
+The agentic init flow provides a JSON-based interface for AI agents to:
+
+1. **Detect** the project environment and available validation commands
+2. **Present** questions to the user via the agent's UI (e.g., `AskUserQuestion`)
+3. **Apply** the user's answers to create configuration files
+
+### Step 1: Detection
+
+```bash
+canopy init --detect
+```
+
+Returns JSON with project analysis:
+```json
+{
+  "project": {"type": "Go", "root": "/path/to/project", "markers": ["go.mod"]},
+  "sandbox": {"tools": ["~/.goenv"], "configs": ["~/.gitconfig"], "caches": ["~/.cache/go-build"]},
+  "validation": {
+    "suggested": [
+      {"name": "build", "command": "go build ./...", "confidence": "high"},
+      {"name": "test", "command": "go test ./...", "confidence": "high"}
+    ]
+  }
+}
+```
+
+### Step 2: Get Questionnaire
+
+```bash
+canopy init --agent
+```
+
+Returns the detection plus a structured questionnaire:
+```json
+{
+  "detection": { /* same as --detect */ },
+  "questions": [
+    {
+      "id": "confirm_validation",
+      "question": "I detected build and test commands. Enable post-merge validation?",
+      "type": "single_select",
+      "options": [
+        {"value": "yes", "label": "Yes, validate after each merge"},
+        {"value": "no", "label": "No, skip validation"}
+      ],
+      "default": "yes",
+      "depends_on": null
+    }
+    /* ... more questions */
+  ]
+}
+```
+
+### Step 3: Apply Answers
+
+After collecting user responses, apply them:
+
+```bash
+canopy init --apply '{"confirm_validation":"yes","validation_mode":"strict","validation_steps":["build","test"]}'
+```
+
+Returns:
+```json
+{
+  "success": true,
+  "files_created": [".canopy/sandbox.toml", ".canopy/validation.toml"]
+}
+```
+
+### Example: AI Agent Integration
+
+Here's how an AI agent might use agentic init:
+
+```python
+import subprocess
+import json
+
+# Step 1: Get questionnaire
+result = subprocess.run(["canopy", "init", "--agent"], capture_output=True, text=True)
+questionnaire = json.loads(result.stdout)
+
+# Step 2: Present questions to user (agent-specific)
+answers = {}
+for q in questionnaire["questions"]:
+    # Check dependencies
+    if q["depends_on"]:
+        dep = q["depends_on"]
+        if answers.get(dep["question_id"]) != dep["value"]:
+            continue  # Skip this question
+
+    # Present question to user and collect answer
+    answer = ask_user(q["question"], q["options"], q["type"])
+    answers[q["id"]] = answer
+
+# Step 3: Apply answers
+result = subprocess.run(
+    ["canopy", "init", "--apply", json.dumps(answers)],
+    capture_output=True, text=True
+)
+apply_result = json.loads(result.stdout)
+print(f"Created: {apply_result['files_created']}")
+```
+
+### Question Types
+
+| Type | Description | Answer Format |
+|------|-------------|---------------|
+| `single_select` | Pick one option | `"value"` string |
+| `multi_select` | Pick multiple options | `["value1", "value2"]` array |
+| `freeform` | Free text input | `"text"` string |
+
+### Conditional Questions
+
+Questions have a `depends_on` field that specifies when to show them:
+- `null` = always show
+- `{"question_id": "x", "value": "y"}` = show only if question `x` was answered with `y`
+
+This allows agents to skip irrelevant questions (e.g., don't ask about validation mode if validation is disabled).
 
 ## Filtering Tasks
 
