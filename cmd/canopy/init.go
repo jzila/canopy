@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/jzila/canopy/pkg/sandbox"
+	"github.com/jzila/canopy/pkg/validation"
 	"github.com/spf13/cobra"
 )
 
@@ -18,6 +19,8 @@ var (
 	initSkipBeads      bool
 	initNonInteractive bool
 	initDetect         bool
+	initAgent          bool
+	initApply          string
 )
 
 var initCmd = &cobra.Command{
@@ -50,7 +53,13 @@ Examples:
   canopy init --skip-beads
 
   # Output detection results as JSON (for tooling integration)
-  canopy init --detect`,
+  canopy init --detect
+
+  # Output questionnaire JSON for agentic integration
+  canopy init --agent
+
+  # Apply answers from agentic questionnaire
+  canopy init --apply '{"confirm_validation": "yes", ...}'`,
 	RunE: runInit,
 }
 
@@ -60,6 +69,8 @@ func init() {
 	initCmd.Flags().BoolVar(&initNonInteractive, "non-interactive", false, "Accept all defaults without prompting")
 	initCmd.Flags().BoolVarP(&initNonInteractive, "yes", "y", false, "Accept all defaults without prompting (alias for --non-interactive)")
 	initCmd.Flags().BoolVar(&initDetect, "detect", false, "Output project detection results as JSON (does not create config)")
+	initCmd.Flags().BoolVar(&initAgent, "agent", false, "Output questionnaire JSON for agentic integration (does not create config)")
+	initCmd.Flags().StringVar(&initApply, "apply", "", "Apply answers from agentic questionnaire JSON (creates config files)")
 
 	rootCmd.AddCommand(initCmd)
 }
@@ -70,6 +81,16 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// Handle --detect flag: output JSON and exit
 	if initDetect {
 		return runDetect(workDir)
+	}
+
+	// Handle --agent flag: output questionnaire JSON and exit
+	if initAgent {
+		return runAgentQuestionnaire(workDir)
+	}
+
+	// Handle --apply flag: apply answers from JSON and create config files
+	if initApply != "" {
+		return runApplyAnswers(workDir, initApply)
 	}
 
 	// Step 1: Initialize beads if needed
@@ -375,4 +396,282 @@ func getProjectMarkers(workDir string, projectTypes []sandbox.ProjectType) []str
 	}
 
 	return markers
+}
+
+// AgentQuestionnaireOutput represents the JSON output for --agent flag
+type AgentQuestionnaireOutput struct {
+	Detection DetectOutput  `json:"detection"`
+	Questions []Question    `json:"questions"`
+}
+
+// Question represents a single question in the questionnaire
+type Question struct {
+	ID        string           `json:"id"`
+	Question  string           `json:"question"`
+	Type      string           `json:"type"` // "single_select" or "freeform"
+	Options   []QuestionOption `json:"options,omitempty"`
+	Default   string           `json:"default,omitempty"`
+	DependsOn *Dependency      `json:"depends_on,omitempty"`
+}
+
+// QuestionOption represents an option for single_select questions
+type QuestionOption struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+}
+
+// Dependency represents a conditional dependency for a question
+type Dependency struct {
+	QuestionID string `json:"question_id"`
+	Value      string `json:"value"`
+}
+
+// ApplyAnswers represents the expected JSON input for --apply flag
+type ApplyAnswers struct {
+	ConfirmValidation string   `json:"confirm_validation"`
+	ValidationMode    string   `json:"validation_mode"`
+	ExtraCommands     string   `json:"extra_commands"`
+	ValidationSteps   []string `json:"validation_steps"`
+}
+
+// runAgentQuestionnaire performs project detection and outputs questionnaire JSON
+func runAgentQuestionnaire(workDir string) error {
+	// Detect project type and tools
+	detection, err := sandbox.DetectProject(workDir)
+	if err != nil {
+		return fmt.Errorf("project detection failed: %w", err)
+	}
+
+	// Detect validation commands
+	validationDetection := sandbox.DetectValidationCommands(workDir, detection.ProjectTypes)
+
+	// Build project markers list
+	markers := getProjectMarkers(workDir, detection.ProjectTypes)
+
+	// Build detection output
+	detectOutput := DetectOutput{
+		Project: ProjectInfo{
+			Type:    sandbox.ProjectTypeString(detection.ProjectTypes),
+			Root:    workDir,
+			Markers: markers,
+		},
+		Sandbox: SandboxInfo{
+			Tools:   collapsePaths(detection.ToolPaths),
+			Configs: collapsePaths(detection.ConfigPaths),
+			Caches:  collapsePaths(detection.CachePaths),
+		},
+		Validation: ValidationInfo{
+			Suggested:     validationDetection.Suggested,
+			DetectedFiles: validationDetection.DetectedFiles,
+		},
+	}
+
+	// Build questions based on detection
+	questions := buildQuestionnaire(validationDetection)
+
+	// Build output structure
+	output := AgentQuestionnaireOutput{
+		Detection: detectOutput,
+		Questions: questions,
+	}
+
+	// Output as JSON
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(output)
+}
+
+// buildQuestionnaire constructs the questionnaire based on detection results
+func buildQuestionnaire(validationDetection *sandbox.ValidationDetection) []Question {
+	questions := []Question{}
+
+	// Question 1: Confirm validation
+	hasValidationCommands := len(validationDetection.Suggested) > 0
+	confirmQuestion := "Enable post-merge validation?"
+	if hasValidationCommands {
+		confirmQuestion = "I detected build and test commands. Enable post-merge validation?"
+	}
+
+	questions = append(questions, Question{
+		ID:       "confirm_validation",
+		Question: confirmQuestion,
+		Type:     "single_select",
+		Options: []QuestionOption{
+			{Value: "yes", Label: "Yes, validate after each merge"},
+			{Value: "no", Label: "No, skip validation"},
+		},
+		Default: "yes",
+	})
+
+	// Question 2: Validation mode (depends on confirm_validation=yes)
+	questions = append(questions, Question{
+		ID:       "validation_mode",
+		Question: "How should validation failures be handled?",
+		Type:     "single_select",
+		Options: []QuestionOption{
+			{Value: "strict", Label: "Strict - revert merge on failure"},
+			{Value: "lenient", Label: "Lenient - file issue, keep merge"},
+		},
+		Default: "strict",
+		DependsOn: &Dependency{
+			QuestionID: "confirm_validation",
+			Value:      "yes",
+		},
+	})
+
+	// Question 3: Select validation steps (depends on confirm_validation=yes)
+	if hasValidationCommands {
+		// Build options from detected commands
+		var options []QuestionOption
+		for _, cmd := range validationDetection.Suggested {
+			label := fmt.Sprintf("%s (%s)", cmd.Name, cmd.Command)
+			options = append(options, QuestionOption{
+				Value: cmd.Name,
+				Label: label,
+			})
+		}
+
+		// Only add question if there are detected commands
+		if len(options) > 0 {
+			questions = append(questions, Question{
+				ID:       "validation_steps",
+				Question: "Which validation steps should run after each merge?",
+				Type:     "multi_select",
+				Options:  options,
+				DependsOn: &Dependency{
+					QuestionID: "confirm_validation",
+					Value:      "yes",
+				},
+			})
+		}
+	}
+
+	// Question 4: Extra commands (freeform, depends on confirm_validation=yes)
+	questions = append(questions, Question{
+		ID:       "extra_commands",
+		Question: "Any additional validation commands? (comma-separated, or leave empty)",
+		Type:     "freeform",
+		DependsOn: &Dependency{
+			QuestionID: "confirm_validation",
+			Value:      "yes",
+		},
+	})
+
+	return questions
+}
+
+// runApplyAnswers applies the questionnaire answers and creates config files
+func runApplyAnswers(workDir string, answersJSON string) error {
+	// Parse the answers JSON
+	var answers ApplyAnswers
+	if err := json.Unmarshal([]byte(answersJSON), &answers); err != nil {
+		return fmt.Errorf("failed to parse answers JSON: %w", err)
+	}
+
+	// Initialize beads if needed
+	if !initSkipBeads {
+		if _, err := os.Stat(filepath.Join(workDir, ".beads")); os.IsNotExist(err) {
+			fmt.Fprintln(os.Stderr, "Initializing beads for task tracking...")
+			bdCmd := exec.Command("bd", "init")
+			bdCmd.Dir = workDir
+			bdCmd.Stdout = os.Stderr // Send to stderr so JSON stdout is clean
+			bdCmd.Stderr = os.Stderr
+
+			if err := bdCmd.Run(); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: bd init failed: %v\n", err)
+				fmt.Fprintln(os.Stderr, "You can run 'bd init' manually later.")
+			}
+		}
+	}
+
+	// Detect project to get tool paths for sandbox config
+	detection, err := sandbox.DetectProject(workDir)
+	if err != nil {
+		return fmt.Errorf("project detection failed: %w", err)
+	}
+
+	// Create sandbox config
+	sandboxConfig := sandbox.DefaultSandboxConfig()
+	sandboxConfig.Paths.ReadOnly = collapsePaths(detection.ToolPaths)
+	sandboxConfig.Paths.CopyConfigs = collapsePaths(detection.ConfigPaths)
+	sandboxConfig.Paths.CacheMounts = collapsePaths(detection.CachePaths)
+
+	if err := sandbox.SaveConfig(workDir, sandboxConfig); err != nil {
+		return fmt.Errorf("failed to save sandbox config: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Created .canopy/sandbox.toml\n")
+
+	// Create validation config if enabled
+	if answers.ConfirmValidation == "yes" {
+		validationConfig := validation.DefaultValidationConfig()
+		validationConfig.Validation.Enabled = true
+		validationConfig.Validation.Strict = answers.ValidationMode == "strict"
+
+		// Get validation detection for command mapping
+		validationDetection := sandbox.DetectValidationCommands(workDir, detection.ProjectTypes)
+		commandMap := make(map[string]string)
+		for _, cmd := range validationDetection.Suggested {
+			commandMap[cmd.Name] = cmd.Command
+		}
+
+		// Add selected validation steps
+		for _, stepName := range answers.ValidationSteps {
+			if cmd, ok := commandMap[stepName]; ok {
+				validationConfig.Validation.Steps = append(validationConfig.Validation.Steps, validation.StepConfig{
+					Name:     stepName,
+					Command:  cmd,
+					Required: true,
+				})
+			}
+		}
+
+		// Add extra commands
+		if answers.ExtraCommands != "" {
+			extras := splitAndTrim(answers.ExtraCommands)
+			for _, extra := range extras {
+				validationConfig.Validation.Steps = append(validationConfig.Validation.Steps, validation.StepConfig{
+					Name:     extractCommandName(extra),
+					Command:  extra,
+					Required: false,
+				})
+			}
+		}
+
+		if err := validation.SaveConfig(workDir, validationConfig); err != nil {
+			return fmt.Errorf("failed to save validation config: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "Created .canopy/validation.toml\n")
+	}
+
+	// Output success message
+	result := map[string]interface{}{
+		"success": true,
+		"files_created": []string{
+			".canopy/sandbox.toml",
+		},
+	}
+
+	if answers.ConfirmValidation == "yes" {
+		result["files_created"] = append(result["files_created"].([]string), ".canopy/validation.toml")
+	}
+
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(result)
+}
+
+// extractCommandName extracts a short name from a command
+func extractCommandName(cmd string) string {
+	cmd = strings.TrimSpace(cmd)
+	parts := strings.Fields(cmd)
+	if len(parts) == 0 {
+		return "custom"
+	}
+	// Use first word as base, strip any path
+	name := filepath.Base(parts[0])
+	// If there's a subcommand, append it
+	if len(parts) > 1 && !strings.HasPrefix(parts[1], "-") {
+		name = name + "_" + parts[1]
+	}
+	return name
 }
