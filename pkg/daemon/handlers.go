@@ -179,10 +179,30 @@ func (h *Handler) HandleKillAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Update agent status to cancelled
+	now := time.Now()
+	agent.Update(func(a *AgentState) {
+		a.Status = AgentStatusCancelled
+		a.EndTime = &now
+	})
+
+	// Publish agent:completed event to notify WebSocket clients
+	if h.eventBus != nil {
+		h.eventBus.Publish(Event{
+			Type:      EventAgentCompleted,
+			Timestamp: now,
+			Payload: map[string]interface{}{
+				"agent_id": agentID,
+				"status":   string(AgentStatusCancelled),
+				"error":    "cancelled by user",
+			},
+		})
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{
-		"status": "killed",
+		"status":   "killed",
 		"agent_id": agentID,
 	})
 }
