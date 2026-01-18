@@ -236,6 +236,11 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 			failedPatches = req.Result.GitState.Patches
 		}
 
+		var baseCommit string
+		if req.Result.GitState != nil {
+			baseCommit = req.Result.GitState.BaseCommit
+		}
+
 		conflictCtx := &resolver.ConflictContext{
 			TaskID:          taskID,
 			TaskTitle:       req.Task.Title,
@@ -244,6 +249,7 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 			PatchErrors:     mergeResult.Errors,
 			FileChanges:     req.Result.Changes,
 			ParentAgentID:   p.makeAgentID(taskID),
+			BaseCommit:      baseCommit,
 		}
 
 		// Spawn resolver agent asynchronously

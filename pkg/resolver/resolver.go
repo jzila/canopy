@@ -43,6 +43,9 @@ type ConflictContext struct {
 	FileChanges []sandbox.FileChange
 	// ParentAgentID is the ID of the parent agent (the implementor that failed)
 	ParentAgentID string
+	// BaseCommit is the commit hash where the original agent started work.
+	// Patches in FailedPatches are diffs relative to this commit.
+	BaseCommit string
 }
 
 // Result holds the outcome of a resolver agent execution
@@ -271,6 +274,14 @@ func (r *Resolver) writePatchFiles(overlay *sandbox.Overlay, conflict *ConflictC
 		conflict.TaskID, conflict.TaskTitle, conflict.TaskDescription)
 	if err := os.WriteFile(contextPath, []byte(context), 0644); err != nil {
 		return fmt.Errorf("failed to write context file: %w", err)
+	}
+
+	// Write base commit info if available
+	if conflict.BaseCommit != "" {
+		baseCommitPath := filepath.Join(canopyDir, "base-commit.txt")
+		if err := os.WriteFile(baseCommitPath, []byte(conflict.BaseCommit+"\n"), 0644); err != nil {
+			return fmt.Errorf("failed to write base commit file: %w", err)
+		}
 	}
 
 	return nil
