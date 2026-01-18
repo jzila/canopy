@@ -40,10 +40,21 @@ func (o *Overlay) ExtractNewCommits(baseCommit string) (*GitState, error) {
 	cmd := exec.Command("git", "rev-list", "--reverse", baseCommit+"..HEAD")
 	cmd.Dir = o.MergedDir
 
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
 	out, err := cmd.Output()
 	if err != nil {
-		// No new commits is not an error
-		return state, nil
+		// Check if this is an actual error vs empty output
+		// git rev-list returns exit 0 with empty output when there are no commits
+		// git rev-list returns exit 128 for invalid refs or other errors
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			// Non-zero exit code means actual error (e.g., invalid ref)
+			return nil, fmt.Errorf("git rev-list %s..HEAD failed (exit %d): %s",
+				baseCommit, exitErr.ExitCode(), strings.TrimSpace(stderr.String()))
+		}
+		// Other errors (e.g., command not found)
+		return nil, fmt.Errorf("git rev-list failed: %w", err)
 	}
 
 	commits := strings.Fields(string(out))
