@@ -300,6 +300,9 @@ func (s *Server) convertToEvent(msg *Message) *events.Event {
 		if payload.RunID != "" {
 			eventPayload["run_id"] = payload.RunID
 		}
+		if payload.TaskDescription != "" {
+			eventPayload["task_description"] = payload.TaskDescription
+		}
 		if payload.ParentAgentID != "" {
 			eventPayload["parent_agent_id"] = payload.ParentAgentID
 		}

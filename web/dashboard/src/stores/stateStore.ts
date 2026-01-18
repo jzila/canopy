@@ -50,6 +50,7 @@ export interface AgentState {
   run_id?: string;             // ID of the run this agent belongs to
   task_id: string;
   task_title: string;
+  task_description?: string;   // Task description for display
   parent_agent_id?: string;    // ID of parent agent if spawned by another agent
   child_agent_ids?: string[];  // IDs of child agents spawned by this agent
   status: AgentStatus;
@@ -64,6 +65,7 @@ export interface AgentState {
   changes: number;
   commits: number;
   git_commits: GitCommit[];
+  result_message?: string;    // Final result message from agent
   archived: boolean;
   // Merge status fields (snake_case per API conventions)
   merge_status?: MergeStatus;

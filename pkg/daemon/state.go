@@ -397,6 +397,7 @@ type AgentState struct {
 	RunID           string          `json:"run_id,omitempty"`           // ID of the run this agent belongs to
 	TaskID          string          `json:"task_id"`                    // Beads task ID
 	TaskTitle       string          `json:"task_title"`                 // Task title for display
+	TaskDescription string          `json:"task_description,omitempty"` // Task description for display
 	RepoID          string          `json:"repo_id,omitempty"`          // Repository this agent is working in
 	ParentAgentID   string          `json:"parent_agent_id,omitempty"`  // ID of parent agent if spawned by another agent
 	ChildAgentIDs   []string        `json:"child_agent_ids,omitempty"`  // IDs of child agents spawned by this agent
@@ -838,6 +839,7 @@ func (r *RuntimeState) handleAgentStarted(payload map[string]interface{}, timest
 	runID, _ := payload["run_id"].(string)
 	taskID, _ := payload["task_id"].(string)
 	taskTitle, _ := payload["task_title"].(string)
+	taskDescription, _ := payload["task_description"].(string)
 	parentAgentID, _ := payload["parent_agent_id"].(string)
 	repoID, _ := payload["repo_id"].(string)
 
@@ -853,14 +855,15 @@ func (r *RuntimeState) handleAgentStarted(payload map[string]interface{}, timest
 	}
 
 	agent := &AgentState{
-		ID:            agentID,
-		RunID:         runID,
-		TaskID:        taskID,
-		TaskTitle:     taskTitle,
-		RepoID:        repoID,
-		ParentAgentID: parentAgentID,
-		Status:        AgentStatusRunning,
-		StartTime:     timestamp,
+		ID:              agentID,
+		RunID:           runID,
+		TaskID:          taskID,
+		TaskTitle:       taskTitle,
+		TaskDescription: taskDescription,
+		RepoID:          repoID,
+		ParentAgentID:   parentAgentID,
+		Status:          AgentStatusRunning,
+		StartTime:       timestamp,
 	}
 
 	r.AddAgent(agent)

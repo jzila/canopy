@@ -175,11 +175,12 @@ func (r *Resolver) Resolve(ctx context.Context, conflict *ConflictContext) (*Res
 	if r.ipcClient != nil {
 		if err := r.ipcClient.SendAgentStart(
 			resolverAgentID,
-			r.config.RunID,         // Run ID for historical filtering
-			conflict.TaskID,        // TaskID is the original task
+			r.config.RunID,            // Run ID for historical filtering
+			conflict.TaskID,           // TaskID is the original task
 			resolverTask.Title,
-			conflict.ParentAgentID, // Parent is the implementor agent
-			r.config.RepoID,        // Repository ID for tracking
+			conflict.TaskDescription,  // Task description from original task
+			conflict.ParentAgentID,    // Parent is the implementor agent
+			r.config.RepoID,           // Repository ID for tracking
 		); err != nil && r.config.Verbose {
 			fmt.Fprintf(os.Stderr, "warning: failed to send resolver start event: %v\n", err)
 		}

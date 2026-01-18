@@ -17,6 +17,7 @@ interface AgentStartedEvent {
     run_id?: string;
     task_id: string;
     task_title: string;
+    task_description?: string;
     parent_agent_id?: string;
   };
 }
@@ -157,6 +158,7 @@ interface BackendAgentState {
   run_id?: string;
   task_id: string;
   task_title: string;
+  task_description?: string;
   status: string;
   start_time: string;
   end_time: string | null;
@@ -370,6 +372,7 @@ export function useWebSocket() {
                   archived: agent.archived || false,
                   // Optional properties - only set if defined (exactOptionalPropertyTypes compliance)
                   ...(agent.run_id && { run_id: agent.run_id }),
+                  ...(agent.task_description && { task_description: agent.task_description }),
                   ...(agent.parent_agent_id && { parent_agent_id: agent.parent_agent_id }),
                 };
               }
@@ -401,7 +404,7 @@ export function useWebSocket() {
             }
 
             case 'agent:started': {
-              const { agent_id, run_id, task_id, task_title, parent_agent_id } = message.payload;
+              const { agent_id, run_id, task_id, task_title, task_description, parent_agent_id } = message.payload;
               // Create new agent entry
               updateAgent(agent_id, {
                 id: agent_id,
@@ -426,6 +429,7 @@ export function useWebSocket() {
                 git_commits: [],
                 // Optional properties - only set if defined (exactOptionalPropertyTypes compliance)
                 ...(run_id && { run_id }),
+                ...(task_description && { task_description }),
                 ...(parent_agent_id && { parent_agent_id }),
               });
               break;

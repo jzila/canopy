@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { List, Terminal as TerminalIcon, GitCommit, GripHorizontal } from 'lucide-react';
+import { List, Terminal as TerminalIcon, GitCommit, GripHorizontal, Info } from 'lucide-react';
 import { AgentTerminal } from '../agents/AgentTerminal';
 import { LiveFeed } from '../agents/LiveFeed';
 import { CommitList } from '../agents/CommitList';
+import { AgentDetail } from '../agents/AgentDetail';
 import type { AgentState } from '../../stores/stateStore';
 
-type TerminalTab = 'feed' | 'terminal' | 'commits';
+type TerminalTab = 'feed' | 'terminal' | 'commits' | 'detail';
 
 export interface TerminalPanelProps {
   /** The selected agent to display */
@@ -113,6 +114,20 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
                   </span>
                 )}
               </button>
+              <button
+                onClick={() => setActiveTab('detail')}
+                className={`
+                  flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all
+                  ${
+                    activeTab === 'detail'
+                      ? 'bg-blue-600 text-white'
+                      : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-300/50 dark:hover:bg-gray-700/50'
+                  }
+                `}
+              >
+                <Info className="w-4 h-4" />
+                Detail
+              </button>
             </div>
 
             {/* Agent info */}
@@ -142,6 +157,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
               <CommitList commits={agent.git_commits || []} />
             </div>
           )}
+          {activeTab === 'detail' && <AgentDetail agent={agent} />}
         </div>
       </div>
     </div>

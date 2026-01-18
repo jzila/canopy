@@ -320,16 +320,18 @@ func (c *Client) flushQueueLocked() {
 
 // SendAgentStart notifies the daemon that an agent has started executing a task
 // runID is the ID of the run this agent belongs to (for historical filtering)
+// taskDescription is optional and provides the full task description
 // parentAgentID is optional and specifies the ID of the parent agent if this agent was spawned by another
 // repoID is optional and specifies the repository ID for tracking
-func (c *Client) SendAgentStart(agentID, runID, taskID, taskTitle, parentAgentID, repoID string) error {
+func (c *Client) SendAgentStart(agentID, runID, taskID, taskTitle, taskDescription, parentAgentID, repoID string) error {
 	payload := AgentStartPayload{
-		AgentID:       agentID,
-		RunID:         runID,
-		TaskID:        taskID,
-		TaskTitle:     taskTitle,
-		ParentAgentID: parentAgentID,
-		RepoID:        repoID,
+		AgentID:         agentID,
+		RunID:           runID,
+		TaskID:          taskID,
+		TaskTitle:       taskTitle,
+		TaskDescription: taskDescription,
+		ParentAgentID:   parentAgentID,
+		RepoID:          repoID,
 	}
 
 	return c.sendMessage(MessageTypeAgentStart, payload)

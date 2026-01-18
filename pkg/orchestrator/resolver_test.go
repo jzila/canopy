@@ -344,6 +344,7 @@ func TestIPCChildEventsOnResolverSpawn(t *testing.T) {
 		"",    // no run ID in test
 		taskID,
 		"Resolve merge conflict for canopy-test",
+		"", // no description in test
 		parentAgentID,
 		"", // no repo ID in test
 	); err != nil {
@@ -434,6 +435,7 @@ func TestIPCChildEventsOnResolverFailure(t *testing.T) {
 		"",    // no run ID in test
 		"canopy-test",
 		"Resolve merge conflict",
+		"", // no description in test
 		parentAgentID,
 		"", // no repo ID in test
 	); err != nil {

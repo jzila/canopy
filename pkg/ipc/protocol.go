@@ -117,12 +117,13 @@ type RawMessage struct {
 
 // AgentStartPayload is sent when an agent begins execution
 type AgentStartPayload struct {
-	AgentID       string `json:"agent_id"`
-	RunID         string `json:"run_id,omitempty"`          // Run ID this agent belongs to
-	TaskID        string `json:"task_id"`
-	TaskTitle     string `json:"task_title"`
-	ParentAgentID string `json:"parent_agent_id,omitempty"` // ID of parent agent if spawned by another agent
-	RepoID        string `json:"repo_id,omitempty"`         // Repository ID for tracking
+	AgentID         string `json:"agent_id"`
+	RunID           string `json:"run_id,omitempty"`            // Run ID this agent belongs to
+	TaskID          string `json:"task_id"`
+	TaskTitle       string `json:"task_title"`
+	TaskDescription string `json:"task_description,omitempty"` // Task description for display
+	ParentAgentID   string `json:"parent_agent_id,omitempty"`   // ID of parent agent if spawned by another agent
+	RepoID          string `json:"repo_id,omitempty"`           // Repository ID for tracking
 }
 
 // AgentOutputPayload is sent when an agent produces output
