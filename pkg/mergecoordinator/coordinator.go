@@ -241,11 +241,11 @@ func (mc *MergeCoordinator) HandleFailure(ctx context.Context, taskID string, re
 	}
 
 	// Send task status update via IPC
-	mc.sendTaskUpdated(taskID, taskTitle, "failed")
+	mc.SendTaskUpdated(taskID, taskTitle, "failed")
 }
 
-// sendTaskUpdated sends a task status update via IPC if client is connected.
-func (mc *MergeCoordinator) sendTaskUpdated(taskID, title, status string) {
+// SendTaskUpdated sends a task status update via IPC if client is connected.
+func (mc *MergeCoordinator) SendTaskUpdated(taskID, title, status string) {
 	if mc.ipcClient == nil {
 		return
 	}
