@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,9 +14,10 @@ import (
 )
 
 var (
-	initReconfigure bool
-	initSkipBeads   bool
+	initReconfigure    bool
+	initSkipBeads      bool
 	initNonInteractive bool
+	initDetect         bool
 )
 
 var initCmd = &cobra.Command{
@@ -45,7 +47,10 @@ Examples:
   canopy init --non-interactive
 
   # Skip beads initialization
-  canopy init --skip-beads`,
+  canopy init --skip-beads
+
+  # Output detection results as JSON (for tooling integration)
+  canopy init --detect`,
 	RunE: runInit,
 }
 
@@ -54,11 +59,19 @@ func init() {
 	initCmd.Flags().BoolVar(&initSkipBeads, "skip-beads", false, "Skip beads initialization")
 	initCmd.Flags().BoolVar(&initNonInteractive, "non-interactive", false, "Accept all defaults without prompting")
 	initCmd.Flags().BoolVarP(&initNonInteractive, "yes", "y", false, "Accept all defaults without prompting (alias for --non-interactive)")
+	initCmd.Flags().BoolVar(&initDetect, "detect", false, "Output project detection results as JSON (does not create config)")
 
 	rootCmd.AddCommand(initCmd)
 }
 
 func runInit(cmd *cobra.Command, args []string) error {
+	workDir, _ := os.Getwd()
+
+	// Handle --detect flag: output JSON and exit
+	if initDetect {
+		return runDetect(workDir)
+	}
+
 	// Step 1: Initialize beads if needed
 	if !initSkipBeads {
 		if _, err := os.Stat(".beads"); os.IsNotExist(err) {
@@ -79,7 +92,6 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	// Step 2: Check for existing sandbox config
-	workDir, _ := os.Getwd()
 	configPath := filepath.Join(workDir, ".canopy", "sandbox.toml")
 
 	if _, err := os.Stat(configPath); err == nil && !initReconfigure {
@@ -272,4 +284,95 @@ func splitAndTrim(s string) []string {
 		}
 	}
 	return result
+}
+
+// DetectOutput represents the JSON output for --detect flag
+type DetectOutput struct {
+	Project    ProjectInfo    `json:"project"`
+	Sandbox    SandboxInfo    `json:"sandbox"`
+	Validation ValidationInfo `json:"validation"`
+}
+
+// ProjectInfo contains detected project information
+type ProjectInfo struct {
+	Type    string   `json:"type"`
+	Root    string   `json:"root"`
+	Markers []string `json:"markers"`
+}
+
+// SandboxInfo contains sandbox configuration suggestions
+type SandboxInfo struct {
+	Tools   []string `json:"tools"`
+	Configs []string `json:"configs"`
+	Caches  []string `json:"caches"`
+}
+
+// ValidationInfo contains validation command suggestions
+type ValidationInfo struct {
+	Suggested     []sandbox.ValidationCommand `json:"suggested"`
+	DetectedFiles sandbox.DetectedFiles       `json:"detected_files"`
+}
+
+// runDetect performs project detection and outputs JSON
+func runDetect(workDir string) error {
+	// Detect project type and tools
+	detection, err := sandbox.DetectProject(workDir)
+	if err != nil {
+		return fmt.Errorf("project detection failed: %w", err)
+	}
+
+	// Detect validation commands
+	validationDetection := sandbox.DetectValidationCommands(workDir, detection.ProjectTypes)
+
+	// Build project markers list
+	markers := getProjectMarkers(workDir, detection.ProjectTypes)
+
+	// Build output structure
+	output := DetectOutput{
+		Project: ProjectInfo{
+			Type:    sandbox.ProjectTypeString(detection.ProjectTypes),
+			Root:    workDir,
+			Markers: markers,
+		},
+		Sandbox: SandboxInfo{
+			Tools:   collapsePaths(detection.ToolPaths),
+			Configs: collapsePaths(detection.ConfigPaths),
+			Caches:  collapsePaths(detection.CachePaths),
+		},
+		Validation: ValidationInfo{
+			Suggested:     validationDetection.Suggested,
+			DetectedFiles: validationDetection.DetectedFiles,
+		},
+	}
+
+	// Output as JSON
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(output)
+}
+
+// getProjectMarkers returns the file markers that were found for detected project types
+func getProjectMarkers(workDir string, projectTypes []sandbox.ProjectType) []string {
+	var markers []string
+
+	markerFiles := map[sandbox.ProjectType][]string{
+		sandbox.ProjectNodeJS: {"package.json"},
+		sandbox.ProjectRust:   {"Cargo.toml"},
+		sandbox.ProjectGo:     {"go.mod", "go.sum"},
+		sandbox.ProjectPython: {"pyproject.toml", "requirements.txt", "setup.py", "Pipfile"},
+		sandbox.ProjectRuby:   {"Gemfile"},
+		sandbox.ProjectJava:   {"pom.xml", "build.gradle", "build.gradle.kts"},
+	}
+
+	for _, pt := range projectTypes {
+		if files, ok := markerFiles[pt]; ok {
+			for _, f := range files {
+				if _, err := os.Stat(filepath.Join(workDir, f)); err == nil {
+					markers = append(markers, f)
+				}
+			}
+		}
+	}
+
+	return markers
 }
