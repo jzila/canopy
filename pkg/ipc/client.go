@@ -444,6 +444,22 @@ func (c *Client) SendTaskUpdated(taskID, title, status, agentID, repoID string) 
 	return c.sendMessage(MessageTypeTaskUpdated, payload)
 }
 
+// SendTaskUpdatedFull notifies the daemon of a task update with all fields
+// This is used for initial task list population where type and priority are known
+func (c *Client) SendTaskUpdatedFull(taskID, title, status, taskType string, priority int, agentID, repoID string) error {
+	payload := TaskUpdatedPayload{
+		ID:       taskID,
+		Title:    title,
+		Status:   status,
+		Type:     taskType,
+		Priority: priority,
+		AgentID:  agentID,
+		RepoID:   repoID,
+	}
+
+	return c.sendMessage(MessageTypeTaskUpdated, payload)
+}
+
 // SendRunStarted notifies the daemon that a canopy run has started
 // repo is optional and contains repository information for tracking
 func (c *Client) SendRunStarted(runID string, taskCount int, repo *repository.Repository) error {

@@ -79,6 +79,7 @@ export interface TaskState {
   id: string;
   title: string;
   status: string;
+  type?: string;  // Task type (task, bug, feature, etc.)
   agent_id: string;
   priority: number;
   dependencies: string[];

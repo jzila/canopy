@@ -79,8 +79,9 @@ interface TaskUpdatedEvent {
     id: string;
     title?: string;
     status?: string;
-    agent_id?: string;
+    type?: string;     // Task type (task, bug, feature, etc.)
     priority?: number;
+    agent_id?: string;
   };
 }
 
@@ -151,6 +152,7 @@ interface BackendRuntimeState {
     id: string;
     title: string;
     status: string;
+    type?: string;     // Task type (task, bug, feature, etc.)
     agent_id: string;
     priority: number;
     dependencies: string[];
@@ -450,13 +452,14 @@ export function useWebSocket() {
             }
 
             case 'task:updated': {
-              const { id, title, status, agent_id, priority } = message.payload;
+              const { id, title, status, type: taskType, priority, agent_id } = message.payload;
               console.log('[WebSocket] Task updated:', id, status);
               updateTask(id, {
                 ...(title !== undefined && { title }),
                 ...(status !== undefined && { status }),
-                ...(agent_id !== undefined && { agent_id }),
+                ...(taskType !== undefined && { type: taskType }),
                 ...(priority !== undefined && { priority }),
+                ...(agent_id !== undefined && { agent_id }),
               });
               break;
             }
