@@ -119,3 +119,64 @@ func TestGetChanges_ContentComparison(t *testing.T) {
 		os.Remove(upperFile)
 	})
 }
+
+func TestNewDirectOverlay(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	overlay := NewDirectOverlay(tmpDir)
+
+	if overlay == nil {
+		t.Fatal("NewDirectOverlay returned nil")
+	}
+
+	t.Run("fields set correctly", func(t *testing.T) {
+		if overlay.ID != "direct" {
+			t.Errorf("expected ID 'direct', got %q", overlay.ID)
+		}
+		if overlay.MergedDir != tmpDir {
+			t.Errorf("expected MergedDir %q, got %q", tmpDir, overlay.MergedDir)
+		}
+		if overlay.LowerDir != tmpDir {
+			t.Errorf("expected LowerDir %q, got %q", tmpDir, overlay.LowerDir)
+		}
+		if overlay.UpperDir != "" {
+			t.Errorf("expected empty UpperDir, got %q", overlay.UpperDir)
+		}
+		if overlay.WorkDir != "" {
+			t.Errorf("expected empty WorkDir, got %q", overlay.WorkDir)
+		}
+	})
+
+	t.Run("GetChanges returns empty for direct overlay", func(t *testing.T) {
+		// Create some files in the directory
+		testFile := filepath.Join(tmpDir, "test.txt")
+		if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
+			t.Fatalf("failed to write test file: %v", err)
+		}
+
+		changes, err := overlay.GetChanges()
+		if err != nil {
+			t.Errorf("GetChanges() returned error: %v", err)
+		}
+		if len(changes) != 0 {
+			t.Errorf("expected empty changes for direct overlay, got %d", len(changes))
+		}
+	})
+
+	t.Run("HasGitRepo works on direct overlay", func(t *testing.T) {
+		// Should return false since tmpDir doesn't have .git
+		if overlay.HasGitRepo() {
+			t.Error("expected HasGitRepo() to return false for non-git dir")
+		}
+
+		// Create .git dir
+		gitDir := filepath.Join(tmpDir, ".git")
+		if err := os.MkdirAll(gitDir, 0755); err != nil {
+			t.Fatalf("failed to create .git: %v", err)
+		}
+
+		if !overlay.HasGitRepo() {
+			t.Error("expected HasGitRepo() to return true after creating .git")
+		}
+	})
+}

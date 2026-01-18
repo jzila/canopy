@@ -118,6 +118,26 @@ func NewOverlay(baseDir, lowerDir string) (*Overlay, error) {
 	return overlay, nil
 }
 
+// NewDirectOverlay creates a minimal overlay that operates directly on a directory
+// without any isolation. This is used for repair agents that need to modify the
+// actual repository directly (after merge has already been applied).
+//
+// Unlike a full overlay, this:
+//   - Does not create any temporary directories
+//   - Does not provide isolation or copy-on-write
+//   - Writes directly to the target directory
+//   - GetChanges() will return an empty list (use git status instead)
+func NewDirectOverlay(workDir string) *Overlay {
+	return &Overlay{
+		ID:        "direct",
+		LowerDir:  workDir,
+		UpperDir:  "", // No upper dir - changes go directly to workDir
+		WorkDir:   "", // No overlay work dir
+		MergedDir: workDir,
+		mounted:   true, // Mark as mounted so methods work
+	}
+}
+
 // createWhiteouts creates whiteout entries in the upper directory to hide
 // sensitive paths from agents. Uses OverlayFS whiteout convention.
 func (o *Overlay) createWhiteouts() error {
@@ -353,6 +373,12 @@ func generateID() string {
 
 // GetChanges extracts all file changes from the overlay's upper directory
 func (o *Overlay) GetChanges() ([]FileChange, error) {
+	// For direct overlays (no UpperDir), return empty list.
+	// Changes should be tracked via git status instead.
+	if o.UpperDir == "" {
+		return nil, nil
+	}
+
 	var changes []FileChange
 
 	err := filepath.WalkDir(o.UpperDir, func(path string, d fs.DirEntry, err error) error {
