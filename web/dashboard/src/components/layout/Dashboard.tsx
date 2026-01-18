@@ -94,10 +94,11 @@ export const Dashboard: React.FC = () => {
   const agents = useStateStore((state) => state.agents);
   const stats = useStateStore((state) => state.stats);
   const isPaused = useStateStore((state) => state.isPaused);
+  const isPausedByResolver = useStateStore((state) => state.isPausedByResolver);
+  const pauseState = useStateStore((state) => state.pauseState);
   const selectedAgentId = useStateStore((state) => state.selectedAgentId);
   const setSelectedAgent = useStateStore((state) => state.setSelectedAgent);
   const syncState = useStateStore((state) => state.syncState);
-  const setIsPaused = useStateStore((state) => state.setIsPaused);
   const updateAgent = useStateStore((state) => state.updateAgent);
   const repositories = useStateStore((state) => state.repositories);
   const activeRepoId = useStateStore((state) => state.activeRepoId);
@@ -195,7 +196,7 @@ export const Dashboard: React.FC = () => {
     try {
       setIsPauseLoading(true);
       await pauseOrch();
-      setIsPaused(true);
+      // State update comes from WebSocket event
     } catch (error) {
       console.error('Failed to pause orchestration:', error);
     } finally {
@@ -209,7 +210,7 @@ export const Dashboard: React.FC = () => {
     try {
       setIsResumeLoading(true);
       await resumeOrch();
-      setIsPaused(false);
+      // State update comes from WebSocket event
     } catch (error) {
       console.error('Failed to resume orchestration:', error);
     } finally {
@@ -258,6 +259,8 @@ export const Dashboard: React.FC = () => {
       <DashboardHeader
         connected={connected}
         isPaused={isPaused}
+        isPausedByResolver={isPausedByResolver}
+        pauseState={pauseState}
         isPauseLoading={isPauseLoading}
         isResumeLoading={isResumeLoading}
         isDark={isDark}

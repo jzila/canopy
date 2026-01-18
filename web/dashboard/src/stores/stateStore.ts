@@ -101,11 +101,17 @@ export interface Stats {
   all_git_commits: GitCommit[];
 }
 
+// Pause state enum matching Go backend (ipc/protocol.go)
+export type PauseState = 'running' | 'paused_user' | 'paused_resolver' | 'paused_both';
+
 export interface RuntimeState {
   agents: Record<string, AgentState>;
   tasks: Record<string, TaskState>;
   stats: Stats;
   is_paused: boolean;
+  is_paused_by_user: boolean;
+  is_paused_by_resolver: boolean;
+  pause_state: PauseState;
   start_time: string;
 }
 
@@ -117,6 +123,9 @@ interface StateStore {
   tasks: Record<string, TaskState>;
   stats: Stats;
   isPaused: boolean;
+  isPausedByUser: boolean;
+  isPausedByResolver: boolean;
+  pauseState: PauseState;
   selectedAgentId: string | null;
   highlightedTaskId: string | null;
   selectedBeadId: string | null; // Selected bead for filtering agents
@@ -140,7 +149,12 @@ interface StateStore {
   setSelectedAgent: (id: string | null) => void;
   setHighlightedTask: (id: string | null) => void;
   setSelectedBead: (id: string | null) => void;
-  setIsPaused: (paused: boolean) => void;
+  setPauseState: (
+    isPaused: boolean,
+    isPausedByUser: boolean,
+    isPausedByResolver: boolean,
+    pauseState: PauseState
+  ) => void;
   setRepositories: (repositories: Repository[], activeRepoId: string) => void;
   setActiveRepo: (repoId: string) => void;
   setRepoSwitching: (isSwitching: boolean) => void;
@@ -224,6 +238,9 @@ export const useStateStore = create<StateStore>((set) => ({
   tasks: {},
   stats: initialStats,
   isPaused: false,
+  isPausedByUser: false,
+  isPausedByResolver: false,
+  pauseState: 'running',
   selectedAgentId: null,
   highlightedTaskId: null,
   selectedBeadId: null,
@@ -305,6 +322,9 @@ export const useStateStore = create<StateStore>((set) => ({
       tasks: runtimeState.tasks,
       stats: runtimeState.stats,
       isPaused: runtimeState.is_paused,
+      isPausedByUser: runtimeState.is_paused_by_user,
+      isPausedByResolver: runtimeState.is_paused_by_resolver,
+      pauseState: runtimeState.pause_state,
     }),
 
   appendOutput: (agentId, output, isError = false) =>
@@ -376,7 +396,8 @@ export const useStateStore = create<StateStore>((set) => ({
 
   setSelectedBead: (selectedBeadId) => set({ selectedBeadId }),
 
-  setIsPaused: (isPaused) => set({ isPaused }),
+  setPauseState: (isPaused, isPausedByUser, isPausedByResolver, pauseState) =>
+    set({ isPaused, isPausedByUser, isPausedByResolver, pauseState }),
 
   setRepositories: (repositories, activeRepoId) =>
     set({

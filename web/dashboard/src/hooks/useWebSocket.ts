@@ -211,8 +211,14 @@ interface BackendRuntimeState {
     all_git_commits: BackendGitCommit[];
   };
   is_paused: boolean;
+  is_paused_by_user: boolean;
+  is_paused_by_resolver: boolean;
+  pause_state: PauseState;
   start_time: string;
 }
+
+// Pause state enum matching Go backend (ipc/protocol.go)
+type PauseState = 'running' | 'paused_user' | 'paused_resolver' | 'paused_both';
 
 interface StateSyncEvent {
   type: 'state:sync';
@@ -227,20 +233,23 @@ interface RepoSyncPayload {
   active_repo_path: string;
 }
 
+interface OrchPauseStatusPayload {
+  is_paused: boolean;
+  is_paused_by_user: boolean;
+  is_paused_by_resolver: boolean;
+  pause_state: PauseState;
+}
+
 interface OrchPausedEvent {
   type: 'orch:paused';
   timestamp: string;
-  payload: {
-    paused: boolean;
-  };
+  payload: OrchPauseStatusPayload;
 }
 
 interface OrchResumedEvent {
   type: 'orch:resumed';
   timestamp: string;
-  payload: {
-    paused: boolean;
-  };
+  payload: OrchPauseStatusPayload;
 }
 type EventType =
   | StateSyncEvent
@@ -286,7 +295,7 @@ export function useWebSocket() {
     appendLiveFeedEvent,
     appendGitCommit,
     syncState,
-    setIsPaused,
+    setPauseState,
     setActiveRepo,
     updateAgentMergeStatus,
     addRun,
@@ -397,6 +406,9 @@ export function useWebSocket() {
                   all_git_commits: [],
                 },
                 is_paused: backendState.is_paused,
+                is_paused_by_user: backendState.is_paused_by_user ?? false,
+                is_paused_by_resolver: backendState.is_paused_by_resolver ?? false,
+                pause_state: backendState.pause_state ?? 'running',
                 start_time: backendState.start_time,
               });
               console.log('[WebSocket] State synced with', Object.keys(transformedAgents).length, 'agents');
@@ -518,14 +530,16 @@ export function useWebSocket() {
             }
 
             case 'orch:paused': {
-              console.log('[WebSocket] Orchestrator paused');
-              setIsPaused(true);
+              const { is_paused, is_paused_by_user, is_paused_by_resolver, pause_state } = message.payload;
+              console.log('[WebSocket] Orchestrator paused:', pause_state);
+              setPauseState(is_paused, is_paused_by_user, is_paused_by_resolver, pause_state);
               break;
             }
 
             case 'orch:resumed': {
-              console.log('[WebSocket] Orchestrator resumed');
-              setIsPaused(false);
+              const { is_paused, is_paused_by_user, is_paused_by_resolver, pause_state } = message.payload;
+              console.log('[WebSocket] Orchestrator resumed:', pause_state);
+              setPauseState(is_paused, is_paused_by_user, is_paused_by_resolver, pause_state);
               break;
             }
 
@@ -615,7 +629,7 @@ export function useWebSocket() {
         }, backoffTime);
       }
     }
-  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, appendGitCommit, syncState, setIsPaused, setActiveRepo, updateAgentMergeStatus, addRun, updateRun]);
+  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, appendGitCommit, syncState, setPauseState, setActiveRepo, updateAgentMergeStatus, addRun, updateRun]);
 
   const disconnect = useCallback(() => {
     isManuallyClosedRef.current = true;

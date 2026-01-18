@@ -10,7 +10,7 @@ import {
   Moon,
 } from 'lucide-react';
 import type { Repository, Run } from '../../api/client';
-import type { Stats } from '../../stores/stateStore';
+import type { Stats, PauseState } from '../../stores/stateStore';
 import { RepoSelector } from './RepoSelector';
 import { RunSelector } from './RunSelector';
 
@@ -18,6 +18,8 @@ export interface DashboardHeaderProps {
   // Connection & state
   connected: boolean;
   isPaused: boolean;
+  isPausedByResolver: boolean;
+  pauseState: PauseState;
   isPauseLoading: boolean;
   isResumeLoading: boolean;
 
@@ -66,9 +68,53 @@ function formatTokens(tokens: number): string {
  * - Pause/Resume controls
  * - Stats summary
  */
+/**
+ * Get the display text for the pause button based on pause state
+ */
+function getPauseButtonText(
+  pauseState: PauseState,
+  isPauseLoading: boolean,
+  isResumeLoading: boolean
+): string {
+  if (isPauseLoading) return 'Pausing...';
+  if (isResumeLoading) return 'Resuming...';
+
+  switch (pauseState) {
+    case 'paused_user':
+      return 'Paused';
+    case 'paused_resolver':
+      return 'Resolving...';
+    case 'paused_both':
+      return 'Paused (resolving)';
+    default:
+      return 'Pause';
+  }
+}
+
+/**
+ * Get the tooltip text for the pause/resume button
+ */
+function getPauseButtonTooltip(pauseState: PauseState, isPaused: boolean): string {
+  if (isPaused) {
+    switch (pauseState) {
+      case 'paused_user':
+        return 'Orchestrator paused by user. Click to resume spawning new agents.';
+      case 'paused_resolver':
+        return 'Orchestrator paused while resolving merge conflicts. Will auto-resume when complete.';
+      case 'paused_both':
+        return 'Orchestrator paused by user while also resolving merge conflicts. Click to allow new agents after resolution completes.';
+      default:
+        return 'Click to resume spawning new agents';
+    }
+  }
+  return 'Pause spawning of new agents. Running agents will continue until completion.';
+}
+
 export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
   connected,
   isPaused,
+  isPausedByResolver,
+  pauseState,
   isPauseLoading,
   isResumeLoading,
   isDark,
@@ -85,6 +131,8 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
   onPause,
   onResume,
 }) => {
+  const buttonText = getPauseButtonText(pauseState, isPauseLoading, isResumeLoading);
+  const buttonTooltip = getPauseButtonTooltip(pauseState, isPaused);
   return (
     <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-8 py-5 flex-shrink-0">
       <div className="flex items-center">
@@ -161,24 +209,29 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
           {isPaused ? (
             <button
               onClick={onResume}
-              disabled={isResumeLoading || !connected}
+              disabled={isResumeLoading || !connected || isPausedByResolver}
+              title={buttonTooltip}
               className={`
-                header-control gap-2 px-4 bg-green-500 text-white rounded-lg
+                header-control gap-2 px-4 text-white rounded-lg
                 font-medium transition-colors
+                ${pauseState === 'paused_resolver' ? 'bg-blue-500' : 'bg-green-500'}
                 ${
-                  isResumeLoading || !connected
+                  isResumeLoading || !connected || (isPausedByResolver && pauseState === 'paused_resolver')
                     ? 'opacity-50 cursor-not-allowed'
-                    : 'hover:bg-green-600'
+                    : pauseState === 'paused_resolver'
+                      ? 'hover:bg-blue-600'
+                      : 'hover:bg-green-600'
                 }
               `}
             >
               <Play className="w-4 h-4" />
-              {isResumeLoading ? 'Resuming...' : 'Resume'}
+              {buttonText}
             </button>
           ) : (
             <button
               onClick={onPause}
               disabled={isPauseLoading || !connected}
+              title={buttonTooltip}
               className={`
                 header-control gap-2 px-4 bg-orange-500 text-white rounded-lg
                 font-medium transition-colors
@@ -190,7 +243,7 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
               `}
             >
               <Pause className="w-4 h-4" />
-              {isPauseLoading ? 'Pausing...' : 'Pause'}
+              {buttonText}
             </button>
           )}
         </div>
