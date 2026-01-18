@@ -683,6 +683,67 @@ func TestGetStats_WithSince(t *testing.T) {
 	}
 }
 
+func TestGetStats_ResolverStats(t *testing.T) {
+	store := createTestStore(t)
+	defer store.Close()
+
+	now := time.Now()
+
+	// Create a run
+	run := &Run{ID: "run-1", StartedAt: now, Status: RunStatusCompleted}
+	if err := store.CreateRun(run); err != nil {
+		t.Fatalf("failed to create run: %v", err)
+	}
+
+	// Create agents with various merge conflict states
+	agents := []*Agent{
+		// Agent with successful resolution
+		{ID: "agent-1", RunID: "run-1", TaskID: "task-1", TaskTitle: "Task 1", Status: AgentStatusCompleted, StartedAt: now,
+			MergeHadConflict: true, MergeStatus: MergeStatusMerged, DurationSeconds: 120},
+		// Agent with failed resolution
+		{ID: "agent-2", RunID: "run-1", TaskID: "task-2", TaskTitle: "Task 2", Status: AgentStatusFailed, StartedAt: now,
+			MergeHadConflict: true, MergeStatus: MergeStatusFailed, DurationSeconds: 180},
+		// Agent with successful resolution
+		{ID: "agent-3", RunID: "run-1", TaskID: "task-3", TaskTitle: "Task 3", Status: AgentStatusCompleted, StartedAt: now,
+			MergeHadConflict: true, MergeStatus: MergeStatusMerged, DurationSeconds: 60},
+		// Agent without conflict (should not count)
+		{ID: "agent-4", RunID: "run-1", TaskID: "task-4", TaskTitle: "Task 4", Status: AgentStatusCompleted, StartedAt: now,
+			MergeHadConflict: false, MergeStatus: MergeStatusMerged, DurationSeconds: 30},
+	}
+
+	for _, agent := range agents {
+		if err := store.CreateAgent(agent); err != nil {
+			t.Fatalf("failed to create agent: %v", err)
+		}
+	}
+
+	stats, err := store.GetStats(nil)
+	if err != nil {
+		t.Fatalf("failed to get stats: %v", err)
+	}
+
+	// Should have 3 conflicts (agents 1, 2, 3 had merge_had_conflict=true)
+	if stats.TotalConflicts != 3 {
+		t.Errorf("expected 3 total conflicts, got %d", stats.TotalConflicts)
+	}
+
+	// Should have 2 resolved (agents 1, 3 with merge_status=merged)
+	if stats.ResolvedConflicts != 2 {
+		t.Errorf("expected 2 resolved conflicts, got %d", stats.ResolvedConflicts)
+	}
+
+	// Should have 1 failed (agent 2 with merge_status=failed)
+	if stats.FailedResolutions != 1 {
+		t.Errorf("expected 1 failed resolution, got %d", stats.FailedResolutions)
+	}
+
+	// Average resolution time should be (120 + 180 + 60) / 3 = 120 seconds
+	expectedAvg := 120.0
+	if stats.AvgResolutionSeconds != expectedAvg {
+		t.Errorf("expected avg resolution time %.1f, got %.1f", expectedAvg, stats.AvgResolutionSeconds)
+	}
+}
+
 func TestGetRun_NotFound(t *testing.T) {
 	store := createTestStore(t)
 	defer store.Close()

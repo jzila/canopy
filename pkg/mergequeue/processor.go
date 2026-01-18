@@ -318,6 +318,9 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 		p.queue.Resume()
 
 		if resolverErr != nil {
+			// Track resolver failure metrics (timeout or other error)
+			metrics.IncResolverFailure()
+
 			resp.Error = fmt.Sprintf("resolver error: %v", resolverErr)
 			p.markTaskFailed(ctx, taskID, resp.Error)
 			p.sendTaskUpdated(taskID, req.Task.Title, "failed")
@@ -326,6 +329,10 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 		}
 
 		if resolverResult != nil && resolverResult.Success {
+			// Track resolver success metrics
+			metrics.IncResolverSuccess()
+			metrics.ObserveResolverDuration(resolverResult.Duration.Seconds())
+
 			if p.verbose {
 				fmt.Printf("[%s-resolver] Conflict resolved successfully (%.1fs)\n",
 					taskID, resolverResult.Duration.Seconds())
@@ -387,7 +394,12 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 			p.sendMergeStatusFull(taskID, ipc.MergeStatusMerged, "", resp.CommitsApplied, resp.HadConflict, resp.ResolverSpawned)
 			resp.Success = true
 		} else {
-			// Resolver failed
+			// Resolver failed - track metrics
+			metrics.IncResolverFailure()
+			if resolverResult != nil && resolverResult.Duration > 0 {
+				metrics.ObserveResolverDuration(resolverResult.Duration.Seconds())
+			}
+
 			errMsg := "resolver failed"
 			if resolverResult != nil && resolverResult.Error != "" {
 				errMsg = fmt.Sprintf("resolver failed: %s", resolverResult.Error)

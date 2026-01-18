@@ -141,5 +141,25 @@ func outputStatsTable(stats *persistence.AggregateStats, since string) error {
 		fmt.Printf("Git Commits: %d\n", stats.GitCommits)
 	}
 
+	// Resolver stats section
+	if stats.TotalConflicts > 0 {
+		fmt.Println()
+		fmt.Println("Resolver Stats")
+		fmt.Println(strings.Repeat("-", 40))
+		fmt.Printf("Total Conflicts: %d\n", stats.TotalConflicts)
+
+		resolveRate := float64(stats.ResolvedConflicts) / float64(stats.TotalConflicts) * 100
+		fmt.Printf("Resolved: %d (%.1f%%)\n", stats.ResolvedConflicts, resolveRate)
+
+		if stats.FailedResolutions > 0 {
+			failRate := float64(stats.FailedResolutions) / float64(stats.TotalConflicts) * 100
+			fmt.Printf("Failed: %d (%.1f%%)\n", stats.FailedResolutions, failRate)
+		}
+
+		if stats.AvgResolutionSeconds > 0 {
+			fmt.Printf("Avg Resolution Time: %s\n", formatDuration(time.Duration(stats.AvgResolutionSeconds*float64(time.Second))))
+		}
+	}
+
 	return nil
 }

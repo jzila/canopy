@@ -57,6 +57,34 @@ var (
 		},
 	)
 
+	// ResolverSuccessTotal tracks the number of successfully resolved conflicts.
+	ResolverSuccessTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "resolver_success_total",
+			Help:      "Total number of conflicts successfully resolved",
+		},
+	)
+
+	// ResolverFailureTotal tracks the number of failed resolution attempts.
+	ResolverFailureTotal = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "resolver_failure_total",
+			Help:      "Total number of failed conflict resolutions",
+		},
+	)
+
+	// ResolverDurationSeconds tracks the duration of resolver executions.
+	ResolverDurationSeconds = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: namespace,
+			Name:      "resolver_duration_seconds",
+			Help:      "Duration of resolver executions in seconds",
+			Buckets:   []float64{10, 30, 60, 120, 300, 600, 900, 1200},
+		},
+	)
+
 	// IPCMessagesTotal tracks the total number of IPC messages processed by type.
 	IPCMessagesTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
@@ -106,6 +134,21 @@ func IncMergeConflicts() {
 // AddMergeConflicts increments the merge conflicts counter by the given amount.
 func AddMergeConflicts(count int) {
 	MergeConflictsTotal.Add(float64(count))
+}
+
+// IncResolverSuccess increments the resolver success counter.
+func IncResolverSuccess() {
+	ResolverSuccessTotal.Inc()
+}
+
+// IncResolverFailure increments the resolver failure counter.
+func IncResolverFailure() {
+	ResolverFailureTotal.Inc()
+}
+
+// ObserveResolverDuration records a resolver execution duration.
+func ObserveResolverDuration(durationSeconds float64) {
+	ResolverDurationSeconds.Observe(durationSeconds)
 }
 
 // IncIPCMessages increments the IPC messages counter for the given message type.

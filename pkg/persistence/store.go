@@ -173,6 +173,11 @@ type AggregateStats struct {
 	TotalDurationSeconds     float64 `json:"total_duration_seconds"`
 	FilesChanged             int     `json:"files_changed"`
 	GitCommits               int     `json:"git_commits"`
+	// Resolver statistics (aggregated from agents with merge_had_conflict=true)
+	TotalConflicts       int     `json:"total_conflicts"`
+	ResolvedConflicts    int     `json:"resolved_conflicts"`
+	FailedResolutions    int     `json:"failed_resolutions"`
+	AvgResolutionSeconds float64 `json:"avg_resolution_seconds"`
 }
 
 // NewStore creates a new Store with the default database path
@@ -1064,6 +1069,32 @@ func (s *Store) GetStats(since *time.Time) (*AggregateStats, error) {
 		return nil, fmt.Errorf("failed to query agent stats: %w", err)
 	}
 
+	// Query resolver stats from agents that had conflicts
+	// merge_had_conflict=true indicates a conflict was detected
+	// merge_status='merged' indicates successful resolution
+	// merge_status='failed' indicates failed resolution
+	resolverQuery := `
+		SELECT
+			COALESCE(SUM(CASE WHEN merge_had_conflict = 1 THEN 1 ELSE 0 END), 0) as total_conflicts,
+			COALESCE(SUM(CASE WHEN merge_had_conflict = 1 AND merge_status = 'merged' THEN 1 ELSE 0 END), 0) as resolved_conflicts,
+			COALESCE(SUM(CASE WHEN merge_had_conflict = 1 AND merge_status = 'failed' THEN 1 ELSE 0 END), 0) as failed_resolutions,
+			COALESCE(AVG(CASE WHEN merge_had_conflict = 1 AND merge_status IN ('merged', 'failed') THEN duration_seconds ELSE NULL END), 0) as avg_resolution_seconds
+		FROM agents
+	`
+	if since != nil {
+		resolverQuery += " WHERE started_at >= ?"
+	}
+
+	err = s.db.QueryRow(resolverQuery, args...).Scan(
+		&stats.TotalConflicts,
+		&stats.ResolvedConflicts,
+		&stats.FailedResolutions,
+		&stats.AvgResolutionSeconds,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query resolver stats: %w", err)
+	}
+
 	return &stats, nil
 }
 
@@ -1152,6 +1183,30 @@ func (s *Store) GetStatsByRepo(repoID string, since *time.Time) (*AggregateStats
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query agent stats by repo: %w", err)
+	}
+
+	// Query resolver stats from agents that had conflicts
+	resolverQuery := `
+		SELECT
+			COALESCE(SUM(CASE WHEN merge_had_conflict = 1 THEN 1 ELSE 0 END), 0) as total_conflicts,
+			COALESCE(SUM(CASE WHEN merge_had_conflict = 1 AND merge_status = 'merged' THEN 1 ELSE 0 END), 0) as resolved_conflicts,
+			COALESCE(SUM(CASE WHEN merge_had_conflict = 1 AND merge_status = 'failed' THEN 1 ELSE 0 END), 0) as failed_resolutions,
+			COALESCE(AVG(CASE WHEN merge_had_conflict = 1 AND merge_status IN ('merged', 'failed') THEN duration_seconds ELSE NULL END), 0) as avg_resolution_seconds
+		FROM agents
+		WHERE repo_id = ?
+	`
+	if since != nil {
+		resolverQuery += " AND started_at >= ?"
+	}
+
+	err = s.db.QueryRow(resolverQuery, args...).Scan(
+		&stats.TotalConflicts,
+		&stats.ResolvedConflicts,
+		&stats.FailedResolutions,
+		&stats.AvgResolutionSeconds,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query resolver stats by repo: %w", err)
 	}
 
 	return &stats, nil
