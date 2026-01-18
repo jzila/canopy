@@ -5,7 +5,7 @@ interface MergeQueueStatusProps {
   completed: MergeCompletedItem[];
   resolvers: MergeResolverItem[];
   pending: MergePendingItem[];
-  activeWorkers: MergeWorkerItem[];
+  active_workers: MergeWorkerItem[];
   onTaskClick?: (taskId: string) => void;
 }
 
@@ -87,7 +87,7 @@ export const MergeQueueStatus: React.FC<MergeQueueStatusProps> = ({
   completed,
   resolvers,
   pending,
-  activeWorkers,
+  active_workers,
   onTaskClick,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -98,7 +98,7 @@ export const MergeQueueStatus: React.FC<MergeQueueStatusProps> = ({
 
   // Track newly completed items for animation
   useEffect(() => {
-    const currentIds = completed.map(c => c.taskId);
+    const currentIds = completed.map(c => c.task_id);
     const prevIds = prevCompletedRef.current;
 
     // Find newly completed (in current but not in previous)
@@ -127,10 +127,10 @@ export const MergeQueueStatus: React.FC<MergeQueueStatusProps> = ({
   }, [completed]);
 
   // Check if there's any merge activity
-  const hasActivity = completed.length > 0 || resolvers.length > 0 || pending.length > 0 || activeWorkers.length > 0;
+  const hasActivity = completed.length > 0 || resolvers.length > 0 || pending.length > 0 || active_workers.length > 0;
 
   // Count active items (merging + resolving)
-  const mergingCount = activeWorkers.length;
+  const mergingCount = active_workers.length;
   const resolvingCount = resolvers.filter(r => r.status === 'running').length;
   const queuedCount = pending.length;
 
@@ -195,14 +195,14 @@ export const MergeQueueStatus: React.FC<MergeQueueStatusProps> = ({
             )}
             {recentCompleted.map((item) => (
               <MergeCircle
-                key={`completed-${item.taskId}`}
-                taskId={item.taskId}
+                key={`completed-${item.task_id}`}
+                taskId={item.task_id}
                 status={item.success ? 'completed' : 'failed'}
                 success={item.success}
-                isRecent={recentlyCompleted.has(item.taskId)}
-                onMouseEnter={(e) => handleMouseEnter(e, item.taskId, extractShortId(item.taskId), item.success ? 'Merged' : 'Failed')}
+                isRecent={recentlyCompleted.has(item.task_id)}
+                onMouseEnter={(e) => handleMouseEnter(e, item.task_id, extractShortId(item.task_id), item.success ? 'Merged' : 'Failed')}
                 onMouseLeave={handleMouseLeave}
-                onClick={() => onTaskClick?.(item.taskId)}
+                onClick={() => onTaskClick?.(item.task_id)}
               />
             ))}
           </div>
@@ -214,16 +214,16 @@ export const MergeQueueStatus: React.FC<MergeQueueStatusProps> = ({
         )}
 
         {/* Active workers - bright with gentle heartbeat */}
-        {activeWorkers.length > 0 && (
+        {active_workers.length > 0 && (
           <div className="flex items-center -space-x-0.5">
-            {activeWorkers.map((worker) => (
+            {active_workers.map((worker) => (
               <MergeCircle
-                key={`active-${worker.taskId}`}
-                taskId={worker.taskId}
+                key={`active-${worker.task_id}`}
+                taskId={worker.task_id}
                 status="active"
-                onMouseEnter={(e) => handleMouseEnter(e, worker.taskId, extractShortId(worker.taskId), 'Merging')}
+                onMouseEnter={(e) => handleMouseEnter(e, worker.task_id, extractShortId(worker.task_id), 'Merging')}
                 onMouseLeave={handleMouseLeave}
-                onClick={() => onTaskClick?.(worker.taskId)}
+                onClick={() => onTaskClick?.(worker.task_id)}
               />
             ))}
           </div>
@@ -234,12 +234,12 @@ export const MergeQueueStatus: React.FC<MergeQueueStatusProps> = ({
           <div className="flex items-center -space-x-0.5">
             {resolvers.filter(r => r.status === 'running').map((resolver) => (
               <MergeCircle
-                key={`resolver-${resolver.resolverTaskId}`}
-                taskId={resolver.resolverTaskId}
+                key={`resolver-${resolver.resolver_task_id}`}
+                taskId={resolver.resolver_task_id}
                 status="resolving"
-                onMouseEnter={(e) => handleMouseEnter(e, resolver.resolverTaskId, extractShortId(resolver.resolverTaskId), 'Resolving')}
+                onMouseEnter={(e) => handleMouseEnter(e, resolver.resolver_task_id, extractShortId(resolver.resolver_task_id), 'Resolving')}
                 onMouseLeave={handleMouseLeave}
-                onClick={() => onTaskClick?.(resolver.resolverTaskId)}
+                onClick={() => onTaskClick?.(resolver.resolver_task_id)}
               />
             ))}
           </div>
@@ -255,13 +255,13 @@ export const MergeQueueStatus: React.FC<MergeQueueStatusProps> = ({
           <div className="flex items-center -space-x-1">
             {pending.slice(0, 5).map((item) => (
               <MergeCircle
-                key={`pending-${item.taskId}`}
-                taskId={item.taskId}
+                key={`pending-${item.task_id}`}
+                taskId={item.task_id}
                 status="queued"
                 position={item.position}
-                onMouseEnter={(e) => handleMouseEnter(e, item.taskId, extractShortId(item.taskId), `#${item.position}`)}
+                onMouseEnter={(e) => handleMouseEnter(e, item.task_id, extractShortId(item.task_id), `#${item.position}`)}
                 onMouseLeave={handleMouseLeave}
-                onClick={() => onTaskClick?.(item.taskId)}
+                onClick={() => onTaskClick?.(item.task_id)}
               />
             ))}
             {pending.length > 5 && (

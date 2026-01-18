@@ -513,15 +513,15 @@ type MergeQueueState struct {
 	Completed     []MergeCompletedItem `json:"completed"`
 	Resolvers     []MergeResolverItem  `json:"resolvers"`
 	Pending       []MergePendingItem   `json:"pending"`
-	ActiveWorkers []MergeWorkerItem    `json:"activeWorkers"`
-	IsPaused      bool                 `json:"isPaused"`
-	QueueLength   int                  `json:"queueLength"`
+	ActiveWorkers []MergeWorkerItem    `json:"active_workers"`
+	IsPaused      bool                 `json:"is_paused"`
+	QueueLength   int                  `json:"queue_length"`
 }
 
 // MergeCompletedItem represents a completed merge
 type MergeCompletedItem struct {
-	TaskID    string    `json:"taskId"`
-	AgentID   string    `json:"agentId"`
+	TaskID    string    `json:"task_id"`
+	AgentID   string    `json:"agent_id"`
 	Timestamp time.Time `json:"timestamp"`
 	Success   bool      `json:"success"`
 	Error     string    `json:"error,omitempty"`
@@ -529,24 +529,24 @@ type MergeCompletedItem struct {
 
 // MergeResolverItem represents an active resolver for merge conflicts
 type MergeResolverItem struct {
-	ParentTaskID    string `json:"parentTaskId"`
-	ResolverTaskID  string `json:"resolverTaskId"`
-	ParentAgentID   string `json:"parentAgentId"`
-	ResolverAgentID string `json:"resolverAgentId"`
+	ParentTaskID    string `json:"parent_task_id"`
+	ResolverTaskID  string `json:"resolver_task_id"`
+	ParentAgentID   string `json:"parent_agent_id"`
+	ResolverAgentID string `json:"resolver_agent_id"`
 	Status          string `json:"status"`
 }
 
 // MergePendingItem represents a task waiting in the merge queue
 type MergePendingItem struct {
-	TaskID   string `json:"taskId"`
-	AgentID  string `json:"agentId"`
+	TaskID   string `json:"task_id"`
+	AgentID  string `json:"agent_id"`
 	Position int    `json:"position"`
 }
 
 // MergeWorkerItem represents an agent actively working on a task
 type MergeWorkerItem struct {
-	AgentID string `json:"agentId"`
-	TaskID  string `json:"taskId"`
+	AgentID string `json:"agent_id"`
+	TaskID  string `json:"task_id"`
 	Status  string `json:"status"`
 }
 

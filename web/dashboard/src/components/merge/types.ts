@@ -7,8 +7,8 @@ export type MergeStatus = 'pending' | 'acquiring' | 'merging' | 'resolving' | 'm
 
 // A completed merge in the queue history
 export interface CompletedMerge {
-  taskId: string;
-  agentId: string;
+  task_id: string;
+  agent_id: string;
   timestamp: string;
   success: boolean;
   error?: string;
@@ -16,24 +16,24 @@ export interface CompletedMerge {
 
 // A resolver branch spawned to handle merge conflicts
 export interface ResolverBranch {
-  parentTaskId: string;
-  resolverTaskId: string;
-  parentAgentId: string;
-  resolverAgentId: string;
+  parent_task_id: string;
+  resolver_task_id: string;
+  parent_agent_id: string;
+  resolver_agent_id: string;
   status: 'resolving' | 'resolved' | 'failed';
 }
 
 // A pending merge waiting in the queue
 export interface PendingMerge {
-  taskId: string;
-  agentId: string;
+  task_id: string;
+  agent_id: string;
   position: number;
 }
 
 // An active worker currently working on a task
 export interface ActiveWorker {
-  agentId: string;
-  taskId: string;
+  agent_id: string;
+  task_id: string;
   status: MergeStatus;
 }
 

@@ -227,13 +227,13 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
   // Transform merge queue data for MergeQueueStatus component
   const mergeQueueData = useMemo(() => {
     if (!mergeQueue) {
-      return { completed: [], resolvers: [], pending: [], activeWorkers: [] };
+      return { completed: [], resolvers: [], pending: [], active_workers: [] };
     }
     return {
       completed: mergeQueue.completed,
       resolvers: mergeQueue.resolvers,
       pending: mergeQueue.pending,
-      activeWorkers: mergeQueue.activeWorkers,
+      active_workers: mergeQueue.active_workers,
     };
   }, [mergeQueue]);
 
@@ -482,7 +482,7 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
         completed={mergeQueueData.completed}
         resolvers={mergeQueueData.resolvers}
         pending={mergeQueueData.pending}
-        activeWorkers={mergeQueueData.activeWorkers}
+        active_workers={mergeQueueData.active_workers}
         {...(onTaskClick && { onTaskClick })}
       />
 
