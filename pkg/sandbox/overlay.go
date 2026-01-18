@@ -37,6 +37,7 @@ type Overlay struct {
 	UpperDir   string   // Writable layer (per-agent changes)
 	WorkDir    string   // OverlayFS internal workdir
 	MergedDir  string   // Combined view where agent operates
+	Verbose    bool     // Enable debug logging
 	mounted    bool
 	useFuse    bool
 	bindMounts []string // Paths that are bind-mounted through the overlay

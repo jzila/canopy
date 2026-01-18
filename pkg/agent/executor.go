@@ -135,6 +135,9 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 		TaskID: task.ID,
 	}
 
+	// Pass verbose flag to overlay for debug logging
+	overlay.Verbose = e.config.Verbose
+
 	// Record base commit if this is a git repo
 	var baseCommit string
 	if overlay.HasGitRepo() {

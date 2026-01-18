@@ -36,14 +36,28 @@ func (o *Overlay) ExtractNewCommits(baseCommit string) (*GitState, error) {
 		BaseCommit: baseCommit,
 	}
 
+	if o.Verbose {
+		fmt.Fprintf(os.Stderr, "[ExtractNewCommits] baseCommit=%q, MergedDir=%q\n", baseCommit, o.MergedDir)
+	}
+
 	// Get list of new commits (oldest first)
-	cmd := exec.Command("git", "rev-list", "--reverse", baseCommit+"..HEAD")
+	cmdArgs := []string{"rev-list", "--reverse", baseCommit + "..HEAD"}
+	cmd := exec.Command("git", cmdArgs...)
 	cmd.Dir = o.MergedDir
+
+	if o.Verbose {
+		fmt.Fprintf(os.Stderr, "[ExtractNewCommits] running: git %s (in %s)\n", strings.Join(cmdArgs, " "), o.MergedDir)
+	}
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
 	out, err := cmd.Output()
+	if o.Verbose {
+		fmt.Fprintf(os.Stderr, "[ExtractNewCommits] git rev-list output=%q, stderr=%q, err=%v\n",
+			strings.TrimSpace(string(out)), strings.TrimSpace(stderr.String()), err)
+	}
+
 	if err != nil {
 		// Check if this is an actual error vs empty output
 		// git rev-list returns exit 0 with empty output when there are no commits
@@ -58,7 +72,14 @@ func (o *Overlay) ExtractNewCommits(baseCommit string) (*GitState, error) {
 	}
 
 	commits := strings.Fields(string(out))
+	if o.Verbose {
+		fmt.Fprintf(os.Stderr, "[ExtractNewCommits] found %d commits: %v\n", len(commits), commits)
+	}
+
 	if len(commits) == 0 {
+		if o.Verbose {
+			fmt.Fprintf(os.Stderr, "[ExtractNewCommits] returning GitState with 0 commits\n")
+		}
 		return state, nil
 	}
 
@@ -75,6 +96,11 @@ func (o *Overlay) ExtractNewCommits(baseCommit string) (*GitState, error) {
 		// Extract commit message from patch
 		msg := extractCommitMessageFromPatch(patch)
 		state.CommitMessages = append(state.CommitMessages, msg)
+	}
+
+	if o.Verbose {
+		fmt.Fprintf(os.Stderr, "[ExtractNewCommits] returning GitState with %d commits, %d patches\n",
+			len(state.NewCommits), len(state.Patches))
 	}
 
 	return state, nil
