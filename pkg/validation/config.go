@@ -24,6 +24,8 @@ type ValidationSettings struct {
 	Strict bool `toml:"strict"`
 	// Timeout is the default timeout for all validation steps (e.g., "5m", "30s")
 	Timeout string `toml:"timeout"`
+	// MaxRepairAttempts is the maximum number of repair attempts before giving up (default: 3)
+	MaxRepairAttempts int `toml:"max_repair_attempts"`
 	// Steps defines the validation steps to run
 	Steps []StepConfig `toml:"steps"`
 }
@@ -44,10 +46,11 @@ type StepConfig struct {
 func DefaultValidationConfig() *ValidationConfig {
 	return &ValidationConfig{
 		Validation: ValidationSettings{
-			Enabled: false,
-			Strict:  false,
-			Timeout: "5m",
-			Steps:   []StepConfig{},
+			Enabled:           false,
+			Strict:            false,
+			Timeout:           "5m",
+			MaxRepairAttempts: 3,
+			Steps:             []StepConfig{},
 		},
 	}
 }
@@ -195,6 +198,15 @@ func (c *ValidationConfig) IsEnabled() bool {
 // IsStrict returns whether strict mode is enabled.
 func (c *ValidationConfig) IsStrict() bool {
 	return c != nil && c.Validation.Strict
+}
+
+// GetMaxRepairAttempts returns the maximum number of repair attempts.
+// Returns the default (3) if not set or config is nil.
+func (c *ValidationConfig) GetMaxRepairAttempts() int {
+	if c == nil || c.Validation.MaxRepairAttempts <= 0 {
+		return 3
+	}
+	return c.Validation.MaxRepairAttempts
 }
 
 // SaveConfig saves validation configuration to .canopy/validation.toml

@@ -370,6 +370,68 @@ required = false
 	}
 }
 
+func TestLoadValidationConfig_MaxRepairAttempts(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		expected int
+	}{
+		{
+			name: "explicit value",
+			content: `[validation]
+enabled = true
+max_repair_attempts = 5
+`,
+			expected: 5,
+		},
+		{
+			name: "not specified defaults to 3",
+			content: `[validation]
+enabled = true
+`,
+			expected: 3,
+		},
+		{
+			name: "zero value defaults to 3",
+			content: `[validation]
+enabled = true
+max_repair_attempts = 0
+`,
+			expected: 3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir, err := os.MkdirTemp("", "validation-test")
+			if err != nil {
+				t.Fatalf("failed to create temp dir: %v", err)
+			}
+			defer os.RemoveAll(tmpDir)
+
+			configDir := filepath.Join(tmpDir, ".canopy")
+			if err := os.MkdirAll(configDir, 0755); err != nil {
+				t.Fatalf("failed to create config dir: %v", err)
+			}
+
+			configPath := filepath.Join(configDir, "validation.toml")
+			if err := os.WriteFile(configPath, []byte(tt.content), 0644); err != nil {
+				t.Fatalf("failed to write config: %v", err)
+			}
+
+			cfg, err := LoadValidationConfig(tmpDir)
+			if err != nil {
+				t.Fatalf("LoadValidationConfig() error: %v", err)
+			}
+
+			result := cfg.GetMaxRepairAttempts()
+			if result != tt.expected {
+				t.Errorf("GetMaxRepairAttempts() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}
+
 func TestLoadValidationConfig_InvalidTOML(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "validation-test")
 	if err != nil {
@@ -601,6 +663,57 @@ func TestIsStrict(t *testing.T) {
 	}
 }
 
+func TestGetMaxRepairAttempts(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   *ValidationConfig
+		expected int
+	}{
+		{
+			name:     "nil config",
+			config:   nil,
+			expected: 3,
+		},
+		{
+			name: "zero value defaults to 3",
+			config: &ValidationConfig{
+				Validation: ValidationSettings{MaxRepairAttempts: 0},
+			},
+			expected: 3,
+		},
+		{
+			name: "negative value defaults to 3",
+			config: &ValidationConfig{
+				Validation: ValidationSettings{MaxRepairAttempts: -1},
+			},
+			expected: 3,
+		},
+		{
+			name: "explicit value of 1",
+			config: &ValidationConfig{
+				Validation: ValidationSettings{MaxRepairAttempts: 1},
+			},
+			expected: 1,
+		},
+		{
+			name: "explicit value of 5",
+			config: &ValidationConfig{
+				Validation: ValidationSettings{MaxRepairAttempts: 5},
+			},
+			expected: 5,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.config.GetMaxRepairAttempts()
+			if result != tt.expected {
+				t.Errorf("GetMaxRepairAttempts() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}
+
 func TestDefaultValidationConfig(t *testing.T) {
 	cfg := DefaultValidationConfig()
 
@@ -615,6 +728,9 @@ func TestDefaultValidationConfig(t *testing.T) {
 	}
 	if cfg.Validation.Timeout != "5m" {
 		t.Errorf("expected default validation.timeout = 5m, got %s", cfg.Validation.Timeout)
+	}
+	if cfg.Validation.MaxRepairAttempts != 3 {
+		t.Errorf("expected default validation.max_repair_attempts = 3, got %d", cfg.Validation.MaxRepairAttempts)
 	}
 	if len(cfg.Validation.Steps) != 0 {
 		t.Errorf("expected default validation.steps to be empty, got %d steps", len(cfg.Validation.Steps))
