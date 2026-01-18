@@ -46,6 +46,9 @@ type ConflictContext struct {
 	// BaseCommit is the commit hash where the original agent started work.
 	// Patches in FailedPatches are diffs relative to this commit.
 	BaseCommit string
+	// ConcurrentDiff is the git diff from BaseCommit to current HEAD,
+	// showing what other agents merged while this agent was working.
+	ConcurrentDiff string
 }
 
 // Result holds the outcome of a resolver agent execution
@@ -284,6 +287,15 @@ func (r *Resolver) writePatchFiles(overlay *sandbox.Overlay, conflict *ConflictC
 		}
 	}
 
+	// Write concurrent changes diff if available
+	// This shows what other agents merged while the original agent was working
+	if conflict.ConcurrentDiff != "" {
+		diffPath := filepath.Join(canopyDir, "concurrent-changes.diff")
+		if err := os.WriteFile(diffPath, []byte(conflict.ConcurrentDiff), 0644); err != nil {
+			return fmt.Errorf("failed to write concurrent diff file: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -330,6 +342,7 @@ The failed patches are in .canopy/conflict/patch-*.patch - these contain the EXA
 - .canopy/conflict/patch-*.patch - The original patches (READ THESE FIRST)
 - .canopy/conflict/errors.txt - Why the patches failed to apply
 - .canopy/conflict/original-task.txt - Original task context
+- .canopy/conflict/concurrent-changes.diff - Changes merged by other agents since the original agent started (if available)
 
 ### Resolution Strategy
 1. For each patch file, identify which hunks failed to apply

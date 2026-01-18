@@ -14,6 +14,7 @@ import (
 	"github.com/jzila/canopy/pkg/merge"
 	"github.com/jzila/canopy/pkg/metrics"
 	"github.com/jzila/canopy/pkg/resolver"
+	"github.com/jzila/canopy/pkg/sandbox"
 )
 
 // Processor handles merge operations from the queue.
@@ -241,6 +242,19 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 			baseCommit = req.Result.GitState.BaseCommit
 		}
 
+		// Generate diff showing concurrent changes (what other agents merged)
+		var concurrentDiff string
+		if baseCommit != "" {
+			diff, err := sandbox.GetDiffBetween(p.outputDir, baseCommit, "HEAD")
+			if err != nil {
+				if p.verbose {
+					fmt.Fprintf(os.Stderr, "warning: failed to generate concurrent diff: %v\n", err)
+				}
+			} else {
+				concurrentDiff = diff
+			}
+		}
+
 		conflictCtx := &resolver.ConflictContext{
 			TaskID:          taskID,
 			TaskTitle:       req.Task.Title,
@@ -250,6 +264,7 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 			FileChanges:     req.Result.Changes,
 			ParentAgentID:   p.makeAgentID(taskID),
 			BaseCommit:      baseCommit,
+			ConcurrentDiff:  concurrentDiff,
 		}
 
 		// Spawn resolver agent asynchronously

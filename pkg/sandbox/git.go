@@ -151,6 +151,21 @@ func (o *Overlay) HasGitRepo() bool {
 	return err == nil && info.IsDir()
 }
 
+// GetDiffBetween generates a diff between two commits.
+// This is useful for showing what changed between an agent's starting point
+// and current HEAD, so a resolver can understand concurrent modifications.
+func GetDiffBetween(repoDir, fromCommit, toCommit string) (string, error) {
+	cmd := exec.Command("git", "diff", fromCommit+".."+toCommit)
+	cmd.Dir = repoDir
+
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git diff failed: %w", err)
+	}
+
+	return string(out), nil
+}
+
 // CommitInfo holds detailed information about a git commit
 type CommitInfo struct {
 	Hash         string   // Full commit hash
