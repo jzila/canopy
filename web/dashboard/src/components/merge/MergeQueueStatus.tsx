@@ -182,14 +182,14 @@ export const MergeQueueStatus: React.FC<MergeQueueStatusProps> = ({
   }
 
   return (
-    <div ref={containerRef} className="relative px-3 py-1.5 border-b border-gray-100 dark:border-gray-700/50 bg-gray-50/30 dark:bg-gray-800/20">
-      <div className="flex items-center gap-2">
+    <div ref={containerRef} className="relative px-4 py-2 border-b border-gray-100 dark:border-gray-700/50 bg-gray-50/30 dark:bg-gray-800/20">
+      <div className="flex items-center gap-3">
         {/* Completed circles - faded, on the left, separated from active */}
         {recentCompleted.length > 0 && (
           <div className="flex items-center -space-x-0.5 opacity-50">
             {/* Show ellipsis if there are more completed items */}
             {completed.length > 6 && (
-              <span className="text-[9px] text-gray-400 dark:text-gray-500 mr-1.5 tabular-nums">
+              <span className="text-2xs text-gray-400 dark:text-gray-500 mr-1.5 tabular-nums">
                 +{completed.length - 6}
               </span>
             )}
@@ -210,7 +210,7 @@ export const MergeQueueStatus: React.FC<MergeQueueStatusProps> = ({
 
         {/* Separator - thin arrow showing flow direction */}
         {recentCompleted.length > 0 && (mergingCount > 0 || resolvingCount > 0 || queuedCount > 0) && (
-          <span className="text-gray-300 dark:text-gray-600 text-[10px] opacity-60">←</span>
+          <span className="text-gray-300 dark:text-gray-600 text-2xs opacity-60">←</span>
         )}
 
         {/* Active workers - bright with gentle heartbeat */}
@@ -247,7 +247,7 @@ export const MergeQueueStatus: React.FC<MergeQueueStatusProps> = ({
 
         {/* Separator - thin arrow */}
         {(mergingCount > 0 || resolvingCount > 0) && queuedCount > 0 && (
-          <span className="text-gray-300 dark:text-gray-600 text-[10px] opacity-60">←</span>
+          <span className="text-gray-300 dark:text-gray-600 text-2xs opacity-60">←</span>
         )}
 
         {/* Pending - hollow circles tightly clustered */}
@@ -265,7 +265,7 @@ export const MergeQueueStatus: React.FC<MergeQueueStatusProps> = ({
               />
             ))}
             {pending.length > 5 && (
-              <span className="text-[9px] text-gray-400 dark:text-gray-500 ml-1 tabular-nums">
+              <span className="text-2xs text-gray-400 dark:text-gray-500 ml-1.5 tabular-nums">
                 +{pending.length - 5}
               </span>
             )}
@@ -273,15 +273,15 @@ export const MergeQueueStatus: React.FC<MergeQueueStatusProps> = ({
         )}
 
         {/* Compact status summary - right aligned */}
-        <div className="ml-auto flex items-center gap-1.5 text-[10px] text-gray-500 dark:text-gray-400 tabular-nums">
+        <div className="ml-auto flex items-center gap-2 text-2xs text-gray-500 dark:text-gray-400 tabular-nums">
           {mergingCount > 0 && (
-            <span className="flex items-center gap-0.5">
+            <span className="flex items-center gap-1">
               <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-heartbeat" />
               <span>{mergingCount}</span>
             </span>
           )}
           {resolvingCount > 0 && (
-            <span className="flex items-center gap-0.5 text-amber-600 dark:text-amber-400">
+            <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
               <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-heartbeat" />
               <span>{resolvingCount}</span>
             </span>
@@ -300,9 +300,9 @@ export const MergeQueueStatus: React.FC<MergeQueueStatusProps> = ({
           className="absolute z-50 pointer-events-none transform -translate-x-1/2 -translate-y-full"
           style={{ left: tooltip.x, top: tooltip.y }}
         >
-          <div className="bg-gray-900 text-white text-[10px] px-2 py-1 rounded shadow-lg whitespace-nowrap">
+          <div className="bg-gray-900 text-white text-2xs px-2.5 py-1.5 rounded shadow-lg whitespace-nowrap">
             <span className="font-mono">{tooltip.title}</span>
-            <span className="text-gray-400 ml-1.5">{tooltip.status}</span>
+            <span className="text-gray-400 ml-2">{tooltip.status}</span>
           </div>
         </div>
       )}

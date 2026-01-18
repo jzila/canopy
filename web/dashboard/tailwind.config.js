@@ -37,14 +37,14 @@ export default {
         'mono-wide': '0.04em',
       },
       fontSize: {
-        // Extended scale for finer control
-        '2xs': ['0.625rem', { lineHeight: '0.875rem' }],  // 10px
-        'xs': ['0.75rem', { lineHeight: '1.125rem' }],    // 12px
-        'sm': ['0.875rem', { lineHeight: '1.375rem' }],   // 14px
-        'base': ['1rem', { lineHeight: '1.5rem' }],       // 16px
-        'lg': ['1.125rem', { lineHeight: '1.75rem' }],    // 18px
-        'xl': ['1.25rem', { lineHeight: '1.875rem' }],    // 20px
-        '2xl': ['1.5rem', { lineHeight: '2rem' }],        // 24px
+        // Extended scale for finer control - slightly larger for readability
+        '2xs': ['0.6875rem', { lineHeight: '1rem' }],     // 11px - was 10px, more readable
+        'xs': ['0.8125rem', { lineHeight: '1.25rem' }],   // 13px - was 12px, better for body text
+        'sm': ['0.9375rem', { lineHeight: '1.5rem' }],    // 15px - was 14px, improved readability
+        'base': ['1rem', { lineHeight: '1.625rem' }],     // 16px - slightly more line height
+        'lg': ['1.125rem', { lineHeight: '1.875rem' }],   // 18px
+        'xl': ['1.25rem', { lineHeight: '2rem' }],        // 20px
+        '2xl': ['1.5rem', { lineHeight: '2.25rem' }],     // 24px
       },
     },
   },

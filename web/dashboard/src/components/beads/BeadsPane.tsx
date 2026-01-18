@@ -382,42 +382,42 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
   // Collapsed view - just show the toggle button with count
   if (!isExpanded) {
     return (
-      <div className="h-full flex flex-col items-center py-4 px-1 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700">
+      <div className="h-full flex flex-col items-center py-4 px-2 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700">
         <button
           onClick={onToggle}
-          className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors group"
+          className="p-2.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors group"
           title="Expand beads pane"
         >
           <ChevronRight className="w-5 h-5 text-gray-500 dark:text-gray-400 group-hover:text-gray-700 dark:group-hover:text-gray-200" />
         </button>
         {incompleteBeads.length > 0 && (
-          <div className="mt-2 flex flex-col items-center gap-1">
-            <span className="text-xs font-bold text-gray-700 dark:text-gray-300">{incompleteBeads.length}</span>
-            <span className="text-[10px] text-gray-500 dark:text-gray-400 writing-mode-vertical" style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}>
+          <div className="mt-3 flex flex-col items-center gap-1.5">
+            <span className="text-sm font-bold text-gray-700 dark:text-gray-300">{incompleteBeads.length}</span>
+            <span className="text-2xs text-gray-500 dark:text-gray-400 writing-mode-vertical" style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}>
               beads
             </span>
           </div>
         )}
         {/* Status indicators when collapsed */}
-        <div className="mt-4 flex flex-col gap-1">
+        <div className="mt-4 flex flex-col gap-1.5">
           {statusCounts.running > 0 && (
-            <div className="w-6 h-6 rounded-full bg-blue-100 dark:bg-blue-900/50 flex items-center justify-center" title={`${statusCounts.running} running`}>
-              <span className="text-[10px] font-bold text-blue-600 dark:text-blue-400">{statusCounts.running}</span>
+            <div className="w-7 h-7 rounded-full bg-blue-100 dark:bg-blue-900/50 flex items-center justify-center" title={`${statusCounts.running} running`}>
+              <span className="text-2xs font-bold text-blue-600 dark:text-blue-400">{statusCounts.running}</span>
             </div>
           )}
           {statusCounts.blocked > 0 && (
-            <div className="w-6 h-6 rounded-full bg-yellow-100 dark:bg-yellow-900/50 flex items-center justify-center" title={`${statusCounts.blocked} blocked`}>
-              <span className="text-[10px] font-bold text-yellow-600 dark:text-yellow-400">{statusCounts.blocked}</span>
+            <div className="w-7 h-7 rounded-full bg-yellow-100 dark:bg-yellow-900/50 flex items-center justify-center" title={`${statusCounts.blocked} blocked`}>
+              <span className="text-2xs font-bold text-yellow-600 dark:text-yellow-400">{statusCounts.blocked}</span>
             </div>
           )}
           {statusCounts.ready > 0 && (
-            <div className="w-6 h-6 rounded-full bg-gray-100 dark:bg-gray-700 flex items-center justify-center" title={`${statusCounts.ready} ready`}>
-              <span className="text-[10px] font-bold text-gray-600 dark:text-gray-400">{statusCounts.ready}</span>
+            <div className="w-7 h-7 rounded-full bg-gray-100 dark:bg-gray-700 flex items-center justify-center" title={`${statusCounts.ready} ready`}>
+              <span className="text-2xs font-bold text-gray-600 dark:text-gray-400">{statusCounts.ready}</span>
             </div>
           )}
           {statusCounts.failed > 0 && (
-            <div className="w-6 h-6 rounded-full bg-red-100 dark:bg-red-900/50 flex items-center justify-center" title={`${statusCounts.failed} failed`}>
-              <span className="text-[10px] font-bold text-red-600 dark:text-red-400">{statusCounts.failed}</span>
+            <div className="w-7 h-7 rounded-full bg-red-100 dark:bg-red-900/50 flex items-center justify-center" title={`${statusCounts.failed} failed`}>
+              <span className="text-2xs font-bold text-red-600 dark:text-red-400">{statusCounts.failed}</span>
             </div>
           )}
         </div>
@@ -487,28 +487,28 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
       />
 
       {/* Status Summary */}
-      <div className="flex items-center gap-4 px-5 py-3 border-b border-gray-100 dark:border-gray-700/50 bg-gray-50 dark:bg-gray-800/50 h-10">
+      <div className="flex items-center gap-5 px-5 py-3.5 border-b border-gray-100 dark:border-gray-700/50 bg-gray-50 dark:bg-gray-800/50 min-h-[44px]">
         {statusCounts.running > 0 && (
-          <div className="flex items-center gap-2 text-xs">
-            <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-500" />
+          <div className="flex items-center gap-2.5 text-xs">
+            <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
             <span className="font-mono tabular-nums tracking-mono-normal text-blue-600 dark:text-blue-400">{statusCounts.running}</span>
           </div>
         )}
         {statusCounts.blocked > 0 && (
-          <div className="flex items-center gap-2 text-xs">
-            <Clock className="w-3.5 h-3.5 text-yellow-500" />
+          <div className="flex items-center gap-2.5 text-xs">
+            <Clock className="w-4 h-4 text-yellow-500" />
             <span className="font-mono tabular-nums tracking-mono-normal text-yellow-600 dark:text-yellow-400">{statusCounts.blocked}</span>
           </div>
         )}
         {statusCounts.ready > 0 && (
-          <div className="flex items-center gap-2 text-xs">
-            <Circle className="w-3.5 h-3.5 text-gray-400" />
+          <div className="flex items-center gap-2.5 text-xs">
+            <Circle className="w-4 h-4 text-gray-400" />
             <span className="font-mono tabular-nums tracking-mono-normal text-gray-600 dark:text-gray-400">{statusCounts.ready}</span>
           </div>
         )}
         {statusCounts.failed > 0 && (
-          <div className="flex items-center gap-2 text-xs">
-            <AlertCircle className="w-3.5 h-3.5 text-red-500" />
+          <div className="flex items-center gap-2.5 text-xs">
+            <AlertCircle className="w-4 h-4 text-red-500" />
             <span className="font-mono tabular-nums tracking-mono-normal text-red-600 dark:text-red-400">{statusCounts.failed}</span>
           </div>
         )}
@@ -516,8 +516,8 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
           <span className="text-xs tracking-wider text-gray-500 dark:text-gray-400">All done!</span>
         )}
         {showCompleted && completedBeadsCount > 0 && (
-          <div className="flex items-center gap-2 text-xs">
-            <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
+          <div className="flex items-center gap-2.5 text-xs">
+            <CheckCircle2 className="w-4 h-4 text-green-500" />
             <span className="font-mono tabular-nums tracking-mono-normal text-green-600 dark:text-green-400">{completedBeadsCount}</span>
           </div>
         )}
@@ -556,7 +556,7 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
                     }
                   }}
                   onClick={(e) => handleBeadClick(task.id, e)}
-                  className={`px-4 py-3.5 transition-all cursor-pointer ${
+                  className={`px-5 py-4 transition-all cursor-pointer ${
                     isSelected
                       ? 'bg-indigo-100 dark:bg-indigo-900/50 ring-2 ring-indigo-500 ring-inset'
                       : isHighlighted
@@ -567,22 +567,22 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
                   }`}
                 >
                   {/* Top row: Priority, Status, ID */}
-                  <div className="flex items-center gap-2.5 mb-2.5 h-5">
+                  <div className="flex items-center gap-3 mb-3 min-h-6">
                     {/* Priority badge */}
-                    <span className={`px-2 py-0.5 rounded text-2xs font-mono font-semibold tracking-mono-normal ${priorityStyle.bg} ${priorityStyle.text}`}>
+                    <span className={`px-2.5 py-1 rounded text-2xs font-mono font-semibold tracking-mono-normal ${priorityStyle.bg} ${priorityStyle.text}`}>
                       {priorityStyle.label}
                     </span>
 
                     {/* Status badge */}
-                    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-2xs font-medium tracking-wider ${statusConfig.bg} ${statusConfig.text}`}>
+                    <span className={`inline-flex items-center gap-2 px-2.5 py-1 rounded text-2xs font-medium tracking-wider ${statusConfig.bg} ${statusConfig.text}`}>
                       {statusConfig.icon}
                       {statusConfig.label}
                     </span>
 
                     {/* Archived badge */}
                     {task.archived && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs font-medium tracking-wider bg-purple-100 dark:bg-purple-900/50 text-purple-600 dark:text-purple-400">
-                        <Archive className="w-2.5 h-2.5" />
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-2xs font-medium tracking-wider bg-purple-100 dark:bg-purple-900/50 text-purple-600 dark:text-purple-400">
+                        <Archive className="w-3 h-3" />
                         Archived
                       </span>
                     )}
@@ -594,13 +594,13 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
                   </div>
 
                   {/* Title */}
-                  <p className={`text-xs leading-relaxed tracking-wide line-clamp-2 ${isCompletedOrArchived ? 'text-gray-500 dark:text-gray-400' : 'text-gray-800 dark:text-gray-200'}`}>
+                  <p className={`text-sm leading-relaxed tracking-wide line-clamp-2 ${isCompletedOrArchived ? 'text-gray-500 dark:text-gray-400' : 'text-gray-800 dark:text-gray-200'}`}>
                     {task.title}
                   </p>
 
                   {/* Dependencies (if any) */}
                   {task.dependencies && task.dependencies.length > 0 && (
-                    <div className="mt-2.5 flex items-center gap-2 text-2xs text-gray-500 dark:text-gray-400">
+                    <div className="mt-3 flex items-center gap-2.5 text-2xs text-gray-500 dark:text-gray-400">
                       <span className="font-medium tracking-wider">Blocked by:</span>
                       <span className="font-mono tracking-mono-normal truncate">
                         {task.dependencies.map(d => truncateId(d, 8)).join(', ')}
@@ -644,9 +644,9 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
                           ? 'bg-gray-50 dark:bg-gray-800/50 opacity-75 hover:bg-gray-100 dark:hover:bg-gray-700/50'
                           : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'
                   }`}
-                  style={{ paddingLeft: `${depth * 16 + 8}px` }}
+                  style={{ paddingLeft: `${depth * 16 + 12}px` }}
                 >
-                  <div className="py-2 pr-3">
+                  <div className="py-3 pr-4">
                     {/* Tree structure indicator */}
                     <div className="flex items-start gap-1">
                       {/* Expand/collapse button or tree line */}
@@ -672,22 +672,22 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
                       {/* Task content */}
                       <div className="flex-1 min-w-0">
                         {/* Top row: Priority, Status, ID */}
-                        <div className="flex items-center gap-2 mb-1.5 flex-wrap min-h-5">
+                        <div className="flex items-center gap-2.5 mb-2 flex-wrap min-h-6">
                           {/* Priority badge */}
-                          <span className={`px-1.5 py-0.5 rounded text-2xs font-mono font-semibold tracking-mono-normal ${priorityStyle.bg} ${priorityStyle.text}`}>
+                          <span className={`px-2 py-0.5 rounded text-2xs font-mono font-semibold tracking-mono-normal ${priorityStyle.bg} ${priorityStyle.text}`}>
                             {priorityStyle.label}
                           </span>
 
                           {/* Status badge */}
-                          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs font-medium tracking-wider ${statusConfig.bg} ${statusConfig.text}`}>
+                          <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-2xs font-medium tracking-wider ${statusConfig.bg} ${statusConfig.text}`}>
                             {statusConfig.icon}
                             {statusConfig.label}
                           </span>
 
                           {/* Archived badge */}
                           {task.archived && (
-                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-2xs font-medium tracking-wider bg-purple-100 dark:bg-purple-900/50 text-purple-600 dark:text-purple-400">
-                              <Archive className="w-2.5 h-2.5" />
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs font-medium tracking-wider bg-purple-100 dark:bg-purple-900/50 text-purple-600 dark:text-purple-400">
+                              <Archive className="w-3 h-3" />
                               Archived
                             </span>
                           )}
@@ -699,13 +699,13 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
                         </div>
 
                         {/* Title */}
-                        <p className={`text-xs leading-relaxed tracking-wide line-clamp-2 ${isCompletedOrArchived ? 'text-gray-500 dark:text-gray-400' : 'text-gray-800 dark:text-gray-200'}`}>
+                        <p className={`text-sm leading-relaxed tracking-wide line-clamp-2 ${isCompletedOrArchived ? 'text-gray-500 dark:text-gray-400' : 'text-gray-800 dark:text-gray-200'}`}>
                           {task.title}
                         </p>
 
                         {/* Child count indicator when collapsed */}
                         {hasChildren && isCollapsed && (
-                          <div className="mt-1.5 text-2xs tracking-wider text-gray-400 dark:text-gray-500">
+                          <div className="mt-2 text-2xs tracking-wider text-gray-400 dark:text-gray-500">
                             {children.length} blocked task{children.length !== 1 ? 's' : ''} hidden
                           </div>
                         )}

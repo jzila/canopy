@@ -400,13 +400,10 @@ type AgentState struct {
 	RepoID          string          `json:"repo_id,omitempty"`          // Repository this agent is working in
 	ParentAgentID   string          `json:"parent_agent_id,omitempty"`  // ID of parent agent if spawned by another agent
 	ChildAgentIDs   []string        `json:"child_agent_ids,omitempty"`  // IDs of child agents spawned by this agent
-	Status               AgentStatus     `json:"status"`                        // Current agent status
-	MergeStatus          MergeStatus     `json:"merge_status,omitempty"`        // Current merge queue status
-	MergeQueuePos        int             `json:"merge_queue_pos,omitempty"`     // Position in merge wait queue (0 = not waiting)
-	MergeError           string          `json:"merge_error,omitempty"`         // Error message if merge failed
-	MergeCommitsApplied  int             `json:"merge_commits_applied,omitempty"`  // Number of commits applied during merge
-	MergeHadConflict     bool            `json:"merge_had_conflict,omitempty"`     // Whether merge had conflicts
-	MergeResolverSpawned bool            `json:"merge_resolver_spawned,omitempty"` // Whether resolver agent was spawned
+	Status          AgentStatus     `json:"status"`                     // Current agent status
+	MergeStatus     MergeStatus     `json:"merge_status,omitempty"`     // Current merge queue status
+	MergeQueuePos   int             `json:"merge_queue_pos,omitempty"`  // Position in merge wait queue (0 = not waiting)
+	MergeError      string          `json:"merge_error,omitempty"`      // Error message if merge failed
 	StartTime       time.Time       `json:"start_time"`                 // When agent started
 	EndTime         *time.Time      `json:"end_time"`                   // When agent finished (nil if running)
 	Duration        float64         `json:"duration"`                   // Execution duration in seconds

@@ -120,13 +120,13 @@ type Agent struct {
 	ResultMessage       string      `json:"result_message,omitempty"`
 	RepoID              string      `json:"repo_id,omitempty"`
 	Archived            bool        `json:"archived"`
-	ParentAgentID        string      `json:"parent_agent_id,omitempty"` // ID of parent agent for resolver agents
+	ParentAgentID       string      `json:"parentAgentId,omitempty"` // ID of parent agent for resolver agents
 	// Merge result fields
-	MergeStatus          MergeStatus `json:"merge_status,omitempty"`
-	MergeCommitsApplied  int         `json:"merge_commits_applied"`
-	MergeHadConflict     bool        `json:"merge_had_conflict"`
-	MergeResolverSpawned bool        `json:"merge_resolver_spawned"`
-	MergeError           string      `json:"merge_error,omitempty"`
+	MergeStatus         MergeStatus `json:"mergeStatus,omitempty"`
+	MergeCommitsApplied int         `json:"mergeCommitsApplied"`
+	MergeHadConflict    bool        `json:"mergeHadConflict"`
+	MergeResolverSpawned bool       `json:"mergeResolverSpawned"`
+	MergeError          string      `json:"mergeError,omitempty"`
 }
 
 // RunFilter specifies criteria for querying runs
