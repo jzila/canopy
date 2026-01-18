@@ -589,7 +589,7 @@ func (r *RuntimeState) UpdateStats() {
 			totalDuration += agent.Duration
 		case AgentStatusFailed, AgentStatusTimedOut:
 			stats.FailedTasks++
-		case AgentStatusRunning:
+		case AgentStatusRunning, AgentStatusStarting:
 			stats.RunningTasks++
 		}
 
@@ -754,7 +754,7 @@ func (r *RuntimeState) recalculateStats() {
 			totalDuration += agent.Duration
 		case AgentStatusFailed, AgentStatusTimedOut:
 			stats.FailedTasks++
-		case AgentStatusRunning:
+		case AgentStatusRunning, AgentStatusStarting:
 			stats.RunningTasks++
 		}
 
