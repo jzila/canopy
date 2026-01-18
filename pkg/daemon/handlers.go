@@ -43,6 +43,7 @@ type BeadsClientInterface interface {
 	Fail(ctx context.Context, taskID string, reason string) error
 	AddDep(ctx context.Context, child, parent string) error
 	List(ctx context.Context) ([]beads.Task, error)
+	Show(ctx context.Context, taskID string) (*beads.Task, error)
 }
 
 // NewHandler creates a new handler with the given state

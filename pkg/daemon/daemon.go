@@ -244,6 +244,74 @@ func (d *Daemon) loadTasksFromBeads() error {
 	}
 
 	logging.Info("loaded pending tasks from beads database", "count", len(tasks))
+
+	// Reconcile closed beads - update tasks in runs.db that show as failed
+	// but have been closed in beads
+	if err := d.reconcileClosedBeads(); err != nil {
+		logging.Warn("failed to reconcile closed beads", "error", err)
+	}
+
+	return nil
+}
+
+// reconcileClosedBeads updates task status in runs.db for tasks that are marked
+// as "failed" but have been closed in beads. This handles the case where a task
+// fails, is later manually closed in beads, and the daemon restarts - without
+// this reconciliation, the dashboard would show stale "failed" status.
+func (d *Daemon) reconcileClosedBeads() error {
+	client, err := d.getActiveBeadsClient()
+	if err != nil {
+		return fmt.Errorf("failed to get beads client: %w", err)
+	}
+	if client == nil {
+		return nil
+	}
+
+	store := d.persistManager.GetStore()
+	if store == nil {
+		return nil
+	}
+
+	// Get tasks with "failed" status from runs.db
+	failedTasks, err := store.GetTasksByStatus("failed")
+	if err != nil {
+		return fmt.Errorf("failed to get failed tasks: %w", err)
+	}
+
+	if len(failedTasks) == 0 {
+		return nil
+	}
+
+	ctx := context.Background()
+	var reconciled int
+
+	for _, task := range failedTasks {
+		// Check current status in beads
+		beadTask, err := client.Show(ctx, task.ID)
+		if err != nil {
+			// Task might not exist in beads anymore - log and continue
+			logging.Debug("failed to get task from beads, skipping", "task_id", task.ID, "error", err)
+			continue
+		}
+
+		// If the task is closed in beads, update runs.db to show "completed"
+		if beadTask.Status == "closed" {
+			task.Status = "completed"
+			if err := store.UpsertTask(&task); err != nil {
+				logging.Warn("failed to update reconciled task", "task_id", task.ID, "error", err)
+				continue
+			}
+
+			// Also update RuntimeState if the task exists there
+			d.state.UpdateTaskStatus(task.ID, "completed", "")
+			reconciled++
+		}
+	}
+
+	if reconciled > 0 {
+		logging.Info("reconciled closed beads with runs.db", "count", reconciled)
+	}
+
 	return nil
 }
 

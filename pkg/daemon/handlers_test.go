@@ -72,6 +72,10 @@ func (m *mockBeadsClient) List(_ context.Context) ([]beads.Task, error) {
 	return nil, nil
 }
 
+func (m *mockBeadsClient) Show(_ context.Context, taskID string) (*beads.Task, error) {
+	return nil, nil
+}
+
 func TestHandleGetState(t *testing.T) {
 	state := NewRuntimeState()
 	scheduler := &mockScheduler{}
