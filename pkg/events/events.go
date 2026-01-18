@@ -32,11 +32,12 @@ const (
 
 // IsCritical returns true if this event type must never be dropped.
 // Critical events represent state transitions that cannot be reconstructed
-// from subsequent events (e.g., agent lifecycle, run lifecycle).
+// from subsequent events (e.g., agent lifecycle, run lifecycle, merge status).
 func (et EventType) IsCritical() bool {
 	switch et {
 	case EventRunStarted, EventRunCompleted,
 		EventAgentStarted, EventAgentCompleted,
+		EventAgentMergeStatus,
 		EventOrchPaused, EventOrchResumed,
 		EventTaskUpdated:
 		return true

@@ -17,6 +17,7 @@ func TestEventType_IsCritical(t *testing.T) {
 		{EventRunCompleted, true},
 		{EventAgentStarted, true},
 		{EventAgentCompleted, true},
+		{EventAgentMergeStatus, true},
 		{EventOrchPaused, true},
 		{EventOrchResumed, true},
 		{EventTaskUpdated, true},
@@ -26,7 +27,6 @@ func TestEventType_IsCritical(t *testing.T) {
 		{EventAgentOutput, false},
 		{EventAgentLiveFeed, false},
 		{EventAgentCommit, false},
-		{EventAgentMergeStatus, false},
 		{EventStatsUpdated, false},
 	}
 
