@@ -285,14 +285,14 @@ func TestResolverActive(t *testing.T) {
 		t.Error("resolver should not be active initially")
 	}
 
-	q.SetResolverActive(true)
+	q.ResolverPause()
 	if !q.IsResolverActive() {
-		t.Error("resolver should be active after SetResolverActive(true)")
+		t.Error("resolver should be active after ResolverPause()")
 	}
 
-	q.SetResolverActive(false)
+	q.ResolverResume()
 	if q.IsResolverActive() {
-		t.Error("resolver should not be active after SetResolverActive(false)")
+		t.Error("resolver should not be active after ResolverResume()")
 	}
 }
 

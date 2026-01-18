@@ -15,21 +15,15 @@ type Queue struct {
 	// requests is the buffered channel holding pending merge requests.
 	requests chan *MergeRequest
 
-	// paused indicates whether dequeue operations should block.
-	// This is set during conflict resolution to prevent new merges.
-	paused atomic.Bool
-
-	// resolverActive indicates whether a resolver agent is running.
-	resolverActive atomic.Bool
+	// pauseState manages pause state from user and resolver sources.
+	// The queue only processes when in the Running state.
+	pauseState *PauseStateMachine
 
 	// closed indicates the queue has been shut down.
 	closed atomic.Bool
 
-	// mu protects coordinated state changes.
+	// mu protects coordinated state changes (used for Close).
 	mu sync.Mutex
-
-	// pauseCond is used to signal when the queue is resumed.
-	pauseCond *sync.Cond
 
 	// capacity is the maximum number of pending requests.
 	capacity int
@@ -40,12 +34,11 @@ func NewQueue(capacity int) *Queue {
 	if capacity <= 0 {
 		capacity = 100 // default capacity
 	}
-	q := &Queue{
-		requests: make(chan *MergeRequest, capacity),
-		capacity: capacity,
+	return &Queue{
+		requests:   make(chan *MergeRequest, capacity),
+		pauseState: NewPauseStateMachine(),
+		capacity:   capacity,
 	}
-	q.pauseCond = sync.NewCond(&q.mu)
-	return q
 }
 
 // Enqueue adds a merge request to the queue.
@@ -73,7 +66,7 @@ func (q *Queue) Dequeue() *MergeRequest {
 }
 
 // DequeueCtx retrieves the next merge request from the queue with context support.
-// Blocks if the queue is paused, waiting until Resume() is called.
+// Blocks if the queue is paused (by user or resolver), waiting until running.
 // Returns nil if the queue is closed or the context is cancelled.
 func (q *Queue) DequeueCtx(ctx context.Context) *MergeRequest {
 	// Check context early
@@ -83,36 +76,9 @@ func (q *Queue) DequeueCtx(ctx context.Context) *MergeRequest {
 	default:
 	}
 
-	// Wait if paused, with context cancellation support
-	for {
-		q.mu.Lock()
-		if !q.paused.Load() || q.closed.Load() {
-			q.mu.Unlock()
-			break
-		}
-
-		// Create a channel that will be closed when condition is signaled
-		// This allows us to select on both the condition and the context
-		waitCh := make(chan struct{})
-		go func() {
-			q.mu.Lock()
-			q.pauseCond.Wait()
-			q.mu.Unlock()
-			close(waitCh)
-		}()
-		q.mu.Unlock()
-
-		select {
-		case <-ctx.Done():
-			// Context cancelled - broadcast to wake the waiting goroutine
-			q.mu.Lock()
-			q.pauseCond.Broadcast()
-			q.mu.Unlock()
-			<-waitCh // Wait for goroutine to complete
-			return nil
-		case <-waitCh:
-			// Condition was signaled, loop to check if still paused
-		}
+	// Wait until queue is running (not paused by user or resolver)
+	if err := q.pauseState.WaitUntilRunning(ctx); err != nil {
+		return nil
 	}
 
 	if q.closed.Load() {
@@ -134,7 +100,7 @@ func (q *Queue) DequeueCtx(ctx context.Context) *MergeRequest {
 // TryDequeue attempts to retrieve a merge request without blocking.
 // Returns nil immediately if no request is available or if paused.
 func (q *Queue) TryDequeue() *MergeRequest {
-	if q.paused.Load() || q.closed.Load() {
+	if !q.pauseState.IsRunning() || q.closed.Load() {
 		return nil
 	}
 
@@ -146,34 +112,49 @@ func (q *Queue) TryDequeue() *MergeRequest {
 	}
 }
 
-// Pause stops dequeue operations until Resume is called.
+// Pause stops dequeue operations until Resume is called (user-initiated pause).
 // This is used during conflict resolution to prevent concurrent merges.
 func (q *Queue) Pause() {
-	q.paused.Store(true)
+	q.pauseState.UserPause()
 }
 
-// Resume allows dequeue operations to proceed.
+// Resume allows dequeue operations to proceed (user-initiated resume).
 // This is called after conflict resolution completes.
 func (q *Queue) Resume() {
-	q.mu.Lock()
-	q.paused.Store(false)
-	q.pauseCond.Broadcast()
-	q.mu.Unlock()
+	q.pauseState.UserResume()
 }
 
-// SetResolverActive marks whether a resolver agent is currently running.
-func (q *Queue) SetResolverActive(active bool) {
-	q.resolverActive.Store(active)
+// ResolverPause pauses the queue for resolver operations.
+// This should be called before spawning a resolver agent.
+func (q *Queue) ResolverPause() {
+	q.pauseState.ResolverPause()
 }
 
-// IsResolverActive returns whether a resolver agent is running.
+// ResolverResume resumes the queue after resolver operations.
+// This should be called after the resolver agent completes.
+func (q *Queue) ResolverResume() {
+	q.pauseState.ResolverResume()
+}
+
+// IsResolverActive returns whether a resolver agent is running
+// (i.e., the queue is paused by the resolver).
 func (q *Queue) IsResolverActive() bool {
-	return q.resolverActive.Load()
+	return q.pauseState.IsPausedByResolver()
 }
 
-// IsPaused returns whether the queue is currently paused.
+// IsPaused returns whether the queue is currently paused (by user or resolver).
 func (q *Queue) IsPaused() bool {
-	return q.paused.Load()
+	return !q.pauseState.IsRunning()
+}
+
+// IsPausedByUser returns whether the queue is paused by a user request.
+func (q *Queue) IsPausedByUser() bool {
+	return q.pauseState.IsPausedByUser()
+}
+
+// PauseState returns the current pause state for detailed status reporting.
+func (q *Queue) PauseState() PauseState {
+	return q.pauseState.State()
 }
 
 // IsClosed returns whether the queue has been closed.
@@ -197,7 +178,10 @@ func (q *Queue) Close() {
 	}
 	q.closed.Store(true)
 	close(q.requests)
-	q.pauseCond.Broadcast()
+	// Resume to wake any goroutines blocked in WaitUntilRunning.
+	// This ensures DequeueCtx calls return promptly on shutdown.
+	q.pauseState.UserResume()
+	q.pauseState.ResolverResume()
 	q.mu.Unlock()
 
 	// Drain remaining requests and send error responses

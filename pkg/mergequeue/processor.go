@@ -232,8 +232,7 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 		}
 
 		// Pause queue during conflict resolution
-		p.queue.Pause()
-		p.queue.SetResolverActive(true)
+		p.queue.ResolverPause()
 		p.sendMergeStatus(taskID, ipc.MergeStatusResolving, 0, "")
 
 		resp.HadConflict = true
@@ -261,8 +260,7 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 				p.sendTaskUpdated(taskID, req.Task.Title, "failed")
 				p.sendMergeStatusFull(taskID, ipc.MergeStatusFailed, errMsg, resp.CommitsApplied, resp.HadConflict, false)
 				// Resume queue since we're not spawning a resolver
-				p.queue.SetResolverActive(false)
-				p.queue.Resume()
+				p.queue.ResolverResume()
 				return resp
 			}
 		}
@@ -314,8 +312,7 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 		resolverResult, resolverErr := p.resolveAsync(ctx, conflictCtx)
 
 		// Resume queue after resolution (regardless of outcome)
-		p.queue.SetResolverActive(false)
-		p.queue.Resume()
+		p.queue.ResolverResume()
 
 		if resolverErr != nil {
 			// Track resolver failure metrics (timeout or other error)
