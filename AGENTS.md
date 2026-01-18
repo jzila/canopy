@@ -187,7 +187,7 @@ When defining API types that cross the Go/TypeScript boundary:
 
 3. **When adding new API types**: Define Go struct first with snake_case JSON tags, then mirror exactly in TypeScript. Both sides must match character-for-character.
 
-4. **Rebuild dashboard after API changes**: Run `cd web/dashboard && npm run build` to catch TypeScript errors early.
+4. **Rebuild dashboard after API changes**: Run `just run` to catch TypeScript errors early.
 
 ## Data Flow Invariants
 
@@ -256,7 +256,7 @@ Audit when adding new metrics: `pkg/ipc/server.go` → `web/dashboard/src/hooks/
 **Never run `tsc` directly** in `web/dashboard`. Vite handles all transpilation.
 
 - **Type checking**: `npm run type-check` (runs `tsc --noEmit`)
-- **Building**: `npm run build` (type-checks then Vite builds)
+- **Building**: `just run` (rebuilds dashboard + Go binary, restarts daemon)
 - **Development**: `npm run dev` (Vite dev server)
 
 Running raw `tsc` without `--noEmit` generates `.js`, `.d.ts`, and `.map` files in `src/` which pollute the working directory. These are gitignored but cause issues with overlay change detection.
