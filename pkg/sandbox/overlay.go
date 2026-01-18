@@ -426,20 +426,32 @@ func (o *Overlay) GetChanges() ([]FileChange, error) {
 		lowerPath := filepath.Join(o.LowerDir, relPath)
 		_, lowerErr := os.Stat(lowerPath)
 
-		change := FileChange{Path: relPath}
-
-		if os.IsNotExist(lowerErr) {
-			change.Type = ChangeCreated
-		} else {
-			change.Type = ChangeModified
-		}
-
-		hash, hashErr := hashFile(path)
+		// Compute hash of upper file
+		upperHash, hashErr := hashFile(path)
 		if hashErr != nil {
 			// Log but continue - file change is still recorded, just without hash
 			fmt.Fprintf(os.Stderr, "warning: failed to hash file %s: %v\n", relPath, hashErr)
 		}
-		change.NewHash = hash
+
+		change := FileChange{Path: relPath, NewHash: upperHash}
+
+		if os.IsNotExist(lowerErr) {
+			change.Type = ChangeCreated
+		} else {
+			// File exists in lower - compare content hashes
+			lowerHash, lowerHashErr := hashFile(lowerPath)
+			if lowerHashErr != nil {
+				// Can't compare, assume modified to be safe
+				fmt.Fprintf(os.Stderr, "warning: failed to hash lower file %s: %v\n", relPath, lowerHashErr)
+				change.Type = ChangeModified
+			} else if upperHash == lowerHash {
+				// Content identical - skip this file (copy-up without actual change)
+				return nil
+			} else {
+				change.Type = ChangeModified
+			}
+		}
+
 		changes = append(changes, change)
 
 		return nil
