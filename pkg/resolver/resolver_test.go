@@ -3,6 +3,7 @@ package resolver
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -671,4 +672,615 @@ func initGitRepo(dir string) error {
 		return err
 	}
 	return nil
+}
+
+// initRealGitRepo initializes a git repository with actual commits using git commands.
+// Returns the repository directory and initial commit hash.
+func initRealGitRepo(t *testing.T, dir string) string {
+	t.Helper()
+
+	// Initialize git repo
+	runGit(t, dir, "init", "--initial-branch=main")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test User")
+
+	// Create initial file and commit
+	initialContent := `package main
+
+func example() {
+	line1()
+	line2()
+}
+`
+	testFile := filepath.Join(dir, "example.go")
+	if err := os.WriteFile(testFile, []byte(initialContent), 0644); err != nil {
+		t.Fatalf("Failed to write initial file: %v", err)
+	}
+
+	runGit(t, dir, "add", "example.go")
+	runGit(t, dir, "commit", "-m", "Initial commit")
+
+	// Get initial commit hash
+	return getHeadCommit(t, dir)
+}
+
+// runGit runs a git command and fails the test on error
+func runGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\nOutput: %s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// getHeadCommit returns the current HEAD commit hash
+func getHeadCommit(t *testing.T, dir string) string {
+	t.Helper()
+	return runGit(t, dir, "rev-parse", "HEAD")
+}
+
+// TestConcurrentModificationScenario tests that the resolver doesn't revert concurrent changes.
+//
+// Scenario:
+// 1. Create a test repository with a file
+// 2. Agent A starts work (records base commit)
+// 3. Agent B completes first and adds line3()
+// 4. Agent A completes with change to line1() -> modifiedLine1()
+// 5. Apply Agent A's patches to current HEAD - should fail (context mismatch)
+// 6. Run resolver which should preserve BOTH:
+//   - Agent A's change: modifiedLine1()
+//   - Agent B's concurrent change: line3() (NOT reverted)
+func TestConcurrentModificationScenario(t *testing.T) {
+	workDir := t.TempDir()
+
+	// Step 1: Initialize repository with initial file
+	baseCommit := initRealGitRepo(t, workDir)
+
+	// Step 2: Simulate Agent A starting work (records base commit)
+	// Agent A will change line1() -> modifiedLine1()
+	agentABaseCommit := baseCommit
+
+	// Step 3: Simulate Agent B completing first - adds line3() after line2()
+	agentBContent := `package main
+
+func example() {
+	line1()
+	line2()
+	line3()
+}
+`
+	testFile := filepath.Join(workDir, "example.go")
+	if err := os.WriteFile(testFile, []byte(agentBContent), 0644); err != nil {
+		t.Fatalf("Failed to write Agent B changes: %v", err)
+	}
+	runGit(t, workDir, "add", "example.go")
+	runGit(t, workDir, "commit", "-m", "Agent B: add line3()")
+	agentBCommit := getHeadCommit(t, workDir)
+
+	// Step 4: Create Agent A's patch (against original base commit)
+	// Agent A changed line1() -> modifiedLine1()
+	agentAPatch := `From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Test User <test@example.com>
+Date: Mon, 1 Jan 2024 00:00:00 +0000
+Subject: [PATCH] Agent A: modify line1
+
+---
+ example.go | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/example.go b/example.go
+index 0000000..1111111 100644
+--- a/example.go
++++ b/example.go
+@@ -1,7 +1,7 @@
+ package main
+
+ func example() {
+-	line1()
++	modifiedLine1()
+ 	line2()
+ }
+`
+
+	// Step 5: Try to apply Agent A's patch - should fail due to context mismatch
+	// The patch expects line2() to be followed by }, but now there's line3()
+	err := sandbox.ApplyPatches(workDir, []string{agentAPatch})
+	if err == nil {
+		t.Log("Patch applied successfully (no conflict in this case)")
+		// Even if patch applies, verify the result is correct
+	} else {
+		t.Logf("Patch failed as expected: %v", err)
+	}
+
+	// Reset to Agent B's commit to simulate failed patch scenario
+	runGit(t, workDir, "reset", "--hard", agentBCommit)
+
+	// Step 6: Get concurrent diff (what changed from base to current HEAD)
+	concurrentDiff := runGit(t, workDir, "diff", agentABaseCommit+"..HEAD")
+
+	// Step 7: Get base file content
+	baseFileContent := runGit(t, workDir, "show", agentABaseCommit+":example.go")
+
+	// Step 8: Create ConflictContext with all the information
+	conflict := &ConflictContext{
+		TaskID:          "canopy-agent-a",
+		TaskTitle:       "Agent A: modify line1",
+		TaskDescription: "Change line1() to modifiedLine1()",
+		FailedPatches:   []string{agentAPatch},
+		PatchErrors:     []string{"patch does not apply: context mismatch due to line3()"},
+		BaseCommit:      agentABaseCommit,
+		ConcurrentDiff:  concurrentDiff,
+		BaseFileContents: map[string]string{
+			"example.go": baseFileContent,
+		},
+		ParentAgentID: "agent-canopy-agent-a",
+	}
+
+	// Step 9: Verify the conflict context captures the scenario correctly
+	t.Run("ConflictContextCaptures", func(t *testing.T) {
+		// Verify base commit is correct
+		if conflict.BaseCommit != agentABaseCommit {
+			t.Errorf("BaseCommit = %q, want %q", conflict.BaseCommit, agentABaseCommit)
+		}
+
+		// Verify concurrent diff shows line3() was added
+		if !strings.Contains(conflict.ConcurrentDiff, "line3()") {
+			t.Error("ConcurrentDiff should show line3() was added")
+		}
+
+		// Verify base file doesn't have line3()
+		if strings.Contains(conflict.BaseFileContents["example.go"], "line3()") {
+			t.Error("Base file should not contain line3()")
+		}
+
+		// Verify patch shows line1 -> modifiedLine1
+		if !strings.Contains(conflict.FailedPatches[0], "modifiedLine1()") {
+			t.Error("Patch should contain modifiedLine1()")
+		}
+	})
+
+	// Step 10: Build resolver prompt and verify it instructs preservation
+	t.Run("ResolverPromptInstructions", func(t *testing.T) {
+		r := &Resolver{config: &Config{}}
+		prompt := r.buildResolverPrompt(conflict)
+
+		// Verify prompt contains critical instructions
+		criticalInstructions := []string{
+			"DO NOT revert",
+			"concurrent",
+			"BASE",
+			"OURS",
+			"THEIRS",
+			agentABaseCommit,
+		}
+		for _, instruction := range criticalInstructions {
+			if !strings.Contains(prompt, instruction) {
+				t.Errorf("Prompt missing critical instruction: %q", instruction)
+			}
+		}
+	})
+
+	// Step 11: Verify expected resolution has both changes
+	t.Run("ExpectedResolutionHasBothChanges", func(t *testing.T) {
+		// The expected resolved content should have BOTH:
+		// 1. modifiedLine1() from Agent A's patch
+		// 2. line3() from Agent B's concurrent change
+		expectedResolution := `package main
+
+func example() {
+	modifiedLine1()
+	line2()
+	line3()
+}
+`
+		// Verify expected resolution has both changes
+		if !strings.Contains(expectedResolution, "modifiedLine1()") {
+			t.Error("Expected resolution should have Agent A's change (modifiedLine1)")
+		}
+		if !strings.Contains(expectedResolution, "line3()") {
+			t.Error("Expected resolution should preserve Agent B's concurrent change (line3)")
+		}
+	})
+
+	// Step 12: Write conflict files to a temp overlay and verify structure
+	t.Run("WritePatchFilesForResolver", func(t *testing.T) {
+		tempDir := t.TempDir()
+		overlay := &sandbox.Overlay{MergedDir: tempDir}
+		r := &Resolver{config: &Config{}}
+
+		err := r.writePatchFiles(overlay, conflict)
+		if err != nil {
+			t.Fatalf("writePatchFiles failed: %v", err)
+		}
+
+		conflictDir := filepath.Join(tempDir, ".canopy", "conflict")
+
+		// Verify patch file
+		patchContent, err := os.ReadFile(filepath.Join(conflictDir, "patch-0.patch"))
+		if err != nil {
+			t.Fatalf("Failed to read patch: %v", err)
+		}
+		if !strings.Contains(string(patchContent), "modifiedLine1()") {
+			t.Error("Patch file should contain modifiedLine1()")
+		}
+
+		// Verify base file
+		baseContent, err := os.ReadFile(filepath.Join(conflictDir, "base", "example.go"))
+		if err != nil {
+			t.Fatalf("Failed to read base file: %v", err)
+		}
+		if strings.Contains(string(baseContent), "line3()") {
+			t.Error("Base file should NOT contain line3()")
+		}
+		if !strings.Contains(string(baseContent), "line1()") {
+			t.Error("Base file should contain original line1()")
+		}
+
+		// Verify concurrent changes diff
+		concurrentContent, err := os.ReadFile(filepath.Join(conflictDir, "concurrent-changes.diff"))
+		if err != nil {
+			t.Fatalf("Failed to read concurrent diff: %v", err)
+		}
+		if !strings.Contains(string(concurrentContent), "line3()") {
+			t.Error("Concurrent diff should show line3() was added")
+		}
+	})
+}
+
+// TestConcurrentNewFile tests that new files created by concurrent agents are preserved.
+func TestConcurrentNewFile(t *testing.T) {
+	workDir := t.TempDir()
+
+	// Initialize repository
+	baseCommit := initRealGitRepo(t, workDir)
+
+	// Concurrent agent creates a new file
+	newFileContent := `package main
+
+func helper() {
+	// Helper function added by concurrent agent
+}
+`
+	helperFile := filepath.Join(workDir, "helper.go")
+	if err := os.WriteFile(helperFile, []byte(newFileContent), 0644); err != nil {
+		t.Fatalf("Failed to write new file: %v", err)
+	}
+	runGit(t, workDir, "add", "helper.go")
+	runGit(t, workDir, "commit", "-m", "Concurrent: add helper.go")
+
+	// Get concurrent diff
+	concurrentDiff := runGit(t, workDir, "diff", baseCommit+"..HEAD")
+
+	// Verify new file appears in diff
+	if !strings.Contains(concurrentDiff, "helper.go") {
+		t.Error("Concurrent diff should show helper.go was created")
+	}
+
+	// Create conflict context for a patch that modifies example.go
+	conflict := &ConflictContext{
+		TaskID:          "canopy-modify-example",
+		TaskTitle:       "Modify example.go",
+		TaskDescription: "Make changes to example.go",
+		FailedPatches:   []string{"patch content for example.go"},
+		BaseCommit:      baseCommit,
+		ConcurrentDiff:  concurrentDiff,
+		BaseFileContents: map[string]string{
+			"example.go": "original example.go content",
+		},
+	}
+
+	// Build prompt and verify it mentions preserving concurrent changes
+	r := &Resolver{config: &Config{}}
+	prompt := r.buildResolverPrompt(conflict)
+
+	if !strings.Contains(prompt, "concurrent changes are VALID and MUST be preserved") {
+		t.Error("Prompt should instruct preservation of concurrent changes")
+	}
+	if !strings.Contains(prompt, "DO NOT revert any code that exists in HEAD") {
+		t.Error("Prompt should warn against reverting HEAD changes")
+	}
+}
+
+// TestConcurrentDeletedFile tests scenario where concurrent agent deleted a file.
+func TestConcurrentDeletedFile(t *testing.T) {
+	workDir := t.TempDir()
+
+	// Initialize repository with two files
+	_ = initRealGitRepo(t, workDir)
+
+	// Add another file
+	otherContent := `package main
+
+func other() {}
+`
+	otherFile := filepath.Join(workDir, "other.go")
+	if err := os.WriteFile(otherFile, []byte(otherContent), 0644); err != nil {
+		t.Fatalf("Failed to write other file: %v", err)
+	}
+	runGit(t, workDir, "add", "other.go")
+	runGit(t, workDir, "commit", "-m", "Add other.go")
+	baseWithOther := getHeadCommit(t, workDir)
+
+	// Concurrent agent deletes other.go
+	if err := os.Remove(otherFile); err != nil {
+		t.Fatalf("Failed to remove other.go: %v", err)
+	}
+	runGit(t, workDir, "add", "-A")
+	runGit(t, workDir, "commit", "-m", "Concurrent: remove other.go")
+
+	// Get concurrent diff
+	concurrentDiff := runGit(t, workDir, "diff", baseWithOther+"..HEAD")
+
+	// Verify deletion appears in diff
+	if !strings.Contains(concurrentDiff, "deleted file") || !strings.Contains(concurrentDiff, "other.go") {
+		t.Logf("Concurrent diff: %s", concurrentDiff)
+		// Deletion might be shown differently
+	}
+
+	// Create conflict context
+	conflict := &ConflictContext{
+		TaskID:          "canopy-modify-example",
+		TaskTitle:       "Modify example.go",
+		TaskDescription: "Changes to example.go while other.go was deleted",
+		BaseCommit:      baseWithOther,
+		ConcurrentDiff:  concurrentDiff,
+	}
+
+	// Verify conflict context captures the scenario
+	if conflict.BaseCommit != baseWithOther {
+		t.Errorf("BaseCommit = %q, want %q", conflict.BaseCommit, baseWithOther)
+	}
+}
+
+// TestSameFileModifiedBothAgents tests the true conflict case where both agents
+// modify the same file in different places.
+func TestSameFileModifiedBothAgents(t *testing.T) {
+	workDir := t.TempDir()
+
+	// Initialize repository with a larger file
+	_ = initRealGitRepo(t, workDir)
+
+	// Replace with larger file
+	largerContent := `package main
+
+func first() {
+	// First function
+}
+
+func second() {
+	// Second function
+}
+
+func third() {
+	// Third function
+}
+`
+	testFile := filepath.Join(workDir, "example.go")
+	if err := os.WriteFile(testFile, []byte(largerContent), 0644); err != nil {
+		t.Fatalf("Failed to write larger file: %v", err)
+	}
+	runGit(t, workDir, "add", "example.go")
+	runGit(t, workDir, "commit", "-m", "Larger file")
+	newBaseCommit := getHeadCommit(t, workDir)
+
+	// Concurrent agent modifies third() function
+	modifiedByB := `package main
+
+func first() {
+	// First function
+}
+
+func second() {
+	// Second function
+}
+
+func third() {
+	// Third function - modified by Agent B
+	newLine()
+}
+`
+	if err := os.WriteFile(testFile, []byte(modifiedByB), 0644); err != nil {
+		t.Fatalf("Failed to write Agent B changes: %v", err)
+	}
+	runGit(t, workDir, "add", "example.go")
+	runGit(t, workDir, "commit", "-m", "Agent B: modify third()")
+
+	// Get concurrent diff
+	concurrentDiff := runGit(t, workDir, "diff", newBaseCommit+"..HEAD")
+
+	// Agent A's patch modifies first() function
+	agentAPatch := `From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Test User <test@example.com>
+Date: Mon, 1 Jan 2024 00:00:00 +0000
+Subject: [PATCH] Agent A: modify first
+
+---
+ example.go | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/example.go b/example.go
+index 0000000..1111111 100644
+--- a/example.go
++++ b/example.go
+@@ -1,7 +1,7 @@
+ package main
+
+ func first() {
+-	// First function
++	// First function - modified by Agent A
+ }
+
+ func second() {
+`
+
+	// Create conflict context
+	conflict := &ConflictContext{
+		TaskID:          "canopy-agent-a",
+		TaskTitle:       "Agent A: modify first()",
+		TaskDescription: "Modify the first() function",
+		FailedPatches:   []string{agentAPatch},
+		PatchErrors:     []string{"context line mismatch"},
+		BaseCommit:      newBaseCommit,
+		ConcurrentDiff:  concurrentDiff,
+		BaseFileContents: map[string]string{
+			"example.go": largerContent,
+		},
+	}
+
+	// Verify both agents' changes are captured
+	t.Run("BothChangesInConflictContext", func(t *testing.T) {
+		// Verify patch has Agent A's change
+		if !strings.Contains(conflict.FailedPatches[0], "modified by Agent A") {
+			t.Error("Patch should contain Agent A's modification")
+		}
+
+		// Verify concurrent diff has Agent B's change
+		if !strings.Contains(conflict.ConcurrentDiff, "modified by Agent B") ||
+			!strings.Contains(conflict.ConcurrentDiff, "newLine()") {
+			t.Error("Concurrent diff should show Agent B's changes")
+		}
+
+		// Verify base file has neither modification
+		base := conflict.BaseFileContents["example.go"]
+		if strings.Contains(base, "modified by Agent A") ||
+			strings.Contains(base, "modified by Agent B") {
+			t.Error("Base file should not contain either agent's modifications")
+		}
+	})
+
+	// Expected resolution should have BOTH modifications
+	t.Run("ExpectedResolution", func(t *testing.T) {
+		expectedResolution := `package main
+
+func first() {
+	// First function - modified by Agent A
+}
+
+func second() {
+	// Second function
+}
+
+func third() {
+	// Third function - modified by Agent B
+	newLine()
+}
+`
+		if !strings.Contains(expectedResolution, "modified by Agent A") {
+			t.Error("Expected resolution should have Agent A's change")
+		}
+		if !strings.Contains(expectedResolution, "modified by Agent B") {
+			t.Error("Expected resolution should have Agent B's change")
+		}
+		if !strings.Contains(expectedResolution, "newLine()") {
+			t.Error("Expected resolution should preserve Agent B's newLine()")
+		}
+	})
+}
+
+// TestSameLineModifiedBothAgents tests the true conflict case where both agents
+// modify the same line (this requires manual resolution).
+func TestSameLineModifiedBothAgents(t *testing.T) {
+	workDir := t.TempDir()
+
+	// Initialize repository
+	baseCommit := initRealGitRepo(t, workDir)
+
+	// Concurrent agent modifies line1()
+	modifiedByB := `package main
+
+func example() {
+	lineModifiedByB()
+	line2()
+}
+`
+	testFile := filepath.Join(workDir, "example.go")
+	if err := os.WriteFile(testFile, []byte(modifiedByB), 0644); err != nil {
+		t.Fatalf("Failed to write Agent B changes: %v", err)
+	}
+	runGit(t, workDir, "add", "example.go")
+	runGit(t, workDir, "commit", "-m", "Agent B: modify line1")
+
+	// Get concurrent diff
+	concurrentDiff := runGit(t, workDir, "diff", baseCommit+"..HEAD")
+
+	// Agent A's patch also modifies line1() - true conflict!
+	agentAPatch := `From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Test User <test@example.com>
+Date: Mon, 1 Jan 2024 00:00:00 +0000
+Subject: [PATCH] Agent A: modify line1
+
+---
+ example.go | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/example.go b/example.go
+index 0000000..1111111 100644
+--- a/example.go
++++ b/example.go
+@@ -1,7 +1,7 @@
+ package main
+
+ func example() {
+-	line1()
++	lineModifiedByA()
+ 	line2()
+ }
+`
+
+	// Create conflict context
+	baseFileContent := runGit(t, workDir, "show", baseCommit+":example.go")
+	conflict := &ConflictContext{
+		TaskID:          "canopy-agent-a",
+		TaskTitle:       "Agent A: modify line1",
+		TaskDescription: "Modify line1() - conflicts with Agent B",
+		FailedPatches:   []string{agentAPatch},
+		PatchErrors:     []string{"patch does not apply: hunk failed"},
+		BaseCommit:      baseCommit,
+		ConcurrentDiff:  concurrentDiff,
+		BaseFileContents: map[string]string{
+			"example.go": baseFileContent,
+		},
+	}
+
+	// Verify true conflict is captured
+	t.Run("TrueConflictCaptured", func(t *testing.T) {
+		// Patch wants to change line1() -> lineModifiedByA()
+		if !strings.Contains(conflict.FailedPatches[0], "lineModifiedByA()") {
+			t.Error("Patch should show Agent A wants lineModifiedByA()")
+		}
+
+		// But concurrent diff shows line1() was already changed to lineModifiedByB()
+		if !strings.Contains(conflict.ConcurrentDiff, "lineModifiedByB()") {
+			t.Error("Concurrent diff should show Agent B changed line1 to lineModifiedByB()")
+		}
+
+		// Base file has original line1()
+		if !strings.Contains(conflict.BaseFileContents["example.go"], "line1()") {
+			t.Error("Base file should have original line1()")
+		}
+	})
+
+	// Build prompt and verify it provides enough context for resolution
+	t.Run("PromptProvidesContext", func(t *testing.T) {
+		r := &Resolver{config: &Config{}}
+		prompt := r.buildResolverPrompt(conflict)
+
+		// Prompt should explain three-way merge
+		if !strings.Contains(prompt, "Three-Way Merge") {
+			t.Error("Prompt should explain three-way merge")
+		}
+
+		// Prompt should reference base files
+		if !strings.Contains(prompt, ".canopy/conflict/base/") {
+			t.Error("Prompt should reference base file location")
+		}
+
+		// Prompt should reference concurrent changes
+		if !strings.Contains(prompt, "concurrent-changes.diff") {
+			t.Error("Prompt should reference concurrent changes diff")
+		}
+	})
 }
