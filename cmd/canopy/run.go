@@ -15,6 +15,7 @@ import (
 
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
+	"github.com/jzila/canopy/pkg/config"
 	"github.com/jzila/canopy/pkg/ipc"
 	"github.com/jzila/canopy/pkg/orchestrator"
 	"github.com/jzila/canopy/pkg/repository"
@@ -22,14 +23,15 @@ import (
 )
 
 var (
-	concurrency int
-	outputDir   string
-	dryRun      bool
-	useSandbox  bool
-	maxRetries  int
-	prompt      string
-	maxPriority int
-	stopAtGate  bool
+	concurrency     int
+	outputDir       string
+	dryRun          bool
+	useSandbox      bool
+	maxRetries      int
+	prompt          string
+	maxPriority     int
+	stopAtGate      bool
+	resolverTimeout time.Duration
 )
 
 var runCmd = &cobra.Command{
@@ -94,7 +96,11 @@ Example:
   canopy run --max-priority 0   # Only P0 tasks (critical only)
 
   # Stop at gate tasks (tasks marked with gate=true)
-  canopy run --stop-at-gate     # Stop before executing any gate task`,
+  canopy run --stop-at-gate     # Stop before executing any gate task
+
+  # Set resolver timeout for conflict resolution
+  canopy run --resolver-timeout 15m   # 15 minute timeout (default: 10m)
+  canopy run --resolver-timeout 30m   # 30 minute timeout for complex conflicts`,
 	RunE: runOrchestrator,
 }
 
@@ -107,6 +113,7 @@ func init() {
 	runCmd.Flags().StringVar(&prompt, "prompt", "", "Prompt to filter/direct work selection (e.g., 'Only work on P0 issues', 'Stop after completing all P1s')")
 	runCmd.Flags().IntVar(&maxPriority, "max-priority", -1, "Hard filter: only run tasks with priority <= this value (0-4, -1=no filter)")
 	runCmd.Flags().BoolVar(&stopAtGate, "stop-at-gate", false, "Stop orchestration when encountering a task marked as a gate")
+	runCmd.Flags().DurationVar(&resolverTimeout, "resolver-timeout", 0, "Timeout for resolver agents when resolving merge conflicts (e.g., 10m, 15m, 1h). Default: 10m. Set from CANOPY_RESOLVER_TIMEOUT env var if not specified.")
 
 	rootCmd.AddCommand(runCmd)
 }
@@ -170,6 +177,31 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		outputDir = absWorkdir
 	}
 
+	// Resolve resolver timeout with precedence: CLI flag > env var > config file > default
+	effectiveResolverTimeout := resolverTimeout
+	if effectiveResolverTimeout == 0 {
+		// Try environment variable
+		if envTimeout := os.Getenv("CANOPY_RESOLVER_TIMEOUT"); envTimeout != "" {
+			parsed, err := time.ParseDuration(envTimeout)
+			if err != nil {
+				return fmt.Errorf("invalid CANOPY_RESOLVER_TIMEOUT %q: %w", envTimeout, err)
+			}
+			effectiveResolverTimeout = parsed
+		}
+	}
+	if effectiveResolverTimeout == 0 {
+		// Try config file
+		cfg, err := config.LoadConfig(absWorkdir)
+		if err != nil {
+			if verbose {
+				fmt.Fprintf(os.Stderr, "warning: failed to load config: %v\n", err)
+			}
+		} else if cfg != nil {
+			effectiveResolverTimeout = cfg.GetResolverTimeout()
+		}
+	}
+	// Note: if still 0, the processor will use its default of 10 minutes
+
 	// Initialize repository for tracking
 	repo, err := repository.GetOrCreate(absWorkdir)
 	if err != nil {
@@ -194,16 +226,17 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 
 	// Create and run orchestrator
 	orch, err = orchestrator.New(&orchestrator.Config{
-		WorkDir:     absWorkdir,
-		OutputDir:   outputDir,
-		Concurrency: concurrency,
-		Verbose:     verbose,
-		DryRun:      dryRun,
-		UseBwrap:    useSandbox,
-		MaxRetries:  maxRetries,
-		Prompt:      prompt,
-		MaxPriority: maxPriority,
-		StopAtGate:  stopAtGate,
+		WorkDir:         absWorkdir,
+		OutputDir:       outputDir,
+		Concurrency:     concurrency,
+		Verbose:         verbose,
+		DryRun:          dryRun,
+		UseBwrap:        useSandbox,
+		MaxRetries:      maxRetries,
+		Prompt:          prompt,
+		MaxPriority:     maxPriority,
+		StopAtGate:      stopAtGate,
+		ResolverTimeout: effectiveResolverTimeout,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create orchestrator: %w", err)

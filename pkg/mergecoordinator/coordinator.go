@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
@@ -40,6 +41,10 @@ type Config struct {
 
 	// SandboxConfig is the sandbox configuration for resolver agents.
 	SandboxConfig *sandbox.SandboxConfig
+
+	// ResolverTimeout is the timeout for resolver agent operations.
+	// If 0, uses the default timeout of 10 minutes.
+	ResolverTimeout time.Duration
 }
 
 // MergeCoordinator coordinates all merge operations including:
@@ -105,7 +110,7 @@ func New(config *Config, beadsClient beads.BeadsClient) (*MergeCoordinator, erro
 		config.OutputDir,
 		nil, // ipcClient set later via SetIPCClient
 		config.Verbose,
-		0, // Use default resolver timeout (10 minutes)
+		config.ResolverTimeout, // Use configured resolver timeout (0 = default 10 minutes)
 	)
 
 	return &MergeCoordinator{

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
@@ -70,16 +71,17 @@ func (e *EventCallbacks) OnFail(ctx context.Context, taskID string, result *agen
 
 // Config holds orchestrator configuration
 type Config struct {
-	WorkDir     string
-	OutputDir   string
-	Concurrency int
-	Verbose     bool
-	DryRun      bool
-	UseBwrap    bool   // Use bubblewrap sandbox for agent isolation
-	MaxRetries  int    // Maximum number of times to retry failed tasks (0 = no retries, -1 = infinite)
-	Prompt      string // Prompt to filter/direct work selection
-	MaxPriority int    // Hard filter: only run tasks with priority <= this value (-1 = no filter)
-	StopAtGate  bool   // Stop orchestration when encountering a task marked as a gate
+	WorkDir         string
+	OutputDir       string
+	Concurrency     int
+	Verbose         bool
+	DryRun          bool
+	UseBwrap        bool          // Use bubblewrap sandbox for agent isolation
+	MaxRetries      int           // Maximum number of times to retry failed tasks (0 = no retries, -1 = infinite)
+	Prompt          string        // Prompt to filter/direct work selection
+	MaxPriority     int           // Hard filter: only run tasks with priority <= this value (-1 = no filter)
+	StopAtGate      bool          // Stop orchestration when encountering a task marked as a gate
+	ResolverTimeout time.Duration // Timeout for resolver agents (0 = use default 10m)
 }
 
 // Orchestrator coordinates the execution of tasks from beads
@@ -160,13 +162,14 @@ func New(config *Config) (*Orchestrator, error) {
 
 	// Create merge coordinator to handle all merge operations
 	mc, err := mergecoordinator.New(&mergecoordinator.Config{
-		WorkDir:       config.WorkDir,
-		OutputDir:     config.OutputDir,
-		TempDir:       tempDir,
-		Concurrency:   config.Concurrency,
-		Verbose:       config.Verbose,
-		UseBwrap:      config.UseBwrap,
-		SandboxConfig: sandboxConfig,
+		WorkDir:         config.WorkDir,
+		OutputDir:       config.OutputDir,
+		TempDir:         tempDir,
+		Concurrency:     config.Concurrency,
+		Verbose:         config.Verbose,
+		UseBwrap:        config.UseBwrap,
+		SandboxConfig:   sandboxConfig,
+		ResolverTimeout: config.ResolverTimeout,
 	}, beadsClient)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create merge coordinator: %w", err)

@@ -6,10 +6,71 @@ This document covers all configuration options for Canopy.
 
 | File | Location | Purpose |
 |------|----------|---------|
+| `config.toml` | `.canopy/config.toml` | General canopy configuration |
 | `sandbox.toml` | `.canopy/sandbox.toml` | Per-project sandbox settings |
+| `validation.toml` | `.canopy/validation.toml` | Task validation settings |
 | `repositories.json` | `~/.cache/canopy/` | Repository identity registry |
 | `runs.db` | `~/.cache/canopy/` | SQLite run history |
 | `daemon.log` | `~/.cache/canopy/` | Daemon log file |
+
+---
+
+## General Configuration
+
+The general configuration file controls canopy behavior. Create it manually at `.canopy/config.toml`.
+
+### Location
+
+```
+<project>/.canopy/config.toml
+```
+
+### Full Example
+
+```toml
+# Canopy Configuration
+# General configuration for canopy orchestration.
+
+[resolver]
+# Timeout for resolver agents when resolving merge conflicts.
+# Resolver agents are spawned when parallel agent changes conflict.
+# Default: 10m (10 minutes)
+# Format: Go duration string (e.g., "10m", "15m", "1h", "30m")
+timeout = "15m"
+```
+
+### [resolver]
+
+Resolver agent settings.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `timeout` | string | `"10m"` | Timeout for resolver agent operations |
+
+Duration format: Go duration string (e.g., `"10m"`, `"15m"`, `"1h"`, `"30m"`)
+
+### Configuration Precedence
+
+The resolver timeout can be configured through multiple sources. The precedence order is:
+
+1. **CLI flag** (`--resolver-timeout`): Highest priority
+2. **Environment variable** (`CANOPY_RESOLVER_TIMEOUT`): Second priority
+3. **Config file** (`.canopy/config.toml`): Third priority
+4. **Default** (`10m`): Used if no other source is configured
+
+Example:
+
+```bash
+# CLI flag takes precedence
+canopy run --resolver-timeout 20m
+
+# Environment variable (if no CLI flag)
+CANOPY_RESOLVER_TIMEOUT=15m canopy run
+
+# Config file (if no CLI flag or env var)
+# .canopy/config.toml: [resolver] timeout = "12m"
+canopy run
+```
 
 ---
 
@@ -266,6 +327,12 @@ Canopy automatically discovers these tools:
 ---
 
 ## Environment Variables
+
+### Canopy Configuration
+
+| Variable | Description |
+|----------|-------------|
+| `CANOPY_RESOLVER_TIMEOUT` | Timeout for resolver agents (e.g., `"15m"`, `"1h"`). Overridden by `--resolver-timeout` CLI flag. |
 
 ### Passed to Agents
 
