@@ -2,6 +2,7 @@ package mergequeue
 
 import (
 	"context"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -675,4 +676,256 @@ func TestFileRepairExhaustedBead_TruncatesLongContent(t *testing.T) {
 	if !strings.Contains(call.Description, "(truncated)") {
 		t.Error("description should contain truncation marker")
 	}
+}
+
+func TestGetCurrentHead(t *testing.T) {
+	// Create a temp git repo
+	tmpDir := t.TempDir()
+
+	// Initialize git repo
+	initCmd := strings.Join([]string{
+		"cd", tmpDir, "&&",
+		"git init &&",
+		"git config user.email test@test.com &&",
+		"git config user.name Test &&",
+		"echo hello > file.txt &&",
+		"git add . &&",
+		"git commit -m 'initial'",
+	}, " ")
+
+	cmd := execCommand("sh", "-c", initCmd)
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("failed to setup git repo: %v", err)
+	}
+
+	p := &Processor{
+		outputDir: tmpDir,
+		verbose:   false,
+	}
+
+	head, err := p.getCurrentHead()
+	if err != nil {
+		t.Fatalf("getCurrentHead failed: %v", err)
+	}
+
+	if len(head) != 40 {
+		t.Errorf("expected 40-char SHA, got %d chars: %q", len(head), head)
+	}
+}
+
+func TestGetCurrentHead_NonGitDir(t *testing.T) {
+	p := &Processor{
+		outputDir: t.TempDir(),
+		verbose:   false,
+	}
+
+	_, err := p.getCurrentHead()
+	if err == nil {
+		t.Error("expected error for non-git directory")
+	}
+}
+
+func TestRevertMerge(t *testing.T) {
+	// Create a temp git repo with two commits
+	tmpDir := t.TempDir()
+
+	initCmd := strings.Join([]string{
+		"cd", tmpDir, "&&",
+		"git init &&",
+		"git config user.email test@test.com &&",
+		"git config user.name Test &&",
+		"echo hello > file.txt &&",
+		"git add . &&",
+		"git commit -m 'initial'",
+	}, " ")
+
+	cmd := execCommand("sh", "-c", initCmd)
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("failed to setup git repo: %v", err)
+	}
+
+	p := &Processor{
+		outputDir: tmpDir,
+		verbose:   false,
+	}
+
+	// Get initial HEAD
+	initialHead, err := p.getCurrentHead()
+	if err != nil {
+		t.Fatalf("getCurrentHead failed: %v", err)
+	}
+
+	// Create second commit (simulating a merge)
+	mergeCmd := strings.Join([]string{
+		"cd", tmpDir, "&&",
+		"echo world >> file.txt &&",
+		"git add . &&",
+		"git commit -m 'second commit'",
+	}, " ")
+
+	cmd = execCommand("sh", "-c", mergeCmd)
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("failed to create second commit: %v", err)
+	}
+
+	// Verify we're on a different commit now
+	afterMerge, err := p.getCurrentHead()
+	if err != nil {
+		t.Fatalf("getCurrentHead failed: %v", err)
+	}
+	if afterMerge == initialHead {
+		t.Error("expected different commit after merge")
+	}
+
+	// Revert to initial commit
+	if err := p.revertMerge(initialHead); err != nil {
+		t.Fatalf("revertMerge failed: %v", err)
+	}
+
+	// Verify we're back to initial commit
+	afterRevert, err := p.getCurrentHead()
+	if err != nil {
+		t.Fatalf("getCurrentHead failed: %v", err)
+	}
+	if afterRevert != initialHead {
+		t.Errorf("expected HEAD to be %s after revert, got %s", initialHead, afterRevert)
+	}
+}
+
+func TestRevertMerge_EmptyCommit(t *testing.T) {
+	p := &Processor{
+		outputDir: t.TempDir(),
+		verbose:   false,
+	}
+
+	err := p.revertMerge("")
+	if err == nil {
+		t.Error("expected error for empty pre-merge commit")
+	}
+	if !strings.Contains(err.Error(), "no pre-merge commit specified") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestFileValidationFailureBead(t *testing.T) {
+	mock := beads.NewMockClient()
+	mock.NextCreateID = "validation-bead-1"
+
+	p := &Processor{
+		beadsClient: mock,
+		verbose:     false,
+	}
+
+	ctx := context.Background()
+	result := &validation.Result{
+		Status: validation.ValidationStatusFailed,
+		Steps: []validation.StepResult{
+			{
+				Name:    "build",
+				Status:  validation.ValidationStatusFailed,
+				Command: "go build ./...",
+				Output:  "undefined: someFunction",
+			},
+			{
+				Name:    "test",
+				Status:  validation.ValidationStatusPassed,
+				Command: "go test ./...",
+				Output:  "ok",
+			},
+		},
+	}
+
+	p.fileValidationFailureBead(ctx, "task-456", "Add new feature", result)
+
+	// Verify CreateWithDescription was called
+	if len(mock.Calls.CreateWithDescription) != 1 {
+		t.Fatalf("expected 1 CreateWithDescription call, got %d", len(mock.Calls.CreateWithDescription))
+	}
+
+	call := mock.Calls.CreateWithDescription[0]
+	if !strings.Contains(call.Title, "Validation failed") {
+		t.Errorf("expected title to contain 'Validation failed', got %q", call.Title)
+	}
+	if call.Priority != 1 {
+		t.Errorf("expected priority 1, got %d", call.Priority)
+	}
+
+	desc := call.Description
+	if !strings.Contains(desc, "Validation Failure") {
+		t.Error("description missing header")
+	}
+	if !strings.Contains(desc, "task-456") {
+		t.Error("description missing task ID")
+	}
+	if !strings.Contains(desc, "undefined: someFunction") {
+		t.Error("description missing validation output")
+	}
+	if !strings.Contains(desc, "lenient mode") {
+		t.Error("description missing lenient mode mention")
+	}
+	// Should NOT contain passed steps
+	if strings.Contains(desc, "test") && strings.Contains(desc, "ok") {
+		t.Error("description should only contain failed steps")
+	}
+}
+
+func TestFileValidationFailureBead_NoClient(t *testing.T) {
+	p := &Processor{
+		beadsClient: nil,
+		verbose:     false,
+	}
+
+	// Should not panic when beadsClient is nil
+	p.fileValidationFailureBead(context.Background(), "task-1", "Test", nil)
+}
+
+func TestIsStrict(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   *validation.ValidationConfig
+		expected bool
+	}{
+		{
+			name:     "nil config",
+			config:   nil,
+			expected: false,
+		},
+		{
+			name: "strict disabled",
+			config: &validation.ValidationConfig{
+				Validation: validation.ValidationSettings{
+					Enabled: true,
+					Strict:  false,
+				},
+			},
+			expected: false,
+		},
+		{
+			name: "strict enabled",
+			config: &validation.ValidationConfig{
+				Validation: validation.ValidationSettings{
+					Enabled: true,
+					Strict:  true,
+				},
+			},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got bool
+			if tt.config != nil {
+				got = tt.config.IsStrict()
+			}
+			if got != tt.expected {
+				t.Errorf("IsStrict() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+// execCommand is a helper to run commands for tests
+func execCommand(name string, args ...string) *exec.Cmd {
+	return exec.Command(name, args...)
 }

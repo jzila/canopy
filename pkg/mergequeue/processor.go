@@ -212,6 +212,15 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 	// Send merging status
 	p.sendMergeStatus(taskID, ipc.MergeStatusMerging, 0, "")
 
+	// Record pre-merge HEAD for potential rollback in strict validation mode
+	preMergeCommit, err := p.getCurrentHead()
+	if err != nil {
+		if p.verbose {
+			fmt.Fprintf(os.Stderr, "warning: failed to get pre-merge HEAD: %v\n", err)
+		}
+		// Continue anyway - we just won't be able to revert in strict mode
+	}
+
 	// Apply merge via merger.MergeSingle()
 	// Pass task title for commit message generation if agent didn't make commits
 	mergeOpts := &merge.MergeOptions{
@@ -512,9 +521,28 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 		}
 		resp.Error = errMsg
 
-		// Handle repair exhaustion: file bead and use merged_needs_repair status
+		// Check if strict validation mode is enabled
+		isStrict := p.validationConfig != nil && p.validationConfig.IsStrict()
+
+		if isStrict {
+			// Strict mode: revert the merge and fail the task completely
+			if preMergeCommit != "" {
+				if err := p.revertMerge(preMergeCommit); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: failed to revert merge for %s: %v\n", taskID, err)
+					// Still mark as failed even if revert fails
+				} else {
+					resp.CommitsApplied = 0 // Reset since we reverted
+				}
+			}
+			p.markTaskFailed(ctx, taskID, errMsg)
+			p.sendTaskUpdated(taskID, req.Task.Title, "failed")
+			p.sendMergeStatusFull(taskID, ipc.MergeStatusFailed, errMsg, resp.CommitsApplied, false, false)
+			return resp
+		}
+
+		// Lenient mode: file bead and use merged_needs_repair status
+		// Handle repair exhaustion: file bead with full context for manual intervention
 		if validationResult.RepairExhausted {
-			// File a bead with full context for manual intervention
 			repairCtx := &repairExhaustedContext{
 				TaskID:           taskID,
 				TaskTitle:        req.Task.Title,
@@ -526,18 +554,15 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 			if _, err := p.fileRepairExhaustedBead(ctx, repairCtx); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: failed to file repair exhaustion bead for %s: %v\n", taskID, err)
 			}
-
-			// Mark task with merged_needs_repair status (merge succeeded, validation failed)
-			p.markTaskFailed(ctx, taskID, errMsg)
-			p.sendTaskUpdated(taskID, req.Task.Title, "merged_needs_repair")
-			p.sendMergeStatusFull(taskID, ipc.MergeStatusMergedNeedsRepair, errMsg, resp.CommitsApplied, false, false)
-			return resp
+		} else {
+			// Regular validation failure (not exhaustion) in lenient mode - file a bead
+			p.fileValidationFailureBead(ctx, taskID, req.Task.Title, validationResult.FinalValidationResult)
 		}
 
-		// Regular validation failure (not exhaustion)
+		// Mark task with merged_needs_repair status (merge succeeded, validation failed)
 		p.markTaskFailed(ctx, taskID, errMsg)
-		p.sendTaskUpdated(taskID, req.Task.Title, "failed")
-		// Status already sent by runValidationAndRepair
+		p.sendTaskUpdated(taskID, req.Task.Title, "merged_needs_repair")
+		p.sendMergeStatusFull(taskID, ipc.MergeStatusMergedNeedsRepair, errMsg, resp.CommitsApplied, false, false)
 		return resp
 	}
 
@@ -971,6 +996,39 @@ func (p *Processor) getMergedDiff(commitsApplied int) string {
 	return string(output)
 }
 
+// getCurrentHead returns the current HEAD commit hash.
+// Used to record the pre-merge state for potential rollback.
+func (p *Processor) getCurrentHead() (string, error) {
+	cmd := exec.Command("git", "-C", p.outputDir, "rev-parse", "HEAD")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse HEAD failed: %w", err)
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+// revertMerge reverts the repository to a previous commit state.
+// This is used in strict validation mode when validation fails after merge.
+// It performs a hard reset to discard all changes made during the merge.
+func (p *Processor) revertMerge(preMergeCommit string) error {
+	if preMergeCommit == "" {
+		return fmt.Errorf("no pre-merge commit specified")
+	}
+
+	cmd := exec.Command("git", "-C", p.outputDir, "reset", "--hard", preMergeCommit)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("git reset --hard %s failed: %w: %s", preMergeCommit, err, stderr.String())
+	}
+
+	if p.verbose {
+		fmt.Printf("Reverted merge to pre-merge commit %s (strict validation mode)\n", preMergeCommit[:8])
+	}
+
+	return nil
+}
+
 // buildRepairAttemptSummary constructs a summary of a repair attempt for
 // inclusion in subsequent repair agent context. This helps later repair
 // agents understand what was already tried and avoid repeating failed approaches.
@@ -1107,4 +1165,56 @@ func (p *Processor) fileRepairExhaustedBead(ctx context.Context, repairCtx *repa
 	}
 
 	return beadID, nil
+}
+
+// fileValidationFailureBead creates a bead documenting a validation failure (lenient mode).
+// This is used when validation fails but we're not in strict mode, so the merge remains.
+func (p *Processor) fileValidationFailureBead(ctx context.Context, taskID, taskTitle string, result *validation.Result) {
+	if p.beadsClient == nil {
+		return
+	}
+
+	// Build the bead description
+	var sb strings.Builder
+
+	sb.WriteString("## Validation Failure\n\n")
+	sb.WriteString(fmt.Sprintf("Task: %s - %s\n\n", taskID, taskTitle))
+	sb.WriteString("Merge was applied but validation failed. Manual fix required.\n\n")
+
+	// Add validation step information
+	if result != nil {
+		sb.WriteString("### Failed Validation Steps\n")
+		for _, step := range result.Steps {
+			if step.Status == validation.ValidationStatusFailed {
+				sb.WriteString(fmt.Sprintf("- Step: %s\n", step.Name))
+				sb.WriteString(fmt.Sprintf("- Command: %s\n", step.Command))
+				// Truncate very long output
+				output := step.Output
+				if len(output) > 2000 {
+					output = output[:2000] + "\n... (truncated)"
+				}
+				sb.WriteString(fmt.Sprintf("- Output:\n```\n%s\n```\n\n", output))
+			}
+		}
+	}
+
+	// Add action required section
+	sb.WriteString("### Action Required\n")
+	sb.WriteString("Fix the validation failure manually. The merge has already been applied (lenient mode).\n")
+
+	// Create the bead with high priority (1 = high)
+	title := fmt.Sprintf("Validation failed: %s", taskTitle)
+	if len(title) > 100 {
+		title = title[:97] + "..."
+	}
+
+	beadID, err := p.beadsClient.CreateWithDescription(ctx, title, sb.String(), 1)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to create validation failure bead for %s: %v\n", taskID, err)
+		return
+	}
+
+	if p.verbose {
+		fmt.Printf("[%s] Filed validation failure bead: %s\n", taskID, beadID)
+	}
 }
