@@ -241,27 +241,27 @@ export const AgentCard: React.FC<AgentCardProps> = ({
       </div>
 
       {/* Merge status indicator for historical data */}
-      {(agent.mergeStatus || agent.merge_status) && (
+      {agent.merge_status && (
         <div className="mt-3 flex items-center gap-3 text-xs">
-          {(agent.mergeStatus === 'merged' || agent.merge_status === 'merged') ? (
-            <div className="flex items-center gap-1.5 text-green-600 dark:text-green-400" title={`Merged${agent.mergeCommitsApplied ? ` (${agent.mergeCommitsApplied} commits)` : ''}`}>
+          {agent.merge_status === 'merged' ? (
+            <div className="flex items-center gap-1.5 text-green-600 dark:text-green-400" title={`Merged${agent.merge_commits_applied ? ` (${agent.merge_commits_applied} commits)` : ''}`}>
               <GitMerge className="w-3.5 h-3.5" />
               <span className="tracking-wide">Merged</span>
-              {agent.mergeCommitsApplied ? <span className="tabular-nums">({agent.mergeCommitsApplied})</span> : null}
+              {agent.merge_commits_applied ? <span className="tabular-nums">({agent.merge_commits_applied})</span> : null}
             </div>
-          ) : (agent.mergeStatus === 'failed' || agent.merge_status === 'failed') ? (
-            <div className="flex items-center gap-1.5 text-red-600 dark:text-red-400" title={agent.mergeError || agent.merge_error || 'Merge failed'}>
+          ) : agent.merge_status === 'failed' ? (
+            <div className="flex items-center gap-1.5 text-red-600 dark:text-red-400" title={agent.merge_error || 'Merge failed'}>
               <GitMerge className="w-3.5 h-3.5" />
               <span className="tracking-wide">Merge Failed</span>
             </div>
           ) : null}
-          {agent.mergeHadConflict && (
+          {agent.merge_had_conflict && (
             <div className="flex items-center gap-1.5 text-yellow-600 dark:text-yellow-400" title="Merge had conflicts">
               <AlertTriangle className="w-3.5 h-3.5" />
               <span className="tracking-wide">Conflict</span>
             </div>
           )}
-          {agent.mergeResolverSpawned && (
+          {agent.merge_resolver_spawned && (
             <span className="text-purple-600 dark:text-purple-400 tracking-wide" title="Resolver agent was spawned">
               (Resolved)
             </span>
