@@ -281,13 +281,34 @@ type MergeCoordinator struct {
 
 ```go
 type Queue struct {
-    requests       chan *MergeRequest
-    paused         atomic.Bool          // Pause during conflict resolution
-    resolverActive atomic.Bool
-    closed         atomic.Bool
-    pauseCond      *sync.Cond           // For pause/resume signaling
+    requests   chan *MergeRequest
+    pauseState *PauseStateMachine  // Manages pause from user and resolver sources
+    closed     atomic.Bool
 }
 ```
+
+**PauseStateMachine** (`pkg/mergequeue/pause_state.go`):
+
+The queue uses an explicit state machine to coordinate pause requests from two independent sources: user-initiated pauses (via dashboard) and resolver-initiated pauses (during conflict resolution). This prevents race conditions where a user resume could incorrectly unblock a resolver operation, or vice versa.
+
+```
+┌──────────┐  UserPause   ┌──────────────┐
+│ Running  │─────────────▶│ PausedUser   │
+└──────────┘              └──────────────┘
+     │                           │
+     │ ResolverPause             │ ResolverPause
+     ▼                           ▼
+┌──────────────┐          ┌──────────────┐
+│PausedResolver│─────────▶│ PausedBoth   │
+└──────────────┘ UserPause└──────────────┘
+```
+
+The system only runs (allows dequeue) when in the `Running` state. Transitions:
+- `UserPause()`: Running→PausedUser, PausedResolver→PausedBoth
+- `UserResume()`: PausedUser→Running, PausedBoth→PausedResolver
+- `ResolverPause()`: Running→PausedResolver, PausedUser→PausedBoth
+- `ResolverResume()`: PausedResolver→Running, PausedBoth→PausedUser
+- `WaitUntilRunning(ctx)`: Blocks until Running state or context cancelled
 
 **MergeRequest/Response**:
 
@@ -564,11 +585,13 @@ max_processes = 100
 | Component | Pattern | Use Case |
 |-----------|---------|----------|
 | `RuntimeState` | `sync.Map` | High-read agent/task state |
-| `MergeQueue` | `atomic.Bool` + `sync.Cond` | Pauseable queue |
+| `MergeQueue.pauseState` | `PauseStateMachine` (mutex + cond) | Dual-source pause coordination |
 | `Scheduler.results` | `sync.RWMutex` | Iteration via AllResults() |
 | `Scheduler.activeOverlays` | `sync.RWMutex` | Iteration via CleanupAll() |
 | `Scheduler.agentContexts` | `sync.Map` | Store-then-delete pattern |
 | `Scheduler` | `errgroup` + `semaphore` | Bounded parallelism |
 | `IPC Client` | `sync.Mutex` + queue | Reconnection buffering |
+
+**PauseStateMachine Details**: The merge queue's pause state machine uses `sync.Mutex` for state transitions and `sync.Cond` for goroutine wakeup. It tracks two independent pause sources (user and resolver) with a 4-state enum (Running, PausedUser, PausedResolver, PausedBoth). The system only processes when in Running state. `WaitUntilRunning()` blocks on the condition variable until both sources have resumed.
 
 See `AGENTS.md` for detailed concurrency guidelines.
