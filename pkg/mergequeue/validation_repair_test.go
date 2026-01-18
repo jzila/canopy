@@ -2,10 +2,14 @@ package mergequeue
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
+	"github.com/jzila/canopy/pkg/repairagent"
+	"github.com/jzila/canopy/pkg/sandbox"
 	"github.com/jzila/canopy/pkg/validation"
 )
 
@@ -349,5 +353,150 @@ func TestValidationAndRepair_HistoryRecording(t *testing.T) {
 	// Check that final status was recorded
 	if len(mock.Calls.AddComment) == 0 {
 		t.Error("expected at least one history comment to be recorded")
+	}
+}
+
+func TestBuildRepairAttemptSummary(t *testing.T) {
+	tests := []struct {
+		name            string
+		attempt         *RepairAttempt
+		result          *repairagent.Result
+		wantContains    []string
+		wantNotContains []string
+	}{
+		{
+			name: "minimal attempt",
+			attempt: &RepairAttempt{
+				Number: 1,
+				Status: "failed",
+			},
+			result:       nil,
+			wantContains: []string{"Attempt 1: failed"},
+		},
+		{
+			name: "attempt with error",
+			attempt: &RepairAttempt{
+				Number: 2,
+				Status: "failed",
+				Error:  "compilation error",
+			},
+			result:       nil,
+			wantContains: []string{"Attempt 2: failed", "Error: compilation error"},
+		},
+		{
+			name: "attempt with commits",
+			attempt: &RepairAttempt{
+				Number:         1,
+				Status:         "success",
+				CommitsApplied: 2,
+			},
+			result: &repairagent.Result{
+				Success: true,
+				AgentResult: &agent.Result{
+					GitState: &sandbox.GitState{
+						CommitMessages: []string{"fix: first fix", "fix: second fix"},
+					},
+				},
+			},
+			wantContains: []string{"Attempt 1: success", "Commits applied: 2", "fix: first fix", "fix: second fix"},
+		},
+		{
+			name: "attempt with files changed",
+			attempt: &RepairAttempt{
+				Number: 1,
+				Status: "failed",
+			},
+			result: &repairagent.Result{
+				Success: false,
+				AgentResult: &agent.Result{
+					Changes: []sandbox.FileChange{
+						{Path: "src/main.go"},
+						{Path: "src/test.go"},
+					},
+				},
+			},
+			wantContains: []string{"Attempt 1: failed", "Files modified: 2", "src/main.go", "src/test.go"},
+		},
+		{
+			name: "attempt with agent result message",
+			attempt: &RepairAttempt{
+				Number:         1,
+				Status:         "failed",
+				CommitsApplied: 1,
+			},
+			result: &repairagent.Result{
+				Success: false,
+				AgentResult: &agent.Result{
+					Output: &agent.ClaudeOutput{
+						ResultMessage: "I tried to fix the compilation error but the underlying issue is deeper.",
+					},
+					GitState: &sandbox.GitState{
+						CommitMessages: []string{"fix: attempt fix"},
+					},
+				},
+			},
+			wantContains: []string{
+				"Attempt 1: failed",
+				"Agent summary:",
+				"I tried to fix the compilation error",
+			},
+		},
+		{
+			name: "truncates long commit messages",
+			attempt: &RepairAttempt{
+				Number:         1,
+				Status:         "success",
+				CommitsApplied: 1,
+			},
+			result: &repairagent.Result{
+				AgentResult: &agent.Result{
+					GitState: &sandbox.GitState{
+						CommitMessages: []string{strings.Repeat("a", 300)},
+					},
+				},
+			},
+			wantContains:    []string{"..."},
+			wantNotContains: []string{strings.Repeat("a", 300)},
+		},
+		{
+			name: "limits files shown to 5",
+			attempt: &RepairAttempt{
+				Number: 1,
+				Status: "success",
+			},
+			result: &repairagent.Result{
+				AgentResult: &agent.Result{
+					Changes: []sandbox.FileChange{
+						{Path: "file1.go"},
+						{Path: "file2.go"},
+						{Path: "file3.go"},
+						{Path: "file4.go"},
+						{Path: "file5.go"},
+						{Path: "file6.go"},
+						{Path: "file7.go"},
+					},
+				},
+			},
+			wantContains:    []string{"Files modified: 7", "file1.go", "file5.go", "... and 2 more files"},
+			wantNotContains: []string{"file6.go", "file7.go"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildRepairAttemptSummary(tt.attempt, tt.result)
+
+			for _, want := range tt.wantContains {
+				if !strings.Contains(got, want) {
+					t.Errorf("buildRepairAttemptSummary() missing expected content %q\ngot:\n%s", want, got)
+				}
+			}
+
+			for _, notWant := range tt.wantNotContains {
+				if strings.Contains(got, notWant) {
+					t.Errorf("buildRepairAttemptSummary() should not contain %q\ngot:\n%s", notWant, got)
+				}
+			}
+		})
 	}
 }

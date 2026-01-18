@@ -825,13 +825,7 @@ func (p *Processor) runValidationAndRepair(ctx context.Context, taskID, taskTitl
 		}
 
 		// Build summary of this attempt for future repair agents
-		attemptSummary := fmt.Sprintf("Attempt %d: %s", attempt+1, repairAttempt.Status)
-		if repairAttempt.Error != "" {
-			attemptSummary += fmt.Sprintf(" - %s", repairAttempt.Error)
-		}
-		if repairAttempt.CommitsApplied > 0 {
-			attemptSummary += fmt.Sprintf(" (%d commits applied)", repairAttempt.CommitsApplied)
-		}
+		attemptSummary := buildRepairAttemptSummary(repairAttempt, repairResult)
 		previousAttempts = append(previousAttempts, attemptSummary)
 
 		// Clean up repair context files
@@ -921,4 +915,62 @@ func (p *Processor) getMergedDiff(commitsApplied int) string {
 	}
 
 	return string(output)
+}
+
+// buildRepairAttemptSummary constructs a summary of a repair attempt for
+// inclusion in subsequent repair agent context. This helps later repair
+// agents understand what was already tried and avoid repeating failed approaches.
+func buildRepairAttemptSummary(attempt *RepairAttempt, result *repairagent.Result) string {
+	var sb strings.Builder
+
+	// Header with attempt number and status
+	sb.WriteString(fmt.Sprintf("Attempt %d: %s\n", attempt.Number, attempt.Status))
+
+	// Error details if failed
+	if attempt.Error != "" {
+		sb.WriteString(fmt.Sprintf("Error: %s\n", attempt.Error))
+	}
+
+	// Commits applied
+	if attempt.CommitsApplied > 0 {
+		sb.WriteString(fmt.Sprintf("Commits applied: %d\n", attempt.CommitsApplied))
+
+		// Include commit messages if available
+		if result != nil && result.AgentResult != nil && result.AgentResult.GitState != nil {
+			for _, msg := range result.AgentResult.GitState.CommitMessages {
+				// Truncate long commit messages
+				if len(msg) > 200 {
+					msg = msg[:200] + "..."
+				}
+				sb.WriteString(fmt.Sprintf("  - %s\n", msg))
+			}
+		}
+	}
+
+	// Files changed
+	if result != nil && result.AgentResult != nil && len(result.AgentResult.Changes) > 0 {
+		sb.WriteString(fmt.Sprintf("Files modified: %d\n", len(result.AgentResult.Changes)))
+		// List first few files
+		for i, change := range result.AgentResult.Changes {
+			if i >= 5 {
+				sb.WriteString(fmt.Sprintf("  ... and %d more files\n", len(result.AgentResult.Changes)-5))
+				break
+			}
+			sb.WriteString(fmt.Sprintf("  - %s\n", change.Path))
+		}
+	}
+
+	// Agent's result message (the agent's summary of what it did)
+	if result != nil && result.AgentResult != nil && result.AgentResult.Output != nil {
+		if result.AgentResult.Output.ResultMessage != "" {
+			// Truncate long result messages
+			msg := result.AgentResult.Output.ResultMessage
+			if len(msg) > 1000 {
+				msg = msg[:1000] + "..."
+			}
+			sb.WriteString(fmt.Sprintf("\nAgent summary:\n%s\n", msg))
+		}
+	}
+
+	return sb.String()
 }
