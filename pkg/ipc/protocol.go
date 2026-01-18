@@ -95,6 +95,9 @@ const (
 	// Run lifecycle events
 	MessageTypeRunStarted   MessageType = "run_started"
 	MessageTypeRunCompleted MessageType = "run_completed"
+
+	// Orchestrator status events
+	MessageTypeOrchPauseStatus MessageType = "orch_pause_status"
 )
 
 // Message is the top-level IPC message envelope
@@ -255,4 +258,12 @@ type RunStats struct {
 type RunCompletedPayload struct {
 	RunID string   `json:"run_id"`
 	Stats RunStats `json:"stats"`
+}
+
+// OrchPauseStatusPayload is sent when the orchestrator pause state changes
+type OrchPauseStatusPayload struct {
+	IsPaused           bool   `json:"is_paused"`            // Whether the orchestrator is paused (by any source)
+	IsPausedByUser     bool   `json:"is_paused_by_user"`    // Whether paused by user request
+	IsPausedByResolver bool   `json:"is_paused_by_resolver"` // Whether paused for conflict resolution
+	PauseState         string `json:"pause_state"`          // Detailed state: "running", "paused_user", "paused_resolver", "paused_both"
 }

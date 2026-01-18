@@ -157,6 +157,11 @@ func (q *Queue) PauseState() PauseState {
 	return q.pauseState.State()
 }
 
+// PauseStateString returns a string representation of the current pause state.
+func (q *Queue) PauseStateString() string {
+	return q.pauseState.State().String()
+}
+
 // IsClosed returns whether the queue has been closed.
 func (q *Queue) IsClosed() bool {
 	return q.closed.Load()

@@ -17,6 +17,15 @@ type DaemonInterface interface {
 	GetActiveRepositoryID() string
 }
 
+// MergeQueueInterface abstracts merge queue operations for handlers
+type MergeQueueInterface interface {
+	Pause()
+	Resume()
+	IsPaused() bool
+	IsPausedByUser() bool
+	PauseStateString() string
+}
+
 // Handler wraps RuntimeState and provides HTTP handlers
 type Handler struct {
 	state            *RuntimeState
@@ -25,6 +34,7 @@ type Handler struct {
 	eventBus         *EventBus
 	daemon           DaemonInterface
 	persistenceStore PersistenceStoreInterface
+	mergeQueue       MergeQueueInterface
 }
 
 // SchedulerInterface abstracts scheduler operations for handlers
@@ -64,6 +74,11 @@ func (h *Handler) SetDaemon(daemon DaemonInterface) {
 // SetPersistenceStore sets the persistence store for handlers that need to persist state
 func (h *Handler) SetPersistenceStore(store PersistenceStoreInterface) {
 	h.persistenceStore = store
+}
+
+// SetMergeQueue sets the merge queue reference for pause/resume operations
+func (h *Handler) SetMergeQueue(mq MergeQueueInterface) {
+	h.mergeQueue = mq
 }
 
 // StateResponse wraps RuntimeState with additional daemon-level information
@@ -179,30 +194,10 @@ func (h *Handler) HandleKillAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update agent status to cancelled
-	now := time.Now()
-	agent.Update(func(a *AgentState) {
-		a.Status = AgentStatusCancelled
-		a.EndTime = &now
-	})
-
-	// Publish agent:completed event to notify WebSocket clients
-	if h.eventBus != nil {
-		h.eventBus.Publish(Event{
-			Type:      EventAgentCompleted,
-			Timestamp: now,
-			Payload: map[string]interface{}{
-				"agent_id": agentID,
-				"status":   string(AgentStatusCancelled),
-				"error":    "cancelled by user",
-			},
-		})
-	}
-
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{
-		"status":   "killed",
+		"status": "killed",
 		"agent_id": agentID,
 	})
 }
@@ -399,20 +394,39 @@ func (h *Handler) HandlePauseOrch(w http.ResponseWriter, r *http.Request) {
 	h.scheduler.Pause()
 	h.state.Pause()
 
+	// Also pause the merge queue if available (user-initiated pause)
+	if h.mergeQueue != nil {
+		h.mergeQueue.Pause()
+	}
+
+	// Build event payload with detailed pause state
+	payload := map[string]interface{}{
+		"paused":         true,
+		"paused_by_user": true,
+	}
+	if h.mergeQueue != nil {
+		payload["pause_state"] = h.mergeQueue.PauseStateString()
+	}
+
 	// Publish pause event to notify WebSocket clients
 	if h.eventBus != nil {
 		h.eventBus.Publish(Event{
 			Type:      EventOrchPaused,
 			Timestamp: time.Now(),
-			Payload:   map[string]bool{"paused": true},
+			Payload:   payload,
 		})
+	}
+
+	response := map[string]interface{}{
+		"status": "paused",
+	}
+	if h.mergeQueue != nil {
+		response["pause_state"] = h.mergeQueue.PauseStateString()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
-		"status": "paused",
-	})
+	json.NewEncoder(w).Encode(response)
 }
 
 // HandleResumeOrch resumes the orchestrator
@@ -430,20 +444,52 @@ func (h *Handler) HandleResumeOrch(w http.ResponseWriter, r *http.Request) {
 	h.scheduler.Resume()
 	h.state.Resume()
 
+	// Also resume the merge queue if available (user-initiated resume)
+	if h.mergeQueue != nil {
+		h.mergeQueue.Resume()
+	}
+
+	// Build event payload with detailed pause state
+	// After user resume, we may still be paused by resolver
+	isPaused := false
+	pausedByResolver := false
+	if h.mergeQueue != nil {
+		isPaused = h.mergeQueue.IsPaused()
+		pausedByResolver = isPaused && !h.mergeQueue.IsPausedByUser()
+	}
+
+	payload := map[string]interface{}{
+		"paused":             isPaused,
+		"paused_by_user":     false,
+		"paused_by_resolver": pausedByResolver,
+	}
+	if h.mergeQueue != nil {
+		payload["pause_state"] = h.mergeQueue.PauseStateString()
+	}
+
 	// Publish resume event to notify WebSocket clients
 	if h.eventBus != nil {
 		h.eventBus.Publish(Event{
 			Type:      EventOrchResumed,
 			Timestamp: time.Now(),
-			Payload:   map[string]bool{"paused": false},
+			Payload:   payload,
 		})
+	}
+
+	response := map[string]interface{}{
+		"status": "resumed",
+	}
+	if h.mergeQueue != nil {
+		response["pause_state"] = h.mergeQueue.PauseStateString()
+		if isPaused {
+			response["status"] = "partially_resumed"
+			response["still_paused_by_resolver"] = true
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
-		"status": "resumed",
-	})
+	json.NewEncoder(w).Encode(response)
 }
 
 // HandleGetStats returns aggregate statistics
@@ -531,12 +577,15 @@ func (h *Handler) HandleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 
 // MergeQueueState represents the current state of the merge queue
 type MergeQueueState struct {
-	Completed     []MergeCompletedItem `json:"completed"`
-	Resolvers     []MergeResolverItem  `json:"resolvers"`
-	Pending       []MergePendingItem   `json:"pending"`
-	ActiveWorkers []MergeWorkerItem    `json:"active_workers"`
-	IsPaused      bool                 `json:"is_paused"`
-	QueueLength   int                  `json:"queue_length"`
+	Completed          []MergeCompletedItem `json:"completed"`
+	Resolvers          []MergeResolverItem  `json:"resolvers"`
+	Pending            []MergePendingItem   `json:"pending"`
+	ActiveWorkers      []MergeWorkerItem    `json:"active_workers"`
+	IsPaused           bool                 `json:"is_paused"`
+	IsPausedByUser     bool                 `json:"is_paused_by_user"`
+	IsPausedByResolver bool                 `json:"is_paused_by_resolver"`
+	PauseState         string               `json:"pause_state"`
+	QueueLength        int                  `json:"queue_length"`
 }
 
 // MergeCompletedItem represents a completed merge
@@ -587,6 +636,15 @@ func (h *Handler) HandleGetMergeQueue(w http.ResponseWriter, r *http.Request) {
 		Pending:       make([]MergePendingItem, 0),
 		ActiveWorkers: make([]MergeWorkerItem, 0),
 		IsPaused:      snapshot.IsPaused,
+		PauseState:    "running", // default
+	}
+
+	// Get detailed pause state from merge queue if available
+	if h.mergeQueue != nil {
+		state.IsPaused = h.mergeQueue.IsPaused()
+		state.IsPausedByUser = h.mergeQueue.IsPausedByUser()
+		state.IsPausedByResolver = h.mergeQueue.IsPaused() && !h.mergeQueue.IsPausedByUser()
+		state.PauseState = h.mergeQueue.PauseStateString()
 	}
 
 	// Track resolver relationships for building resolver items
