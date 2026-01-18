@@ -121,9 +121,11 @@ const MergeStatusBadge: React.FC<{ status: MergeStatus; queuePos?: number; error
     resolving: { color: 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300', label: 'Resolving Conflicts' },
     merged: { color: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300', label: 'Merged' },
     failed: { color: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300', label: 'Merge Failed' },
+    skipped: { color: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300', label: 'No Changes' },
   };
 
   const config = statusConfig[status];
+  const isSkipped = status === 'skipped';
   return (
     <div className="space-y-1">
       <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-sm font-medium ${config.color}`}>
@@ -132,8 +134,8 @@ const MergeStatusBadge: React.FC<{ status: MergeStatus; queuePos?: number; error
         {queuePos !== undefined && queuePos > 0 && ` (Queue: #${queuePos})`}
       </span>
       {error && (
-        <div className="text-xs text-red-600 dark:text-red-400 flex items-start gap-1 mt-1">
-          <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />
+        <div className={`text-xs flex items-start gap-1 mt-1 ${isSkipped ? 'text-gray-500 dark:text-gray-400' : 'text-red-600 dark:text-red-400'}`}>
+          {!isSkipped && <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />}
           <span>{error}</span>
         </div>
       )}

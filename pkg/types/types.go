@@ -29,6 +29,9 @@ const (
 	// MergeStatusResolved indicates the merge succeeded after conflict resolution
 	// (used in persistence to distinguish from direct merges).
 	MergeStatusResolved MergeStatus = "resolved"
+	// MergeStatusSkipped indicates merge was skipped because there were no changes
+	// to apply (e.g., resolver determined work was already done).
+	MergeStatusSkipped MergeStatus = "skipped"
 )
 
 // ModelUsage represents per-model token usage and cost.

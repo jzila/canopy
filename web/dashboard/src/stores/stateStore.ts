@@ -12,7 +12,7 @@ export type AgentStatus =
   | 'cancelled';
 
 // Merge status types matching Go backend (ipc/protocol.go)
-export type MergeStatus = 'pending' | 'acquiring' | 'merging' | 'resolving' | 'merged' | 'failed';
+export type MergeStatus = 'pending' | 'acquiring' | 'merging' | 'resolving' | 'merged' | 'failed' | 'skipped';
 
 export interface OutputBuffer {
   stdout: string;

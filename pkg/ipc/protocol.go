@@ -165,6 +165,7 @@ const (
 	MergeStatusResolving = types.MergeStatusResolving
 	MergeStatusMerged    = types.MergeStatusMerged
 	MergeStatusFailed    = types.MergeStatusFailed
+	MergeStatusSkipped   = types.MergeStatusSkipped
 )
 
 // ValidationStep represents the result of a single validation step

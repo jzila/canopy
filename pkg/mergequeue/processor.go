@@ -372,16 +372,19 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 					return resp
 				}
 
-				// Verify commits were actually applied
+				// Check if commits were actually applied
 				if resolverMergeResult.CommitsApplied == 0 && len(resolverMergeResult.Applied) == 0 {
-					errMsg := fmt.Sprintf("resolver completed but produced no changes for %s", taskID)
+					// Resolver completed but had no changes to apply.
+					// This is a benign outcome (work already done or nothing to do), not a failure.
+					msg := fmt.Sprintf("resolver completed with no changes for %s", taskID)
 					if p.verbose {
-						fmt.Fprintf(os.Stderr, "[%s] Warning: %s\n", taskID, errMsg)
+						fmt.Fprintf(os.Stderr, "[%s] Info: %s\n", taskID, msg)
 					}
-					resp.Error = errMsg
-					p.markTaskFailed(ctx, taskID, errMsg)
-					p.sendTaskUpdated(taskID, req.Task.Title, "failed")
-					p.sendMergeStatusFull(taskID, ipc.MergeStatusFailed, errMsg, resp.CommitsApplied, resp.HadConflict, resp.ResolverSpawned)
+					// Mark task as done since the resolver successfully determined there's nothing to do
+					p.markTaskDone(ctx, taskID)
+					p.sendTaskUpdated(taskID, req.Task.Title, "completed")
+					p.sendMergeStatusFull(taskID, ipc.MergeStatusSkipped, msg, resp.CommitsApplied, resp.HadConflict, resp.ResolverSpawned)
+					resp.Success = true
 					return resp
 				}
 
