@@ -398,6 +398,25 @@ func (c *Client) SendAgentMergeStatusFull(agentID string, status MergeStatus, qu
 	return c.sendMessage(MessageTypeAgentMergeStatus, payload)
 }
 
+// SendAgentMergeStatusWithValidation notifies the daemon of an agent's merge status including validation results.
+// This should be used after validation runs to include validation outcome.
+func (c *Client) SendAgentMergeStatusWithValidation(agentID string, status MergeStatus, errMsg string, commitsApplied int, hadConflict, resolverSpawned bool, validationStatus string, validationError string, validationDurationMS int64, validationSteps []ValidationStep) error {
+	payload := AgentMergeStatusPayload{
+		AgentID:            agentID,
+		MergeStatus:        status,
+		Error:              errMsg,
+		CommitsApplied:     commitsApplied,
+		HadConflict:        hadConflict,
+		ResolverSpawned:    resolverSpawned,
+		ValidationStatus:   validationStatus,
+		ValidationError:    validationError,
+		ValidationDuration: validationDurationMS,
+		ValidationSteps:    validationSteps,
+	}
+
+	return c.sendMessage(MessageTypeAgentMergeStatus, payload)
+}
+
 // SendAgentDone notifies the daemon that an agent completed successfully
 // parentAgentID is optional and specifies the ID of the parent agent if this agent was spawned by another
 func (c *Client) SendAgentDone(agentID, parentAgentID string, result *AgentResult) error {

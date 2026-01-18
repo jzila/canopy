@@ -13,8 +13,10 @@ import (
 	"github.com/jzila/canopy/pkg/ipc"
 	"github.com/jzila/canopy/pkg/merge"
 	"github.com/jzila/canopy/pkg/metrics"
+	"github.com/jzila/canopy/pkg/repairagent"
 	"github.com/jzila/canopy/pkg/resolver"
 	"github.com/jzila/canopy/pkg/sandbox"
+	"github.com/jzila/canopy/pkg/validation"
 )
 
 // Processor handles merge operations from the queue.
@@ -30,6 +32,12 @@ type Processor struct {
 	resolverTimeout time.Duration // Timeout for resolver operations (0 = no timeout)
 	runID           string        // Run ID for unique agent ID generation
 	repoID          string        // Repository ID for IPC tracking
+
+	// Validation and repair fields
+	validationConfig *validation.ValidationConfig // Validation configuration (nil = disabled)
+	repairAgent      *repairagent.RepairAgent     // Repair agent for fixing validation failures
+	historyRecorder  *HistoryRecorder             // History recorder for audit trail
+	sandboxConfig    *sandbox.SandboxConfig       // Sandbox configuration for repair agents
 }
 
 // NewProcessor creates a new merge processor.
@@ -74,6 +82,39 @@ func (p *Processor) SetIPCClient(client *ipc.Client) {
 // SetRepoID sets the repository ID for IPC tracking.
 func (p *Processor) SetRepoID(repoID string) {
 	p.repoID = repoID
+}
+
+// SetValidationConfig sets the validation configuration.
+// If nil, validation is disabled.
+func (p *Processor) SetValidationConfig(config *validation.ValidationConfig) {
+	p.validationConfig = config
+}
+
+// SetSandboxConfig sets the sandbox configuration for repair agents.
+func (p *Processor) SetSandboxConfig(config *sandbox.SandboxConfig) {
+	p.sandboxConfig = config
+}
+
+// InitializeRepairAgent creates the repair agent with current configuration.
+// Must be called after SetRunID, SetRepoID, and SetSandboxConfig.
+func (p *Processor) InitializeRepairAgent() {
+	if p.validationConfig == nil || !p.validationConfig.IsEnabled() {
+		return
+	}
+
+	p.repairAgent = repairagent.New(&repairagent.Config{
+		WorkDir:       p.outputDir,
+		Verbose:       p.verbose,
+		SandboxConfig: p.sandboxConfig,
+		RepoID:        p.repoID,
+		RunID:         p.runID,
+	})
+
+	if p.ipcClient != nil {
+		p.repairAgent.SetIPCClient(p.ipcClient)
+	}
+
+	p.historyRecorder = NewHistoryRecorder(p.beadsClient, p.verbose)
 }
 
 // makeAgentID creates a unique agent ID by combining run ID prefix with task ID.
@@ -388,7 +429,24 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 				resp.CommitsApplied += resolverMergeResult.CommitsApplied
 			}
 
-			// Mark task as done after successful resolution
+			// Run validation and repair loop after successful resolution
+			mergedDiff := p.getMergedDiff(resp.CommitsApplied)
+			validationResult := p.runValidationAndRepair(ctx, taskID, req.Task.Title, mergedDiff, p.makeAgentID(taskID), resp.HadConflict, resp.ResolverSpawned, resp.CommitsApplied)
+
+			if !validationResult.ValidationPassed {
+				// Validation failed even after repair attempts
+				errMsg := validationResult.Error
+				if errMsg == "" {
+					errMsg = "validation failed"
+				}
+				resp.Error = errMsg
+				p.markTaskFailed(ctx, taskID, errMsg)
+				p.sendTaskUpdated(taskID, req.Task.Title, "failed")
+				// Status already sent by runValidationAndRepair
+				return resp
+			}
+
+			// Mark task as done after successful resolution and validation
 			p.markTaskDone(ctx, taskID)
 			p.sendTaskUpdated(taskID, req.Task.Title, "completed")
 			p.sendMergeStatusFull(taskID, ipc.MergeStatusMerged, "", resp.CommitsApplied, resp.HadConflict, resp.ResolverSpawned)
@@ -417,8 +475,25 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 		return resp
 	}
 
-	// No conflicts and no errors - mark task as done
+	// No conflicts and no errors - run validation and repair loop
 	// (Error cases and no-change cases are handled by resolver above)
+	mergedDiff := p.getMergedDiff(resp.CommitsApplied)
+	validationResult := p.runValidationAndRepair(ctx, taskID, req.Task.Title, mergedDiff, p.makeAgentID(taskID), false, false, resp.CommitsApplied)
+
+	if !validationResult.ValidationPassed {
+		// Validation failed even after repair attempts
+		errMsg := validationResult.Error
+		if errMsg == "" {
+			errMsg = "validation failed"
+		}
+		resp.Error = errMsg
+		p.markTaskFailed(ctx, taskID, errMsg)
+		p.sendTaskUpdated(taskID, req.Task.Title, "failed")
+		// Status already sent by runValidationAndRepair
+		return resp
+	}
+
+	// Mark task as done after successful merge and validation
 	p.markTaskDone(ctx, taskID)
 	p.sendTaskUpdated(taskID, req.Task.Title, "completed")
 	p.sendMergeStatusFull(taskID, ipc.MergeStatusMerged, "", resp.CommitsApplied, false, false)
@@ -582,4 +657,268 @@ func (p *Processor) validateBaseCommit(baseCommit string) error {
 	}
 
 	return nil
+}
+
+// validationAndRepairResult holds the outcome of the validation and repair loop.
+type validationAndRepairResult struct {
+	// ValidationPassed indicates whether validation passed (initial or after repair)
+	ValidationPassed bool
+	// RepairAttempted indicates whether any repair was attempted
+	RepairAttempted bool
+	// RepairSucceeded indicates whether repair fixed the validation failure
+	RepairSucceeded bool
+	// AttemptsUsed is the number of repair attempts made
+	AttemptsUsed int
+	// FinalValidationResult is the last validation result (may be nil if skipped)
+	FinalValidationResult *validation.Result
+	// Error contains any error that occurred during the process
+	Error string
+}
+
+// runValidationAndRepair runs validation and, if it fails, spawns repair agents
+// in a retry loop until validation passes or max attempts are exhausted.
+//
+// The loop follows this pattern:
+//  1. Run validation
+//  2. If validation passes -> return success
+//  3. If validation fails and attempts < max -> spawn repair agent
+//  4. Wait for repair agent to complete
+//  5. Go to step 1
+//  6. If validation fails and attempts >= max -> return failure
+func (p *Processor) runValidationAndRepair(ctx context.Context, taskID, taskTitle, mergedDiff string, agentID string, hadConflict, resolverSpawned bool, commitsApplied int) *validationAndRepairResult {
+	result := &validationAndRepairResult{}
+
+	// Check if validation is enabled
+	if p.validationConfig == nil || !p.validationConfig.IsEnabled() {
+		// Validation disabled - skip
+		result.ValidationPassed = true
+		return result
+	}
+
+	maxAttempts := p.validationConfig.GetMaxRepairAttempts()
+	var previousAttempts []string
+
+	for attempt := 0; attempt <= maxAttempts; attempt++ {
+		// Check context before each iteration
+		if err := ctx.Err(); err != nil {
+			result.Error = fmt.Sprintf("cancelled: %v", err)
+			return result
+		}
+
+		// Run validation
+		validationResult := p.runValidation(ctx, taskID, agentID, hadConflict, resolverSpawned, commitsApplied)
+		result.FinalValidationResult = validationResult
+
+		// Check if validation passed
+		if validationResult.Status == validation.ValidationStatusPassed {
+			result.ValidationPassed = true
+			if attempt > 0 {
+				result.RepairSucceeded = true
+				// Record successful repair in history
+				if p.historyRecorder != nil {
+					_ = p.historyRecorder.RecordFinalStatus(ctx, taskID, FinalStatusRepaired,
+						fmt.Sprintf("Validation passed after %d repair attempt(s)", attempt))
+				}
+			} else {
+				// First-time pass
+				if p.historyRecorder != nil {
+					_ = p.historyRecorder.RecordFinalStatus(ctx, taskID, FinalStatusValidated, "")
+				}
+			}
+			return result
+		}
+
+		// Validation failed
+		result.AttemptsUsed = attempt + 1
+
+		// Record validation failure in history
+		if p.historyRecorder != nil {
+			_ = p.historyRecorder.RecordValidationFailure(ctx, taskID, validationResult, attempt+1)
+		}
+
+		// Check if we've exhausted repair attempts
+		if attempt >= maxAttempts {
+			result.Error = fmt.Sprintf("validation failed after %d repair attempts: %s", maxAttempts, validationResult.Error)
+			if p.historyRecorder != nil {
+				_ = p.historyRecorder.RecordFinalStatus(ctx, taskID, FinalStatusNeedsManualFix,
+					fmt.Sprintf("Exhausted %d repair attempts", maxAttempts))
+			}
+			return result
+		}
+
+		// Check if we have a repair agent configured
+		if p.repairAgent == nil {
+			result.Error = fmt.Sprintf("validation failed and no repair agent configured: %s", validationResult.Error)
+			if p.historyRecorder != nil {
+				_ = p.historyRecorder.RecordFinalStatus(ctx, taskID, FinalStatusNeedsManualFix,
+					"No repair agent configured")
+			}
+			return result
+		}
+
+		// Spawn repair agent
+		result.RepairAttempted = true
+
+		if p.verbose {
+			fmt.Printf("[%s] Validation failed, spawning repair agent (attempt %d/%d)...\n",
+				taskID, attempt+1, maxAttempts)
+		}
+
+		// Find the failed step for context
+		var failedStep *validation.StepResult
+		for i := range validationResult.Steps {
+			if validationResult.Steps[i].Status == validation.ValidationStatusFailed {
+				failedStep = &validationResult.Steps[i]
+				break
+			}
+		}
+
+		// Build repair context
+		repairCtx := &repairagent.RepairContext{
+			TaskID:            taskID,
+			TaskTitle:         taskTitle,
+			ValidationResult:  validationResult,
+			FailedStep:        failedStep,
+			MergedDiff:        mergedDiff,
+			PreviousAttempts:  previousAttempts,
+			RepairAttempt:     attempt + 1,
+			MaxRepairAttempts: maxAttempts,
+		}
+
+		// Send IPC status update for repair starting
+		p.sendValidationStatus(agentID, ipc.MergeStatusResolving, "", commitsApplied, hadConflict, resolverSpawned,
+			"repairing", fmt.Sprintf("Repair attempt %d/%d", attempt+1, maxAttempts), 0, nil)
+
+		// Execute repair agent
+		repairResult, err := p.repairAgent.Repair(ctx, repairCtx, agentID)
+		if err != nil {
+			result.Error = fmt.Sprintf("repair agent error: %v", err)
+			return result
+		}
+
+		// Record repair attempt in history
+		repairAttempt := &RepairAttempt{
+			Number:   attempt + 1,
+			Duration: repairResult.Duration,
+			AgentID:  repairResult.RepairAgentID,
+		}
+		if repairResult.AgentResult != nil && repairResult.AgentResult.GitState != nil {
+			repairAttempt.CommitsApplied = len(repairResult.AgentResult.GitState.NewCommits)
+		}
+
+		if repairResult.Success {
+			repairAttempt.Status = "success"
+			if p.verbose {
+				fmt.Printf("[%s] Repair agent completed successfully (%.1fs), re-running validation...\n",
+					taskID, repairResult.Duration.Seconds())
+			}
+		} else {
+			repairAttempt.Status = "failed"
+			repairAttempt.Error = repairResult.Error
+			if p.verbose {
+				fmt.Printf("[%s] Repair agent failed: %s\n", taskID, repairResult.Error)
+			}
+		}
+
+		if p.historyRecorder != nil {
+			_ = p.historyRecorder.RecordRepairAttempt(ctx, taskID, repairAttempt)
+		}
+
+		// Build summary of this attempt for future repair agents
+		attemptSummary := fmt.Sprintf("Attempt %d: %s", attempt+1, repairAttempt.Status)
+		if repairAttempt.Error != "" {
+			attemptSummary += fmt.Sprintf(" - %s", repairAttempt.Error)
+		}
+		if repairAttempt.CommitsApplied > 0 {
+			attemptSummary += fmt.Sprintf(" (%d commits applied)", repairAttempt.CommitsApplied)
+		}
+		previousAttempts = append(previousAttempts, attemptSummary)
+
+		// Clean up repair context files
+		_ = repairagent.CleanupRepairContext(p.outputDir)
+
+		// Even if repair agent "failed", we still re-run validation
+		// because the agent might have made partial fixes
+	}
+
+	return result
+}
+
+// runValidation executes validation and sends IPC status updates.
+func (p *Processor) runValidation(ctx context.Context, taskID, agentID string, hadConflict, resolverSpawned bool, commitsApplied int) *validation.Result {
+	// Send validation starting status
+	p.sendValidationStatus(agentID, ipc.MergeStatusMerging, "", commitsApplied, hadConflict, resolverSpawned,
+		"running", "", 0, nil)
+
+	// Create and run validation executor
+	executor := validation.NewExecutor(p.validationConfig, p.outputDir, p.verbose)
+	result, err := executor.Run(ctx)
+	if err != nil {
+		// Executor error (not validation failure)
+		result = &validation.Result{
+			Status: validation.ValidationStatusFailed,
+			Error:  fmt.Sprintf("validation executor error: %v", err),
+		}
+	}
+
+	// Convert validation steps to IPC format
+	ipcSteps := make([]ipc.ValidationStep, len(result.Steps))
+	for i, step := range result.Steps {
+		ipcSteps[i] = ipc.ValidationStep{
+			Name:     step.Name,
+			Status:   string(step.Status),
+			Duration: step.Duration.Milliseconds(),
+			Output:   step.Output,
+		}
+	}
+
+	// Send validation result status
+	validationStatus := string(result.Status)
+	validationError := result.Error
+	validationDuration := result.Duration.Milliseconds()
+
+	// Determine merge status based on validation result
+	mergeStatus := ipc.MergeStatusMerged
+	if result.Status == validation.ValidationStatusFailed {
+		mergeStatus = ipc.MergeStatusFailed
+	}
+
+	p.sendValidationStatus(agentID, mergeStatus, "", commitsApplied, hadConflict, resolverSpawned,
+		validationStatus, validationError, validationDuration, ipcSteps)
+
+	return result
+}
+
+// sendValidationStatus sends a merge status update with validation information via IPC.
+func (p *Processor) sendValidationStatus(agentID string, mergeStatus ipc.MergeStatus, errMsg string, commitsApplied int, hadConflict, resolverSpawned bool, validationStatus, validationError string, validationDurationMS int64, validationSteps []ipc.ValidationStep) {
+	if p.ipcClient == nil {
+		return
+	}
+
+	if err := p.ipcClient.SendAgentMergeStatusWithValidation(
+		agentID, mergeStatus, errMsg, commitsApplied, hadConflict, resolverSpawned,
+		validationStatus, validationError, validationDurationMS, validationSteps,
+	); err != nil && p.verbose {
+		fmt.Fprintf(os.Stderr, "warning: failed to send validation status: %v\n", err)
+	}
+}
+
+// getMergedDiff returns the git diff for the commits that were just merged.
+// This provides context for repair agents about what changes were introduced.
+func (p *Processor) getMergedDiff(commitsApplied int) string {
+	if commitsApplied == 0 {
+		return ""
+	}
+
+	// Get diff of the last N commits that were applied
+	cmd := exec.Command("git", "-C", p.outputDir, "diff", fmt.Sprintf("HEAD~%d..HEAD", commitsApplied))
+	output, err := cmd.Output()
+	if err != nil {
+		if p.verbose {
+			fmt.Fprintf(os.Stderr, "warning: failed to get merged diff: %v\n", err)
+		}
+		return ""
+	}
+
+	return string(output)
 }
