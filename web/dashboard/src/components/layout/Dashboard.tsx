@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useStateStore } from '../../stores/stateStore';
-import { useWebSocket, useAgentFiltering, useResizablePane } from '../../hooks';
+import { useWebSocket, useAgentFiltering, useResizablePane, useResizableWidth } from '../../hooks';
 import type { StatusFilter } from '../../hooks';
 import { pauseOrch, resumeOrch, getState, getRepositories, activateRepository, getRuns } from '../../api/client';
 import { BeadsPane } from '../beads/BeadsPane';
@@ -48,6 +48,14 @@ export const Dashboard: React.FC = () => {
     defaultHeight: 320,
     minHeight: 200,
     maxHeightRatio: 0.8,
+  });
+
+  // Resizable beads pane width
+  const { width: beadsPaneWidth, isResizing: isBeadsResizing, handleResizeStart: handleBeadsResizeStart } = useResizableWidth({
+    storageKey: 'beadsPaneWidth',
+    defaultWidth: 320,
+    minWidth: 200,
+    maxWidthRatio: 0.5,
   });
 
   // Persist beads pane state
@@ -277,6 +285,9 @@ export const Dashboard: React.FC = () => {
           onTaskClick={handleMergeTaskClick}
           showCompleted={showCompletedBeads}
           onToggleShowCompleted={() => setShowCompletedBeads(!showCompletedBeads)}
+          width={beadsPaneWidth}
+          isResizing={isBeadsResizing}
+          onResizeStart={handleBeadsResizeStart}
         />
 
         {/* Main Content */}

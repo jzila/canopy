@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
-import { Circle, Clock, AlertCircle, Loader2, ChevronRight, ChevronLeft, ChevronDown, GitBranch, CheckCircle2, Archive } from 'lucide-react';
+import { Circle, Clock, AlertCircle, Loader2, ChevronRight, ChevronLeft, ChevronDown, GitBranch, CheckCircle2, Archive, GripVertical } from 'lucide-react';
 import { useStateStore } from '../../stores/stateStore';
 import type { TaskState } from '../../stores/stateStore';
 import { useMergeQueue } from '../../hooks/useMergeQueue';
@@ -11,6 +11,12 @@ interface BeadsPaneProps {
   onTaskClick?: (taskId: string) => void;
   showCompleted?: boolean;
   onToggleShowCompleted?: () => void;
+  /** Width of the pane in pixels (when expanded) */
+  width?: number;
+  /** Whether the pane is currently being resized */
+  isResizing?: boolean;
+  /** Handler to start resizing (attach to mousedown on resize handle) */
+  onResizeStart?: (e: React.MouseEvent) => void;
 }
 
 type ViewMode = 'hierarchy' | 'flat';
@@ -203,7 +209,7 @@ const truncateId = (id: string, length: number = 11): string => {
   return id.length > length ? id.slice(0, length) : id;
 };
 
-export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTaskClick, showCompleted = false, onToggleShowCompleted }) => {
+export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTaskClick, showCompleted = false, onToggleShowCompleted, width = 320, isResizing = false, onResizeStart }) => {
   const tasks = useStateStore((state) => state.tasks);
   const highlightedTaskId = useStateStore((state) => state.highlightedTaskId);
   const [viewMode, setViewMode] = useState<ViewMode>('hierarchy');
@@ -405,7 +411,8 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
 
   // Expanded view
   return (
-    <div className="h-full flex flex-col bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 w-80">
+    <div className="h-full flex bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700" style={{ width }}>
+      <div className="flex-1 flex flex-col min-w-0">
       {/* Header */}
       <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700">
         <div className="flex items-center gap-3 h-8">
@@ -693,6 +700,26 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
           </div>
         )}
       </div>
+      </div>
+
+      {/* Resize Handle */}
+      {onResizeStart && (
+        <div
+          onMouseDown={onResizeStart}
+          className={`
+            w-1.5 bg-gray-200 dark:bg-gray-700 cursor-ew-resize flex items-center justify-center
+            hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors group flex-shrink-0
+            ${isResizing ? 'bg-blue-500 dark:bg-blue-600' : ''}
+          `}
+          title="Drag to resize"
+        >
+          <GripVertical
+            className={`w-3 h-4 text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300 ${
+              isResizing ? 'text-blue-200' : ''
+            }`}
+          />
+        </div>
+      )}
     </div>
   );
 };
