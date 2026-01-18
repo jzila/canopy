@@ -133,6 +133,7 @@ interface StateStore {
   syncState: (state: RuntimeState) => void;
   appendOutput: (agentId: string, output: string, isError?: boolean) => void;
   appendLiveFeedEvent: (agentId: string, event: LiveFeedEvent) => void;
+  appendGitCommit: (agentId: string, commit: GitCommit) => void;
   setSelectedAgent: (id: string | null) => void;
   setHighlightedTask: (id: string | null) => void;
   setIsPaused: (paused: boolean) => void;
@@ -338,6 +339,29 @@ export const useStateStore = create<StateStore>((set) => ({
             liveFeed: newEvents,
           },
         },
+      };
+    }),
+
+  appendGitCommit: (agentId, commit) =>
+    set((state) => {
+      const agent = state.agents[agentId];
+      if (!agent) return state;
+
+      const existingCommits = agent.git_commits || [];
+      const newCommits = [...existingCommits, commit];
+
+      const newAgents = {
+        ...state.agents,
+        [agentId]: {
+          ...agent,
+          git_commits: newCommits,
+          commits: newCommits.length,
+        },
+      };
+
+      return {
+        agents: newAgents,
+        stats: recalculateStats(newAgents),
       };
     }),
 

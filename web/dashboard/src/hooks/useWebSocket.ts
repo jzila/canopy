@@ -41,6 +41,21 @@ interface AgentLiveFeedEvent {
   };
 }
 
+interface AgentCommitEvent {
+  type: 'agent:commit';
+  timestamp: string;
+  payload: {
+    agent_id: string;
+    hash: string;
+    short_hash: string;
+    message: string;
+    author: string;
+    author_email: string;
+    timestamp: string;
+    files_changed: string[];
+  };
+}
+
 interface AgentCompletedEvent {
   type: 'agent:completed';
   timestamp: string;
@@ -191,6 +206,7 @@ type EventType =
   | AgentStartedEvent
   | AgentOutputEvent
   | AgentLiveFeedEvent
+  | AgentCommitEvent
   | AgentCompletedEvent
   | AgentMergeStatusEvent
   | TaskUpdatedEvent
@@ -225,6 +241,7 @@ export function useWebSocket() {
     updateTask,
     appendOutput,
     appendLiveFeedEvent,
+    appendGitCommit,
     syncState,
     setIsPaused,
     setActiveRepo,
@@ -390,6 +407,21 @@ export function useWebSocket() {
               break;
             }
 
+            case 'agent:commit': {
+              const { agent_id, hash, short_hash, message: commitMessage, author, author_email, timestamp, files_changed } = message.payload;
+              console.log('[WebSocket] Agent commit:', agent_id, short_hash, commitMessage);
+              appendGitCommit(agent_id, {
+                hash,
+                short_hash,
+                message: commitMessage,
+                author,
+                author_email,
+                timestamp,
+                files_changed: files_changed || [],
+              });
+              break;
+            }
+
             case 'agent:completed': {
               const { agent_id, error, exit_code, duration, input_tokens, output_tokens, cost_usd, files_changed, commits_created } = message.payload;
               updateAgent(agent_id, {
@@ -488,7 +520,7 @@ export function useWebSocket() {
         }, backoffTime);
       }
     }
-  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, syncState, setIsPaused, setActiveRepo, updateAgentMergeStatus]);
+  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, appendGitCommit, syncState, setIsPaused, setActiveRepo, updateAgentMergeStatus]);
 
   const disconnect = useCallback(() => {
     isManuallyClosedRef.current = true;
