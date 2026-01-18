@@ -189,6 +189,68 @@ When defining API types that cross the Go/TypeScript boundary:
 
 4. **Rebuild dashboard after API changes**: Run `cd web/dashboard && npm run build` to catch TypeScript errors early.
 
+## Data Flow Invariants
+
+### Event Pipeline
+
+ALL state changes MUST flow through this pipeline:
+
+```
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│ IPC Client  │ -> │ IPC Server  │ -> │  EventBus   │ -> │ Subscribers │
+│(canopy run) │    │  (daemon)   │    │             │    │             │
+└─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
+                                              │
+                   ┌──────────────────────────┼──────────────────────────┐
+                   │                          │                          │
+                   ▼                          ▼                          ▼
+            ┌─────────────┐           ┌─────────────┐           ┌─────────────┐
+            │RuntimeState │           │Persistence  │           │ WebSocket   │
+            │ (in-memory) │           │  Handler    │           │    Hub      │
+            └─────────────┘           └─────────────┘           └─────────────┘
+                                              │                          │
+                                              ▼                          ▼
+                                       ┌─────────────┐           ┌─────────────┐
+                                       │   SQLite    │           │  Dashboard  │
+                                       │  (runs.db)  │           │   (React)   │
+                                       └─────────────┘           └─────────────┘
+```
+
+**Critical invariant**: Fields MUST be present at every layer or data will be lost.
+
+### Field Naming Checklist
+
+When adding new fields to any struct that crosses boundaries:
+
+- [ ] Use snake_case in all Go JSON tags (e.g., `json:"merge_status"`)
+- [ ] Use snake_case in TypeScript interfaces (e.g., `merge_status: string`)
+- [ ] Use snake_case in database columns (e.g., `merge_status TEXT`)
+- [ ] Verify field appears in IPC protocol message type
+- [ ] Verify field appears in EventBus event payload
+- [ ] Verify field appears in WebSocket event handler
+- [ ] Verify field appears in dashboard TypeScript interface
+
+**Never use camelCase in JSON tags** - it breaks the Go/TypeScript/persistence boundary.
+
+### State Restoration Invariant
+
+On daemon restart, ALL persisted state MUST be restored to RuntimeState:
+
+1. `RestoreState()` loads from SQLite (runs, agents, tasks)
+2. `ApplyRestoredState()` maps persistence types to runtime types
+3. `loadTasksFromBeads()` loads current beads (requires beads client factory)
+
+If a field exists in persistence.Agent, it MUST be mapped in `ConvertPersistenceAgentToState()`.
+
+### WebSocket Event Parity
+
+Every field sent by the IPC server MUST be:
+1. Defined in the TypeScript event interface
+2. Extracted in the WebSocket event handler
+3. Applied to the corresponding state store field
+
+Audit when adding new metrics: `pkg/ipc/server.go` → `web/dashboard/src/hooks/useWebSocket.ts`
+
 ## Dashboard (web/dashboard) TypeScript
 
 **Never run `tsc` directly** in `web/dashboard`. Vite handles all transpilation.
