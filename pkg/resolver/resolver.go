@@ -324,13 +324,23 @@ func (r *Resolver) writePatchFiles(overlay *sandbox.Overlay, conflict *ConflictC
 }
 
 // buildResolverPrompt creates the prompt for the resolver agent.
-// The prompt focuses specifically on conflict resolution - NOT reimplementation.
+// The prompt focuses specifically on conflict resolution using three-way merge semantics.
 func (r *Resolver) buildResolverPrompt(conflict *ConflictContext) string {
-	prompt := fmt.Sprintf(`## Merge Conflict Resolution
+	prompt := fmt.Sprintf(`## Three-Way Merge Resolution
 
-**CRITICAL: You are a MERGE RESOLVER, not a feature implementer.**
+**You are resolving a git merge conflict using three-way merge semantics.**
 
-A previous agent completed the task below and created valid changes, but those changes could not be cleanly applied because HEAD has moved. Your ONLY job is to resolve the merge conflict - NOT to reimplement the feature.
+### The Three Versions
+
+1. **BASE** (.canopy/conflict/base/): The codebase when the original agent started.
+   The patches in patch-*.patch are diffs relative to this state.
+   Commit: %s
+
+2. **OURS** (current HEAD): The codebase now, after other agents merged their work.
+   This is what you see in the working directory.
+
+3. **THEIRS** (.canopy/conflict/patch-*.patch): The changes the original agent made.
+   These are expressed as diffs from BASE.
 
 ### Original Task (for context only)
 **ID:** %s
@@ -339,48 +349,66 @@ A previous agent completed the task below and created valid changes, but those c
 %s
 
 ### What Happened
-1. An agent successfully completed this task and made commits
-2. While that agent was working, other changes were merged to HEAD
-3. The original agent's patches can no longer apply cleanly
-4. The HEAD has been reset to a clean state before the merge attempt
 
-### Your ONLY Goal: Resolve the Merge Conflict
+While the original agent worked on BASE, other changes were merged to HEAD.
+The concurrent changes are shown in: .canopy/conflict/concurrent-changes.diff
 
-The failed patches are in .canopy/conflict/patch-*.patch - these contain the EXACT changes the original agent made.
+These concurrent changes are VALID and MUST be preserved.
 
-**DO:**
-1. Read the patches carefully to understand what changes were made
-2. Look at the current state of affected files
-3. Apply the SAME changes from the patches, adapting for any conflicts with current HEAD
-4. Preserve the original intent of the patches exactly
-5. Create commits with messages that reference the original work
+### Your Goal
+
+Produce code that has BOTH:
+1. All the concurrent changes that are already in HEAD (OURS)
+2. The intent of the patches (THEIRS), adapted for the new context
+
+**CRITICAL: DO NOT revert any code that exists in HEAD but not in the patches.**
+The patches were created against BASE, not HEAD. Missing lines in patches
+don't mean those lines should be removed - they mean those lines were
+added concurrently and must stay.
+
+### Resolution Process
+
+1. Read the patches to understand what the agent INTENDED to change
+2. Read .canopy/conflict/base/ to see original file states at BASE
+3. Look at the current files (OURS/HEAD) to see concurrent changes
+4. Apply the INTENT of the patches to the current state
+5. Preserve all concurrent changes from OURS
+
+### Conflict Files
+- .canopy/conflict/patch-*.patch - The original patches (diffs from BASE)
+- .canopy/conflict/base/<filepath> - Original file contents at BASE commit
+- .canopy/conflict/concurrent-changes.diff - What changed BASE→HEAD (concurrent work)
+- .canopy/conflict/errors.txt - Why the patches failed to apply
+- .canopy/conflict/original-task.txt - Original task context
+
+### Example Resolution
+
+If BASE had:
+    func foo() { return 1 }
+
+And THEIRS (patch) changes it to:
+    func foo() { return 2 }
+
+But OURS (HEAD) has:
+    func foo() { return 1 }
+    func bar() { return 3 }  // Added by concurrent agent
+
+The correct resolution is:
+    func foo() { return 2 }  // Apply the patch's intent
+    func bar() { return 3 }  // Keep concurrent addition
 
 **DO NOT:**
 - Reimplement the feature from scratch
 - Make additional changes beyond what's in the patches
-- "Improve" or extend the original implementation
+- Remove concurrent changes that aren't in the patches
 - Skip changes because you think they're unnecessary
-- Add new functionality not in the patches
-
-### Conflict Files
-- .canopy/conflict/patch-*.patch - The original patches (READ THESE FIRST)
-- .canopy/conflict/errors.txt - Why the patches failed to apply
-- .canopy/conflict/original-task.txt - Original task context
-- .canopy/conflict/concurrent-changes.diff - Changes merged by other agents since the original agent started (if available)
-- .canopy/conflict/base/<filepath> - Original file contents at the base commit (for files that existed before the agent's changes)
-
-### Resolution Strategy
-1. For each patch file, identify which hunks failed to apply
-2. Find the affected lines in the current codebase
-3. Apply the changes manually, resolving conflicts between old and new code
-4. The result should be: current HEAD + the changes from the patches
 
 ### Success Criteria
 Your work is complete when:
 - All changes from the patches have been applied (adapted for current HEAD)
-- The feature works as the original agent intended
-- You've made clean commits that can be merged to HEAD
-`, conflict.TaskID, conflict.TaskTitle, conflict.TaskDescription)
+- All concurrent changes in HEAD have been preserved
+- You've made clean commits that can be merged
+`, conflict.BaseCommit, conflict.TaskID, conflict.TaskTitle, conflict.TaskDescription)
 
 	return prompt
 }

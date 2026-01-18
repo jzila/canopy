@@ -19,6 +19,7 @@ func TestBuildResolverPrompt(t *testing.T) {
 		FailedPatches:   []string{"patch-content-1", "patch-content-2"},
 		PatchErrors:     []string{"error 1", "error 2"},
 		ParentAgentID:   "agent-canopy-abc",
+		BaseCommit:      "abc123def456",
 	}
 
 	prompt := r.buildResolverPrompt(conflict)
@@ -44,13 +45,28 @@ func TestBuildResolverPrompt(t *testing.T) {
 	}
 
 	// Check for conflict resolution instructions
-	if !strings.Contains(prompt, "Merge Conflict Resolution") {
-		t.Error("Prompt should contain conflict resolution header")
+	if !strings.Contains(prompt, "Three-Way Merge Resolution") {
+		t.Error("Prompt should contain three-way merge resolution header")
 	}
 
 	// Check for patch file references
 	if !strings.Contains(prompt, ".canopy/conflict") {
 		t.Error("Prompt should reference patch file location")
+	}
+
+	// Check for base commit reference
+	if !strings.Contains(prompt, "abc123def456") {
+		t.Error("Prompt should contain base commit hash")
+	}
+
+	// Check for three-way merge terminology
+	if !strings.Contains(prompt, "BASE") || !strings.Contains(prompt, "OURS") || !strings.Contains(prompt, "THEIRS") {
+		t.Error("Prompt should use BASE/OURS/THEIRS terminology")
+	}
+
+	// Check for concurrent changes explanation
+	if !strings.Contains(prompt, "concurrent") {
+		t.Error("Prompt should explain concurrent changes")
 	}
 }
 
