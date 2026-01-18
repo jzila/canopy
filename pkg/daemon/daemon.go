@@ -79,14 +79,22 @@ func (d *Daemon) SetBeadsClientFactory(factory BeadsClientFactory) {
 // Returns an error if the repository ID is not found in the registry.
 // This also reloads tasks from the new repository's beads database.
 func (d *Daemon) SetActiveRepository(repoID string) error {
+	// Get the old repo ID BEFORE switching, so we know if we're actually changing repos
+	var oldRepoID string
+	if d.repoManager != nil {
+		oldRepoID = d.repoManager.GetActiveRepositoryID()
+	}
+
 	if err := d.repoManager.SetActiveRepository(repoID); err != nil {
 		return err
 	}
 
 	// Reload tasks from the new repository's beads database
 	if d.state != nil {
-		// Clear existing tasks and load tasks from the new repository
-		d.state.ClearTasksForRepo("")
+		// Only clear old repo's tasks when ACTUALLY switching repos (not re-activating the same one)
+		if oldRepoID != "" && oldRepoID != repoID {
+			d.state.ClearTasksForRepo(oldRepoID)
+		}
 		if err := d.loadTasksFromBeads(); err != nil {
 			logging.Warn("failed to load tasks for repository", "repo_id", repoID, "error", err)
 		}
