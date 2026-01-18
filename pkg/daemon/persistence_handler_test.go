@@ -192,6 +192,9 @@ func TestPersistenceHandler_AgentLifecycle(t *testing.T) {
 	if agent.Stderr != "test stderr output" {
 		t.Errorf("Expected stderr 'test stderr output', got %q", agent.Stderr)
 	}
+	if agent.GitCommitsCreated != 1 {
+		t.Errorf("Expected git_commits_created 1, got %d", agent.GitCommitsCreated)
+	}
 }
 
 func TestPersistenceHandler_AgentFailed(t *testing.T) {

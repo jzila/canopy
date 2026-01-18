@@ -139,12 +139,20 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 	overlay.Verbose = e.config.Verbose
 
 	// Record base commit if this is a git repo
+	// This is critical for tracking git commits made by agents
 	var baseCommit string
-	if overlay.HasGitRepo() {
+	hasGitRepo := overlay.HasGitRepo()
+	if e.config.Verbose {
+		fmt.Fprintf(os.Stderr, "[executor] HasGitRepo=%v, MergedDir=%s\n", hasGitRepo, overlay.MergedDir)
+	}
+	if hasGitRepo {
 		var err error
 		baseCommit, err = overlay.GetBaseCommit()
-		if err != nil && e.config.Verbose {
-			fmt.Fprintf(os.Stderr, "warning: failed to get base commit: %v\n", err)
+		if err != nil {
+			// Always log git errors since they cause commits to not be tracked
+			fmt.Fprintf(os.Stderr, "warning: failed to get base commit (commits won't be tracked): %v\n", err)
+		} else if e.config.Verbose {
+			fmt.Fprintf(os.Stderr, "[executor] baseCommit=%s\n", baseCommit)
 		}
 	}
 
@@ -383,10 +391,16 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 	// Extract git commits if this is a git repo
 	if baseCommit != "" {
 		gitState, err := overlay.ExtractNewCommits(baseCommit)
-		if err != nil && e.config.Verbose {
+		if err != nil {
+			// Always log extraction errors - they affect commit tracking
 			fmt.Fprintf(os.Stderr, "warning: failed to extract git commits: %v\n", err)
 		}
 		result.GitState = gitState
+		if e.config.Verbose && gitState != nil {
+			fmt.Fprintf(os.Stderr, "[executor] extracted %d commits\n", len(gitState.NewCommits))
+		}
+	} else if hasGitRepo && e.config.Verbose {
+		fmt.Fprintf(os.Stderr, "[executor] skipping commit extraction: no base commit\n")
 	}
 
 	// Set overlay for merge processing
