@@ -834,6 +834,7 @@ func (r *RuntimeState) handleRunStarted(payload map[string]interface{}) {
 
 func (r *RuntimeState) handleAgentStarted(payload map[string]interface{}, timestamp time.Time) {
 	agentID, _ := payload["agent_id"].(string)
+	runID, _ := payload["run_id"].(string)
 	taskID, _ := payload["task_id"].(string)
 	taskTitle, _ := payload["task_title"].(string)
 	parentAgentID, _ := payload["parent_agent_id"].(string)
@@ -843,10 +844,12 @@ func (r *RuntimeState) handleAgentStarted(payload map[string]interface{}, timest
 		return
 	}
 
-	// Get current run ID
-	r.mu.RLock()
-	runID := r.CurrentRunID
-	r.mu.RUnlock()
+	// Use run_id from payload if provided, otherwise fall back to CurrentRunID
+	if runID == "" {
+		r.mu.RLock()
+		runID = r.CurrentRunID
+		r.mu.RUnlock()
+	}
 
 	agent := &AgentState{
 		ID:            agentID,

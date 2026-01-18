@@ -81,8 +81,8 @@ func TestClientSendAgentStart(t *testing.T) {
 	}
 	defer client.Close()
 
-	// Send agent start event (empty parent and repo for top-level agent)
-	if err := client.SendAgentStart("agent-1", "task-1", "Test Task", "", ""); err != nil {
+	// Send agent start event (empty run, parent and repo for top-level agent)
+	if err := client.SendAgentStart("agent-1", "", "task-1", "Test Task", "", ""); err != nil {
 		t.Fatalf("Failed to send agent start: %v", err)
 	}
 
@@ -131,8 +131,8 @@ func TestClientSendAgentStartWithParent(t *testing.T) {
 	}
 	defer client.Close()
 
-	// Send agent start event with parent agent ID (no repo)
-	if err := client.SendAgentStart("agent-child", "task-1", "Child Task", "agent-parent", ""); err != nil {
+	// Send agent start event with parent agent ID (no run or repo)
+	if err := client.SendAgentStart("agent-child", "", "task-1", "Child Task", "agent-parent", ""); err != nil {
 		t.Fatalf("Failed to send agent start: %v", err)
 	}
 
@@ -500,7 +500,7 @@ func TestClientSendWithoutConnection(t *testing.T) {
 	client := &Client{socketPath: socketPath, maxQueueSize: DefaultMaxQueueSize}
 
 	// All send operations should queue events instead of returning errors
-	if err := client.SendAgentStart("a1", "t1", "title", "", ""); err != nil {
+	if err := client.SendAgentStart("a1", "", "t1", "title", "", ""); err != nil {
 		t.Errorf("Expected no error when queuing event, got: %v", err)
 	}
 
@@ -581,7 +581,7 @@ func TestClientReconnect(t *testing.T) {
 		receivedEvents <- event
 	})
 
-	if err := client.SendAgentStart("agent-1", "task-1", "Test", "", ""); err != nil {
+	if err := client.SendAgentStart("agent-1", "", "task-1", "Test", "", ""); err != nil {
 		t.Fatalf("Failed to send after reconnect: %v", err)
 	}
 
@@ -670,7 +670,7 @@ func TestClientMessageFormat(t *testing.T) {
 	})
 
 	// Send a message and verify it arrives properly formatted
-	if err := client.SendAgentStart("agent-1", "task-1", "Test", "", ""); err != nil {
+	if err := client.SendAgentStart("agent-1", "", "task-1", "Test", "", ""); err != nil {
 		t.Fatalf("Failed to send: %v", err)
 	}
 
@@ -739,7 +739,7 @@ func TestClientProtocolVersion(t *testing.T) {
 	defer client.Close()
 
 	// Send a message and verify it includes version
-	if err := client.SendAgentStart("agent-1", "task-1", "Test Task", "", ""); err != nil {
+	if err := client.SendAgentStart("agent-1", "", "task-1", "Test Task", "", ""); err != nil {
 		t.Fatalf("Failed to send agent start: %v", err)
 	}
 
@@ -921,7 +921,7 @@ func TestClientConnectionLostDuringWrite(t *testing.T) {
 	defer client.Close()
 
 	// Send a message successfully first
-	if err := client.SendAgentStart("a1", "t1", "title", "", ""); err != nil {
+	if err := client.SendAgentStart("a1", "", "t1", "title", "", ""); err != nil {
 		t.Fatalf("Expected no error, got: %v", err)
 	}
 

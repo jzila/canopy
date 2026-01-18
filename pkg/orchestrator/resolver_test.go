@@ -341,6 +341,7 @@ func TestIPCChildEventsOnResolverSpawn(t *testing.T) {
 
 	if err := client.SendAgentStart(
 		resolverAgentID,
+		"",    // no run ID in test
 		taskID,
 		"Resolve merge conflict for canopy-test",
 		parentAgentID,
@@ -430,6 +431,7 @@ func TestIPCChildEventsOnResolverFailure(t *testing.T) {
 	// Simulate resolver start
 	if err := client.SendAgentStart(
 		resolverAgentID,
+		"",    // no run ID in test
 		"canopy-test",
 		"Resolve merge conflict",
 		parentAgentID,

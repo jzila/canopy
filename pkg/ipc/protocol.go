@@ -118,6 +118,7 @@ type RawMessage struct {
 // AgentStartPayload is sent when an agent begins execution
 type AgentStartPayload struct {
 	AgentID       string `json:"agent_id"`
+	RunID         string `json:"run_id,omitempty"`          // Run ID this agent belongs to
 	TaskID        string `json:"task_id"`
 	TaskTitle     string `json:"task_title"`
 	ParentAgentID string `json:"parent_agent_id,omitempty"` // ID of parent agent if spawned by another agent
@@ -201,13 +202,11 @@ type AgentFailPayload struct {
 
 // TaskUpdatedPayload is sent when a task status changes
 type TaskUpdatedPayload struct {
-	ID       string `json:"id"`
-	Title    string `json:"title,omitempty"`
-	Status   string `json:"status"`
-	Type     string `json:"type,omitempty"`     // Task type (task, bug, feature, etc.)
-	Priority int    `json:"priority,omitempty"` // Task priority (0-4)
-	AgentID  string `json:"agent_id,omitempty"`
-	RepoID   string `json:"repo_id,omitempty"` // Repository ID for tracking
+	ID      string `json:"id"`
+	Title   string `json:"title,omitempty"`
+	Status  string `json:"status"`
+	AgentID string `json:"agent_id,omitempty"`
+	RepoID  string `json:"repo_id,omitempty"` // Repository ID for tracking
 }
 
 // RunStartedPayload is sent when a canopy run begins

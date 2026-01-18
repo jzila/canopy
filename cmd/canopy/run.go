@@ -233,7 +233,7 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 			// Record agent ID for parent-child tracking (resolver agents need this)
 			orch.SetAgentID(taskID, agentID)
 			parentAgentID := "" // Top-level agents have no parent
-			if err := ipcClient.SendAgentStart(agentID, taskID, task.Title, parentAgentID, repoID); err != nil && verbose {
+			if err := ipcClient.SendAgentStart(agentID, runID, taskID, task.Title, parentAgentID, repoID); err != nil && verbose {
 				fmt.Fprintf(os.Stderr, "warning: failed to send agent start: %v\n", err)
 			}
 		},
@@ -287,32 +287,13 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 	// Pass run ID to orchestrator for unique agent ID generation
 	orch.SetRunID(runID)
 
-	// Get initial ready tasks to send task count and populate daemon's task list
+	// Get initial ready tasks to send task count
 	beadsClient, err := beads.NewClient(absWorkdir)
 	if err == nil {
 		tasks, err := beadsClient.Ready(ctx)
 		if err == nil && len(tasks) > 0 {
 			if err := ipcClient.SendRunStarted(runID, len(tasks), repo); err != nil && verbose {
 				fmt.Fprintf(os.Stderr, "warning: failed to send run started: %v\n", err)
-			}
-
-			// Send initial task list to daemon for persistence
-			// This ensures the dashboard shows tasks even before agents start
-			for i := range tasks {
-				task := &tasks[i]
-				// Task type is not returned by beads ready, but status is available
-				// Status will be "open" for ready tasks (no blockers)
-				if err := ipcClient.SendTaskUpdatedFull(
-					task.ID,
-					task.Title,
-					task.Status,
-					"", // taskType not available from beads ready
-					task.Priority,
-					"", // agentID empty until agent starts
-					repoID,
-				); err != nil && verbose {
-					fmt.Fprintf(os.Stderr, "warning: failed to send task update for %s: %v\n", task.ID, err)
-				}
 			}
 		}
 	}

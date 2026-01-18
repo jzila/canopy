@@ -165,7 +165,8 @@ func (r *Resolver) Resolve(ctx context.Context, conflict *ConflictContext) (*Res
 	if r.ipcClient != nil {
 		if err := r.ipcClient.SendAgentStart(
 			resolverAgentID,
-			conflict.TaskID, // TaskID is the original task
+			r.config.RunID,         // Run ID for historical filtering
+			conflict.TaskID,        // TaskID is the original task
 			resolverTask.Title,
 			conflict.ParentAgentID, // Parent is the implementor agent
 			r.config.RepoID,        // Repository ID for tracking
