@@ -235,6 +235,14 @@ func ConvertPersistenceAgentToState(pAgent *persistence.Agent) *AgentState {
 	// Generate synthetic live feed events from historical data
 	agent.LiveFeedEvents = GenerateHistoricalLiveFeedEvents(pAgent)
 
+	// Restore merge status fields
+	if pAgent.MergeStatus != "" {
+		agent.MergeStatus = MergeStatus(pAgent.MergeStatus)
+	}
+	if pAgent.MergeError != "" {
+		agent.MergeError = pAgent.MergeError
+	}
+
 	return agent
 }
 
