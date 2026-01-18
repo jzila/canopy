@@ -145,6 +145,24 @@ func (h *PersistenceHandler) handleAgentMergeStatus(event Event) {
 		}
 	}
 
+	// Persist repair state if present (repair_attempts > 0 or validation_status is "repairing")
+	repairAttempts, hasRepairAttempts := getIntFromPayload(payload, "repair_attempts")
+	lastRepairOutput, _ := payload["last_repair_output"].(string)
+	if hasRepairAttempts || validationStatus == "repairing" {
+		if err := h.store.UpdateAgentRepairState(agentID, repairAttempts, lastRepairOutput, validationStatus); err != nil {
+			logging.Error("failed to update repair state",
+				"agent_id", agentID,
+				"error", err,
+				"component", "persistence")
+		} else {
+			logging.Debug("updated repair state",
+				"agent_id", agentID,
+				"repair_attempts", repairAttempts,
+				"validation_status", validationStatus,
+				"component", "persistence")
+		}
+	}
+
 	// Only persist final merge statuses
 	if mergeStatus != "merged" && mergeStatus != "failed" {
 		return

@@ -246,6 +246,11 @@ func ConvertPersistenceAgentToState(pAgent *persistence.Agent) *AgentState {
 		agent.MergeError = pAgent.MergeError
 	}
 
+	// Restore repair agent state fields
+	agent.RepairAttempts = pAgent.RepairAttempts
+	agent.LastRepairOutput = pAgent.LastRepairOutput
+	agent.ValidationStatus = pAgent.ValidationStatus
+
 	return agent
 }
 

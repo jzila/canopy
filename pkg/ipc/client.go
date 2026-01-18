@@ -417,6 +417,20 @@ func (c *Client) SendAgentMergeStatusWithValidation(agentID string, status Merge
 	return c.sendMessage(MessageTypeAgentMergeStatus, payload)
 }
 
+// SendAgentRepairStatus notifies the daemon of an agent's repair status.
+// This should be used when a repair agent starts or completes.
+func (c *Client) SendAgentRepairStatus(agentID string, repairAttempts int, lastRepairOutput string, validationStatus string) error {
+	payload := AgentMergeStatusPayload{
+		AgentID:          agentID,
+		MergeStatus:      MergeStatusResolving, // Repair uses resolving status
+		ValidationStatus: validationStatus,
+		RepairAttempts:   repairAttempts,
+		LastRepairOutput: lastRepairOutput,
+	}
+
+	return c.sendMessage(MessageTypeAgentMergeStatus, payload)
+}
+
 // SendAgentDone notifies the daemon that an agent completed successfully
 // parentAgentID is optional and specifies the ID of the parent agent if this agent was spawned by another
 func (c *Client) SendAgentDone(agentID, parentAgentID string, result *AgentResult) error {

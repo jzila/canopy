@@ -418,10 +418,13 @@ type AgentState struct {
 	Error           string          `json:"error"`                      // Error message if failed
 	Changes         int             `json:"changes"`                    // Number of files changed
 	Commits         int             `json:"commits"`                    // Number of git commits made (legacy, use len(GitCommits))
-	GitCommits      []GitCommit     `json:"git_commits"`                // Detailed git commit history
-	ResultMessage   string          `json:"result_message"`             // Final result message from Claude
-	Archived        bool            `json:"archived"`                   // Whether the agent is archived (hidden by default)
-	mu              sync.RWMutex
+	GitCommits       []GitCommit     `json:"git_commits"`                  // Detailed git commit history
+	ResultMessage    string          `json:"result_message"`               // Final result message from Claude
+	Archived         bool            `json:"archived"`                     // Whether the agent is archived (hidden by default)
+	RepairAttempts   int             `json:"repair_attempts"`              // Number of repair attempts made (0 = no repairs attempted)
+	LastRepairOutput string          `json:"last_repair_output,omitempty"` // Output/error from the last repair attempt
+	ValidationStatus string          `json:"validation_status,omitempty"`  // Validation status: pending, running, passed, failed, skipped, repairing
+	mu               sync.RWMutex
 }
 
 // Update atomically updates agent state fields

@@ -191,10 +191,14 @@ type AgentMergeStatusPayload struct {
 	ResolverSpawned bool        `json:"resolver_spawned,omitempty"`  // Whether resolver was spawned
 
 	// Validation results
-	ValidationStatus   string           `json:"validation_status,omitempty"`      // Overall status: "pending", "running", "passed", "failed", "skipped"
+	ValidationStatus   string           `json:"validation_status,omitempty"`      // Overall status: "pending", "running", "passed", "failed", "skipped", "repairing"
 	ValidationSteps    []ValidationStep `json:"validation_steps,omitempty"`       // Results of individual validation steps
 	ValidationDuration int64            `json:"validation_duration_ms,omitempty"` // Total validation duration in milliseconds
 	ValidationError    string           `json:"validation_error,omitempty"`       // Error message if validation failed
+
+	// Repair agent tracking
+	RepairAttempts   int    `json:"repair_attempts,omitempty"`     // Number of repair attempts made (0 = no repairs)
+	LastRepairOutput string `json:"last_repair_output,omitempty"`  // Output/error from last repair attempt
 }
 
 // AgentResult is an alias to types.AgentResult for backwards compatibility.

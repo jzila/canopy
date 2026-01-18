@@ -907,6 +907,14 @@ func (p *Processor) runValidationAndRepair(ctx context.Context, taskID, taskTitl
 		attemptSummary := buildRepairAttemptSummary(repairAttempt, repairResult)
 		previousAttempts = append(previousAttempts, attemptSummary)
 
+		// Persist repair state for daemon restart recovery
+		// lastRepairOutput captures the error for failed attempts or "success" for successful ones
+		lastOutput := repairResult.Error
+		if repairResult.Success {
+			lastOutput = "Repair completed successfully"
+		}
+		p.sendRepairStatus(agentID, attempt+1, lastOutput, "repairing")
+
 		// Clean up repair context files
 		_ = repairagent.CleanupRepairContext(p.outputDir)
 
@@ -973,6 +981,18 @@ func (p *Processor) sendValidationStatus(agentID string, mergeStatus ipc.MergeSt
 		validationStatus, validationError, validationDurationMS, validationSteps,
 	); err != nil && p.verbose {
 		fmt.Fprintf(os.Stderr, "warning: failed to send validation status: %v\n", err)
+	}
+}
+
+// sendRepairStatus sends a repair state update via IPC.
+// This persists repair attempt count and last repair output for daemon restart recovery.
+func (p *Processor) sendRepairStatus(agentID string, repairAttempts int, lastRepairOutput string, validationStatus string) {
+	if p.ipcClient == nil {
+		return
+	}
+
+	if err := p.ipcClient.SendAgentRepairStatus(agentID, repairAttempts, lastRepairOutput, validationStatus); err != nil && p.verbose {
+		fmt.Fprintf(os.Stderr, "warning: failed to send repair status: %v\n", err)
 	}
 }
 
