@@ -365,6 +365,62 @@ func (s *Scheduler) gatherDependencyContext(ctx context.Context, task *beads.Tas
 	return deps
 }
 
+// ExecuteTask executes a single task and returns its result.
+// This is the building block for dynamic task assignment - the orchestrator
+// calls this for each worker slot to execute individual tasks.
+// The completion callback is invoked after the task completes to allow
+// the orchestrator to update its in-flight tracking.
+func (s *Scheduler) ExecuteTask(ctx context.Context, task *beads.Task, completionCallback func(taskID string, result *agent.Result)) *agent.Result {
+	// Wait if scheduler is paused
+	s.pauseMu.Lock()
+	for s.paused {
+		select {
+		case <-ctx.Done():
+			s.pauseMu.Unlock()
+			return &agent.Result{
+				TaskID:  task.ID,
+				Success: false,
+				Error:   ctx.Err().Error(),
+			}
+		default:
+		}
+		s.pauseCond.Wait()
+	}
+	s.pauseMu.Unlock()
+
+	// Create cancellable context for this agent
+	agentCtx, cancel := context.WithCancel(ctx)
+	s.agentContexts.Store(task.ID, cancel)
+	defer func() {
+		s.agentContexts.Delete(task.ID)
+		cancel()
+	}()
+
+	// Execute the task
+	result := s.executeTask(agentCtx, task)
+
+	// Store result
+	s.resultsMu.Lock()
+	s.results[task.ID] = result
+	s.resultsMu.Unlock()
+
+	// Invoke completion callbacks
+	if s.callbacks != nil {
+		if result.Success {
+			s.callbacks.OnDone(agentCtx, task.ID, result)
+		} else {
+			s.callbacks.OnFail(agentCtx, task.ID, result)
+		}
+	}
+
+	// Invoke the orchestrator's completion callback
+	if completionCallback != nil {
+		completionCallback(task.ID, result)
+	}
+
+	return result
+}
+
 // GetResult returns the result for a specific task
 func (s *Scheduler) GetResult(taskID string) *agent.Result {
 	s.resultsMu.RLock()

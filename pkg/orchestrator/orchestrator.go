@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/semaphore"
 
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
@@ -95,6 +98,10 @@ type Orchestrator struct {
 	failureCounts    map[string]int // Tracks how many times each task has failed
 	promptFilter     *PromptFilter  // Parsed prompt for filtering tasks
 	sandboxConfig    *sandbox.SandboxConfig
+
+	// In-flight task tracking for dynamic task assignment
+	inFlightMu sync.RWMutex
+	inFlight   map[string]bool // Tasks currently being executed
 }
 
 // New creates a new orchestrator
@@ -188,6 +195,7 @@ func New(config *Config) (*Orchestrator, error) {
 		failureCounts:    make(map[string]int),
 		promptFilter:     promptFilter,
 		sandboxConfig:    sandboxConfig,
+		inFlight:         make(map[string]bool),
 	}
 
 	// Set cleanup callback for merge coordinator
@@ -289,144 +297,245 @@ func (o *Orchestrator) GetAgentID(taskID string) string {
 	return o.mergeCoordinator.GetAgentID(taskID)
 }
 
-// Run executes the orchestration loop until no ready tasks remain
+// Run executes the orchestration loop until no ready tasks remain.
+// This uses dynamic task assignment: each worker calls bd ready to get
+// fresh tasks, ensuring newly-unblocked tasks are picked up immediately.
 func (o *Orchestrator) Run(ctx context.Context) error {
 	// Start the merge coordinator's processor goroutine
 	// It will process merge requests from the queue until context is cancelled
 	o.mergeCoordinator.Start(ctx)
 
-	iteration := 0
+	// Dry run: show what would execute and exit
+	if o.config.DryRun {
+		return o.dryRun(ctx)
+	}
 
+	// Create semaphore for bounded concurrency
+	sem := semaphore.NewWeighted(int64(o.config.Concurrency))
+
+	// Track active workers and results
+	var wg sync.WaitGroup
+	var resultsMu sync.Mutex
+	var results []*agent.Result
+	var runError error
+	var runErrorMu sync.Mutex
+
+	// Create a channel to signal when workers should check for new tasks
+	// Workers send on this channel when they complete a task
+	taskComplete := make(chan struct{}, o.config.Concurrency)
+
+	// Completion callback removes task from in-flight and tracks results
+	completionCallback := func(taskID string, result *agent.Result) {
+		o.unmarkInFlight(taskID)
+
+		resultsMu.Lock()
+		results = append(results, result)
+
+		// Track success/failure counts
+		if result.Success {
+			delete(o.failureCounts, taskID)
+		} else {
+			o.failureCounts[taskID]++
+
+			// Check if retries exhausted
+			if o.config.MaxRetries != -1 && o.failureCounts[taskID] > o.config.MaxRetries {
+				// Mark as permanently failed in beads
+				if err := o.beadsClient.Fail(ctx, taskID, fmt.Sprintf("Task failed after %d attempts", o.failureCounts[taskID])); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: could not mark task %s as failed in beads: %v\n", taskID, err)
+				}
+				fmt.Fprintf(os.Stderr, "ERROR: Task %s has failed %d times and will not be retried\n", taskID, o.failureCounts[taskID])
+
+				// Signal error but don't stop immediately - let other workers finish
+				runErrorMu.Lock()
+				if runError == nil {
+					runError = fmt.Errorf("task %s failed after %d retry attempts", taskID, o.config.MaxRetries)
+				}
+				runErrorMu.Unlock()
+			}
+		}
+		resultsMu.Unlock()
+
+		// Signal that a task completed (non-blocking)
+		select {
+		case taskComplete <- struct{}{}:
+		default:
+		}
+	}
+
+	// Initial check for tasks
+	task, shouldStop, err := o.getNextTask(ctx)
+	if err != nil {
+		return err
+	}
+	if shouldStop {
+		if o.config.Verbose {
+			fmt.Println("No tasks to execute, orchestration complete")
+		}
+		return nil
+	}
+	if task == nil {
+		if o.config.Verbose {
+			fmt.Println("No ready tasks, orchestration complete")
+		}
+		return nil
+	}
+
+	// Start the first worker with the initial task
+	if o.config.Verbose {
+		fmt.Printf("Starting task: %s: %s\n", task.ID, task.Title)
+	}
+
+	// Acquire semaphore before spawning worker
+	if err := sem.Acquire(ctx, 1); err != nil {
+		return err
+	}
+	wg.Add(1)
+	go func(t *beads.Task) {
+		defer wg.Done()
+		defer sem.Release(1)
+
+		o.scheduler.ExecuteTask(ctx, t, completionCallback)
+	}(task)
+
+	// Main loop: keep spawning workers as slots become available
 	for {
 		select {
 		case <-ctx.Done():
+			// Wait for in-flight tasks to complete
+			wg.Wait()
 			return ctx.Err()
+
+		case <-taskComplete:
+			// A task completed, try to get more work
+
 		default:
+			// Try to acquire a semaphore slot (non-blocking check first)
 		}
 
-		iteration++
-
-		// Get ready tasks from beads (with optional filtering from prompt)
-		var tasks []beads.Task
-		var err error
-		if o.promptFilter != nil && o.config.Prompt != "" {
-			args := o.promptFilter.BuildBdReadyArgs()
-			tasks, err = o.beadsClient.ReadyWithArgs(ctx, args...)
-		} else {
-			tasks, err = o.beadsClient.Ready(ctx)
+		// Check if we have an error that should stop us
+		runErrorMu.Lock()
+		if runError != nil {
+			runErrorMu.Unlock()
+			// Wait for in-flight tasks
+			wg.Wait()
+			return runError
 		}
+		runErrorMu.Unlock()
+
+		// Try to acquire a semaphore slot
+		if err := sem.Acquire(ctx, 1); err != nil {
+			// Context cancelled
+			wg.Wait()
+			return err
+		}
+
+		// Got a slot, get the next task
+		task, shouldStop, err := o.getNextTask(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to get ready tasks: %w", err)
+			sem.Release(1)
+			wg.Wait()
+			return err
 		}
 
-		// Apply hard max-priority filter (this is a hard filter, not a soft prompt)
-		if o.config.MaxPriority >= 0 {
-			tasks = filterTasksByMaxPriority(tasks, o.config.MaxPriority)
+		if shouldStop {
+			// Stop condition met - release slot and wait for in-flight tasks
+			sem.Release(1)
+			wg.Wait()
 			if o.config.Verbose {
-				fmt.Printf("After max-priority filter (<= P%d): %d tasks\n", o.config.MaxPriority, len(tasks))
+				fmt.Println("Stop condition met, orchestration complete")
 			}
+			return nil
 		}
 
-		// Apply gate-based stopping: exclude gate tasks and stop if only gates remain
-		if o.config.StopAtGate {
-			nonGateTasks, gateTasks := filterOutGateTasks(tasks)
-			if len(gateTasks) > 0 && len(nonGateTasks) == 0 {
-				// Only gate tasks remain - stop orchestration
+		if task == nil {
+			// No task available right now
+			sem.Release(1)
+
+			// Check if there are any in-flight tasks
+			o.inFlightMu.RLock()
+			inFlightCount := len(o.inFlight)
+			o.inFlightMu.RUnlock()
+
+			if inFlightCount == 0 {
+				// No in-flight tasks and no ready tasks - we're done
+				wg.Wait()
 				if o.config.Verbose {
-					fmt.Printf("Stopping at gate: %d gate task(s) found, no non-gate tasks ready\n", len(gateTasks))
-					for _, t := range gateTasks {
-						fmt.Printf("  Gate task: %s: %s\n", t.ID, t.Title)
-					}
+					fmt.Println("No more tasks, orchestration complete")
 				}
 				return nil
 			}
-			tasks = nonGateTasks
-			if o.config.Verbose && len(gateTasks) > 0 {
-				fmt.Printf("Filtered out %d gate task(s), %d non-gate tasks remaining\n", len(gateTasks), len(tasks))
+
+			// Wait for a task to complete before trying again
+			select {
+			case <-ctx.Done():
+				wg.Wait()
+				return ctx.Err()
+			case <-taskComplete:
+				// A task completed, loop back to try again
+				continue
 			}
 		}
 
-		// Check stop condition
-		if o.promptFilter != nil && o.promptFilter.ShouldStop(len(tasks)) {
-			if o.config.Verbose {
-				fmt.Printf("Stop condition met: %s\n", o.promptFilter.StopCondition)
-			}
-			return nil
-		}
-
-		if len(tasks) == 0 {
-			if o.config.Verbose {
-				fmt.Println("No more ready tasks, orchestration complete")
-			}
-			return nil
-		}
-
+		// Start worker for this task
 		if o.config.Verbose {
-			fmt.Printf("\n=== Iteration %d: %d ready tasks ===\n", iteration, len(tasks))
-			for _, t := range tasks {
-				fmt.Printf("  %s: %s\n", t.ID, t.Title)
-			}
+			fmt.Printf("Starting task: %s: %s\n", task.ID, task.Title)
 		}
 
-		// Dry run: just show what would execute
-		if o.config.DryRun {
-			fmt.Printf("Would execute %d tasks:\n", len(tasks))
-			for _, t := range tasks {
-				fmt.Printf("  - %s: %s\n", t.ID, t.Title)
-			}
-			// In dry run, we don't actually execute, so we need to break
-			// to avoid infinite loop (tasks remain ready)
-			return nil
-		}
+		wg.Add(1)
+		go func(t *beads.Task) {
+			defer wg.Done()
+			defer sem.Release(1)
 
-		// Execute batch
-		// NOTE: Merging and cleanup happen in the OnDone/OnFail callbacks
-		// as each agent completes, so we don't need to do batch merge here.
-		results, err := o.scheduler.ExecuteBatch(ctx, tasks)
-		if err != nil {
-			return fmt.Errorf("batch execution failed: %w", err)
-		}
+			o.scheduler.ExecuteTask(ctx, t, completionCallback)
+		}(task)
+	}
+}
 
-		// Summary of this iteration
-		succeeded := 0
-		failed := 0
-		retriesExhausted := []string{}
+// dryRun shows what tasks would execute without actually running them
+func (o *Orchestrator) dryRun(ctx context.Context) error {
+	// Get ready tasks from beads (with optional filtering from prompt)
+	var tasks []beads.Task
+	var err error
+	if o.promptFilter != nil && o.config.Prompt != "" {
+		args := o.promptFilter.BuildBdReadyArgs()
+		tasks, err = o.beadsClient.ReadyWithArgs(ctx, args...)
+	} else {
+		tasks, err = o.beadsClient.Ready(ctx)
+	}
+	if err != nil {
+		return fmt.Errorf("failed to get ready tasks: %w", err)
+	}
 
-		for _, r := range results {
-			if r.Success {
-				succeeded++
-				// Clear failure count on success
-				delete(o.failureCounts, r.TaskID)
-			} else {
-				failed++
-				// Track failure count
-				o.failureCounts[r.TaskID]++
-
-				// Check if we've exceeded max retries (unless MaxRetries is -1 for infinite)
-				if o.config.MaxRetries != -1 && o.failureCounts[r.TaskID] > o.config.MaxRetries {
-					retriesExhausted = append(retriesExhausted, r.TaskID)
-				}
-			}
-		}
-
+	// Apply hard max-priority filter
+	if o.config.MaxPriority >= 0 {
+		tasks = filterTasksByMaxPriority(tasks, o.config.MaxPriority)
 		if o.config.Verbose {
-			fmt.Printf("Iteration %d complete: %d succeeded, %d failed\n", iteration, succeeded, failed)
-		}
-
-		// If tasks have exhausted retries, stop retrying them
-		if len(retriesExhausted) > 0 {
-			fmt.Fprintf(os.Stderr, "\nERROR: The following tasks have failed %d times and will not be retried:\n", o.config.MaxRetries)
-			for _, taskID := range retriesExhausted {
-				fmt.Fprintf(os.Stderr, "  - %s\n", taskID)
-				// Try to mark as failed one more time
-				if err := o.beadsClient.Fail(ctx, taskID, fmt.Sprintf("Task failed after %d attempts", o.failureCounts[taskID])); err != nil {
-					fmt.Fprintf(os.Stderr, "    warning: could not mark task as failed in beads: %v\n", err)
-				}
-			}
-			fmt.Fprintf(os.Stderr, "\nStopping orchestration due to exhausted retries.\n")
-			return fmt.Errorf("%d task(s) failed after %d retry attempts", len(retriesExhausted), o.config.MaxRetries)
+			fmt.Printf("After max-priority filter (<= P%d): %d tasks\n", o.config.MaxPriority, len(tasks))
 		}
 	}
+
+	// Apply gate-based stopping
+	if o.config.StopAtGate {
+		nonGateTasks, gateTasks := filterOutGateTasks(tasks)
+		if len(gateTasks) > 0 {
+			fmt.Printf("Gate tasks (would stop before):\n")
+			for _, t := range gateTasks {
+				fmt.Printf("  - %s: %s\n", t.ID, t.Title)
+			}
+		}
+		tasks = nonGateTasks
+	}
+
+	if len(tasks) == 0 {
+		fmt.Println("No tasks would execute")
+		return nil
+	}
+
+	fmt.Printf("Would execute %d tasks:\n", len(tasks))
+	for _, t := range tasks {
+		fmt.Printf("  - %s: %s\n", t.ID, t.Title)
+	}
+	return nil
 }
 
 // Cleanup removes temporary files
@@ -468,4 +577,90 @@ func filterOutGateTasks(tasks []beads.Task) ([]beads.Task, []beads.Task) {
 		}
 	}
 	return nonGate, gate
+}
+
+// markInFlight marks a task as currently in-flight
+func (o *Orchestrator) markInFlight(taskID string) {
+	o.inFlightMu.Lock()
+	defer o.inFlightMu.Unlock()
+	o.inFlight[taskID] = true
+}
+
+// unmarkInFlight removes a task from the in-flight set
+func (o *Orchestrator) unmarkInFlight(taskID string) {
+	o.inFlightMu.Lock()
+	defer o.inFlightMu.Unlock()
+	delete(o.inFlight, taskID)
+}
+
+// isInFlight returns whether a task is currently in-flight
+func (o *Orchestrator) isInFlight(taskID string) bool {
+	o.inFlightMu.RLock()
+	defer o.inFlightMu.RUnlock()
+	return o.inFlight[taskID]
+}
+
+// getNextTask fetches fresh ready tasks from beads and returns the first one
+// that is not currently in-flight. Returns nil if no available task is found.
+// Also returns whether we should stop due to stop conditions or gate tasks.
+func (o *Orchestrator) getNextTask(ctx context.Context) (*beads.Task, bool, error) {
+	// Get fresh ready tasks from beads
+	var tasks []beads.Task
+	var err error
+	if o.promptFilter != nil && o.config.Prompt != "" {
+		args := o.promptFilter.BuildBdReadyArgs()
+		tasks, err = o.beadsClient.ReadyWithArgs(ctx, args...)
+	} else {
+		tasks, err = o.beadsClient.Ready(ctx)
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to get ready tasks: %w", err)
+	}
+
+	// Apply hard max-priority filter
+	if o.config.MaxPriority >= 0 {
+		tasks = filterTasksByMaxPriority(tasks, o.config.MaxPriority)
+	}
+
+	// Apply gate-based stopping: exclude gate tasks and check if only gates remain
+	if o.config.StopAtGate {
+		nonGateTasks, gateTasks := filterOutGateTasks(tasks)
+		if len(gateTasks) > 0 && len(nonGateTasks) == 0 {
+			// Only gate tasks remain - signal stop
+			if o.config.Verbose {
+				fmt.Printf("Stopping at gate: %d gate task(s) found, no non-gate tasks ready\n", len(gateTasks))
+				for _, t := range gateTasks {
+					fmt.Printf("  Gate task: %s: %s\n", t.ID, t.Title)
+				}
+			}
+			return nil, true, nil
+		}
+		tasks = nonGateTasks
+	}
+
+	// Check stop condition
+	if o.promptFilter != nil && o.promptFilter.ShouldStop(len(tasks)) {
+		if o.config.Verbose {
+			fmt.Printf("Stop condition met: %s\n", o.promptFilter.StopCondition)
+		}
+		return nil, true, nil
+	}
+
+	// Filter out in-flight tasks and find the first available one
+	o.inFlightMu.Lock()
+	defer o.inFlightMu.Unlock()
+
+	availableCount := 0
+	for i := range tasks {
+		if !o.inFlight[tasks[i].ID] {
+			availableCount++
+			// Mark this task as in-flight and return it
+			o.inFlight[tasks[i].ID] = true
+			return &tasks[i], false, nil
+		}
+	}
+
+	// No available tasks (either no ready tasks, or all are in-flight)
+	// Return nil but don't signal stop - there may be in-flight tasks that will complete
+	return nil, false, nil
 }
