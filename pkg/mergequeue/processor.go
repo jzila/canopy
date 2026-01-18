@@ -440,6 +440,30 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 					errMsg = "validation failed"
 				}
 				resp.Error = errMsg
+
+				// Handle repair exhaustion: file bead and use merged_needs_repair status
+				if validationResult.RepairExhausted {
+					// File a bead with full context for manual intervention
+					repairCtx := &repairExhaustedContext{
+						TaskID:           taskID,
+						TaskTitle:        req.Task.Title,
+						ValidationResult: validationResult.FinalValidationResult,
+						RepairSummaries:  validationResult.RepairAttemptSummaries,
+						MergedDiff:       mergedDiff,
+						MaxAttempts:      validationResult.AttemptsUsed,
+					}
+					if _, err := p.fileRepairExhaustedBead(ctx, repairCtx); err != nil {
+						fmt.Fprintf(os.Stderr, "warning: failed to file repair exhaustion bead for %s: %v\n", taskID, err)
+					}
+
+					// Mark task with merged_needs_repair status (merge succeeded, validation failed)
+					p.markTaskFailed(ctx, taskID, errMsg)
+					p.sendTaskUpdated(taskID, req.Task.Title, "merged_needs_repair")
+					p.sendMergeStatusFull(taskID, ipc.MergeStatusMergedNeedsRepair, errMsg, resp.CommitsApplied, resp.HadConflict, resp.ResolverSpawned)
+					return resp
+				}
+
+				// Regular validation failure (not exhaustion)
 				p.markTaskFailed(ctx, taskID, errMsg)
 				p.sendTaskUpdated(taskID, req.Task.Title, "failed")
 				// Status already sent by runValidationAndRepair
@@ -487,6 +511,30 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 			errMsg = "validation failed"
 		}
 		resp.Error = errMsg
+
+		// Handle repair exhaustion: file bead and use merged_needs_repair status
+		if validationResult.RepairExhausted {
+			// File a bead with full context for manual intervention
+			repairCtx := &repairExhaustedContext{
+				TaskID:           taskID,
+				TaskTitle:        req.Task.Title,
+				ValidationResult: validationResult.FinalValidationResult,
+				RepairSummaries:  validationResult.RepairAttemptSummaries,
+				MergedDiff:       mergedDiff,
+				MaxAttempts:      validationResult.AttemptsUsed,
+			}
+			if _, err := p.fileRepairExhaustedBead(ctx, repairCtx); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to file repair exhaustion bead for %s: %v\n", taskID, err)
+			}
+
+			// Mark task with merged_needs_repair status (merge succeeded, validation failed)
+			p.markTaskFailed(ctx, taskID, errMsg)
+			p.sendTaskUpdated(taskID, req.Task.Title, "merged_needs_repair")
+			p.sendMergeStatusFull(taskID, ipc.MergeStatusMergedNeedsRepair, errMsg, resp.CommitsApplied, false, false)
+			return resp
+		}
+
+		// Regular validation failure (not exhaustion)
 		p.markTaskFailed(ctx, taskID, errMsg)
 		p.sendTaskUpdated(taskID, req.Task.Title, "failed")
 		// Status already sent by runValidationAndRepair
@@ -667,10 +715,14 @@ type validationAndRepairResult struct {
 	RepairAttempted bool
 	// RepairSucceeded indicates whether repair fixed the validation failure
 	RepairSucceeded bool
+	// RepairExhausted indicates whether max repair attempts were used without success
+	RepairExhausted bool
 	// AttemptsUsed is the number of repair attempts made
 	AttemptsUsed int
 	// FinalValidationResult is the last validation result (may be nil if skipped)
 	FinalValidationResult *validation.Result
+	// RepairAttemptSummaries contains summaries of each repair attempt for bead filing
+	RepairAttemptSummaries []string
 	// Error contains any error that occurred during the process
 	Error string
 }
@@ -739,6 +791,8 @@ func (p *Processor) runValidationAndRepair(ctx context.Context, taskID, taskTitl
 		// Check if we've exhausted repair attempts
 		if attempt >= maxAttempts {
 			result.Error = fmt.Sprintf("validation failed after %d repair attempts: %s", maxAttempts, validationResult.Error)
+			result.RepairExhausted = true
+			result.RepairAttemptSummaries = previousAttempts
 			if p.historyRecorder != nil {
 				_ = p.historyRecorder.RecordFinalStatus(ctx, taskID, FinalStatusNeedsManualFix,
 					fmt.Sprintf("Exhausted %d repair attempts", maxAttempts))
@@ -973,4 +1027,84 @@ func buildRepairAttemptSummary(attempt *RepairAttempt, result *repairagent.Resul
 	}
 
 	return sb.String()
+}
+
+// repairExhaustedContext contains information for filing a bead when repair attempts are exhausted.
+type repairExhaustedContext struct {
+	TaskID           string
+	TaskTitle        string
+	ValidationResult *validation.Result
+	RepairSummaries  []string
+	MergedDiff       string
+	MaxAttempts      int
+}
+
+// fileRepairExhaustedBead creates a bead documenting the repair exhaustion for manual intervention.
+// Returns the created bead ID.
+func (p *Processor) fileRepairExhaustedBead(ctx context.Context, repairCtx *repairExhaustedContext) (string, error) {
+	if p.beadsClient == nil {
+		return "", fmt.Errorf("no beads client configured")
+	}
+
+	// Build the bead description with full context
+	var sb strings.Builder
+
+	sb.WriteString("## Validation Failure - Repair Exhausted\n\n")
+	sb.WriteString(fmt.Sprintf("Task: %s - %s\n\n", repairCtx.TaskID, repairCtx.TaskTitle))
+
+	// Add validation step information
+	if repairCtx.ValidationResult != nil {
+		sb.WriteString("### Validation Step\n")
+		for _, step := range repairCtx.ValidationResult.Steps {
+			if step.Status == validation.ValidationStatusFailed {
+				sb.WriteString(fmt.Sprintf("- Step: %s\n", step.Name))
+				sb.WriteString(fmt.Sprintf("- Command: %s\n", step.Command))
+				// Truncate very long output
+				output := step.Output
+				if len(output) > 2000 {
+					output = output[:2000] + "\n... (truncated)"
+				}
+				sb.WriteString(fmt.Sprintf("- Final output:\n```\n%s\n```\n\n", output))
+				break
+			}
+		}
+	}
+
+	// Add repair attempt summaries
+	sb.WriteString("### Repair Attempts\n")
+	for i, summary := range repairCtx.RepairSummaries {
+		sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, summary))
+	}
+	sb.WriteString("\n")
+
+	// Add merged diff (truncated if large)
+	if repairCtx.MergedDiff != "" {
+		sb.WriteString("### Merged Diff\n")
+		diff := repairCtx.MergedDiff
+		if len(diff) > 4000 {
+			diff = diff[:4000] + "\n... (truncated)"
+		}
+		sb.WriteString(fmt.Sprintf("```diff\n%s\n```\n\n", diff))
+	}
+
+	// Add action required section
+	sb.WriteString("### Action Required\n")
+	sb.WriteString(fmt.Sprintf("Manual intervention needed to fix validation. Automated repair exhausted after %d attempts.\n", repairCtx.MaxAttempts))
+
+	// Create the bead with high priority (1 = high)
+	title := fmt.Sprintf("Repair exhausted: %s", repairCtx.TaskTitle)
+	if len(title) > 100 {
+		title = title[:97] + "..."
+	}
+
+	beadID, err := p.beadsClient.CreateWithDescription(ctx, title, sb.String(), 1)
+	if err != nil {
+		return "", fmt.Errorf("failed to create repair exhausted bead: %w", err)
+	}
+
+	if p.verbose {
+		fmt.Printf("[%s] Filed repair exhaustion bead: %s\n", repairCtx.TaskID, beadID)
+	}
+
+	return beadID, nil
 }

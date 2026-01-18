@@ -52,6 +52,9 @@ type BeadsClient interface {
 	// Create creates a new task and returns its ID
 	Create(ctx context.Context, title string, priority int) (string, error)
 
+	// CreateWithDescription creates a new task with a description and returns its ID
+	CreateWithDescription(ctx context.Context, title, description string, priority int) (string, error)
+
 	// AddDep adds a dependency: child is blocked by parent
 	AddDep(ctx context.Context, child, parent string) error
 
@@ -199,6 +202,29 @@ func (c *Client) Show(ctx context.Context, taskID string) (*Task, error) {
 // Create creates a new task
 func (c *Client) Create(ctx context.Context, title string, priority int) (string, error) {
 	out, err := c.run(ctx, "create", title, "-p", fmt.Sprintf("%d", priority), "--json")
+	if err != nil {
+		return "", fmt.Errorf("bd create failed: %w", err)
+	}
+
+	// Parse the created task ID from output
+	var result struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		// Fallback: extract ID from non-JSON output
+		out = strings.TrimSpace(out)
+		if strings.HasPrefix(out, "bd-") {
+			return strings.Fields(out)[0], nil
+		}
+		return "", fmt.Errorf("failed to parse task ID: %w", err)
+	}
+
+	return result.ID, nil
+}
+
+// CreateWithDescription creates a new task with a description
+func (c *Client) CreateWithDescription(ctx context.Context, title, description string, priority int) (string, error) {
+	out, err := c.run(ctx, "create", title, "-p", fmt.Sprintf("%d", priority), "-d", description, "--json")
 	if err != nil {
 		return "", fmt.Errorf("bd create failed: %w", err)
 	}

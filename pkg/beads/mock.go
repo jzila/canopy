@@ -33,6 +33,11 @@ type MockClient struct {
 			Title    string
 			Priority int
 		}
+		CreateWithDescription []struct {
+			Title       string
+			Description string
+			Priority    int
+		}
 		AddDep []struct {
 			Child  string
 			Parent string
@@ -47,18 +52,19 @@ type MockClient struct {
 
 	// Errors allows tests to inject errors for specific methods
 	Errors struct {
-		Ready         error
-		List          error
-		ReadyWithArgs error
-		Show          error
-		Start         error
-		Done          error
-		Fail          error
-		Create        error
-		AddDep        error
-		GetDeps       error
-		Sync          error
-		AddComment    error
+		Ready                 error
+		List                  error
+		ReadyWithArgs         error
+		Show                  error
+		Start                 error
+		Done                  error
+		Fail                  error
+		Create                error
+		CreateWithDescription error
+		AddDep                error
+		GetDeps               error
+		Sync                  error
+		AddComment            error
 	}
 
 	// NextCreateID is the ID to return from the next Create call
@@ -231,6 +237,34 @@ func (m *MockClient) Create(_ context.Context, title string, priority int) (stri
 	return id, nil
 }
 
+// CreateWithDescription creates a new task with a description
+func (m *MockClient) CreateWithDescription(_ context.Context, title, description string, priority int) (string, error) {
+	m.mu.Lock()
+	m.Calls.CreateWithDescription = append(m.Calls.CreateWithDescription, struct {
+		Title       string
+		Description string
+		Priority    int
+	}{title, description, priority})
+	id := m.NextCreateID
+	m.mu.Unlock()
+
+	if m.Errors.CreateWithDescription != nil {
+		return "", m.Errors.CreateWithDescription
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.Tasks[id] = &Task{
+		ID:          id,
+		Title:       title,
+		Description: description,
+		Priority:    priority,
+		Status:      "open",
+	}
+	return id, nil
+}
+
 // AddDep adds a dependency
 func (m *MockClient) AddDep(_ context.Context, child, parent string) error {
 	m.mu.Lock()
@@ -324,6 +358,7 @@ func (m *MockClient) Reset() {
 	m.Calls.Done = nil
 	m.Calls.Fail = nil
 	m.Calls.Create = nil
+	m.Calls.CreateWithDescription = nil
 	m.Calls.AddDep = nil
 	m.Calls.GetDeps = nil
 	m.Calls.Sync = 0
@@ -337,6 +372,7 @@ func (m *MockClient) Reset() {
 	m.Errors.Done = nil
 	m.Errors.Fail = nil
 	m.Errors.Create = nil
+	m.Errors.CreateWithDescription = nil
 	m.Errors.AddDep = nil
 	m.Errors.GetDeps = nil
 	m.Errors.Sync = nil

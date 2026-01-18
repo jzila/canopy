@@ -500,3 +500,179 @@ func TestBuildRepairAttemptSummary(t *testing.T) {
 		})
 	}
 }
+
+func TestValidationAndRepairResult_RepairExhausted(t *testing.T) {
+	// Test that the result struct captures repair exhaustion fields
+	result := &validationAndRepairResult{
+		ValidationPassed:       false,
+		RepairAttempted:        true,
+		RepairSucceeded:        false,
+		RepairExhausted:        true,
+		AttemptsUsed:           3,
+		FinalValidationResult:  &validation.Result{Status: validation.ValidationStatusFailed},
+		RepairAttemptSummaries: []string{"Attempt 1: failed", "Attempt 2: failed", "Attempt 3: failed"},
+		Error:                  "validation failed after 3 repair attempts",
+	}
+
+	if result.ValidationPassed {
+		t.Error("expected ValidationPassed to be false")
+	}
+	if !result.RepairExhausted {
+		t.Error("expected RepairExhausted to be true")
+	}
+	if len(result.RepairAttemptSummaries) != 3 {
+		t.Errorf("expected 3 repair attempt summaries, got %d", len(result.RepairAttemptSummaries))
+	}
+	if result.AttemptsUsed != 3 {
+		t.Errorf("expected 3 attempts used, got %d", result.AttemptsUsed)
+	}
+}
+
+func TestFileRepairExhaustedBead(t *testing.T) {
+	mock := beads.NewMockClient()
+	mock.NextCreateID = "repair-bead-1"
+
+	p := &Processor{
+		beadsClient: mock,
+		verbose:     false,
+	}
+
+	ctx := context.Background()
+	repairCtx := &repairExhaustedContext{
+		TaskID:    "task-123",
+		TaskTitle: "Fix the build",
+		ValidationResult: &validation.Result{
+			Status: validation.ValidationStatusFailed,
+			Steps: []validation.StepResult{
+				{
+					Name:    "build",
+					Status:  validation.ValidationStatusFailed,
+					Command: "go build ./...",
+					Output:  "compilation error: undefined function",
+				},
+			},
+		},
+		RepairSummaries: []string{
+			"Attempt 1: failed\nError: still undefined",
+			"Attempt 2: failed\nError: syntax error",
+			"Attempt 3: failed\nError: type mismatch",
+		},
+		MergedDiff:  "diff --git a/main.go b/main.go\n...",
+		MaxAttempts: 3,
+	}
+
+	beadID, err := p.fileRepairExhaustedBead(ctx, repairCtx)
+	if err != nil {
+		t.Fatalf("fileRepairExhaustedBead failed: %v", err)
+	}
+
+	if beadID != "repair-bead-1" {
+		t.Errorf("expected bead ID 'repair-bead-1', got %q", beadID)
+	}
+
+	// Verify CreateWithDescription was called
+	if len(mock.Calls.CreateWithDescription) != 1 {
+		t.Fatalf("expected 1 CreateWithDescription call, got %d", len(mock.Calls.CreateWithDescription))
+	}
+
+	call := mock.Calls.CreateWithDescription[0]
+	if !strings.Contains(call.Title, "Repair exhausted") {
+		t.Errorf("expected title to contain 'Repair exhausted', got %q", call.Title)
+	}
+	if call.Priority != 1 {
+		t.Errorf("expected priority 1, got %d", call.Priority)
+	}
+
+	// Verify description contains key information
+	desc := call.Description
+	if !strings.Contains(desc, "Validation Failure - Repair Exhausted") {
+		t.Error("description missing 'Validation Failure - Repair Exhausted' header")
+	}
+	if !strings.Contains(desc, "task-123") {
+		t.Error("description missing task ID")
+	}
+	if !strings.Contains(desc, "go build ./...") {
+		t.Error("description missing validation command")
+	}
+	if !strings.Contains(desc, "compilation error") {
+		t.Error("description missing validation output")
+	}
+	if !strings.Contains(desc, "Attempt 1: failed") {
+		t.Error("description missing repair attempt summary")
+	}
+	if !strings.Contains(desc, "Manual intervention needed") {
+		t.Error("description missing action required section")
+	}
+}
+
+func TestFileRepairExhaustedBead_NoBeadsClient(t *testing.T) {
+	p := &Processor{
+		beadsClient: nil,
+		verbose:     false,
+	}
+
+	ctx := context.Background()
+	repairCtx := &repairExhaustedContext{
+		TaskID:    "task-123",
+		TaskTitle: "Test task",
+	}
+
+	_, err := p.fileRepairExhaustedBead(ctx, repairCtx)
+	if err == nil {
+		t.Error("expected error when beads client is nil")
+	}
+	if !strings.Contains(err.Error(), "no beads client configured") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestFileRepairExhaustedBead_TruncatesLongContent(t *testing.T) {
+	mock := beads.NewMockClient()
+	mock.NextCreateID = "repair-bead-2"
+
+	p := &Processor{
+		beadsClient: mock,
+		verbose:     false,
+	}
+
+	ctx := context.Background()
+	// Create a very long output and diff
+	longOutput := strings.Repeat("error line\n", 500)  // ~5500 chars
+	longDiff := strings.Repeat("+ new line\n", 1000)   // ~11000 chars
+
+	repairCtx := &repairExhaustedContext{
+		TaskID:    "task-long",
+		TaskTitle: "Task with long output",
+		ValidationResult: &validation.Result{
+			Status: validation.ValidationStatusFailed,
+			Steps: []validation.StepResult{
+				{
+					Name:   "test",
+					Status: validation.ValidationStatusFailed,
+					Output: longOutput,
+				},
+			},
+		},
+		RepairSummaries: []string{"Attempt 1: failed"},
+		MergedDiff:      longDiff,
+		MaxAttempts:     1,
+	}
+
+	beadID, err := p.fileRepairExhaustedBead(ctx, repairCtx)
+	if err != nil {
+		t.Fatalf("fileRepairExhaustedBead failed: %v", err)
+	}
+
+	if beadID != "repair-bead-2" {
+		t.Errorf("expected bead ID 'repair-bead-2', got %q", beadID)
+	}
+
+	// Verify that truncation happened (description should not be extremely long)
+	call := mock.Calls.CreateWithDescription[0]
+	if len(call.Description) > 15000 {
+		t.Errorf("description was not truncated, length: %d", len(call.Description))
+	}
+	if !strings.Contains(call.Description, "(truncated)") {
+		t.Error("description should contain truncation marker")
+	}
+}

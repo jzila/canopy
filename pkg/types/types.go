@@ -32,6 +32,9 @@ const (
 	// MergeStatusSkipped indicates merge was skipped because there were no changes
 	// to apply (e.g., resolver determined work was already done).
 	MergeStatusSkipped MergeStatus = "skipped"
+	// MergeStatusMergedNeedsRepair indicates the merge succeeded but validation
+	// failed and automated repair attempts were exhausted. Manual intervention needed.
+	MergeStatusMergedNeedsRepair MergeStatus = "merged_needs_repair"
 )
 
 // ModelUsage represents per-model token usage and cost.

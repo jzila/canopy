@@ -161,14 +161,15 @@ type MergeStatus = types.MergeStatus
 
 // MergeStatus constants - aliases to types package for backwards compatibility.
 const (
-	MergeStatusNone      = types.MergeStatusNone
-	MergeStatusPending   = types.MergeStatusPending
-	MergeStatusAcquiring = types.MergeStatusAcquiring
-	MergeStatusMerging   = types.MergeStatusMerging
-	MergeStatusResolving = types.MergeStatusResolving
-	MergeStatusMerged    = types.MergeStatusMerged
-	MergeStatusFailed    = types.MergeStatusFailed
-	MergeStatusSkipped   = types.MergeStatusSkipped
+	MergeStatusNone              = types.MergeStatusNone
+	MergeStatusPending           = types.MergeStatusPending
+	MergeStatusAcquiring         = types.MergeStatusAcquiring
+	MergeStatusMerging           = types.MergeStatusMerging
+	MergeStatusResolving         = types.MergeStatusResolving
+	MergeStatusMerged            = types.MergeStatusMerged
+	MergeStatusFailed            = types.MergeStatusFailed
+	MergeStatusSkipped           = types.MergeStatusSkipped
+	MergeStatusMergedNeedsRepair = types.MergeStatusMergedNeedsRepair
 )
 
 // ValidationStep represents the result of a single validation step
