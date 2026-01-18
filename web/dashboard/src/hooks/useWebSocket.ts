@@ -66,8 +66,8 @@ interface AgentCompletedEvent {
     duration: number;
     input_tokens: number;
     output_tokens: number;
-    cache_creation_input_tokens: number;
-    cache_read_input_tokens: number;
+    cache_creation_tokens?: number;
+    cache_read_tokens?: number;
     cost_usd: number;
     files_changed: number;
     commits_created: number;
@@ -136,8 +136,8 @@ interface BackendAgentState {
   token_usage: {
     input_tokens: number;
     output_tokens: number;
-    cache_creation_input_tokens: number;
-    cache_read_input_tokens: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
     total_tokens: number;
     cost_usd: number;
   };
@@ -322,8 +322,6 @@ export function useWebSocket() {
                   token_usage: agent.token_usage || {
                     input_tokens: 0,
                     output_tokens: 0,
-                    cache_creation_input_tokens: 0,
-                    cache_read_input_tokens: 0,
                     total_tokens: 0,
                     cost_usd: 0,
                   },
@@ -381,8 +379,6 @@ export function useWebSocket() {
                 token_usage: {
                   input_tokens: 0,
                   output_tokens: 0,
-                  cache_creation_input_tokens: 0,
-                  cache_read_input_tokens: 0,
                   total_tokens: 0,
                   cost_usd: 0,
                 },
@@ -433,7 +429,7 @@ export function useWebSocket() {
             }
 
             case 'agent:completed': {
-              const { agent_id, error, exit_code, duration, input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, cost_usd, files_changed, commits_created } = message.payload;
+              const { agent_id, error, exit_code, duration, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, commits_created } = message.payload;
               updateAgent(agent_id, {
                 status: error ? 'failed' : 'completed',
                 end_time: message.timestamp,
@@ -445,10 +441,11 @@ export function useWebSocket() {
                 token_usage: {
                   input_tokens,
                   output_tokens,
-                  cache_creation_input_tokens,
-                  cache_read_input_tokens,
                   total_tokens: input_tokens + output_tokens,
                   cost_usd,
+                  // Optional cache token fields - only set if defined (exactOptionalPropertyTypes compliance)
+                  ...(cache_creation_tokens !== undefined && { cache_creation_input_tokens: cache_creation_tokens }),
+                  ...(cache_read_tokens !== undefined && { cache_read_input_tokens: cache_read_tokens }),
                 },
               });
               break;
