@@ -1,5 +1,6 @@
 /* IBM Plex fonts - Modern, technical aesthetic with excellent readability */
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap');
+/* Light 300 for titles, Regular 400 for bold text */
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -23,11 +24,16 @@
     font-feature-settings: 'zero' 1, 'ss01' 1;
   }
 
-  /* Headings use monospace for technical feel */
+  /* Headings use monospace Light 300 for elegant technical feel */
   h1, h2, h3 {
     font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-    @apply font-semibold;
+    font-weight: 300;
     letter-spacing: 0.02em;
+  }
+
+  /* Bold text uses Regular 400 */
+  h1 strong, h2 strong, h3 strong, b, strong {
+    font-weight: 400;
   }
 
   /* Base link styling */

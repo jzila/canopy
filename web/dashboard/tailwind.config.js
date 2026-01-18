@@ -10,9 +10,18 @@ export default {
       fontFamily: {
         // Modern monospace for titles, code, and technical elements
         // IBM Plex Mono - contemporary, technical feel with excellent readability
+        // Light 300 for titles, Regular 400 for bold/emphasis
         mono: ['"IBM Plex Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', 'Courier New', 'monospace'],
         // IBM Plex Sans - sister font for visual harmony
         sans: ['"IBM Plex Sans"', 'ui-sans-serif', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'Helvetica Neue', 'Arial', 'sans-serif'],
+      },
+      fontWeight: {
+        // Explicit weights for IBM Plex Mono usage
+        light: '300',    // Titles
+        normal: '400',   // Bold text (relative to light)
+        medium: '500',
+        semibold: '600',
+        bold: '700',
       },
       letterSpacing: {
         // Custom tracking for better readability
