@@ -242,6 +242,22 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 			baseCommit = req.Result.GitState.BaseCommit
 		}
 
+		// Validate base commit exists before using it
+		// If the repo was force-pushed or rebased, the commit may no longer exist
+		if baseCommit != "" {
+			if err := p.validateBaseCommit(baseCommit); err != nil {
+				errMsg := fmt.Sprintf("cannot spawn resolver: %v", err)
+				resp.Error = errMsg
+				p.markTaskFailed(ctx, taskID, errMsg)
+				p.sendTaskUpdated(taskID, req.Task.Title, "failed")
+				p.sendMergeStatusFull(taskID, ipc.MergeStatusFailed, errMsg, resp.CommitsApplied, resp.HadConflict, false)
+				// Resume queue since we're not spawning a resolver
+				p.queue.SetResolverActive(false)
+				p.queue.Resume()
+				return resp
+			}
+		}
+
 		// Generate diff showing concurrent changes (what other agents merged)
 		var concurrentDiff string
 		if baseCommit != "" {
@@ -519,4 +535,30 @@ func (p *Processor) resolveAsync(ctx context.Context, conflict *resolver.Conflic
 		}
 		return nil, fmt.Errorf("resolver timeout after %v", p.resolverTimeout)
 	}
+}
+
+// validateBaseCommit checks that the base commit exists in the repository.
+// This is important because force-pushes or rebases can remove commits that
+// agents' work was based on, leading to cryptic git failures later.
+func (p *Processor) validateBaseCommit(baseCommit string) error {
+	if baseCommit == "" {
+		return fmt.Errorf("BaseCommit is empty")
+	}
+
+	// Check commit exists using git cat-file -e (exits 0 if exists, non-zero otherwise)
+	cmd := exec.Command("git", "-C", p.outputDir, "cat-file", "-e", baseCommit)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("BaseCommit %s does not exist in repository (may have been force-pushed or rebased): %w", baseCommit, err)
+	}
+
+	// Check if commit is an ancestor of HEAD (optional validation - warn if not)
+	// This can happen if the repo was rebased after the agent started
+	cmd = exec.Command("git", "-C", p.outputDir, "merge-base", "--is-ancestor", baseCommit, "HEAD")
+	if err := cmd.Run(); err != nil {
+		if p.verbose {
+			fmt.Fprintf(os.Stderr, "warning: BaseCommit %s is not an ancestor of HEAD (repository may have been rebased)\n", baseCommit)
+		}
+	}
+
+	return nil
 }
