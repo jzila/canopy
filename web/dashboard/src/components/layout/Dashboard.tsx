@@ -70,10 +70,10 @@ export const Dashboard: React.FC = () => {
 
   // Auto-switch to 'all' agents mode when showing completed beads
   useEffect(() => {
-    if (showCompletedBeads && statusFilter !== 'all') {
+    if (showCompletedBeads) {
       setStatusFilter('all');
     }
-  }, [showCompletedBeads, statusFilter]);
+  }, [showCompletedBeads]);
 
   // Persist show archived agents state
   useEffect(() => {
@@ -271,11 +271,6 @@ export const Dashboard: React.FC = () => {
         isRunsLoading={isRunsLoading}
         onRunSelect={setActiveRunId}
         stats={stats}
-        statusFilter={statusFilter}
-        onStatusFilterChange={setStatusFilter}
-        showArchivedAgents={showArchivedAgents}
-        archivedAgentCount={archivedCount}
-        onToggleShowArchived={() => setShowArchivedAgents(!showArchivedAgents)}
         onPause={handlePause}
         onResume={handleResume}
       />
@@ -304,6 +299,11 @@ export const Dashboard: React.FC = () => {
               groupedAgents={groupedAgents}
               totalAgentCount={totalAgentCount}
               statusFilter={statusFilter}
+              onStatusFilterChange={setStatusFilter}
+              stats={stats}
+              showArchivedAgents={showArchivedAgents}
+              archivedAgentCount={archivedCount}
+              onToggleShowArchived={() => setShowArchivedAgents(!showArchivedAgents)}
               selectedAgentId={selectedAgentId}
               onSelectAgent={handleSelectAgent}
               onArchiveToggle={handleAgentArchiveToggle}

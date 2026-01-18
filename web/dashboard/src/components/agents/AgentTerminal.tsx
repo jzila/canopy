@@ -94,7 +94,7 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({ agentId }) => {
       cursorBlink: false,
       disableStdin: true,
       fontSize: 13,
-      fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace',
+      fontFamily: '"IBM Plex Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace',
       theme: isDark ? darkTheme : lightTheme,
       scrollback: 10000,
       convertEol: true,

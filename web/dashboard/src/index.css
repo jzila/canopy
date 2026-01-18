@@ -1,6 +1,5 @@
-/* IBM Plex fonts - Modern, technical aesthetic with excellent readability */
-/* Light 300 for titles, Regular 400 for bold text */
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap');
+/* IBM Plex fonts loaded via index.html <link> for reliable font loading */
+/* Light 300 for titles/headings, Regular 400 for bold text */
 
 @tailwind base;
 @tailwind components;
@@ -42,9 +41,9 @@
   }
 }
 
-/* Consistent header control height */
+/* Consistent header control height - all controls on header row */
 .header-control {
-  min-height: 40px;
+  height: 48px;
   display: flex;
   align-items: center;
 }

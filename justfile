@@ -16,11 +16,11 @@ dashboard:
 # Build Go binary (embeds dist/)
 go-build:
     @echo "Building Go binary..."
-    go build ./...
+    go build -o canopy ./cmd/canopy
 
 # Quick go build (skip dashboard, use existing dist/)
 go:
-    go build ./...
+    go build -o canopy ./cmd/canopy
 
 # Run tests
 test: test-go test-dashboard
