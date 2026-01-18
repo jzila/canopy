@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"encoding/json"
 	"sync"
 	"time"
 
@@ -99,6 +100,7 @@ func (h *PersistenceHandler) handleRunStarted(event Event) {
 // handleAgentMergeStatus updates the merge result fields when merge completes.
 // We only persist final merge statuses (merged or failed) to avoid noise from
 // intermediate statuses (pending, merging, resolving).
+// Also persists validation results if present.
 func (h *PersistenceHandler) handleAgentMergeStatus(event Event) {
 	payload, ok := event.Payload.(map[string]interface{})
 	if !ok {
@@ -114,6 +116,34 @@ func (h *PersistenceHandler) handleAgentMergeStatus(event Event) {
 
 	mergeStatus, _ := payload["merge_status"].(string)
 	mergeErr, _ := payload["error"].(string)
+
+	// Persist validation results if present
+	validationStatus, hasValidation := payload["validation_status"].(string)
+	if hasValidation && validationStatus != "" {
+		validationDuration, _ := getInt64FromPayload(payload, "validation_duration_ms")
+		validationError, _ := payload["validation_error"].(string)
+
+		// Encode validation steps as JSON if present
+		var validationStepsJSON string
+		if steps, ok := payload["validation_steps"].([]interface{}); ok && len(steps) > 0 {
+			if stepsBytes, err := json.Marshal(steps); err == nil {
+				validationStepsJSON = string(stepsBytes)
+			}
+		}
+
+		if err := h.store.UpdateAgentValidationResult(agentID, validationStatus, validationDuration, validationError, validationStepsJSON); err != nil {
+			logging.Error("failed to update validation result",
+				"agent_id", agentID,
+				"error", err,
+				"component", "persistence")
+		} else {
+			logging.Debug("updated validation result",
+				"agent_id", agentID,
+				"validation_status", validationStatus,
+				"validation_duration_ms", validationDuration,
+				"component", "persistence")
+		}
+	}
 
 	// Only persist final merge statuses
 	if mergeStatus != "merged" && mergeStatus != "failed" {

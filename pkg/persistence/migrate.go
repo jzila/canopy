@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-const currentSchemaVersion = 9
+const currentSchemaVersion = 10
 
 // migrate runs all pending database migrations
 func (s *Store) migrate() error {
@@ -79,6 +79,10 @@ func (s *Store) runMigration(version int) error {
 		}
 	case 9:
 		if err := s.migrateV9(tx); err != nil {
+			return err
+		}
+	case 10:
+		if err := s.migrateV10(tx); err != nil {
 			return err
 		}
 	default:
@@ -317,6 +321,25 @@ func (s *Store) migrateV9(tx *sql.Tx) error {
 	_, err := tx.Exec(schema)
 	if err != nil {
 		return fmt.Errorf("failed to create tasks table: %w", err)
+	}
+
+	return nil
+}
+
+// migrateV10 adds validation result tracking fields to agents table
+func (s *Store) migrateV10(tx *sql.Tx) error {
+	migrations := []string{
+		// Add validation result fields to agents table
+		`ALTER TABLE agents ADD COLUMN validation_status TEXT`,          // Overall validation status (pending, running, passed, failed, skipped)
+		`ALTER TABLE agents ADD COLUMN validation_duration_ms INTEGER`,  // Total validation duration in milliseconds
+		`ALTER TABLE agents ADD COLUMN validation_error TEXT`,           // Error message if validation failed
+		`ALTER TABLE agents ADD COLUMN validation_steps TEXT`,           // JSON-encoded array of validation steps
+	}
+
+	for _, m := range migrations {
+		if _, err := tx.Exec(m); err != nil {
+			return fmt.Errorf("failed to execute migration: %s: %w", m, err)
+		}
 	}
 
 	return nil

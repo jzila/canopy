@@ -166,6 +166,14 @@ const (
 	MergeStatusFailed    = types.MergeStatusFailed
 )
 
+// ValidationStep represents the result of a single validation step
+type ValidationStep struct {
+	Name     string `json:"name"`               // Name of the validation step (e.g., "build", "test", "lint")
+	Status   string `json:"status"`             // Status: "pending", "running", "passed", "failed", "skipped"
+	Duration int64  `json:"duration_ms"`        // Duration of the step in milliseconds
+	Output   string `json:"output,omitempty"`   // Output or error message from the step
+}
+
 // AgentMergeStatusPayload is sent when an agent's merge status changes
 type AgentMergeStatusPayload struct {
 	AgentID         string      `json:"agent_id"`
@@ -175,6 +183,12 @@ type AgentMergeStatusPayload struct {
 	CommitsApplied  int         `json:"commits_applied,omitempty"`   // Number of commits applied (for final status)
 	HadConflict     bool        `json:"had_conflict,omitempty"`      // Whether merge had conflicts
 	ResolverSpawned bool        `json:"resolver_spawned,omitempty"`  // Whether resolver was spawned
+
+	// Validation results
+	ValidationStatus   string           `json:"validation_status,omitempty"`      // Overall status: "pending", "running", "passed", "failed", "skipped"
+	ValidationSteps    []ValidationStep `json:"validation_steps,omitempty"`       // Results of individual validation steps
+	ValidationDuration int64            `json:"validation_duration_ms,omitempty"` // Total validation duration in milliseconds
+	ValidationError    string           `json:"validation_error,omitempty"`       // Error message if validation failed
 }
 
 // AgentResult is an alias to types.AgentResult for backwards compatibility.
