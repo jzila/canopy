@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/jzila/canopy/pkg/beads"
 	"github.com/jzila/canopy/pkg/daemon"
 	"github.com/jzila/canopy/pkg/events"
 	"github.com/jzila/canopy/pkg/ipc"
@@ -254,6 +255,12 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	// Create daemon with nil scheduler and beads client
 	// These are optional - the daemon can run standalone for monitoring
 	d := daemon.NewDaemon(config, ipcServerFactory, nil, nil)
+
+	// Set up beads client factory for loading tasks from repositories
+	// The factory creates beads clients on-demand for different repos
+	d.SetBeadsClientFactory(func(repoPath string) (daemon.BeadsClientInterface, error) {
+		return beads.NewClient(repoPath)
+	})
 
 	if daemonTUIMode {
 		return runDaemonWithTUI(d)
