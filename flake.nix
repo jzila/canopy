@@ -22,7 +22,7 @@
           version = "0.1.0";
           src = ./web/dashboard;
 
-          npmDepsHash = "sha256-pUnMHsyLmeX6PRQ1OO4QsXbscLVZSKGXomCYjMHoBDQ=";
+          npmDepsHash = "sha256-n/tmmdgUHQIC1b35tqIJ6gGWnkeelGEnNxbyi1v4wwA=";
 
           # Build produces dist/ directory
           buildPhase = ''
