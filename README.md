@@ -337,6 +337,7 @@ All state lives in `~/.cache/canopy/` (or `$XDG_CACHE_HOME/canopy/`):
 - [Getting Started](docs/GETTING-STARTED.md) - Step-by-step tutorial
 - [Commands](docs/COMMANDS.md) - Complete CLI reference
 - [Configuration](docs/CONFIGURATION.md) - Configuration options
+- [Dashboard](docs/DASHBOARD.md) - Web dashboard user guide
 - [Sandbox Design](docs/SANDBOX-DESIGN.md) - Security architecture
 
 ## Integration with Beads
