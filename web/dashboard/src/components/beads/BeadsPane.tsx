@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
-import { Circle, Clock, AlertCircle, Loader2, ChevronRight, ChevronLeft, ChevronDown, GitBranch, CheckCircle2, Archive, GripVertical } from 'lucide-react';
+import { Circle, Clock, AlertCircle, Loader2, ChevronRight, ChevronLeft, ChevronDown, GitBranch, CheckCircle2, Archive, GripVertical, ArrowUpDown } from 'lucide-react';
 import { useStateStore } from '../../stores/stateStore';
 import type { TaskState } from '../../stores/stateStore';
 import { useMergeQueue } from '../../hooks/useMergeQueue';
@@ -24,6 +24,7 @@ interface BeadsPaneProps {
 }
 
 type ViewMode = 'hierarchy' | 'flat';
+type SortMode = 'priority' | 'updated';
 
 interface TreeNode {
   task: TaskState;
@@ -217,6 +218,7 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
   const tasks = useStateStore((state) => state.tasks);
   const highlightedTaskId = useStateStore((state) => state.highlightedTaskId);
   const [viewMode, setViewMode] = useState<ViewMode>('hierarchy');
+  const [sortMode, setSortMode] = useState<SortMode>('priority');
   const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set());
   const taskRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const listContainerRef = useRef<HTMLDivElement>(null);
@@ -270,10 +272,26 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
             return aCompleted ? 1 : -1;
           }
         }
-        // Sort by priority first (lower = higher priority)
-        if (a.priority !== b.priority) {
-          return a.priority - b.priority;
+
+        // Sort by selected mode
+        if (sortMode === 'updated') {
+          // Sort by last updated (most recent first)
+          const aUpdated = a.updated_at ?? 0;
+          const bUpdated = b.updated_at ?? 0;
+          if (aUpdated !== bUpdated) {
+            return bUpdated - aUpdated;  // Descending (most recent first)
+          }
+          // Fall back to priority for ties
+          if (a.priority !== b.priority) {
+            return a.priority - b.priority;
+          }
+        } else {
+          // Sort by priority first (lower = higher priority)
+          if (a.priority !== b.priority) {
+            return a.priority - b.priority;
+          }
         }
+
         // Then by status (running > blocked > ready/open > failed > done)
         const statusOrder: Record<string, number> = {
           running: 0,
@@ -289,7 +307,7 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
         const bOrder = statusOrder[b.status.toLowerCase()] ?? 999;
         return aOrder - bOrder;
       });
-  }, [tasks, showCompleted]);
+  }, [tasks, showCompleted, sortMode]);
 
   // For backward compatibility, keep incompleteBeads as an alias
   const incompleteBeads = useMemo(() => {
@@ -438,6 +456,19 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
           </span>
         </div>
         <div className="flex items-center gap-2">
+          {/* Sort mode selector */}
+          <button
+            onClick={() => setSortMode(sortMode === 'priority' ? 'updated' : 'priority')}
+            className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-medium transition-all ${
+              sortMode === 'updated'
+                ? 'bg-indigo-100 dark:bg-indigo-900/50 ring-1 ring-indigo-500 text-indigo-700 dark:text-indigo-300'
+                : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'
+            }`}
+            title={sortMode === 'priority' ? 'Sort by last updated' : 'Sort by priority'}
+          >
+            <ArrowUpDown className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">{sortMode === 'priority' ? 'Priority' : 'Updated'}</span>
+          </button>
           {/* Show completed/archived toggle */}
           {completedBeadsCount > 0 && onToggleShowCompleted && (
             <button

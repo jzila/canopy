@@ -454,6 +454,7 @@ type TaskState struct {
 	Dependencies []string `json:"dependencies"` // Task IDs this task depends on
 	Archived     bool     `json:"archived"`     // Whether the task is archived
 	RepoID       string   `json:"repo_id,omitempty"` // Repository this task belongs to
+	UpdatedAt    int64    `json:"updated_at,omitempty"` // Unix timestamp of last update
 }
 
 // Stats aggregates statistics across all agents
@@ -519,6 +520,15 @@ func (r *RuntimeState) AddTask(task *beads.Task) {
 func (r *RuntimeState) AddTaskWithRepo(task *beads.Task, repoID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	// Parse UpdatedAt from ISO 8601 string to Unix timestamp
+	var updatedAt int64
+	if task.UpdatedAt != "" {
+		if t, err := time.Parse(time.RFC3339Nano, task.UpdatedAt); err == nil {
+			updatedAt = t.Unix()
+		}
+	}
+
 	r.Tasks[task.ID] = &TaskState{
 		ID:           task.ID,
 		Title:        task.Title,
@@ -526,6 +536,7 @@ func (r *RuntimeState) AddTaskWithRepo(task *beads.Task, repoID string) {
 		Priority:     task.Priority,
 		Dependencies: task.GetDependencies(),
 		RepoID:       repoID,
+		UpdatedAt:    updatedAt,
 	}
 }
 

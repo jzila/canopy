@@ -85,6 +85,7 @@ interface TaskUpdatedEvent {
     type?: string;     // Task type (task, bug, feature, etc.)
     priority?: number;
     agent_id?: string;
+    updated_at?: number;  // Unix timestamp of last update
   };
 }
 
@@ -215,6 +216,7 @@ interface BackendRuntimeState {
     priority: number;
     dependencies: string[];
     archived: boolean;
+    updated_at?: number;  // Unix timestamp of last update
   }>;
   stats: {
     total_tasks: number;
@@ -553,7 +555,7 @@ export function useWebSocket() {
             }
 
             case 'task:updated': {
-              const { id, title, status, type: taskType, priority, agent_id } = message.payload;
+              const { id, title, status, type: taskType, priority, agent_id, updated_at } = message.payload;
               console.log('[WebSocket] Task updated:', id, status);
               updateTask(id, {
                 ...(title !== undefined && { title }),
@@ -561,6 +563,7 @@ export function useWebSocket() {
                 ...(taskType !== undefined && { type: taskType }),
                 ...(priority !== undefined && { priority }),
                 ...(agent_id !== undefined && { agent_id }),
+                ...(updated_at !== undefined && { updated_at }),
               });
               break;
             }

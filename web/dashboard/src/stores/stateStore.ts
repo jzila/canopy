@@ -113,6 +113,7 @@ export interface TaskState {
   priority: number;
   dependencies: string[];
   archived: boolean;
+  updated_at?: number;  // Unix timestamp of last update
 }
 
 export interface Stats {
