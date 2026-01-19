@@ -335,8 +335,8 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 		fmt.Fprintf(os.Stderr, "warning: stream scanner error (token/cost metrics may be incomplete): %v\n", scanErr)
 	}
 
-	// Wait for command to complete
-	err = cmd.Wait()
+	// Wait for command to complete (error handled via ProcessState.ExitCode below)
+	_ = cmd.Wait()
 
 	// Signal that process has exited (stops the context cancellation goroutine)
 	close(processDone)

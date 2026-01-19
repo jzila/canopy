@@ -182,9 +182,7 @@ func (c *RemoteClient) readLoop() {
 		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		_, message, err := c.conn.ReadMessage()
 		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				// Connection closed unexpectedly
-			}
+			// All connection errors (expected or unexpected close) terminate the read loop
 			return
 		}
 

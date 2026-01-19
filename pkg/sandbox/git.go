@@ -361,9 +361,7 @@ func extractCommitMessageFromPatch(patch string) string {
 			// Extract subject, removing "[PATCH]" prefix if present
 			subject = strings.TrimPrefix(line, "Subject: ")
 			subject = strings.TrimSpace(subject)
-			if strings.HasPrefix(subject, "[PATCH] ") {
-				subject = strings.TrimPrefix(subject, "[PATCH] ")
-			}
+			subject = strings.TrimPrefix(subject, "[PATCH] ")
 			inBody = true
 			continue
 		}

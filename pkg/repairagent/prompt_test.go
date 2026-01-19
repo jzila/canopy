@@ -171,16 +171,9 @@ func TestTruncateWithContext_PreservesLineBreaks(t *testing.T) {
 	result := truncateWithContext(input, 500)
 
 	// Result should not end mid-line (should end with newline or complete line)
-	resultLines := strings.Split(result, "\n")
-	for i, line := range resultLines {
-		// Skip truncation message lines
-		if strings.Contains(line, "truncated") {
-			continue
-		}
-		// Lines should be either complete (50 chars) or part of truncation
-		if len(line) > 0 && len(line) < 50 && i != 0 && i != len(resultLines)-1 {
-			// This is acceptable if it's near the truncation point
-		}
+	// Verify truncation message is present (the main verification)
+	if !strings.Contains(result, "truncated") {
+		t.Error("truncated string should indicate truncation")
 	}
 }
 

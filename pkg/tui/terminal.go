@@ -105,8 +105,7 @@ func (m TerminalModel) View() string {
 		Bold(true).
 		Foreground(lipgloss.Color("86"))
 
-	selectedBorderStyle := borderStyle.Copy().
-		BorderForeground(lipgloss.Color("86"))
+	selectedBorderStyle := borderStyle.BorderForeground(lipgloss.Color("86"))
 
 	dimStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("240"))
@@ -196,12 +195,8 @@ func (m *TerminalModel) updateViewportContent() {
 		}
 
 		stdoutLines := strings.Split(stdout, "\n")
-		var outputLines []string
-		for _, line := range stdoutLines {
-			outputLines = append(outputLines, line)
-		}
-		if len(outputLines) > 0 {
-			sections = append(sections, strings.Join(outputLines, "\n"))
+		if len(stdoutLines) > 0 {
+			sections = append(sections, strings.Join(stdoutLines, "\n"))
 		}
 	}
 
@@ -279,9 +274,9 @@ func (m *TerminalModel) renderGitCommits() string {
 
 		// Files changed (if available)
 		if len(commit.FilesChanged) > 0 {
-			filesText := fmt.Sprintf("  %d file(s) changed", len(commit.FilesChanged))
 			// Show first few files
 			maxFiles := 3
+			var filesText string
 			if len(commit.FilesChanged) <= maxFiles {
 				filesText = "  " + strings.Join(commit.FilesChanged, ", ")
 			} else {
