@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jzila/canopy/pkg/beads"
+	"github.com/jzila/canopy/pkg/persistence"
 )
 
 // DaemonInterface abstracts daemon operations for handlers
@@ -560,6 +561,14 @@ func (h *Handler) HandleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 				// Log error but don't fail the request - runtime state was updated
 				// This allows archiving to work even if persistence fails
 				fmt.Printf("Warning: failed to persist agent archive status: %v\n", err)
+			}
+		}
+
+		// Clean up live feed JSONL file when archiving
+		if *req.Archived {
+			if err := persistence.DeleteLiveFeedFile(agentID); err != nil {
+				// Log error but don't fail - cleanup is best-effort
+				fmt.Printf("Warning: failed to delete live feed file for archived agent: %v\n", err)
 			}
 		}
 	}

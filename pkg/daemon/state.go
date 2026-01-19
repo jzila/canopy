@@ -5,7 +5,9 @@ import (
 	"time"
 
 	"github.com/jzila/canopy/pkg/beads"
+	"github.com/jzila/canopy/pkg/logging"
 	"github.com/jzila/canopy/pkg/metrics"
+	"github.com/jzila/canopy/pkg/persistence"
 	"github.com/jzila/canopy/pkg/types"
 )
 
@@ -958,6 +960,11 @@ func (r *RuntimeState) handleAgentLiveFeed(payload map[string]interface{}) {
 	agent.Update(func(a *AgentState) {
 		a.LiveFeedEvents = append(a.LiveFeedEvents, liveFeedEvent)
 	})
+
+	// Persist event to JSONL file for later restoration
+	if err := persistence.AppendLiveFeedEvent(agentID, eventType, liveFeedEvent.RawData); err != nil {
+		logging.Debug("failed to persist live feed event", "agent_id", agentID, "error", err)
+	}
 }
 
 func (r *RuntimeState) handleAgentCommit(payload map[string]interface{}) {

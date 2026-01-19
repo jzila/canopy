@@ -235,8 +235,12 @@ func ConvertPersistenceAgentToState(pAgent *persistence.Agent) *AgentState {
 		agent.Output.Stderr = pAgent.Stderr
 	}
 
-	// Generate synthetic live feed events from historical data
-	agent.LiveFeedEvents = GenerateHistoricalLiveFeedEvents(pAgent)
+	// Try to load live feed events from JSONL file
+	agent.LiveFeedEvents = LoadLiveFeedEventsFromFile(pAgent.ID)
+	if len(agent.LiveFeedEvents) == 0 {
+		// No persisted events found, fall back to synthetic events for historical data
+		agent.LiveFeedEvents = GenerateHistoricalLiveFeedEvents(pAgent)
+	}
 
 	// Restore merge status fields
 	if pAgent.MergeStatus != "" {
@@ -277,6 +281,7 @@ func ConvertPersistenceStatus(status persistence.AgentStatus) AgentStatus {
 // GenerateHistoricalLiveFeedEvents creates synthetic live feed events from persisted agent data.
 // Since live feed events aren't persisted to the database, we reconstruct meaningful events
 // from the available data to provide visibility into historical agent executions.
+// This is a fallback for historical data before live feed persistence was implemented.
 func GenerateHistoricalLiveFeedEvents(pAgent *persistence.Agent) []LiveFeedEvent {
 	events := []LiveFeedEvent{}
 
@@ -298,6 +303,70 @@ func GenerateHistoricalLiveFeedEvents(pAgent *persistence.Agent) []LiveFeedEvent
 	))
 
 	return events
+}
+
+// LoadLiveFeedEventsFromFile loads live feed events from a JSONL file and converts
+// them to daemon.LiveFeedEvent structs with typed data.
+func LoadLiveFeedEventsFromFile(agentID string) []LiveFeedEvent {
+	persistedEvents, err := persistence.LoadLiveFeedEvents(agentID)
+	if err != nil {
+		logging.Debug("failed to load live feed events", "agent_id", agentID, "error", err)
+		return nil
+	}
+
+	if len(persistedEvents) == 0 {
+		return nil
+	}
+
+	events := make([]LiveFeedEvent, 0, len(persistedEvents))
+	for _, pe := range persistedEvents {
+		// Convert persisted event back to typed daemon event
+		event := convertPersistedEventToLiveFeed(pe)
+		events = append(events, event)
+	}
+
+	return events
+}
+
+// convertPersistedEventToLiveFeed converts a persistence.LiveFeedEvent to daemon.LiveFeedEvent
+// with properly typed data based on the event type.
+func convertPersistedEventToLiveFeed(pe persistence.LiveFeedEvent) LiveFeedEvent {
+	eventType := LiveFeedEventType(pe.EventType)
+	data := pe.RawData
+
+	switch eventType {
+	case LiveFeedEventToolUse:
+		tool := getStringFromMap(data, "tool")
+		filePath := getStringFromMap(data, "file_path")
+		command := getStringFromMap(data, "command")
+		pattern := getStringFromMap(data, "pattern")
+		return NewToolUseEvent(tool, filePath, command, pattern)
+
+	case LiveFeedEventText:
+		text := getStringFromMap(data, "text")
+		isHistoric := getBoolFromMap(data, "is_historic")
+		return NewTextEvent(text, isHistoric)
+
+	case LiveFeedEventFileChange:
+		action := getStringFromMap(data, "action")
+		filePath := getStringFromMap(data, "file_path")
+		return NewFileChangeEvent(action, filePath)
+
+	case LiveFeedEventAgentCompleted:
+		filesChanged, _ := getIntFromPayload(data, "files_changed")
+		commitsCreated, _ := getIntFromPayload(data, "commits_created")
+		errMsg := getStringFromMap(data, "error")
+		resultMsg := getStringFromMap(data, "result_message")
+		isHistoric := getBoolFromMap(data, "is_historic")
+		return NewAgentCompletedEvent(filesChanged, commitsCreated, errMsg, resultMsg, isHistoric)
+
+	default:
+		// Unknown event type - preserve raw data
+		return LiveFeedEvent{
+			EventType: eventType,
+			RawData:   data,
+		}
+	}
 }
 
 // ConvertPersistenceTaskToState converts a persistence.Task to a daemon.TaskState
