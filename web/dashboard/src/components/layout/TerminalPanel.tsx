@@ -70,7 +70,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
               <button
                 onClick={() => setActiveTab('feed')}
                 className={`
-                  flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all
+                  flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-mono font-normal transition-all
                   ${
                     activeTab === 'feed'
                       ? 'bg-blue-600 text-white'
@@ -84,7 +84,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
               <button
                 onClick={() => setActiveTab('terminal')}
                 className={`
-                  flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all
+                  flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-mono font-normal transition-all
                   ${
                     activeTab === 'terminal'
                       ? 'bg-blue-600 text-white'
@@ -98,7 +98,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
               <button
                 onClick={() => setActiveTab('commits')}
                 className={`
-                  flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all
+                  flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-mono font-normal transition-all
                   ${
                     activeTab === 'commits'
                       ? 'bg-blue-600 text-white'
@@ -117,7 +117,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
               <button
                 onClick={() => setActiveTab('detail')}
                 className={`
-                  flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all
+                  flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-mono font-normal transition-all
                   ${
                     activeTab === 'detail'
                       ? 'bg-blue-600 text-white'
