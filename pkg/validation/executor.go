@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"syscall"
 	"time"
 )
 
@@ -167,6 +168,11 @@ func (e *Executor) runStep(ctx context.Context, step *StepConfig) *StepResult {
 	cmd := exec.Command("sh", "-c", step.Command)
 	cmd.Dir = e.workDir
 
+	// Create a new process group so we can kill all child processes on timeout.
+	// This is critical for CI environments where killing just the parent shell
+	// may not immediately terminate child processes like `sleep`.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
 	// Capture combined stdout/stderr
 	var output bytes.Buffer
 	cmd.Stdout = &output
@@ -189,8 +195,9 @@ func (e *Executor) runStep(ctx context.Context, step *StepConfig) *StepResult {
 	select {
 	case <-ctx.Done():
 		// Context cancelled (timeout or parent cancellation)
+		// Kill the entire process group (negative PID) to ensure child processes are terminated
 		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		}
 		<-done // Wait for the goroutine to finish
 		result.Status = ValidationStatusFailed
