@@ -14,7 +14,7 @@ This document describes the sandboxing architecture for Canopy's parallel agent 
 
 ## Overview
 
-Canopy orchestrates multiple Claude Code agents running in parallel, each operating in an isolated OverlayFS workspace. The goal is to run agents with `--dangerously-skip-permissions` (enabling truly unblocked agentic coding) while restricting what agents can do **outside** their overlay workspace.
+Canopy orchestrates multiple Claude Code agents running in parallel, each operating in an isolated copy-on-write workspace. On Linux this uses OverlayFS; on macOS it uses APFS clones. The goal is to run agents with `--dangerously-skip-permissions` (enabling truly unblocked agentic coding) while restricting what agents can do **outside** their workspace.
 
 ### Design Goals
 
@@ -30,9 +30,30 @@ Canopy orchestrates multiple Claude Code agents running in parallel, each operat
 
 ## Current Architecture
 
-### Workspace Isolation: OverlayFS
+### Workspace Isolation: Copy-on-Write Filesystems
 
-Each agent operates in a copy-on-write filesystem:
+Each agent operates in an isolated copy-on-write filesystem. The implementation differs by platform but provides identical semantics:
+
+| Platform | Technology | Change Detection |
+|----------|------------|------------------|
+| Linux | OverlayFS (kernel or FUSE) | Upper directory scan |
+| macOS | APFS clonefile(2) | mtime snapshot comparison |
+
+Both approaches ensure:
+- **Isolation**: Each agent sees only its workspace, not others' changes
+- **Preservation**: Original directory is never modified
+- **Efficiency**: Copy-on-write avoids duplicating unchanged files
+- **Traceability**: All changes can be detected and merged
+
+Overlay directories are stored under `$XDG_CACHE_HOME/canopy/overlays/`
+(defaulting to `~/.cache/canopy/overlays/`) per the persistence invariant
+that all canopy state lives in the XDG cache directory.
+
+---
+
+#### Linux: OverlayFS
+
+On Linux, agents use kernel OverlayFS (or fuse-overlayfs as fallback):
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -47,16 +68,97 @@ Each agent operates in a copy-on-write filesystem:
 └──────────────────────────────────────────────────────────────┘
 ```
 
-Overlay directories are stored under `$XDG_CACHE_HOME/canopy/overlays/`
-(defaulting to `~/.cache/canopy/overlays/`) per the persistence invariant
-that all canopy state lives in the XDG cache directory.
-
 **Implementation:** `pkg/sandbox/overlay.go`, `pkg/sandbox/overlay_linux.go`
 
 - Uses kernel overlayfs or falls back to fuse-overlayfs
 - Creates whiteouts to hide `.claude/` directory (parent session config)
 - Copies credentials (`.claude.json`, `.gitconfig`) to upper layer
 - Tracks file changes via upper directory diff
+
+**Change Detection:** The upper directory contains only modified files. Walking it reveals all agent changes, including whiteout files (`.wh.*`) for deletions.
+
+---
+
+#### macOS: APFS Clones
+
+On macOS, agents use APFS copy-on-write clones via `clonefile(2)`:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                  MergedDir (Agent View)                      │
+│  ~/.cache/canopy/overlays/{id}/merged                        │
+│  (APFS clone of original repo - COW copy)                    │
+└──────────────────────────────────────────────────────────────┘
+                           │
+                           │ clonefile(2) / cp -c
+                           ▼
+┌──────────────────────────────────────────────────────────────┐
+│              Original Repo (Unmodified)                      │
+│  /Users/user/project                                         │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Implementation:** `pkg/sandbox/overlay.go`, `pkg/sandbox/overlay_darwin.go`
+
+The macOS implementation:
+
+1. **Clone**: Uses `cp -c -R -P` to create an APFS COW clone of the repository
+   - `-c`: Use clonefile(2) for instant, space-efficient copies
+   - `-R`: Recursive directory copy
+   - `-P`: Preserve symlinks (don't follow them)
+
+2. **Hide paths**: Directly deletes paths that should be hidden (equivalent to Linux whiteouts)
+
+3. **Passthrough**: Creates symlinks back to original locations for paths that should bypass isolation
+
+4. **Credentials**: Copies `.claude.json` and `.gitconfig` into the clone
+
+**Change Detection via mtime Snapshots:**
+
+Since APFS clones don't have a separate "upper directory," macOS uses mtime-based snapshot comparison:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Snapshot Comparison                       │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  Baseline Snapshot (at clone time)                          │
+│  ─────────────────────────────────                          │
+│  {                                                          │
+│    "src/main.go":  {mtime: T1, size: 1234},                 │
+│    "README.md":    {mtime: T2, size: 567},                  │
+│    ...                                                      │
+│  }                                                          │
+│                                                             │
+│                    ▼ Compare ▼                              │
+│                                                             │
+│  Current Snapshot (at merge time)                           │
+│  ───────────────────────────────                            │
+│  {                                                          │
+│    "src/main.go":  {mtime: T3, size: 1456},  ← Modified     │
+│    "README.md":    {mtime: T2, size: 567},   ← Unchanged    │
+│    "src/new.go":   {mtime: T4, size: 789},   ← Created      │
+│    ...                                                      │
+│  }                                                          │
+│                                                             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+The snapshot system (`pkg/sandbox/snapshot.go`):
+
+1. **TakeSnapshot()**: Walks the directory tree recording `(path, mtime, size)` for each file
+2. **Compare()**: Detects created, modified, and deleted files between two snapshots
+3. **Excludes**: Respects the same exclusion patterns as Linux (`.git`, `.claude`, HOME paths)
+
+**Detection Logic:**
+- **Created**: File exists in current but not baseline
+- **Modified**: mtime or size changed between baseline and current
+- **Deleted**: File exists in baseline but not current
+
+This approach is reliable because:
+- APFS updates mtime on any content modification
+- Size changes catch modifications even if mtime is somehow preserved
+- Walking the full tree catches deletions that upper-directory scanning inherently detects
 
 ### Optional Bwrap Sandboxing
 
@@ -99,16 +201,18 @@ Only these environment variables pass through:
 
 ### Current Defaults
 
-| Feature | Default | With `--sandbox` |
-|---------|---------|------------------|
-| OverlayFS isolation | Yes | Yes |
-| Environment filtering | Yes | Yes |
-| `.claude/` hidden | Yes | Yes |
-| Namespace isolation | **No** | Yes |
-| Capability drop | **No** | Yes |
-| Resource limits | Soft (Linux rlimits) | 4GB mem, 100 procs |
-| Network access | **Unrestricted** | **Unrestricted** |
-| Filesystem outside overlay | **Unrestricted** | Read-only system paths |
+| Feature | Default | With `--sandbox` | Platform |
+|---------|---------|------------------|----------|
+| COW workspace isolation | Yes | Yes | Both |
+| Environment filtering | Yes | Yes | Both |
+| `.claude/` hidden | Yes | Yes | Both |
+| Namespace isolation | **No** | Yes | Linux only |
+| Capability drop | **No** | Yes | Linux only |
+| Resource limits | Soft (Linux rlimits) | 4GB mem, 100 procs | Linux only |
+| Network access | **Unrestricted** | **Unrestricted** | Both |
+| Filesystem outside workspace | **Unrestricted** | Read-only system paths | Linux only |
+
+**Note:** On macOS, `--sandbox` only enables workspace isolation via APFS clones. The bwrap-based namespace isolation, capability drop, and filesystem restrictions are Linux-specific features.
 
 ---
 
@@ -672,7 +776,12 @@ var SecurityBlocklist = []string{
 
 ## References
 
+### Linux
 - [Bubblewrap Documentation](https://github.com/containers/bubblewrap)
 - [OverlayFS Kernel Docs](https://www.kernel.org/doc/html/latest/filesystems/overlayfs.html)
 - [Linux Namespaces](https://man7.org/linux/man-pages/man7/namespaces.7.html)
 - [Seccomp BPF](https://www.kernel.org/doc/html/latest/userspace-api/seccomp_filter.html)
+
+### macOS
+- [APFS Reference](https://developer.apple.com/documentation/foundation/file_system/about_apple_file_system)
+- [clonefile(2) man page](https://www.manpagez.com/man/2/clonefile/)
