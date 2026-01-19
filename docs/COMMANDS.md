@@ -796,6 +796,160 @@ When the daemon is running, these endpoints are available:
 | `/api/runs` | GET | List runs |
 | `/api/runs/:id` | GET | Get specific run |
 | `/ws` | GET | WebSocket for real-time updates |
+| `/metrics` | GET | Prometheus metrics endpoint |
+
+---
+
+## Prometheus Metrics
+
+Canopy exposes Prometheus-compatible metrics at the `/metrics` endpoint for monitoring, alerting, and observability integration.
+
+### Accessing Metrics
+
+```bash
+# Fetch metrics from the daemon
+curl http://localhost:8080/metrics
+
+# With custom port
+curl http://localhost:9090/metrics
+```
+
+### Available Metrics
+
+All metrics use the `canopy_` namespace prefix.
+
+#### Gauges (Current State)
+
+| Metric | Labels | Description |
+|--------|--------|-------------|
+| `canopy_active_agents` | `status` | Current number of agents by status (`running`, `completed`, `failed`) |
+| `canopy_merge_queue_depth` | - | Number of items waiting in the merge queue |
+| `canopy_overlay_mounts` | - | Number of active overlay filesystem mounts |
+
+#### Histograms (Distributions)
+
+| Metric | Labels | Buckets | Description |
+|--------|--------|---------|-------------|
+| `canopy_task_duration_seconds` | `status` | 1, 5, 10, 30, 60, 300, 600, 1800, 3600 | Task execution duration in seconds |
+| `canopy_resolver_duration_seconds` | - | 10, 30, 60, 120, 300, 600, 900, 1200 | Conflict resolver execution duration |
+
+#### Counters (Cumulative)
+
+| Metric | Labels | Description |
+|--------|--------|-------------|
+| `canopy_merge_conflicts_total` | - | Total merge conflicts encountered |
+| `canopy_resolver_success_total` | - | Total successful conflict resolutions |
+| `canopy_resolver_failure_total` | - | Total failed conflict resolutions |
+| `canopy_ipc_messages_total` | `type` | Total IPC messages processed by message type |
+
+### Example Prometheus Queries
+
+```promql
+# Current running agents
+canopy_active_agents{status="running"}
+
+# Merge queue depth
+canopy_merge_queue_depth
+
+# Task success rate (5m window)
+sum(rate(canopy_task_duration_seconds_count{status="success"}[5m])) /
+sum(rate(canopy_task_duration_seconds_count[5m]))
+
+# Task duration percentiles
+histogram_quantile(0.50, sum(rate(canopy_task_duration_seconds_bucket[5m])) by (le))
+histogram_quantile(0.95, sum(rate(canopy_task_duration_seconds_bucket[5m])) by (le))
+histogram_quantile(0.99, sum(rate(canopy_task_duration_seconds_bucket[5m])) by (le))
+
+# Merge conflict rate
+rate(canopy_merge_conflicts_total[5m])
+
+# Resolver success rate
+canopy_resolver_success_total / (canopy_resolver_success_total + canopy_resolver_failure_total)
+
+# IPC message rate by type
+rate(canopy_ipc_messages_total[5m])
+```
+
+### Prometheus Configuration
+
+Add Canopy as a scrape target in your `prometheus.yml`:
+
+```yaml
+scrape_configs:
+  - job_name: 'canopy'
+    static_configs:
+      - targets: ['localhost:8080']
+    scrape_interval: 15s
+```
+
+### Grafana Integration
+
+A pre-configured Grafana dashboard is available at `docs/grafana/canopy-dashboard.json`.
+
+#### Importing the Dashboard
+
+1. Open Grafana → Dashboards → Import
+2. Upload `docs/grafana/canopy-dashboard.json` or paste its contents
+3. Select your Prometheus data source
+4. Click Import
+
+#### Dashboard Panels
+
+The included dashboard provides:
+
+- **Running Agents**: Current count of active worker agents
+- **Merge Queue Depth**: Items waiting to be merged
+- **Active Overlay Mounts**: Current filesystem isolation count
+- **Total Merge Conflicts**: Cumulative conflict counter
+- **Agents by Status**: Time series of agent states
+- **IPC Messages Rate**: Message throughput by type
+- **Task Duration Percentiles**: p50/p95/p99 latency
+- **Resource Usage**: Queue depth and overlay mounts over time
+- **Hourly Task Activity**: Success/failure/conflict trends
+
+### Alerting Examples
+
+Example Prometheus alerting rules:
+
+```yaml
+groups:
+  - name: canopy
+    rules:
+      - alert: CanopyHighMergeQueueDepth
+        expr: canopy_merge_queue_depth > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Merge queue backing up"
+          description: "{{ $value }} items in merge queue"
+
+      - alert: CanopyHighConflictRate
+        expr: rate(canopy_merge_conflicts_total[15m]) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High merge conflict rate"
+          description: "{{ $value | humanize }} conflicts/sec"
+
+      - alert: CanopyResolverFailures
+        expr: increase(canopy_resolver_failure_total[1h]) > 3
+        labels:
+          severity: critical
+        annotations:
+          summary: "Multiple resolver failures"
+          description: "{{ $value }} resolver failures in the last hour"
+
+      - alert: CanopySlowTasks
+        expr: histogram_quantile(0.95, rate(canopy_task_duration_seconds_bucket[15m])) > 1800
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tasks taking longer than expected"
+          description: "p95 task duration is {{ $value | humanizeDuration }}"
+```
 
 ## See Also
 

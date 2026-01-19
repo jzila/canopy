@@ -258,6 +258,31 @@ canopy daemon logs -f
 | `GET /api/agents` | List all agents |
 | `GET /api/agents/:id` | Get specific agent |
 | `GET /ws` | WebSocket for real-time updates |
+| `GET /metrics` | Prometheus metrics (see [Metrics](#prometheus-metrics)) |
+
+### Prometheus Metrics
+
+Canopy exposes Prometheus-compatible metrics at `/metrics` for monitoring and alerting:
+
+```bash
+# Fetch metrics
+curl http://localhost:8080/metrics
+```
+
+**Available metrics:**
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `canopy_active_agents` | Gauge | Current agents by status (running/completed/failed) |
+| `canopy_merge_queue_depth` | Gauge | Items waiting in merge queue |
+| `canopy_overlay_mounts` | Gauge | Active overlay filesystem mounts |
+| `canopy_task_duration_seconds` | Histogram | Task execution duration by status |
+| `canopy_merge_conflicts_total` | Counter | Total merge conflicts encountered |
+| `canopy_resolver_success_total` | Counter | Successful conflict resolutions |
+| `canopy_resolver_failure_total` | Counter | Failed conflict resolutions |
+| `canopy_ipc_messages_total` | Counter | IPC messages by type |
+
+A pre-configured Grafana dashboard is available at `docs/grafana/canopy-dashboard.json`.
 
 ## Persistence
 
