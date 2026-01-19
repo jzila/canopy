@@ -9,8 +9,8 @@
 > This is **very early alpha software**. It might eat your commits, corrupt your repo, make questionable life choices with your filesystem, or spontaneously decide that `main` was more of a suggestion than a branch name.
 >
 > **What could possibly go wrong:**
-> - Your repository (we use OverlayFS and merge things automatically—what could go wrong?)
-> - Your git history (we spawn agents that commit things—exciting!)
+> - Your repository (we use OverlayFS and merge things automatically)
+> - Your git history (we spawn agents that commit things)
 > - Your sanity (debugging parallel agent conflicts is a character-building exercise)
 > - Anything the agents touch (they're quite enthusiastic)
 >
@@ -19,6 +19,8 @@
 > You have been warned. Proceed with curiosity and caution.
 
 **Parallel agent orchestrator for Claude Code**
+
+![Dashboard](https://github.com/user-attachments/assets/8c0b98bb-9497-44a4-bdc6-73fb4c673893)
 
 Canopy coordinates multiple Claude Code agents working on different tasks simultaneously, each in an isolated sandbox. It handles task scheduling, workspace isolation, change merging, and conflict resolution automatically.
 
