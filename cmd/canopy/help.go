@@ -52,6 +52,21 @@ ARCHITECTURE
 EXECUTION LOOP
   bd ready -> spawn N workers in parallel -> wait -> bd done -> merge changes -> repeat
 
+INITIAL SETUP (for new repos)
+  canopy init --agent       Get detection results + questionnaire JSON
+  canopy init --apply ...   Apply answers JSON to create config files
+
+  Three-step flow:
+  1. Run "canopy init --agent" to get project detection and questions
+  2. Present questions to user (use AskUserQuestion for each)
+  3. Run "canopy init --apply '<answers JSON>'" to create config
+
+  Creates:
+  - .canopy/sandbox.toml   (sandbox paths and resource limits)
+  - .canopy/validation.toml (post-merge validation steps)
+
+  Detection-only mode (no questions): canopy init --detect
+
 SANDBOX ISOLATION
   Each worker sees: lowerdir (read-only base) + upperdir (private writes) = merged view
   Workers can't see each other's changes. Merge happens after completion (last-writer-wins).
