@@ -43,3 +43,8 @@ func CleanupStaleMounts(_ string) (int, []error) {
 func RecoverFromCrash(_ string) (cleaned int, stale int, errors []error) {
 	return 0, 0, nil
 }
+
+// GetChanges is not supported on non-Linux/Darwin platforms
+func (o *Overlay) GetChanges() ([]FileChange, error) {
+	return nil, fmt.Errorf("OverlayFS is only supported on Linux and macOS")
+}

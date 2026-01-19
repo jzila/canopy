@@ -3,10 +3,12 @@
 package sandbox
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -29,6 +31,48 @@ func IsStub() bool {
 	return false
 }
 
+// isAPFS checks if a path is on an APFS filesystem.
+// Returns true if the filesystem is APFS, false otherwise.
+func isAPFS(path string) (bool, error) {
+	// Use diskutil to get filesystem info
+	// diskutil info -plist /path outputs plist with FilesystemType
+	cmd := exec.Command("diskutil", "info", path)
+	output, err := cmd.Output()
+	if err != nil {
+		// Try the parent directory if path doesn't exist yet
+		parent := filepath.Dir(path)
+		if parent != path {
+			cmd = exec.Command("diskutil", "info", parent)
+			output, err = cmd.Output()
+			if err != nil {
+				return false, fmt.Errorf("diskutil info failed: %w", err)
+			}
+		} else {
+			return false, fmt.Errorf("diskutil info failed: %w", err)
+		}
+	}
+
+	// Look for "File System Personality:" or "Type (Bundle):" containing "APFS"
+	// The output format is human-readable text with "File System Personality: APFS"
+	outputStr := string(output)
+	if strings.Contains(outputStr, "APFS") {
+		return true, nil
+	}
+
+	// Also check for the specific filesystem type line
+	for _, line := range strings.Split(outputStr, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "File System Personality:") ||
+			strings.HasPrefix(line, "Type (Bundle):") {
+			if strings.Contains(line, "APFS") {
+				return true, nil
+			}
+		}
+	}
+
+	return false, nil
+}
+
 // Mount creates an APFS clone of the source directory using cp -c (copy-on-write).
 // On Darwin, this doesn't create a real mount - instead it:
 // 1. Clones the source directory to MergedDir using APFS COW clones
@@ -39,6 +83,8 @@ func IsStub() bool {
 // - Changes are isolated to the clone
 // - Original directory is preserved
 // - Changes can be detected via snapshot comparison
+//
+// Note: Requires APFS filesystem for efficient COW cloning.
 func (o *Overlay) Mount() error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -62,8 +108,21 @@ func (o *Overlay) Mount() error {
 	// -R: Recursive
 	// -P: Don't follow symlinks (preserve them)
 	cmd := exec.Command("cp", "-c", "-R", "-P", o.LowerDir, o.MergedDir)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("cp -c clone failed: %w: %s", err, output)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		stderrStr := stderr.String()
+		// Check if the error is due to non-APFS filesystem
+		if strings.Contains(stderrStr, "Invalid argument") ||
+			strings.Contains(stderrStr, "cross-device") ||
+			strings.Contains(stderrStr, "Operation not supported") {
+			// Verify it's actually a filesystem issue
+			isApfs, apfsErr := isAPFS(o.LowerDir)
+			if apfsErr == nil && !isApfs {
+				return fmt.Errorf("APFS filesystem required: cp -c (copy-on-write clone) only works on APFS volumes. Your directory %s is not on an APFS filesystem", o.LowerDir)
+			}
+		}
+		return fmt.Errorf("cp -c clone failed: %w: %s", err, stderrStr)
 	}
 
 	// Delete hidden paths in the clone (equivalent to whiteouts)
@@ -326,4 +385,46 @@ func (o *Overlay) GetChangesDarwin() ([]Change, error) {
 
 	// Compare against baseline
 	return state.BaseSnapshot.Compare(currentSnapshot), nil
+}
+
+// GetChanges extracts all file changes from the overlay using snapshot comparison.
+// This is the Darwin-specific implementation that overrides the Linux version.
+// It converts snapshot-based changes to FileChange format for API compatibility.
+func (o *Overlay) GetChanges() ([]FileChange, error) {
+	// For direct overlays (no isolation), return empty list.
+	// Changes should be tracked via git status instead.
+	if o.ID == "direct" {
+		return nil, nil
+	}
+
+	// Get changes using snapshot comparison
+	changes, err := o.GetChangesDarwin()
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert []Change to []FileChange
+	// Note: Darwin doesn't compute file hashes during change detection
+	// (unlike Linux which reads from UpperDir). The NewHash field will
+	// be empty. If hashes are needed, they can be computed on demand.
+	fileChanges := make([]FileChange, len(changes))
+	for i, change := range changes {
+		fileChanges[i] = FileChange{
+			Path:    change.Path,
+			Type:    change.Type,
+			NewHash: "", // Hash not computed in snapshot-based detection
+		}
+
+		// Optionally compute hash for created/modified files
+		// This provides parity with Linux which always has hashes
+		if change.Type == ChangeCreated || change.Type == ChangeModified {
+			filePath := filepath.Join(o.MergedDir, change.Path)
+			if hash, hashErr := hashFile(filePath); hashErr == nil {
+				fileChanges[i].NewHash = hash
+			}
+			// Non-fatal: continue without hash if file can't be read
+		}
+	}
+
+	return fileChanges, nil
 }

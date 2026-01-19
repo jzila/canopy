@@ -81,7 +81,11 @@ On Linux, agents use kernel OverlayFS (or fuse-overlayfs as fallback):
 
 #### macOS: APFS Clones
 
-On macOS, agents use APFS copy-on-write clones via `clonefile(2)`:
+On macOS, agents use APFS copy-on-write clones via `clonefile(2)`.
+
+**APFS Requirement:** The working directory must be on an APFS-formatted volume. If you run Canopy on a non-APFS filesystem (e.g., HFS+, FAT32, or an external drive), you'll see an error: `APFS filesystem required: cp -c (copy-on-write clone) only works on APFS volumes.` Most modern Macs use APFS by default for the system drive.
+
+macOS APFS clone architecture:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐

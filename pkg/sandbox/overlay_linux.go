@@ -4,6 +4,7 @@ package sandbox
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -331,4 +332,120 @@ func RecoverFromCrash(baseDir string) (cleaned int, stale int, errors []error) {
 
 	cleaned, errors = CleanupStaleMounts(baseDir)
 	return cleaned, stale, errors
+}
+
+// GetChanges extracts all file changes from the overlay's upper directory.
+// This is the Linux-specific implementation that reads from OverlayFS upper directory.
+func (o *Overlay) GetChanges() ([]FileChange, error) {
+	// For direct overlays (no UpperDir), return empty list.
+	// Changes should be tracked via git status instead.
+	if o.UpperDir == "" {
+		return nil, nil
+	}
+
+	var changes []FileChange
+
+	err := filepath.WalkDir(o.UpperDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Skip the root directory
+		if path == o.UpperDir {
+			return nil
+		}
+
+		// Get relative path
+		relPath, _ := filepath.Rel(o.UpperDir, path)
+
+		// Skip .git directory entirely - git changes are handled separately via commit extraction
+		if relPath == ".git" || strings.HasPrefix(relPath, ".git"+string(filepath.Separator)) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// Skip passthrough paths (they're bind-mounted, not overlayed)
+		for _, passthrough := range DefaultPassthroughPaths {
+			if relPath == passthrough || strings.HasPrefix(relPath, passthrough+string(filepath.Separator)) {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+		}
+
+		// Skip hidden paths (they're whiteouts we created, not real changes)
+		for _, hidden := range DefaultHiddenPaths {
+			if relPath == hidden || strings.HasPrefix(relPath, hidden+string(filepath.Separator)) {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+		}
+
+		// Skip HOME-related paths (created when HOME=merged, not project files)
+		for _, excluded := range HomeExcludedPaths {
+			if relPath == excluded || strings.HasPrefix(relPath, excluded+string(filepath.Separator)) {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+		}
+
+		// Check for whiteout files (deleted files in overlay)
+		// Whiteout files have names prefixed with .wh.
+		if strings.HasPrefix(d.Name(), ".wh.") {
+			originalName := strings.TrimPrefix(d.Name(), ".wh.")
+			changes = append(changes, FileChange{
+				Path: filepath.Join(filepath.Dir(relPath), originalName),
+				Type: ChangeDeleted,
+			})
+			return nil
+		}
+
+		// Skip directories (we track file contents)
+		if d.IsDir() {
+			return nil
+		}
+
+		// Check if file exists in lower (original)
+		lowerPath := filepath.Join(o.LowerDir, relPath)
+		_, lowerErr := os.Stat(lowerPath)
+
+		// Compute hash of upper file
+		upperHash, hashErr := hashFile(path)
+		if hashErr != nil {
+			// Log but continue - file change is still recorded, just without hash
+			fmt.Fprintf(os.Stderr, "warning: failed to hash file %s: %v\n", relPath, hashErr)
+		}
+
+		change := FileChange{Path: relPath, NewHash: upperHash}
+
+		if os.IsNotExist(lowerErr) {
+			change.Type = ChangeCreated
+		} else {
+			// File exists in lower - compare content hashes
+			lowerHash, lowerHashErr := hashFile(lowerPath)
+			if lowerHashErr != nil {
+				// Can't compare, assume modified to be safe
+				fmt.Fprintf(os.Stderr, "warning: failed to hash lower file %s: %v\n", relPath, lowerHashErr)
+				change.Type = ChangeModified
+			} else if upperHash == lowerHash {
+				// Content identical - skip this file (copy-up without actual change)
+				return nil
+			} else {
+				change.Type = ChangeModified
+			}
+		}
+
+		changes = append(changes, change)
+
+		return nil
+	})
+
+	return changes, err
 }
