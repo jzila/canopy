@@ -786,17 +786,547 @@ canopy version
 
 ## HTTP API Endpoints
 
-When the daemon is running, these endpoints are available:
+When the daemon is running, these endpoints are available for monitoring and control.
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/state` | GET | Full state snapshot |
-| `/api/agents` | GET | List all agents |
-| `/api/agents/:id` | GET | Get specific agent |
-| `/api/runs` | GET | List runs |
-| `/api/runs/:id` | GET | Get specific run |
-| `/ws` | GET | WebSocket for real-time updates |
-| `/metrics` | GET | Prometheus metrics endpoint |
+### State & Monitoring
+
+#### GET /api/state
+
+Returns the full runtime state snapshot including all agents, tasks, and statistics.
+
+**Response:**
+```json
+{
+  "agents": {
+    "agent-abc123-beads-xyz": {
+      "id": "agent-abc123-beads-xyz",
+      "task_id": "beads-xyz",
+      "status": "running",
+      "start_time": "2024-01-15T10:30:00Z",
+      "merge_status": "none"
+    }
+  },
+  "tasks": {
+    "beads-xyz": {
+      "id": "beads-xyz",
+      "title": "Implement feature X",
+      "status": "in_progress",
+      "priority": 1
+    }
+  },
+  "stats": {
+    "total_tasks": 10,
+    "completed_tasks": 5,
+    "failed_tasks": 1,
+    "running_tasks": 2
+  },
+  "is_paused": false,
+  "active_repo_id": "abc123"
+}
+```
+
+#### GET /api/stats
+
+Returns current run statistics.
+
+**Response:**
+```json
+{
+  "total_tasks": 10,
+  "completed_tasks": 5,
+  "failed_tasks": 1,
+  "running_tasks": 2,
+  "total_cost_usd": 1.23,
+  "total_tokens": 45678
+}
+```
+
+#### GET /api/merge-queue
+
+Returns the current state of the merge queue.
+
+**Response:**
+```json
+{
+  "completed": [
+    {
+      "task_id": "beads-abc",
+      "agent_id": "agent-123",
+      "timestamp": "2024-01-15T10:30:00Z",
+      "success": true
+    }
+  ],
+  "resolvers": [
+    {
+      "parent_task_id": "beads-xyz",
+      "resolver_task_id": "resolver-xyz",
+      "parent_agent_id": "agent-456",
+      "resolver_agent_id": "agent-789",
+      "status": "running"
+    }
+  ],
+  "pending": [
+    {
+      "task_id": "beads-def",
+      "agent_id": "agent-111",
+      "position": 0
+    }
+  ],
+  "active_workers": [
+    {
+      "agent_id": "agent-222",
+      "task_id": "beads-ghi",
+      "status": "running"
+    }
+  ],
+  "is_paused": false,
+  "is_paused_by_user": false,
+  "is_paused_by_agent": false,
+  "pause_state": "running",
+  "queue_length": 1
+}
+```
+
+---
+
+### Agents
+
+#### GET /api/agents
+
+Returns a list of all agents.
+
+**Response:**
+```json
+[
+  {
+    "id": "agent-abc123-beads-xyz",
+    "task_id": "beads-xyz",
+    "status": "running",
+    "start_time": "2024-01-15T10:30:00Z",
+    "merge_status": "none",
+    "archived": false
+  }
+]
+```
+
+#### PATCH /api/agents?id=\<agent-id\>
+
+Updates an agent (currently supports archiving).
+
+**Request:**
+```json
+{
+  "archived": true
+}
+```
+
+**Response:**
+```json
+{
+  "id": "agent-abc123-beads-xyz",
+  "archived": true
+}
+```
+
+#### POST /api/agents/:id/kill
+
+Terminates a running agent.
+
+**Example:**
+```bash
+curl -X POST http://localhost:8080/api/agents/agent-abc123-beads-xyz/kill
+```
+
+**Response:**
+```json
+{
+  "status": "killed",
+  "agent_id": "agent-abc123-beads-xyz"
+}
+```
+
+---
+
+### Tasks
+
+#### GET /api/tasks
+
+Returns a list of all tasks.
+
+**Response:**
+```json
+[
+  {
+    "id": "beads-xyz",
+    "title": "Implement feature X",
+    "status": "pending",
+    "priority": 1,
+    "archived": false
+  }
+]
+```
+
+#### POST /api/tasks
+
+Creates a new task via the beads client.
+
+**Request:**
+```json
+{
+  "title": "New feature",
+  "description": "Optional description",
+  "priority": 2,
+  "dependencies": ["beads-abc"]
+}
+```
+
+**Response:**
+```json
+{
+  "id": "beads-new123",
+  "title": "New feature",
+  "status": "created"
+}
+```
+
+#### PATCH /api/tasks?id=\<task-id\>
+
+Updates a task's status or archived state.
+
+**Request:**
+```json
+{
+  "status": "in_progress",
+  "archived": false
+}
+```
+
+**Response:**
+```json
+{
+  "id": "beads-xyz",
+  "status": "in_progress"
+}
+```
+
+**Valid status values:** `pending`, `in_progress`, `completed`, `failed`
+
+---
+
+### Orchestration Control
+
+#### POST /api/orch/pause
+
+Pauses the orchestrator. No new tasks will be started, and the merge queue will pause.
+
+**Example:**
+```bash
+curl -X POST http://localhost:8080/api/orch/pause
+```
+
+**Response:**
+```json
+{
+  "status": "paused",
+  "pause_state": "paused_by_user"
+}
+```
+
+#### POST /api/orch/resume
+
+Resumes the orchestrator.
+
+**Example:**
+```bash
+curl -X POST http://localhost:8080/api/orch/resume
+```
+
+**Response:**
+```json
+{
+  "status": "resumed",
+  "pause_state": "running"
+}
+```
+
+If a resolver agent is still active, the response may indicate partial resume:
+```json
+{
+  "status": "partially_resumed",
+  "pause_state": "paused_by_resolver",
+  "still_paused_by_resolver": true
+}
+```
+
+---
+
+### Run History
+
+#### GET /api/runs
+
+Lists historical runs with filtering and pagination.
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `since` | string | Filter runs after this time (ISO 8601 or duration like `7d`, `24h`) |
+| `before` | string | Filter runs before this time |
+| `status` | string | Filter by status: `running`, `completed`, `failed`, `cancelled` |
+| `repo_id` | string | Filter by repository ID |
+| `limit` | int | Maximum number of results (default: 50) |
+| `offset` | int | Pagination offset |
+
+**Example:**
+```bash
+curl "http://localhost:8080/api/runs?since=7d&status=completed&limit=10"
+```
+
+**Response:**
+```json
+{
+  "runs": [
+    {
+      "id": "run-abc123",
+      "repo_id": "repo-xyz",
+      "status": "completed",
+      "start_time": "2024-01-15T10:00:00Z",
+      "end_time": "2024-01-15T10:30:00Z",
+      "total_agents": 5,
+      "completed_agents": 5,
+      "failed_agents": 0,
+      "total_cost_usd": 0.45
+    }
+  ],
+  "total": 42,
+  "has_more": true
+}
+```
+
+#### GET /api/runs/:id
+
+Returns details for a specific run including all agents.
+
+**Example:**
+```bash
+curl http://localhost:8080/api/runs/run-abc123
+```
+
+**Response:**
+```json
+{
+  "id": "run-abc123",
+  "repo_id": "repo-xyz",
+  "status": "completed",
+  "start_time": "2024-01-15T10:00:00Z",
+  "end_time": "2024-01-15T10:30:00Z",
+  "agents": [
+    {
+      "id": "agent-1",
+      "task_id": "beads-xyz",
+      "status": "completed",
+      "cost_usd": 0.15
+    }
+  ]
+}
+```
+
+#### GET /api/runs/:id/agents
+
+Returns only the agents for a specific run.
+
+**Example:**
+```bash
+curl http://localhost:8080/api/runs/run-abc123/agents
+```
+
+**Response:**
+```json
+[
+  {
+    "id": "agent-1",
+    "task_id": "beads-xyz",
+    "status": "completed",
+    "start_time": "2024-01-15T10:05:00Z",
+    "end_time": "2024-01-15T10:15:00Z",
+    "cost_usd": 0.15
+  }
+]
+```
+
+#### GET /api/stats/history
+
+Returns aggregate historical statistics.
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `since` | string | Aggregate stats since this time (ISO 8601 or duration) |
+| `repo_id` | string | Filter by repository ID |
+
+**Example:**
+```bash
+curl "http://localhost:8080/api/stats/history?since=30d&repo_id=abc123"
+```
+
+**Response:**
+```json
+{
+  "total_runs": 42,
+  "total_agents": 187,
+  "completed_agents": 175,
+  "failed_agents": 12,
+  "total_cost_usd": 12.34,
+  "total_tokens": 2456789,
+  "avg_duration_seconds": 245.5
+}
+```
+
+---
+
+### Repository Management
+
+#### GET /api/repositories
+
+Lists all registered repositories.
+
+**Response:**
+```json
+{
+  "repositories": [
+    {
+      "id": "abc123",
+      "path": "/home/user/project",
+      "name": "project",
+      "created_at": "2024-01-01T00:00:00Z",
+      "is_active": true
+    }
+  ],
+  "active_repo_id": "abc123"
+}
+```
+
+#### GET /api/repositories/:id
+
+Returns details for a specific repository including statistics.
+
+**Example:**
+```bash
+curl http://localhost:8080/api/repositories/abc123
+```
+
+**Response:**
+```json
+{
+  "id": "abc123",
+  "path": "/home/user/project",
+  "name": "project",
+  "created_at": "2024-01-01T00:00:00Z",
+  "stats": {
+    "total_runs": 42,
+    "total_tasks": 187,
+    "total_cost_usd": 12.34
+  }
+}
+```
+
+#### POST /api/repositories/:id/activate
+
+Sets the specified repository as the active repository.
+
+**Example:**
+```bash
+curl -X POST http://localhost:8080/api/repositories/abc123/activate
+```
+
+**Response:**
+```json
+{
+  "id": "abc123",
+  "path": "/home/user/project",
+  "name": "project",
+  "created_at": "2024-01-01T00:00:00Z",
+  "is_active": true
+}
+```
+
+---
+
+### Beads Operations
+
+#### POST /api/beads/sync
+
+Syncs tasks from the beads database into the daemon's runtime state.
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `repo` | string | Optional repository ID or path. Defaults to active repository. |
+
+**Example:**
+```bash
+# Sync active repository
+curl -X POST http://localhost:8080/api/beads/sync
+
+# Sync specific repository
+curl -X POST "http://localhost:8080/api/beads/sync?repo=abc123"
+```
+
+**Response:**
+```json
+{
+  "synced": 15,
+  "repo_id": "abc123",
+  "repo_name": "my-project"
+}
+```
+
+---
+
+### WebSocket
+
+#### GET /ws
+
+Upgrades to WebSocket connection for real-time event streaming.
+
+**Events received:**
+
+| Event Type | Description |
+|------------|-------------|
+| `state_sync` | Full state snapshot (sent on connection) |
+| `agent_started` | Agent has started running |
+| `agent_completed` | Agent finished successfully |
+| `agent_failed` | Agent failed |
+| `task_updated` | Task status changed |
+| `orch_paused` | Orchestrator paused |
+| `orch_resumed` | Orchestrator resumed |
+| `merge_started` | Merge operation started |
+| `merge_completed` | Merge operation completed |
+| `merge_conflict` | Merge conflict detected |
+
+**Example event:**
+```json
+{
+  "type": "agent_completed",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "payload": {
+    "agent_id": "agent-abc123",
+    "task_id": "beads-xyz",
+    "status": "completed",
+    "cost_usd": 0.15
+  }
+}
+```
+
+---
+
+### Metrics
+
+#### GET /metrics
+
+Prometheus-compatible metrics endpoint. See [Prometheus Metrics](#prometheus-metrics) for details.
 
 ---
 

@@ -252,13 +252,33 @@ canopy daemon logs -f
 
 ### HTTP API
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/state` | Full state snapshot |
-| `GET /api/agents` | List all agents |
-| `GET /api/agents/:id` | Get specific agent |
-| `GET /ws` | WebSocket for real-time updates |
-| `GET /metrics` | Prometheus metrics (see [Metrics](#prometheus-metrics)) |
+The daemon exposes a REST API for monitoring and control:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/state` | GET | Full runtime state snapshot |
+| `/api/agents` | GET | List all agents |
+| `/api/agents` | PATCH | Update agent (archive) |
+| `/api/agents/:id/kill` | POST | Terminate a running agent |
+| `/api/tasks` | GET | List all tasks |
+| `/api/tasks` | POST | Create a new task |
+| `/api/tasks` | PATCH | Update task status |
+| `/api/stats` | GET | Current run statistics |
+| `/api/merge-queue` | GET | Merge queue state |
+| `/api/orch/pause` | POST | Pause orchestrator |
+| `/api/orch/resume` | POST | Resume orchestrator |
+| `/api/runs` | GET | List historical runs |
+| `/api/runs/:id` | GET | Get run details |
+| `/api/runs/:id/agents` | GET | Get agents for a run |
+| `/api/stats/history` | GET | Aggregate historical stats |
+| `/api/repositories` | GET | List repositories |
+| `/api/repositories/:id` | GET | Get repository details |
+| `/api/repositories/:id/activate` | POST | Set active repository |
+| `/api/beads/sync` | POST | Sync tasks from beads |
+| `/ws` | GET | WebSocket for real-time updates |
+| `/metrics` | GET | Prometheus metrics (see [Metrics](#prometheus-metrics)) |
+
+See [Commands](docs/COMMANDS.md#http-api-endpoints) for detailed request/response formats.
 
 ### Prometheus Metrics
 
