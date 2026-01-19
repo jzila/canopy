@@ -65,12 +65,11 @@ func (m *mockBeadsClient) Show(taskID string) (*beads.Task, error) {
 
 // mockResolver simulates resolver behavior for testing
 type mockResolver struct {
-	mu             sync.Mutex
-	resolveCalls   int
-	lastConflict   *resolver.ConflictContext
-	shouldSucceed  bool
-	resolverResult *resolver.Result
-	ipcClient      *ipc.Client
+	mu            sync.Mutex
+	resolveCalls  int
+	lastConflict  *resolver.ConflictContext
+	shouldSucceed bool
+	ipcClient     *ipc.Client
 }
 
 func newMockResolver(shouldSucceed bool) *mockResolver {

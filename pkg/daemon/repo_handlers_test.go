@@ -16,7 +16,6 @@ import (
 // mockDaemon implements a minimal daemon for testing
 type mockDaemon struct {
 	activeRepoID string
-	eventBus     *EventBus
 }
 
 func (m *mockDaemon) GetActiveRepositoryID() string {

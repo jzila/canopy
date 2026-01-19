@@ -35,9 +35,6 @@ var (
 			Bold(true).
 			Foreground(textColor)
 
-	paramStyle = lipgloss.NewStyle().
-			Foreground(dimColor)
-
 	filePathStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("33")) // Blue for file paths
 

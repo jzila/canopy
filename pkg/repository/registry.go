@@ -66,49 +66,6 @@ func loadRegistry() (*registryData, error) {
 	return &registry, nil
 }
 
-// saveRegistry saves the registry to disk with file locking.
-func saveRegistry(registry *registryData) error {
-	path := getRegistryPath()
-
-	// Ensure directory exists
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("failed to create registry directory: %w", err)
-	}
-
-	// Open file with exclusive lock for writing
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to open registry for writing: %w", err)
-	}
-	defer f.Close()
-
-	// Acquire exclusive lock
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		return fmt.Errorf("failed to acquire write lock: %w", err)
-	}
-	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-
-	// Serialize with pretty formatting
-	data, err := json.MarshalIndent(registry, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to serialize registry: %w", err)
-	}
-
-	// Truncate and write
-	if err := f.Truncate(0); err != nil {
-		return fmt.Errorf("failed to truncate registry: %w", err)
-	}
-	if _, err := f.Seek(0, 0); err != nil {
-		return fmt.Errorf("failed to seek registry: %w", err)
-	}
-	if _, err := f.Write(data); err != nil {
-		return fmt.Errorf("failed to write registry: %w", err)
-	}
-
-	return nil
-}
-
 // registryLock holds an exclusive lock on the registry file for atomic read-modify-write.
 type registryLock struct {
 	file *os.File
