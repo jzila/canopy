@@ -650,10 +650,8 @@ func (o *Orchestrator) getNextTask(ctx context.Context) (*beads.Task, bool, erro
 	o.inFlightMu.Lock()
 	defer o.inFlightMu.Unlock()
 
-	availableCount := 0
 	for i := range tasks {
 		if !o.inFlight[tasks[i].ID] {
-			availableCount++
 			// Mark this task as in-flight and return it
 			o.inFlight[tasks[i].ID] = true
 			return &tasks[i], false, nil
