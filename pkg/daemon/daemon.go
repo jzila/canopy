@@ -415,11 +415,11 @@ func (d *Daemon) GetEventBus() *EventBus {
 }
 
 // GetState returns a snapshot of the current runtime state.
-func (d *Daemon) GetState() RuntimeState {
+func (d *Daemon) GetState() RuntimeStateSnapshot {
 	if d.state != nil {
 		return d.state.GetSnapshot()
 	}
-	return RuntimeState{}
+	return RuntimeStateSnapshot{}
 }
 
 // GetRuntimeState returns the RuntimeState instance for direct access.

@@ -172,7 +172,8 @@ func (d *Dashboard) refreshAgents() {
 	snapshot := d.state.GetSnapshot()
 	d.agents = make([]*daemon.AgentState, 0, len(snapshot.Agents))
 	for _, agent := range snapshot.Agents {
-		agentCopy := *agent
+		// Use GetSnapshot to avoid copying the mutex
+		agentCopy := agent.GetSnapshot()
 		d.agents = append(d.agents, &agentCopy)
 	}
 

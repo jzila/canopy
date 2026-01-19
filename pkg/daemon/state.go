@@ -444,10 +444,52 @@ func (a *AgentState) Update(fn func(*AgentState)) {
 }
 
 // GetSnapshot returns a copy of the agent state (thread-safe)
+// Note: This returns a copy without the mutex to avoid copylocks issues.
 func (a *AgentState) GetSnapshot() AgentState {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return *a
+
+	// Get output buffer values safely
+	stdout, stderr := a.Output.Get()
+
+	// Copy all fields except mutexes
+	return AgentState{
+		ID:                 a.ID,
+		RunID:              a.RunID,
+		TaskID:             a.TaskID,
+		TaskTitle:          a.TaskTitle,
+		TaskDescription:    a.TaskDescription,
+		RepoID:             a.RepoID,
+		ParentAgentID:      a.ParentAgentID,
+		ChildAgentIDs:      append([]string(nil), a.ChildAgentIDs...),
+		Status:             a.Status,
+		MergeStatus:        a.MergeStatus,
+		MergeQueuePos:      a.MergeQueuePos,
+		MergeError:         a.MergeError,
+		StartTime:          a.StartTime,
+		EndTime:            a.EndTime,
+		Duration:           a.Duration,
+		DurationMS:         a.DurationMS,
+		DurationAPIMS:      a.DurationAPIMS,
+		NumTurns:           a.NumTurns,
+		Output:             OutputBuffer{Stdout: stdout, Stderr: stderr},
+		LiveFeedEvents:     append([]LiveFeedEvent(nil), a.LiveFeedEvents...),
+		TokenUsage:         a.TokenUsage,
+		ExitCode:           a.ExitCode,
+		Error:              a.Error,
+		Changes:            a.Changes,
+		Commits:            a.Commits,
+		GitCommits:         append([]GitCommit(nil), a.GitCommits...),
+		ResultMessage:      a.ResultMessage,
+		Archived:           a.Archived,
+		RepairAttempts:     a.RepairAttempts,
+		LastRepairOutput:   a.LastRepairOutput,
+		ValidationStatus:   a.ValidationStatus,
+		ValidationSteps:    append([]ValidationStep(nil), a.ValidationSteps...),
+		ValidationDuration: a.ValidationDuration,
+		ValidationError:    a.ValidationError,
+		// mu is intentionally not copied
+	}
 }
 
 // TaskState represents the state of a task in the orchestration
@@ -664,20 +706,32 @@ func (r *RuntimeState) Resume() {
 	r.IsPaused = false
 }
 
+// RuntimeStateSnapshot is a snapshot of RuntimeState without the mutex.
+// Used to safely return state copies without triggering copylocks warnings.
+type RuntimeStateSnapshot struct {
+	Agents       map[string]*AgentState `json:"agents"`
+	Tasks        map[string]*TaskState  `json:"tasks"`
+	Stats        Stats                  `json:"stats"`
+	IsPaused     bool                   `json:"is_paused"`
+	StartTime    time.Time              `json:"start_time"`
+	CurrentRunID string                 `json:"current_run_id"`
+}
+
 // GetSnapshot returns a complete snapshot of the runtime state (thread-safe)
-func (r *RuntimeState) GetSnapshot() RuntimeState {
+func (r *RuntimeState) GetSnapshot() RuntimeStateSnapshot {
 	// Recalculate stats before taking snapshot to ensure they're up to date
 	r.UpdateStats()
 
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	snapshot := RuntimeState{
-		Agents:    make(map[string]*AgentState),
-		Tasks:     make(map[string]*TaskState),
-		Stats:     r.Stats,
-		IsPaused:  r.IsPaused,
-		StartTime: r.StartTime,
+	snapshot := RuntimeStateSnapshot{
+		Agents:       make(map[string]*AgentState),
+		Tasks:        make(map[string]*TaskState),
+		Stats:        r.Stats,
+		IsPaused:     r.IsPaused,
+		StartTime:    r.StartTime,
+		CurrentRunID: r.CurrentRunID,
 	}
 
 	// Deep copy agents
@@ -722,7 +776,7 @@ func (r *RuntimeState) GetTasksForRepo(repoID string) map[string]*TaskState {
 // GetSnapshotForRepo returns a snapshot of the runtime state filtered to a specific repository.
 // Agents and tasks are filtered by repo ID. Stats are recalculated for the filtered data.
 // If repoID is empty, behaves like GetSnapshot().
-func (r *RuntimeState) GetSnapshotForRepo(repoID string) RuntimeState {
+func (r *RuntimeState) GetSnapshotForRepo(repoID string) RuntimeStateSnapshot {
 	if repoID == "" {
 		return r.GetSnapshot()
 	}
@@ -730,11 +784,12 @@ func (r *RuntimeState) GetSnapshotForRepo(repoID string) RuntimeState {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	snapshot := RuntimeState{
-		Agents:    make(map[string]*AgentState),
-		Tasks:     make(map[string]*TaskState),
-		IsPaused:  r.IsPaused,
-		StartTime: r.StartTime,
+	snapshot := RuntimeStateSnapshot{
+		Agents:       make(map[string]*AgentState),
+		Tasks:        make(map[string]*TaskState),
+		IsPaused:     r.IsPaused,
+		StartTime:    r.StartTime,
+		CurrentRunID: r.CurrentRunID,
 	}
 
 	// Filter and deep copy agents (note: agents don't have repo_id in struct yet,
@@ -764,13 +819,13 @@ func (r *RuntimeState) GetSnapshotForRepo(repoID string) RuntimeState {
 }
 
 // recalculateStats calculates aggregate statistics from agents in the snapshot
-func (r *RuntimeState) recalculateStats() {
+func (s *RuntimeStateSnapshot) recalculateStats() {
 	stats := Stats{}
 	var totalDuration float64
 	completedCount := 0
 	var allCommits []GitCommit
 
-	for _, agent := range r.Agents {
+	for _, agent := range s.Agents {
 		switch agent.Status {
 		case AgentStatusCompleted:
 			stats.CompletedTasks++
@@ -797,14 +852,14 @@ func (r *RuntimeState) recalculateStats() {
 		}
 	}
 
-	stats.TotalTasks = len(r.Agents)
+	stats.TotalTasks = len(s.Agents)
 	stats.TotalDuration = totalDuration
 	if completedCount > 0 {
 		stats.AverageDuration = totalDuration / float64(completedCount)
 	}
 	stats.AllGitCommits = allCommits
 
-	r.Stats = stats
+	s.Stats = stats
 }
 
 // SubscribeToEventBus subscribes to the EventBus and updates state from events.

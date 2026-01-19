@@ -128,9 +128,9 @@ func (c *RemoteClient) fetchInitialState() error {
 	c.state.StartTime = stateResp.StartTime
 	c.state.Stats = stateResp.Stats
 
-	// Copy agents
+	// Copy agents (use GetSnapshot to avoid copying the mutex)
 	for id, agent := range stateResp.Agents {
-		agentCopy := *agent
+		agentCopy := agent.GetSnapshot()
 		c.state.Agents[id] = &agentCopy
 	}
 
@@ -182,7 +182,9 @@ func (c *RemoteClient) readLoop() {
 		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		_, message, err := c.conn.ReadMessage()
 		if err != nil {
-			// All connection errors (expected or unexpected close) terminate the read loop
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				// Connection closed unexpectedly
+			}
 			return
 		}
 

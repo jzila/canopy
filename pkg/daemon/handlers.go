@@ -83,9 +83,9 @@ func (h *Handler) SetMergeQueue(mq MergeQueueInterface) {
 	h.mergeQueue = mq
 }
 
-// StateResponse wraps RuntimeState with additional daemon-level information
+// StateResponse wraps RuntimeStateSnapshot with additional daemon-level information
 type StateResponse struct {
-	RuntimeState
+	RuntimeStateSnapshot
 	ActiveRepoID string `json:"active_repo_id,omitempty"`
 }
 
@@ -108,7 +108,7 @@ func (h *Handler) HandleGetState(w http.ResponseWriter, r *http.Request) {
 
 	// Wrap snapshot with additional daemon-level state
 	response := StateResponse{
-		RuntimeState: snapshot,
+		RuntimeStateSnapshot: snapshot,
 	}
 
 	// Include active_repo_id in response
