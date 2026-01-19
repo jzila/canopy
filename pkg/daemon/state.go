@@ -666,11 +666,12 @@ func (r *RuntimeState) GetSnapshot() RuntimeState {
 	defer r.mu.RUnlock()
 
 	snapshot := RuntimeState{
-		Agents:    make(map[string]*AgentState),
-		Tasks:     make(map[string]*TaskState),
-		Stats:     r.Stats,
-		IsPaused:  r.IsPaused,
-		StartTime: r.StartTime,
+		Agents:       make(map[string]*AgentState),
+		Tasks:        make(map[string]*TaskState),
+		Stats:        r.Stats,
+		IsPaused:     r.IsPaused,
+		StartTime:    r.StartTime,
+		CurrentRunID: r.CurrentRunID,
 	}
 
 	// Deep copy agents
@@ -724,10 +725,11 @@ func (r *RuntimeState) GetSnapshotForRepo(repoID string) RuntimeState {
 	defer r.mu.RUnlock()
 
 	snapshot := RuntimeState{
-		Agents:    make(map[string]*AgentState),
-		Tasks:     make(map[string]*TaskState),
-		IsPaused:  r.IsPaused,
-		StartTime: r.StartTime,
+		Agents:       make(map[string]*AgentState),
+		Tasks:        make(map[string]*TaskState),
+		IsPaused:     r.IsPaused,
+		StartTime:    r.StartTime,
+		CurrentRunID: r.CurrentRunID,
 	}
 
 	// Filter and deep copy agents (note: agents don't have repo_id in struct yet,
@@ -819,6 +821,8 @@ func (r *RuntimeState) handleEvent(event Event) {
 	switch event.Type {
 	case EventRunStarted:
 		r.handleRunStarted(payload)
+	case EventRunCompleted:
+		r.handleRunCompleted(payload)
 	case EventAgentStarted:
 		r.handleAgentStarted(payload, event.Timestamp)
 	case EventAgentOutput:
@@ -847,6 +851,20 @@ func (r *RuntimeState) handleRunStarted(payload map[string]interface{}) {
 
 	r.mu.Lock()
 	r.CurrentRunID = runID
+	r.mu.Unlock()
+}
+
+func (r *RuntimeState) handleRunCompleted(payload map[string]interface{}) {
+	runID, _ := payload["run_id"].(string)
+	if runID == "" {
+		return
+	}
+
+	r.mu.Lock()
+	// Only clear if this is the current run (avoid race conditions with multiple runs)
+	if r.CurrentRunID == runID {
+		r.CurrentRunID = ""
+	}
 	r.mu.Unlock()
 }
 

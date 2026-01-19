@@ -1,7 +1,5 @@
 import React from 'react';
 import {
-  Play,
-  Pause,
   DollarSign,
   Zap,
   GitCommit,
@@ -10,18 +8,13 @@ import {
   Moon,
 } from 'lucide-react';
 import type { Repository, Run } from '../../api/client';
-import type { Stats, PauseState } from '../../stores/stateStore';
+import type { Stats } from '../../stores/stateStore';
 import { RepoSelector } from './RepoSelector';
 import { RunSelector } from './RunSelector';
 
 export interface DashboardHeaderProps {
   // Connection & state
   connected: boolean;
-  isPaused: boolean;
-  isPausedByAgent: boolean;
-  pauseState: PauseState;
-  isPauseLoading: boolean;
-  isResumeLoading: boolean;
 
   // Theme
   isDark: boolean;
@@ -41,10 +34,6 @@ export interface DashboardHeaderProps {
 
   // Stats
   stats: Stats;
-
-  // Actions
-  onPause: () => void;
-  onResume: () => void;
 }
 
 function formatCost(cost: number): string {
@@ -65,58 +54,11 @@ function formatTokens(tokens: number): string {
  * - Title and connection status
  * - Repository and run selectors
  * - Theme toggle
- * - Pause/Resume controls
  * - Stats summary
  */
-/**
- * Get the display text for the pause button based on pause state
- */
-function getPauseButtonText(
-  pauseState: PauseState,
-  isPauseLoading: boolean,
-  isResumeLoading: boolean
-): string {
-  if (isPauseLoading) return 'Pausing...';
-  if (isResumeLoading) return 'Resuming...';
-
-  switch (pauseState) {
-    case 'paused_user':
-      return 'Paused';
-    case 'paused_agent':
-      return 'Agent Active...';
-    case 'paused_both':
-      return 'Paused (agent active)';
-    default:
-      return 'Pause';
-  }
-}
-
-/**
- * Get the tooltip text for the pause/resume button
- */
-function getPauseButtonTooltip(pauseState: PauseState, isPaused: boolean): string {
-  if (isPaused) {
-    switch (pauseState) {
-      case 'paused_user':
-        return 'Orchestrator paused by user. Click to resume spawning new agents.';
-      case 'paused_agent':
-        return 'Orchestrator paused while agent is active (resolving conflicts or repairing). Will auto-resume when complete.';
-      case 'paused_both':
-        return 'Orchestrator paused by user while agent is active. Click to allow new agents after agent completes.';
-      default:
-        return 'Click to resume spawning new agents';
-    }
-  }
-  return 'Pause spawning of new agents. Running agents will continue until completion.';
-}
 
 export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
   connected,
-  isPaused,
-  isPausedByAgent,
-  pauseState,
-  isPauseLoading,
-  isResumeLoading,
   isDark,
   onToggleTheme,
   repositories,
@@ -128,11 +70,7 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
   isRunsLoading,
   onRunSelect,
   stats,
-  onPause,
-  onResume,
 }) => {
-  const buttonText = getPauseButtonText(pauseState, isPauseLoading, isResumeLoading);
-  const buttonTooltip = getPauseButtonTooltip(pauseState, isPaused);
   return (
     <header className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 px-8 py-5 flex-shrink-0">
       <div className="flex items-center">
@@ -180,72 +118,28 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
           </button>
         </div>
 
-        {/* Pause/Resume Button */}
-        <div className="flex items-center gap-6">
-          {/* Stats Summary (non-interactive) */}
-          <div className="flex items-center gap-6 text-sm">
-            <div className="flex items-center gap-2.5 text-gray-600 dark:text-gray-400">
-              <Zap className="w-4 h-4" />
-              <span className="font-mono font-medium tabular-nums tracking-mono-normal">
-                {formatTokens(stats.total_tokens)}
-              </span>
-            </div>
-            <div className="flex items-center gap-2.5 text-gray-600 dark:text-gray-400">
-              <DollarSign className="w-4 h-4" />
-              <span className="font-mono font-medium tabular-nums tracking-mono-normal">
-                {formatCost(stats.total_cost_usd)}
-              </span>
-            </div>
-            <div className="flex items-center gap-2.5 text-gray-600 dark:text-gray-400">
-              <FileEdit className="w-4 h-4" />
-              <span className="font-mono font-medium tabular-nums tracking-mono-normal">{stats.file_changes}</span>
-            </div>
-            <div className="flex items-center gap-2.5 text-gray-600 dark:text-gray-400">
-              <GitCommit className="w-4 h-4" />
-              <span className="font-mono font-medium tabular-nums tracking-mono-normal">{stats.git_commits}</span>
-            </div>
+        {/* Stats Summary */}
+        <div className="flex items-center gap-6 text-sm">
+          <div className="flex items-center gap-2.5 text-gray-600 dark:text-gray-400">
+            <Zap className="w-4 h-4" />
+            <span className="font-mono font-medium tabular-nums tracking-mono-normal">
+              {formatTokens(stats.total_tokens)}
+            </span>
           </div>
-
-          {isPaused ? (
-            <button
-              onClick={onResume}
-              disabled={isResumeLoading || !connected || isPausedByAgent}
-              title={buttonTooltip}
-              className={`
-                header-control gap-2 px-4 text-white rounded-lg
-                font-medium transition-colors
-                ${pauseState === 'paused_agent' ? 'bg-blue-500' : 'bg-green-500'}
-                ${
-                  isResumeLoading || !connected || (isPausedByAgent && pauseState === 'paused_agent')
-                    ? 'opacity-50 cursor-not-allowed'
-                    : pauseState === 'paused_agent'
-                      ? 'hover:bg-blue-600'
-                      : 'hover:bg-green-600'
-                }
-              `}
-            >
-              <Play className="w-4 h-4" />
-              {buttonText}
-            </button>
-          ) : (
-            <button
-              onClick={onPause}
-              disabled={isPauseLoading || !connected}
-              title={buttonTooltip}
-              className={`
-                header-control gap-2 px-4 bg-orange-500 text-white rounded-lg
-                font-medium transition-colors
-                ${
-                  isPauseLoading || !connected
-                    ? 'opacity-50 cursor-not-allowed'
-                    : 'hover:bg-orange-600'
-                }
-              `}
-            >
-              <Pause className="w-4 h-4" />
-              {buttonText}
-            </button>
-          )}
+          <div className="flex items-center gap-2.5 text-gray-600 dark:text-gray-400">
+            <DollarSign className="w-4 h-4" />
+            <span className="font-mono font-medium tabular-nums tracking-mono-normal">
+              {formatCost(stats.total_cost_usd)}
+            </span>
+          </div>
+          <div className="flex items-center gap-2.5 text-gray-600 dark:text-gray-400">
+            <FileEdit className="w-4 h-4" />
+            <span className="font-mono font-medium tabular-nums tracking-mono-normal">{stats.file_changes}</span>
+          </div>
+          <div className="flex items-center gap-2.5 text-gray-600 dark:text-gray-400">
+            <GitCommit className="w-4 h-4" />
+            <span className="font-mono font-medium tabular-nums tracking-mono-normal">{stats.git_commits}</span>
+          </div>
         </div>
       </div>
     </header>

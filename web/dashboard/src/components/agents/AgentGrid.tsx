@@ -1,9 +1,9 @@
 import React from 'react';
-import { Activity, X, Filter, ListTodo, CheckCircle, XCircle, Archive } from 'lucide-react';
+import { Activity, X, Filter, ListTodo, CheckCircle, XCircle, Archive, Play, Pause } from 'lucide-react';
 import { AgentCardGroup } from './AgentCardGroup';
 import type { AgentGroup } from '../../hooks/useAgentFiltering';
 import type { StatusFilter } from '../../hooks/useAgentFiltering';
-import type { Stats } from '../../stores/stateStore';
+import type { Stats, PauseState } from '../../stores/stateStore';
 
 export interface AgentGridProps {
   /** Grouped agents to display */
@@ -34,6 +34,73 @@ export interface AgentGridProps {
   selectedBeadTitle?: string | undefined;
   /** Called when bead filter should be cleared */
   onClearBeadFilter?: () => void;
+  /** Whether the orchestrator is paused */
+  isPaused: boolean;
+  /** Whether the orchestrator is paused by agent */
+  isPausedByAgent: boolean;
+  /** Current pause state */
+  pauseState: PauseState;
+  /** Whether a pause request is in progress */
+  isPauseLoading: boolean;
+  /** Whether a resume request is in progress */
+  isResumeLoading: boolean;
+  /** Current run ID (empty if no active run) */
+  currentRunId: string;
+  /** Whether connected to the backend */
+  connected: boolean;
+  /** Called when pause is clicked */
+  onPause: () => void;
+  /** Called when resume is clicked */
+  onResume: () => void;
+}
+
+/**
+ * Get the display text for the pause button based on pause state
+ */
+function getPauseButtonText(
+  pauseState: PauseState,
+  isPauseLoading: boolean,
+  isResumeLoading: boolean
+): string {
+  if (isPauseLoading) return 'Pausing...';
+  if (isResumeLoading) return 'Resuming...';
+
+  switch (pauseState) {
+    case 'paused_user':
+      return 'Paused';
+    case 'paused_agent':
+      return 'Agent Active...';
+    case 'paused_both':
+      return 'Paused (agent active)';
+    default:
+      return 'Pause';
+  }
+}
+
+/**
+ * Get the tooltip text for the pause/resume button
+ */
+function getPauseButtonTooltip(
+  pauseState: PauseState,
+  isPaused: boolean,
+  hasActiveRun: boolean
+): string {
+  if (!hasActiveRun) {
+    return 'No active run';
+  }
+  if (isPaused) {
+    switch (pauseState) {
+      case 'paused_user':
+        return 'Orchestrator paused by user. Click to resume spawning new agents.';
+      case 'paused_agent':
+        return 'Orchestrator paused while agent is active (resolving conflicts or repairing). Will auto-resume when complete.';
+      case 'paused_both':
+        return 'Orchestrator paused by user while agent is active. Click to allow new agents after agent completes.';
+      default:
+        return 'Click to resume spawning new agents';
+    }
+  }
+  return 'Pause spawning of new agents. Running agents will continue until completion.';
 }
 
 /**
@@ -43,6 +110,7 @@ export interface AgentGridProps {
  * - Responsive grid layout (1-4 columns based on viewport)
  * - Empty state display
  * - Status filter toggles
+ * - Pause/Resume controls
  * - Delegation to AgentCardGroup for rendering
  */
 export const AgentGrid: React.FC<AgentGridProps> = ({
@@ -60,6 +128,15 @@ export const AgentGrid: React.FC<AgentGridProps> = ({
   selectedBeadId,
   selectedBeadTitle,
   onClearBeadFilter,
+  isPaused,
+  isPausedByAgent,
+  pauseState,
+  isPauseLoading,
+  isResumeLoading,
+  currentRunId,
+  connected,
+  onPause,
+  onResume,
 }) => {
   const toggleFilter = (filter: StatusFilter) => {
     onStatusFilterChange(statusFilter === filter ? 'all' : filter);
@@ -72,7 +149,7 @@ export const AgentGrid: React.FC<AgentGridProps> = ({
       <button
         onClick={() => onStatusFilterChange('all')}
         className={`
-          flex items-center gap-2 px-3 py-2 rounded-lg transition-all cursor-pointer
+          flex items-center gap-3 px-5 py-3 rounded-lg font-medium transition-all cursor-pointer h-12
           ${
             statusFilter === 'all'
               ? 'bg-gray-200 dark:bg-gray-600 ring-2 ring-gray-400 dark:ring-gray-500'
@@ -81,8 +158,8 @@ export const AgentGrid: React.FC<AgentGridProps> = ({
         `}
       >
         <ListTodo className="w-4 h-4 text-gray-600 dark:text-gray-400" />
-        <span className="text-sm font-mono font-normal text-gray-600 dark:text-gray-300">All</span>
-        <span className="text-sm font-mono font-normal tabular-nums text-gray-900 dark:text-gray-100">
+        <span className="text-sm tracking-wider text-gray-600 dark:text-gray-300">All</span>
+        <span className="text-lg font-mono font-semibold tabular-nums tracking-mono-normal text-gray-900 dark:text-gray-100">
           {stats.total_tasks}
         </span>
       </button>
@@ -91,7 +168,7 @@ export const AgentGrid: React.FC<AgentGridProps> = ({
       <button
         onClick={() => toggleFilter('running')}
         className={`
-          flex items-center gap-2 px-3 py-2 rounded-lg transition-all cursor-pointer
+          flex items-center gap-3 px-5 py-3 rounded-lg font-medium transition-all cursor-pointer h-12
           ${
             statusFilter === 'running'
               ? 'bg-blue-100 dark:bg-blue-900/50 ring-2 ring-blue-500'
@@ -100,8 +177,8 @@ export const AgentGrid: React.FC<AgentGridProps> = ({
         `}
       >
         <Activity className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-        <span className="text-sm font-mono font-normal text-blue-600 dark:text-blue-400">Running</span>
-        <span className="text-sm font-mono font-normal tabular-nums text-blue-700 dark:text-blue-300">
+        <span className="text-sm tracking-wider text-blue-600 dark:text-blue-400">Running</span>
+        <span className="text-lg font-mono font-semibold tabular-nums tracking-mono-normal text-blue-700 dark:text-blue-300">
           {stats.running_tasks}
         </span>
       </button>
@@ -110,7 +187,7 @@ export const AgentGrid: React.FC<AgentGridProps> = ({
       <button
         onClick={() => toggleFilter('completed')}
         className={`
-          flex items-center gap-2 px-3 py-2 rounded-lg transition-all cursor-pointer
+          flex items-center gap-3 px-5 py-3 rounded-lg font-medium transition-all cursor-pointer h-12
           ${
             statusFilter === 'completed'
               ? 'bg-green-100 dark:bg-green-900/50 ring-2 ring-green-500'
@@ -119,10 +196,10 @@ export const AgentGrid: React.FC<AgentGridProps> = ({
         `}
       >
         <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
-        <span className="text-sm font-mono font-normal text-green-600 dark:text-green-400">
+        <span className="text-sm tracking-wider text-green-600 dark:text-green-400">
           Completed
         </span>
-        <span className="text-sm font-mono font-normal tabular-nums text-green-700 dark:text-green-300">
+        <span className="text-lg font-mono font-semibold tabular-nums tracking-mono-normal text-green-700 dark:text-green-300">
           {stats.completed_tasks}
         </span>
       </button>
@@ -131,7 +208,7 @@ export const AgentGrid: React.FC<AgentGridProps> = ({
       <button
         onClick={() => toggleFilter('failed')}
         className={`
-          flex items-center gap-2 px-3 py-2 rounded-lg transition-all cursor-pointer
+          flex items-center gap-3 px-5 py-3 rounded-lg font-medium transition-all cursor-pointer h-12
           ${
             statusFilter === 'failed'
               ? 'bg-red-100 dark:bg-red-900/50 ring-2 ring-red-500'
@@ -140,8 +217,8 @@ export const AgentGrid: React.FC<AgentGridProps> = ({
         `}
       >
         <XCircle className="w-4 h-4 text-red-600 dark:text-red-400" />
-        <span className="text-sm font-mono font-normal text-red-600 dark:text-red-400">Failed</span>
-        <span className="text-sm font-mono font-normal tabular-nums text-red-700 dark:text-red-300">
+        <span className="text-sm tracking-wider text-red-600 dark:text-red-400">Failed</span>
+        <span className="text-lg font-mono font-semibold tabular-nums tracking-mono-normal text-red-700 dark:text-red-300">
           {stats.failed_tasks}
         </span>
       </button>
@@ -153,7 +230,7 @@ export const AgentGrid: React.FC<AgentGridProps> = ({
       <button
         onClick={onToggleShowArchived}
         className={`
-          flex items-center gap-2 px-3 py-2 rounded-lg transition-all cursor-pointer
+          flex items-center gap-3 px-5 py-3 rounded-lg font-medium transition-all cursor-pointer h-12
           ${
             showArchivedAgents
               ? 'bg-purple-100 dark:bg-purple-900/50 ring-2 ring-purple-500'
@@ -170,7 +247,7 @@ export const AgentGrid: React.FC<AgentGridProps> = ({
           }`}
         />
         <span
-          className={`text-sm font-mono font-normal ${
+          className={`text-sm tracking-wider ${
             showArchivedAgents
               ? 'text-purple-600 dark:text-purple-400'
               : 'text-gray-600 dark:text-gray-400'
@@ -179,7 +256,7 @@ export const AgentGrid: React.FC<AgentGridProps> = ({
           {showArchivedAgents ? 'Hide' : 'Show'} Archived
         </span>
         <span
-          className={`text-sm font-mono font-normal tabular-nums ${
+          className={`text-lg font-mono font-semibold tabular-nums tracking-mono-normal ${
             showArchivedAgents
               ? 'text-purple-700 dark:text-purple-300'
               : 'text-gray-700 dark:text-gray-300'
@@ -188,6 +265,59 @@ export const AgentGrid: React.FC<AgentGridProps> = ({
           {archivedAgentCount}
         </span>
       </button>
+
+      {/* Pause/Resume Button */}
+      {(() => {
+        const hasActiveRun = currentRunId !== '';
+        const buttonText = getPauseButtonText(pauseState, isPauseLoading, isResumeLoading);
+        const buttonTooltip = getPauseButtonTooltip(pauseState, isPaused, hasActiveRun);
+        const isDisabled = !hasActiveRun || !connected;
+
+        if (isPaused) {
+          return (
+            <button
+              onClick={onResume}
+              disabled={isDisabled || isResumeLoading || isPausedByAgent}
+              title={buttonTooltip}
+              className={`
+                flex items-center gap-2 px-4 h-12 text-white rounded-lg
+                font-medium transition-colors
+                ${pauseState === 'paused_agent' ? 'bg-blue-500' : 'bg-green-500'}
+                ${
+                  isDisabled || isResumeLoading || (isPausedByAgent && pauseState === 'paused_agent')
+                    ? 'opacity-50 cursor-not-allowed'
+                    : pauseState === 'paused_agent'
+                      ? 'hover:bg-blue-600'
+                      : 'hover:bg-green-600'
+                }
+              `}
+            >
+              <Play className="w-4 h-4" />
+              <span className="text-sm">{buttonText}</span>
+            </button>
+          );
+        }
+
+        return (
+          <button
+            onClick={onPause}
+            disabled={isDisabled || isPauseLoading}
+            title={buttonTooltip}
+            className={`
+              flex items-center gap-2 px-4 h-12 bg-orange-500 text-white rounded-lg
+              font-medium transition-colors
+              ${
+                isDisabled || isPauseLoading
+                  ? 'opacity-50 cursor-not-allowed'
+                  : 'hover:bg-orange-600'
+              }
+            `}
+          >
+            <Pause className="w-4 h-4" />
+            <span className="text-sm">{buttonText}</span>
+          </button>
+        );
+      })()}
     </div>
   );
 

@@ -142,6 +142,7 @@ export interface RuntimeState {
   is_paused_by_agent: boolean;
   pause_state: PauseState;
   start_time: string;
+  current_run_id: string;
 }
 
 // Store interface
@@ -155,6 +156,7 @@ interface StateStore {
   isPausedByUser: boolean;
   isPausedByAgent: boolean;
   pauseState: PauseState;
+  currentRunId: string; // Currently active orchestrator run ID (empty if no active run)
   selectedAgentId: string | null;
   highlightedTaskId: string | null;
   selectedBeadId: string | null; // Selected bead for filtering agents
@@ -200,6 +202,8 @@ interface StateStore {
     repairAttempts?: number,
     lastRepairOutput?: string
   ) => void;
+  // Current run tracking
+  setCurrentRunId: (runId: string) => void;
   // Run filtering actions
   setRuns: (runs: Run[]) => void;
   setActiveRunId: (runId: string) => void;
@@ -276,6 +280,7 @@ export const useStateStore = create<StateStore>((set) => ({
   isPausedByUser: false,
   isPausedByAgent: false,
   pauseState: 'running',
+  currentRunId: '', // empty means no active orchestrator run
   selectedAgentId: null,
   highlightedTaskId: null,
   selectedBeadId: null,
@@ -360,6 +365,7 @@ export const useStateStore = create<StateStore>((set) => ({
       isPausedByUser: runtimeState.is_paused_by_user,
       isPausedByAgent: runtimeState.is_paused_by_agent,
       pauseState: runtimeState.pause_state,
+      currentRunId: runtimeState.current_run_id ?? '',
     }),
 
   appendOutput: (agentId, output, isError = false) =>
@@ -502,6 +508,9 @@ export const useStateStore = create<StateStore>((set) => ({
         },
       };
     }),
+
+  // Current run tracking
+  setCurrentRunId: (currentRunId) => set({ currentRunId }),
 
   // Run filtering actions
   setRuns: (runs) => set({ runs }),

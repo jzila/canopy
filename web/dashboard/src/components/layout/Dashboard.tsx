@@ -253,16 +253,12 @@ export const Dashboard: React.FC = () => {
 
   const selectedAgent = selectedAgentId ? agents[selectedAgentId] : null;
   const totalAgentCount = Object.keys(agents).length;
+  const currentRunId = useStateStore((state) => state.currentRunId);
 
   return (
     <div className="flex flex-col h-screen bg-gray-50 dark:bg-gray-900">
       <DashboardHeader
         connected={connected}
-        isPaused={isPaused}
-        isPausedByAgent={isPausedByAgent}
-        pauseState={pauseState}
-        isPauseLoading={isPauseLoading}
-        isResumeLoading={isResumeLoading}
         isDark={isDark}
         onToggleTheme={() => setIsDark(!isDark)}
         repositories={repositories}
@@ -274,8 +270,6 @@ export const Dashboard: React.FC = () => {
         isRunsLoading={isRunsLoading}
         onRunSelect={setActiveRunId}
         stats={stats}
-        onPause={handlePause}
-        onResume={handleResume}
       />
 
       {/* Main Content Area with Beads Pane */}
@@ -313,6 +307,15 @@ export const Dashboard: React.FC = () => {
               selectedBeadId={selectedBeadId}
               selectedBeadTitle={selectedBeadId ? tasks[selectedBeadId]?.title : undefined}
               onClearBeadFilter={() => setSelectedBead(null)}
+              isPaused={isPaused}
+              isPausedByAgent={isPausedByAgent}
+              pauseState={pauseState}
+              isPauseLoading={isPauseLoading}
+              isResumeLoading={isResumeLoading}
+              currentRunId={currentRunId}
+              connected={connected}
+              onPause={handlePause}
+              onResume={handleResume}
             />
           </div>
 
