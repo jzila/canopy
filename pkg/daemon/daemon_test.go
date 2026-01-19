@@ -907,3 +907,194 @@ func TestHistoricalLiveFeedEvents(t *testing.T) {
 
 	store.Close()
 }
+
+// TestRestoreLiveFeedEventsFromJSONL verifies that live feed events are loaded from
+// JSONL files during state restoration, taking precedence over synthetic events.
+func TestRestoreLiveFeedEventsFromJSONL(t *testing.T) {
+	// Set up temp directories for both DB and live feed JSONL
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
+
+	// Override XDG_CACHE_HOME so live feed files go to temp directory
+	originalCacheDir := os.Getenv("XDG_CACHE_HOME")
+	os.Setenv("XDG_CACHE_HOME", tempDir)
+	defer os.Setenv("XDG_CACHE_HOME", originalCacheDir)
+
+	store, err := persistence.NewStoreWithPath(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+
+	now := time.Now()
+
+	// Create a completed run
+	run := &persistence.Run{
+		ID:        "run-with-jsonl",
+		StartedAt: now.Add(-time.Hour),
+		Status:    persistence.RunStatusCompleted,
+	}
+	finishedAt := now.Add(-30 * time.Minute)
+	run.FinishedAt = &finishedAt
+	if err := store.CreateRun(run); err != nil {
+		t.Fatalf("failed to create run: %v", err)
+	}
+
+	// Create an agent in the DB
+	agentID := "agent-with-jsonl-events"
+	agent := &persistence.Agent{
+		ID:            agentID,
+		RunID:         "run-with-jsonl",
+		TaskID:        "task-1",
+		TaskTitle:     "Test Task",
+		Status:        persistence.AgentStatusCompleted,
+		StartedAt:     now.Add(-50 * time.Minute),
+		ResultMessage: "Task completed",
+		FilesChanged:  3,
+	}
+	if err := store.CreateAgent(agent); err != nil {
+		t.Fatalf("failed to create agent: %v", err)
+	}
+
+	// Manually create JSONL file with live feed events
+	// This simulates events that were recorded during the original run
+	events := []struct {
+		eventType string
+		rawData   map[string]interface{}
+	}{
+		{
+			eventType: "tool_use",
+			rawData: map[string]interface{}{
+				"tool":      "Read",
+				"file_path": "/src/main.go",
+			},
+		},
+		{
+			eventType: "text",
+			rawData: map[string]interface{}{
+				"text": "Analyzing the code structure...",
+			},
+		},
+		{
+			eventType: "tool_use",
+			rawData: map[string]interface{}{
+				"tool":      "Edit",
+				"file_path": "/src/main.go",
+			},
+		},
+		{
+			eventType: "file_change",
+			rawData: map[string]interface{}{
+				"action":    "modified",
+				"file_path": "/src/main.go",
+			},
+		},
+		{
+			eventType: "agent_completed",
+			rawData: map[string]interface{}{
+				"files_changed":   3,
+				"commits_created": 1,
+				"result_message":  "Task completed",
+			},
+		},
+	}
+
+	// Write events to JSONL file
+	for _, e := range events {
+		if err := persistence.AppendLiveFeedEvent(agentID, e.eventType, e.rawData); err != nil {
+			t.Fatalf("failed to append live feed event: %v", err)
+		}
+	}
+
+	// Verify the JSONL file was created
+	if !persistence.LiveFeedFileExists(agentID) {
+		t.Fatal("expected JSONL file to exist")
+	}
+
+	// Now create daemon and restore state
+	daemon := newDaemonForTest(Config{EnablePersistence: true}, store, nil)
+
+	if err := daemon.restoreStateFromDB(); err != nil {
+		t.Fatalf("restoreStateFromDB failed: %v", err)
+	}
+
+	// Verify agent was restored with events from JSONL
+	state := daemon.GetRuntimeState()
+	restoredAgent := state.GetAgent(agentID)
+	if restoredAgent == nil {
+		t.Fatal("expected agent to be restored")
+	}
+
+	// Should have exactly 5 events from JSONL (not synthetic events)
+	if len(restoredAgent.LiveFeedEvents) != 5 {
+		t.Errorf("expected 5 live feed events from JSONL, got %d", len(restoredAgent.LiveFeedEvents))
+	}
+
+	// Verify the first event is tool_use with Read (from JSONL, not historical marker)
+	if len(restoredAgent.LiveFeedEvents) > 0 {
+		firstEvent := restoredAgent.LiveFeedEvents[0]
+		if firstEvent.EventType != LiveFeedEventToolUse {
+			t.Errorf("expected first event type 'tool_use', got %s", firstEvent.EventType)
+		}
+		toolData, ok := firstEvent.GetToolUseData()
+		if !ok {
+			t.Error("expected to get tool use data")
+		} else if toolData.Tool != "Read" {
+			t.Errorf("expected tool 'Read', got '%s'", toolData.Tool)
+		} else if toolData.FilePath != "/src/main.go" {
+			t.Errorf("expected file_path '/src/main.go', got '%s'", toolData.FilePath)
+		}
+	}
+
+	// Verify the second event is text
+	if len(restoredAgent.LiveFeedEvents) > 1 {
+		textEvent := restoredAgent.LiveFeedEvents[1]
+		if textEvent.EventType != LiveFeedEventText {
+			t.Errorf("expected second event type 'text', got %s", textEvent.EventType)
+		}
+		textData, ok := textEvent.GetTextData()
+		if !ok {
+			t.Error("expected to get text data")
+		} else if textData.Text != "Analyzing the code structure..." {
+			t.Errorf("unexpected text: %s", textData.Text)
+		}
+		// This should NOT be marked as historic since it's from actual JSONL
+		if textData.IsHistoric {
+			t.Error("expected is_historic to be false for JSONL events")
+		}
+	}
+
+	// Verify file_change event
+	if len(restoredAgent.LiveFeedEvents) > 3 {
+		fileChangeEvent := restoredAgent.LiveFeedEvents[3]
+		if fileChangeEvent.EventType != LiveFeedEventFileChange {
+			t.Errorf("expected fourth event type 'file_change', got %s", fileChangeEvent.EventType)
+		}
+		fileData, ok := fileChangeEvent.GetFileChangeData()
+		if !ok {
+			t.Error("expected to get file change data")
+		} else if fileData.Action != "modified" || fileData.FilePath != "/src/main.go" {
+			t.Errorf("unexpected file change data: %+v", fileData)
+		}
+	}
+
+	// Verify agent_completed event
+	if len(restoredAgent.LiveFeedEvents) > 4 {
+		completedEvent := restoredAgent.LiveFeedEvents[4]
+		if completedEvent.EventType != LiveFeedEventAgentCompleted {
+			t.Errorf("expected last event type 'agent_completed', got %s", completedEvent.EventType)
+		}
+		completedData, ok := completedEvent.GetAgentCompletedData()
+		if !ok {
+			t.Error("expected to get agent completed data")
+		} else {
+			if completedData.FilesChanged != 3 {
+				t.Errorf("expected files_changed=3, got %d", completedData.FilesChanged)
+			}
+			if completedData.CommitsCreated != 1 {
+				t.Errorf("expected commits_created=1, got %d", completedData.CommitsCreated)
+			}
+		}
+	}
+
+	store.Close()
+}
