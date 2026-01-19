@@ -481,6 +481,127 @@ canopy init --apply '{"confirm_validation":"yes","validation_mode":"strict","val
 
 ---
 
+### canopy kill
+
+Terminate a running worker agent.
+
+```bash
+canopy kill <agent-id> [flags]
+```
+
+#### Arguments
+
+| Argument | Description |
+|----------|-------------|
+| `<agent-id>` | Agent ID, task ID, or partial agent ID prefix |
+
+#### Options
+
+| Option | Short | Default | Description |
+|--------|-------|---------|-------------|
+| `--force` | `-f` | `false` | Kill without confirmation prompt |
+
+#### Behavior
+
+1. Queries the daemon for running agents
+2. Matches the target by full agent ID, task ID, or prefix
+3. Prompts for confirmation (unless `--force`)
+4. Sends kill signal to terminate the agent
+
+#### Examples
+
+```bash
+# Kill an agent by its full agent ID
+canopy kill agent-abc12345-beads-xyz
+
+# Kill an agent by task ID (matches the running agent for that task)
+canopy kill beads-xyz
+
+# Kill by partial ID prefix
+canopy kill agent-abc
+
+# Force kill without confirmation
+canopy kill --force agent-abc12345-beads-xyz
+```
+
+#### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Agent killed successfully |
+| `1` | Agent not found or not running |
+
+---
+
+### canopy ps
+
+Show running canopy processes.
+
+```bash
+canopy ps [flags]
+```
+
+#### Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--json` | `false` | Output as JSON for scripting |
+| `--daemon-only` | `false` | Show only daemon status |
+| `--workers-only` | `false` | Show only worker agents |
+
+#### Output Sections
+
+**Daemon Section:**
+- Running status and PID
+- Port and socket path
+- Uptime
+- Paused state
+- Active repository
+- Task statistics (total, running, completed, failed)
+- Accumulated cost
+
+**Workers Section:**
+- Agent ID
+- Task ID
+- Task title
+- Status (running, starting, merge status)
+- Duration
+
+#### Examples
+
+```bash
+# Show all running canopy processes
+canopy ps
+
+# Show only the daemon status
+canopy ps --daemon-only
+
+# Show only worker agents
+canopy ps --workers-only
+
+# Output as JSON for scripting
+canopy ps --json
+```
+
+#### Example Output
+
+```
+DAEMON
+  Status: Running (PID 12345)
+  Port: 8080
+  Socket: /run/user/1000/canopy.sock
+  Uptime: 2h 15m
+  Tasks: 10 total (2 running, 7 completed, 1 failed)
+  Cost: $1.23
+
+WORKERS
+  AGENT ID      TASK ID           STATUS      DURATION    TITLE
+  agt-abc123    beads-xyz         running     5m 32s      Implement feature X
+  agt-def456    beads-uvw         merging     2m 10s      Fix bug in module Y
+```
+
+---
+
 ### canopy history
 
 View past run records.
@@ -562,6 +683,76 @@ canopy help --agent
 | `--agent` | Show detailed workflow explanation for AI agents |
 
 The `--agent` flag outputs a comprehensive guide for AI agents orchestrating work with Canopy, including architecture, workflow, and examples.
+
+---
+
+### canopy sync-beads
+
+Sync beads tasks with the daemon.
+
+```bash
+canopy sync-beads [repo-path] [flags]
+```
+
+#### Arguments
+
+| Argument | Description |
+|----------|-------------|
+| `[repo-path]` | Optional path to repository (default: current directory) |
+
+#### Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--json` | `false` | Output as JSON for scripting |
+| `--quiet` | `false` | Only output errors |
+
+#### Behavior
+
+Triggers the daemon to re-read tasks from the beads database (`.beads/` directory) and update its internal state. Useful when:
+- Beads files have been manually modified
+- Ensuring the daemon has the latest task information
+- After external changes to the beads database
+
+#### Examples
+
+```bash
+# Sync beads for the current directory
+canopy sync-beads
+
+# Sync beads for a specific repository
+canopy sync-beads /path/to/repo
+
+# Output as JSON for scripting
+canopy sync-beads --json
+
+# Quiet mode - only output errors
+canopy sync-beads --quiet
+```
+
+#### Example Output
+
+```
+Synced 15 tasks from my-project
+```
+
+#### JSON Output
+
+```json
+{
+  "success": true,
+  "synced": 15,
+  "repo_id": "abc123",
+  "repo_name": "my-project"
+}
+```
+
+#### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Sync completed successfully |
+| `1` | Error (daemon not running, connection failed, etc.) |
 
 ---
 
