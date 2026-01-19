@@ -39,8 +39,8 @@ var runCmd = &cobra.Command{
 	Short: "Execute ready tasks from beads",
 	Long: `Executes all ready (unblocked) tasks from beads in parallel.
 
-Each task runs in an isolated OverlayFS sandbox with its own copy
-of the working directory. Changes are merged back after completion.
+Each task runs in an isolated sandbox with its own copy of the working
+directory. Changes are merged back after completion.
 
 DAEMON CONNECTION
   The canopy daemon is required for monitoring and real-time updates.
