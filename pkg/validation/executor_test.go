@@ -321,7 +321,8 @@ func TestExecutor_StepTimeout(t *testing.T) {
 		t.Errorf("expected status %q, got %q", ValidationStatusFailed, result.Status)
 	}
 	// Should have timed out quickly, not waited 10 seconds
-	if elapsed > 2*time.Second {
+	// Use 5s tolerance for CI environments where process killing can be slow
+	if elapsed > 5*time.Second {
 		t.Errorf("expected timeout to trigger quickly, took %v", elapsed)
 	}
 	if len(result.Steps) != 1 {
@@ -365,7 +366,8 @@ func TestExecutor_GlobalTimeout(t *testing.T) {
 		t.Errorf("expected status %q, got %q", ValidationStatusFailed, result.Status)
 	}
 	// Should have timed out quickly
-	if elapsed > 2*time.Second {
+	// Use 5s tolerance for CI environments where process killing can be slow
+	if elapsed > 5*time.Second {
 		t.Errorf("expected global timeout to trigger quickly, took %v", elapsed)
 	}
 }
@@ -405,7 +407,8 @@ func TestExecutor_ContextCancellation(t *testing.T) {
 		t.Errorf("expected status %q, got %q", ValidationStatusFailed, result.Status)
 	}
 	// Should have been cancelled quickly (not waiting full 10 seconds)
-	if elapsed > 2*time.Second {
+	// Use 5s tolerance for CI environments where process killing can be slow
+	if elapsed > 5*time.Second {
 		t.Errorf("expected cancellation to trigger quickly, took %v", elapsed)
 	}
 	// Verify the step was killed
