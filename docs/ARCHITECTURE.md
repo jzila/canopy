@@ -13,6 +13,7 @@ This document provides a detailed technical overview of Canopy's architecture, i
 7. [Concurrency Model](#concurrency-model)
    - [Pause State Machine](#pause-state-machine)
 8. [Merge Strategy](#merge-strategy)
+   - [Merge Queue State Machine](#merge-queue-state-machine)
 
 ---
 
@@ -362,7 +363,7 @@ type AgentState struct {
     EndTime       time.Time
     Duration      time.Duration
     ExitCode      int
-    MergeStatus   string          // pending, merging, merged, failed
+    MergeStatus   string          // See "Merge Queue State Machine" section for all values
     QueuePosition int
     RepoID        string
     Result        *agent.Result
@@ -791,6 +792,173 @@ If the daemon is unreachable for >5 minutes:
 ---
 
 ## Merge Strategy
+
+### Merge Queue State Machine
+
+The merge queue tracks each agent's changes through a state machine as they are processed. Understanding these states is essential for debugging merge issues and monitoring agent progress.
+
+#### Merge Status Values
+
+| Status | Value | Description |
+|--------|-------|-------------|
+| None | `""` | Agent has not entered the merge queue, or has no changes to merge |
+| Pending | `pending` | Agent is waiting in queue for a merge slot |
+| Acquiring | `acquiring` | Agent is attempting to acquire a merge slot |
+| Merging | `merging` | Agent is actively applying patches/changes via `git am` |
+| Resolving | `resolving` | A resolver or repair agent was spawned to handle conflicts/failures |
+| Merged | `merged` | Changes were successfully merged (with or without validation) |
+| Failed | `failed` | Merge failed and could not be recovered |
+| Resolved | `resolved` | Merge succeeded after conflict resolution (persistence only) |
+| Skipped | `skipped` | Merge was skipped because there were no changes to apply |
+| Merged Needs Repair | `merged_needs_repair` | Merge succeeded but validation failed after all repair attempts |
+
+#### State Transition Diagram
+
+```
+                              ┌─────────────────────────────────────────────────────────────┐
+                              │                     MERGE QUEUE STATES                        │
+                              └─────────────────────────────────────────────────────────────┘
+
+    ┌──────┐    enqueue     ┌─────────┐   slot available   ┌───────────┐   begin merge   ┌─────────┐
+    │ none │ ──────────────►│ pending │ ─────────────────► │ acquiring │ ───────────────►│ merging │
+    └──────┘                └─────────┘                    └───────────┘                 └────┬────┘
+                                                                                              │
+                                                                                              │
+                         ┌────────────────────────────────────────────────────────────────────┤
+                         │                                                                    │
+                         │                                                                    │
+    ┌────────────────────┼─────────────────────────────┐     ┌────────────────────────────────┼────────┐
+    │                    │                             │     │                                │        │
+    │   CONFLICT PATH    │                             │     │   HAPPY PATH                   │        │
+    │                    │                             │     │                                │        │
+    │        ┌───────────▼─────────┐                   │     │                                ▼        │
+    │        │     resolving       │                   │     │                  ┌──────────────────┐   │
+    │        │ (resolver spawned)  │                   │     │                  │ (git am success) │   │
+    │        └─────────┬───────────┘                   │     │                  └────────┬─────────┘   │
+    │                  │                               │     │                           │             │
+    │      ┌───────────┼───────────┐                   │     │              ┌────────────┼─────────┐   │
+    │      │           │           │                   │     │              │            │         │   │
+    │      ▼           ▼           ▼                   │     │              ▼            ▼         │   │
+    │  ┌────────┐  ┌────────┐  ┌─────────┐            │     │     ┌────────────┐  ┌─────────────┐ │   │
+    │  │ merged │  │resolved│  │ failed  │            │     │     │ validation │  │  no changes │ │   │
+    │  │        │  │(+val)  │  │         │            │     │     │  enabled?  │  │   (skip)    │ │   │
+    │  └────────┘  └────────┘  └─────────┘            │     │     └──────┬─────┘  └──────┬──────┘ │   │
+    │                                                 │     │            │               │        │   │
+    └─────────────────────────────────────────────────┘     │     ┌──────┴──────┐        │        │   │
+                                                            │     │             │        │        │   │
+                                                            │     ▼             ▼        ▼        │   │
+                                                            │  ┌──────┐    ┌────────┐ ┌─────────┐ │   │
+                                                            │  │ yes  │    │   no   │ │ skipped │ │   │
+                                                            │  └──┬───┘    └───┬────┘ └─────────┘ │   │
+                                                            │     │            │                  │   │
+                                                            └─────┼────────────┼──────────────────┘   │
+                                                                  │            │                      │
+                                                                  │            │                      │
+                         ┌────────────────────────────────────────┘            │                      │
+                         │                                                     │                      │
+                         │                                                     ▼                      │
+    ┌────────────────────┼─────────────────────────────┐              ┌────────────────┐              │
+    │                    │                             │              │                │              │
+    │   VALIDATION PATH  │                             │              │    merged      │◄─────────────┘
+    │                    │                             │              │                │
+    │        ┌───────────▼─────────┐                   │              └────────────────┘
+    │        │    run validation   │                   │
+    │        │    (build, test)    │                   │
+    │        └─────────┬───────────┘                   │
+    │                  │                               │
+    │      ┌───────────┼───────────┐                   │
+    │      │           │           │                   │
+    │      ▼           ▼           ▼                   │
+    │  ┌────────┐  ┌────────────┐  ┌────────────────┐  │
+    │  │ passed │  │  failed    │  │ failed (strict)│  │
+    │  │        │  │ (lenient)  │  │   → revert     │  │
+    │  └───┬────┘  └─────┬──────┘  └───────┬────────┘  │
+    │      │             │                 │           │
+    │      ▼             │                 ▼           │
+    │  ┌────────┐        │            ┌─────────┐      │
+    │  │ merged │        │            │ failed  │      │
+    │  └────────┘        │            └─────────┘      │
+    │                    │                             │
+    │                    ▼                             │
+    │            ┌───────────────┐                     │
+    │            │ repair agent  │                     │
+    │            │ (up to N tries)                     │
+    │            └───────┬───────┘                     │
+    │                    │                             │
+    │        ┌───────────┼───────────┐                 │
+    │        │           │           │                 │
+    │        ▼           ▼           ▼                 │
+    │   ┌────────┐ ┌───────────┐ ┌──────────────────┐  │
+    │   │ merged │ │ resolving │ │merged_needs_repair│ │
+    │   │(fixed) │ │ (retry)   │ │ (exhausted)       │ │
+    │   └────────┘ └─────┬─────┘ └──────────────────┘  │
+    │                    │                             │
+    │                    └─────► (loops to validation) │
+    └──────────────────────────────────────────────────┘
+```
+
+#### When Each Status Is Set
+
+**`none` (empty string)**
+- Initial state when agent starts executing
+- Never explicitly set; represents absence of merge queue involvement
+
+**`pending`**
+- Set when agent's result is enqueued for merge processing
+- Agent is waiting for other agents ahead in the queue to complete their merges
+
+**`acquiring`**
+- Set when the queue processor starts processing this agent's merge request
+- Brief transitional state before actual merge begins
+
+**`merging`**
+- Set when `git am` (patch application) or file copy operations begin
+- Most time in this state is spent applying git patches
+
+**`resolving`**
+- Set when merge fails and a resolver agent is spawned to fix conflicts
+- Also set when repair agent is spawned after validation failure
+- Queue pauses while resolver/repair agent works
+
+**`merged`**
+- Set when all changes are successfully applied to the repository
+- If validation is enabled: set only after validation passes
+- If validation is disabled: set immediately after successful `git am`
+
+**`resolved`**
+- Used in persistence layer to distinguish merges that required conflict resolution
+- Functionally equivalent to `merged` but indicates resolver agent intervention
+
+**`failed`**
+- Set when merge cannot be completed and no recovery is possible
+- Causes: resolver agent failure, validation failure (strict mode), cancelled context
+- In strict validation mode: merge is reverted before setting this status
+
+**`skipped`**
+- Set when agent completed but had no actual changes to apply
+- Common when: work was already done by another agent, or resolver determined no action needed
+
+**`merged_needs_repair`**
+- Set when merge succeeded but validation failed after exhausting all repair attempts
+- Only occurs in lenient validation mode (strict mode reverts and fails instead)
+- Creates a bead for manual intervention with full context
+
+#### Validation and Repair Interaction
+
+Post-merge validation runs when configured in `.canopy/validation.toml`:
+
+1. **Validation runs after successful merge**
+2. **If validation fails:**
+   - **Lenient mode**: Spawn repair agent (up to N attempts), then `merged_needs_repair` if exhausted
+   - **Strict mode**: Revert merge via `git reset --hard`, set status to `failed`
+3. **Repair agents** run directly on the working directory (not in overlay)
+4. **Each repair attempt** re-runs validation to check if fix worked
+
+#### State Persistence
+
+Final merge statuses are persisted to SQLite (`~/.cache/canopy/runs.db`) in the `agents` table. The `resolved` status is only used in persistence to distinguish merges that required conflict resolution from direct merges.
+
+---
 
 ### Sequential Merging
 
