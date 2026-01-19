@@ -292,8 +292,8 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 			runStats.recordResult(taskID, result, true)
 			agentID := makeAgentID(runID, taskID)
 			parentAgentID := "" // Top-level agents have no parent
-			// Send individual commit events before completion
-			sendAgentCommits(ipcClient, agentID, result, verbose)
+			// Note: Commit events are sent by the merge processor after merge completes,
+			// using the actual merged commit hashes (not overlay commits which may be destroyed)
 			ipcResult := convertToIPCResult(result)
 			if err := ipcClient.SendAgentDone(agentID, parentAgentID, ipcResult); err != nil && verbose {
 				fmt.Fprintf(os.Stderr, "warning: failed to send agent done: %v\n", err)
@@ -303,8 +303,8 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 			runStats.recordResult(taskID, result, false)
 			agentID := makeAgentID(runID, taskID)
 			parentAgentID := "" // Top-level agents have no parent
-			// Send individual commit events before failure (agent may have committed before failing)
-			sendAgentCommits(ipcClient, agentID, result, verbose)
+			// Note: Commit events are sent by the merge processor after merge completes,
+			// using the actual merged commit hashes (not overlay commits which may be destroyed)
 			ipcResult := convertToIPCResult(result)
 			execErr := fmt.Errorf("%s", result.Error)
 			if err := ipcClient.SendAgentFail(agentID, parentAgentID, execErr, ipcResult); err != nil && verbose {
@@ -412,41 +412,15 @@ func makeAgentID(runID, taskID string) string {
 	return fmt.Sprintf("agent-%s-%s", prefix, taskID)
 }
 
-// sendAgentCommits sends individual commit events for each git commit made by an agent
+// sendAgentCommits was used to send commit events from overlay commits.
+// This function is DEPRECATED - commit events are now sent by the merge processor
+// after merge completes, using the actual merged commit hashes from the repo.
+// Overlay commits have different hashes and may not exist after merge.
+// See pkg/mergequeue/processor.go sendMergedCommits() for the new implementation.
 func sendAgentCommits(client *ipc.Client, agentID string, result *agent.Result, verboseMode bool) {
-	if client == nil || result == nil || result.GitState == nil {
-		return
-	}
-
-	overlay := result.Overlay
-	if overlay == nil {
-		return
-	}
-
-	for _, commitHash := range result.GitState.NewCommits {
-		// Get detailed commit info
-		info, err := overlay.GetCommitInfo(commitHash)
-		if err != nil {
-			if verboseMode {
-				fmt.Fprintf(os.Stderr, "warning: failed to get commit info for %s: %v\n", commitHash, err)
-			}
-			continue
-		}
-
-		commit := &ipc.AgentCommitPayload{
-			Hash:         info.Hash,
-			ShortHash:    info.ShortHash,
-			Message:      info.Message,
-			Author:       info.Author,
-			AuthorEmail:  info.AuthorEmail,
-			Timestamp:    info.Timestamp,
-			FilesChanged: info.FilesChanged,
-		}
-
-		if err := client.SendAgentCommit(agentID, commit); err != nil && verboseMode {
-			fmt.Fprintf(os.Stderr, "warning: failed to send agent commit: %v\n", err)
-		}
-	}
+	// No-op: commits are now sent by the merge processor
+	// This function is kept for backwards compatibility in case it's called elsewhere,
+	// but intentionally does nothing.
 }
 
 // runStatsCollector tracks statistics across all agents in a run

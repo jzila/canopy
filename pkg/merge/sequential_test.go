@@ -353,6 +353,28 @@ func TestMergeSingleResetsOnCommitFailure(t *testing.T) {
 	if string(content) != "modified by agent" {
 		t.Errorf("File should be modified, got: %s", content)
 	}
+
+	// Verify MergedCommits is populated with the actual commit info
+	if len(mergeResult.MergedCommits) != 1 {
+		t.Errorf("Expected 1 merged commit, got %d", len(mergeResult.MergedCommits))
+	} else {
+		commit := mergeResult.MergedCommits[0]
+		if commit.Hash == "" {
+			t.Error("MergedCommits[0].Hash should not be empty")
+		}
+		if len(commit.Hash) != 40 {
+			t.Errorf("Expected full 40-char hash, got %d chars: %s", len(commit.Hash), commit.Hash)
+		}
+		if len(commit.ShortHash) != 7 {
+			t.Errorf("Expected 7-char short hash, got %d chars: %s", len(commit.ShortHash), commit.ShortHash)
+		}
+		if commit.Message == "" {
+			t.Error("MergedCommits[0].Message should not be empty")
+		}
+		if len(commit.FilesChanged) != 1 || commit.FilesChanged[0] != "test.txt" {
+			t.Errorf("Expected FilesChanged = [test.txt], got %v", commit.FilesChanged)
+		}
+	}
 }
 
 // initGitRepo initializes a git repo in the given directory

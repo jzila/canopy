@@ -412,3 +412,126 @@ func TestExtractNewCommits_VerboseLogging(t *testing.T) {
 		t.Errorf("expected 1 new commit, got %d", len(state.NewCommits))
 	}
 }
+
+func TestGetCommitInfoFromDir(t *testing.T) {
+	// Create a test git repo
+	tempDir, err := os.MkdirTemp("", "git-commit-info-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Initialize git repo
+	cmd := exec.Command("git", "init")
+	cmd.Dir = tempDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init failed: %v: %s", err, out)
+	}
+
+	// Configure git user
+	cmd = exec.Command("git", "config", "user.name", "Test Author")
+	cmd.Dir = tempDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git config user.name failed: %v: %s", err, out)
+	}
+
+	cmd = exec.Command("git", "config", "user.email", "test@example.com")
+	cmd.Dir = tempDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git config user.email failed: %v: %s", err, out)
+	}
+
+	// Create a commit with known content
+	testFile := filepath.Join(tempDir, "test-file.txt")
+	if err := os.WriteFile(testFile, []byte("test content\n"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	cmd = exec.Command("git", "add", "test-file.txt")
+	cmd.Dir = tempDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add failed: %v: %s", err, out)
+	}
+
+	cmd = exec.Command("git", "commit", "-m", "Test commit message")
+	cmd.Dir = tempDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit failed: %v: %s", err, out)
+	}
+
+	// Get the commit hash
+	cmd = exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = tempDir
+	hashOutput, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git rev-parse HEAD failed: %v", err)
+	}
+	commitHash := strings.TrimSpace(string(hashOutput))
+
+	// Test GetCommitInfoFromDir (the new standalone function)
+	info, err := GetCommitInfoFromDir(tempDir, commitHash)
+	if err != nil {
+		t.Fatalf("GetCommitInfoFromDir failed: %v", err)
+	}
+
+	// Verify the commit info
+	if info.Hash != commitHash {
+		t.Errorf("Hash: expected %q, got %q", commitHash, info.Hash)
+	}
+
+	if len(info.Hash) != 40 {
+		t.Errorf("Expected full 40-char hash, got %d chars", len(info.Hash))
+	}
+
+	if len(info.ShortHash) != 7 {
+		t.Errorf("Expected 7-char short hash, got %d chars: %s", len(info.ShortHash), info.ShortHash)
+	}
+
+	if info.ShortHash != commitHash[:7] {
+		t.Errorf("ShortHash: expected %q, got %q", commitHash[:7], info.ShortHash)
+	}
+
+	if info.Message != "Test commit message" {
+		t.Errorf("Message: expected %q, got %q", "Test commit message", info.Message)
+	}
+
+	if info.Author != "Test Author" {
+		t.Errorf("Author: expected %q, got %q", "Test Author", info.Author)
+	}
+
+	if info.AuthorEmail != "test@example.com" {
+		t.Errorf("AuthorEmail: expected %q, got %q", "test@example.com", info.AuthorEmail)
+	}
+
+	if info.Timestamp == "" {
+		t.Error("Timestamp should not be empty")
+	}
+
+	if len(info.FilesChanged) != 1 {
+		t.Errorf("Expected 1 file changed, got %d", len(info.FilesChanged))
+	} else if info.FilesChanged[0] != "test-file.txt" {
+		t.Errorf("FilesChanged: expected [test-file.txt], got %v", info.FilesChanged)
+	}
+}
+
+func TestGetCommitInfoFromDir_InvalidCommit(t *testing.T) {
+	// Create a test git repo
+	tempDir, err := os.MkdirTemp("", "git-invalid-commit-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Initialize git repo
+	cmd := exec.Command("git", "init")
+	cmd.Dir = tempDir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init failed: %v: %s", err, out)
+	}
+
+	// Test with invalid commit hash
+	_, err = GetCommitInfoFromDir(tempDir, "0000000000000000000000000000000000000000")
+	if err == nil {
+		t.Error("Expected error for invalid commit hash, got nil")
+	}
+}

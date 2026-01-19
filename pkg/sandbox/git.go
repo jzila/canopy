@@ -216,6 +216,13 @@ type CommitInfo struct {
 
 // GetCommitInfo extracts detailed information about a commit
 func (o *Overlay) GetCommitInfo(commitHash string) (*CommitInfo, error) {
+	return GetCommitInfoFromDir(o.MergedDir, commitHash)
+}
+
+// GetCommitInfoFromDir extracts detailed information about a commit from any git directory.
+// This is a standalone function that doesn't require an Overlay, useful for getting
+// commit info from the main repository after merge (when overlays are destroyed).
+func GetCommitInfoFromDir(gitDir, commitHash string) (*CommitInfo, error) {
 	info := &CommitInfo{
 		Hash:      commitHash,
 		ShortHash: commitHash,
@@ -227,7 +234,7 @@ func (o *Overlay) GetCommitInfo(commitHash string) (*CommitInfo, error) {
 	// Get commit metadata using git show with format
 	// Format: %s (subject), %an (author name), %ae (author email), %aI (ISO timestamp)
 	cmd := exec.Command("git", "show", "-s", "--format=%s%n%an%n%ae%n%aI", commitHash)
-	cmd.Dir = o.MergedDir
+	cmd.Dir = gitDir
 
 	out, err := cmd.Output()
 	if err != nil {
@@ -243,8 +250,9 @@ func (o *Overlay) GetCommitInfo(commitHash string) (*CommitInfo, error) {
 	}
 
 	// Get files changed in this commit
-	cmd = exec.Command("git", "diff-tree", "--no-commit-id", "--name-only", "-r", commitHash)
-	cmd.Dir = o.MergedDir
+	// Use --root to handle the initial commit (which has no parent)
+	cmd = exec.Command("git", "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", commitHash)
+	cmd.Dir = gitDir
 
 	out, err = cmd.Output()
 	if err == nil {

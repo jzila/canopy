@@ -56,6 +56,12 @@ type Result struct {
 	CommitsApplied int             // Number of git commits applied
 	BeadsSynced    bool            // Whether bd sync was run for beads updates
 	PatchFailed    map[string]bool // Task IDs where git patch application failed
+
+	// MergedCommits contains information about commits created in the repo during merge.
+	// These are the actual commits after git am/commit, with hashes that exist in the repo.
+	// Use this instead of GitState.NewCommits from agent results, as those are overlay
+	// commits with different hashes that may no longer exist after merge.
+	MergedCommits []*sandbox.CommitInfo
 }
 
 // SequentialMerger applies changes in order, later overwrites earlier
@@ -393,6 +399,20 @@ func (m *SequentialMerger) MergeSingle(result *agent.Result, opts *MergeOptions)
 					fmt.Sprintf("failed to commit changes from %s: %v", result.TaskID, err))
 			} else if committed {
 				mergeResult.CommitsApplied++
+
+				// Capture the new HEAD commit info for the dashboard
+				// This is the actual merged commit with the hash that exists in the repo
+				newHead, err := m.getCurrentHead()
+				if err == nil {
+					commitInfo, err := sandbox.GetCommitInfoFromDir(m.outputDir, newHead)
+					if err == nil {
+						mergeResult.MergedCommits = append(mergeResult.MergedCommits, commitInfo)
+					} else if m.verbose {
+						fmt.Fprintf(os.Stderr, "warning: failed to get commit info for %s: %v\n", newHead, err)
+					}
+				} else if m.verbose {
+					fmt.Fprintf(os.Stderr, "warning: failed to get HEAD after commit: %v\n", err)
+				}
 			}
 		}
 	}

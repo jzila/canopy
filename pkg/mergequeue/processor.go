@@ -237,6 +237,10 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 
 	resp.CommitsApplied = mergeResult.CommitsApplied
 
+	// Send commit events for merged commits immediately after merge
+	// These are the actual commits in the repo (not overlay commits which no longer exist)
+	p.sendMergedCommits(taskID, mergeResult)
+
 	// Determine if we need to spawn a resolver agent
 	needsResolver := false
 	resolverReason := ""
@@ -436,6 +440,9 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 				}
 
 				resp.CommitsApplied += resolverMergeResult.CommitsApplied
+
+				// Send commit events for resolver's merged commits
+				p.sendMergedCommits(taskID, resolverMergeResult)
 			}
 
 			// Run validation and repair loop after successful resolution
@@ -628,6 +635,31 @@ func (p *Processor) markTaskDone(ctx context.Context, taskID string) {
 func (p *Processor) markTaskFailed(ctx context.Context, taskID string, reason string) {
 	if err := p.beadsClient.Fail(ctx, taskID, reason); err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: failed to mark task %s as failed: %v\n", taskID, err)
+	}
+}
+
+// sendMergedCommits sends commit events for each commit created during merge.
+// This sends the actual merged commits (with repo hashes) instead of overlay commits.
+func (p *Processor) sendMergedCommits(taskID string, mergeResult *merge.Result) {
+	if p.ipcClient == nil || mergeResult == nil {
+		return
+	}
+
+	agentID := p.makeAgentID(taskID)
+	for _, commitInfo := range mergeResult.MergedCommits {
+		commit := &ipc.AgentCommitPayload{
+			Hash:         commitInfo.Hash,
+			ShortHash:    commitInfo.ShortHash,
+			Message:      commitInfo.Message,
+			Author:       commitInfo.Author,
+			AuthorEmail:  commitInfo.AuthorEmail,
+			Timestamp:    commitInfo.Timestamp,
+			FilesChanged: commitInfo.FilesChanged,
+		}
+
+		if err := p.ipcClient.SendAgentCommit(agentID, commit); err != nil && p.verbose {
+			fmt.Fprintf(os.Stderr, "warning: failed to send merged commit for %s: %v\n", taskID, err)
+		}
 	}
 }
 
