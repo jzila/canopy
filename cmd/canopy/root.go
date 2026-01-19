@@ -17,7 +17,11 @@ var rootCmd = &cobra.Command{
 	Short: "Coding agent orchestrator with parallel execution",
 	Long: `Canopy orchestrates multiple Claude Code agents in parallel,
 each running in isolated OverlayFS sandboxes. Tasks are tracked
-via beads (bd) and executed based on dependency order.`,
+via beads (bd) and executed based on dependency order.
+
+For AI agents:
+  canopy help --agent    Detailed workflow guide for AI agent orchestration
+  canopy init --help     Setup sandbox and validation (supports agentic questionnaire)`,
 }
 
 func Execute() {
