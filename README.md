@@ -33,7 +33,7 @@ Human (You)
 Without Canopy, Claude Code processes tasks sequentially. A 10-task project takes 10x the time of a single task. Canopy enables:
 
 - **Parallel execution**: Run N tasks simultaneously (default: 4 agents)
-- **Workspace isolation**: Each agent works in a copy-on-write OverlayFS clone
+- **Workspace isolation**: Each agent works in an isolated copy of the repository
 - **Automatic merging**: Changes merge back to the main repo after completion
 - **Conflict resolution**: Spawns resolver agents when merge conflicts occur
 - **Retry logic**: Automatically retries failed tasks (configurable)
@@ -41,7 +41,7 @@ Without Canopy, Claude Code processes tasks sequentially. A 10-task project take
 
 ## Requirements
 
-- **Linux** (OverlayFS is Linux-only; macOS support is limited)
+- **Linux or macOS** (Linux uses OverlayFS; macOS uses file copying)
 - **Go 1.24+** for building
 - **Claude Code CLI** (`claude`) installed and authenticated
 - **beads** (`bd`) for task tracking ([github.com/jzila/beads](https://github.com/jzila/beads))
@@ -179,9 +179,11 @@ The daemon is automatically started if not running. The run command requires dae
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### OverlayFS Isolation
+### Workspace Isolation
 
-Each agent operates in a copy-on-write filesystem:
+Each agent operates in an isolated workspace. The isolation mechanism varies by platform:
+
+**Linux (OverlayFS):** Uses copy-on-write filesystem for efficient isolation:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -196,7 +198,17 @@ Each agent operates in a copy-on-write filesystem:
 └──────────────────────────────────────────────────────────────┘
 ```
 
-Agents cannot see each other's changes until merge.
+**macOS (File Copy):** Creates a full copy of the repository:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                WorkDir (Agent's View)                        │
+│  ~/.cache/canopy/overlays/{id}/merged                        │
+│  (full copy of repository)                                   │
+└──────────────────────────────────────────────────────────────┘
+```
+
+On both platforms, agents cannot see each other's changes until merge.
 
 ## Configuration
 
