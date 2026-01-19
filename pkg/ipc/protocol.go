@@ -267,8 +267,8 @@ type RunCompletedPayload struct {
 
 // OrchPauseStatusPayload is sent when the orchestrator pause state changes
 type OrchPauseStatusPayload struct {
-	IsPaused           bool   `json:"is_paused"`            // Whether the orchestrator is paused (by any source)
-	IsPausedByUser     bool   `json:"is_paused_by_user"`    // Whether paused by user request
-	IsPausedByResolver bool   `json:"is_paused_by_resolver"` // Whether paused for conflict resolution
-	PauseState         string `json:"pause_state"`          // Detailed state: "running", "paused_user", "paused_resolver", "paused_both"
+	IsPaused        bool   `json:"is_paused"`           // Whether the orchestrator is paused (by any source)
+	IsPausedByUser  bool   `json:"is_paused_by_user"`   // Whether paused by user request
+	IsPausedByAgent bool   `json:"is_paused_by_agent"`  // Whether paused by an agent (resolver, repair, etc.)
+	PauseState      string `json:"pause_state"`         // Detailed state: "running", "paused_user", "paused_agent", "paused_both"
 }

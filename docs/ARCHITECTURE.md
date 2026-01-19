@@ -11,6 +11,7 @@ This document provides a detailed technical overview of Canopy's architecture, i
 5. [IPC Protocol](#ipc-protocol)
 6. [Database Schema](#database-schema)
 7. [Concurrency Model](#concurrency-model)
+   - [Pause State Machine](#pause-state-machine)
 8. [Merge Strategy](#merge-strategy)
 
 ---
@@ -616,24 +617,64 @@ func (p *Processor) Run(ctx context.Context) {
 }
 ```
 
-### Pause/Resume for Conflict Resolution
+### Pause State Machine
 
-When a merge conflict occurs, the queue pauses while a resolver agent runs:
+The merge queue implements a two-source pause state machine that allows both user-initiated pauses and agent-initiated pauses to coexist independently. This ensures that:
+
+1. User pauses (manual intervention) don't interfere with agent pauses (conflict resolution, repair)
+2. Both sources must resume before the queue becomes running
+3. State transitions are atomic and thread-safe
+
+**State Diagram:**
+
+```
+         UserPause()              AgentPause()
+    ┌────────────────┐       ┌────────────────┐
+    │                ▼       │                ▼
+    │   ┌────────────────────┴────┐    ┌─────┴──────────┐
+    │   │        Running          │    │   PausedAgent  │
+    │   │  (queue processing)     │◄───┤  (agent active)│
+    │   └────────────┬────────────┘    └────────────────┘
+    │                │                        │
+    │         UserPause()              UserPause()
+    │                │                        │
+    │                ▼                        ▼
+    │   ┌────────────────────┐     ┌─────────────────────┐
+    └───┤     PausedUser     │     │     PausedBoth      │
+        │ (user requested)   │────►│ (both sources)      │
+        └────────────────────┘     └─────────────────────┘
+                   ▲     AgentPause()         │
+                   │                          │
+                   └──────────────────────────┘
+                         AgentResume()
+```
+
+**State Transition Table:**
+
+| Action       | Running      | PausedUser   | PausedAgent  | PausedBoth   |
+|--------------|--------------|--------------|--------------|--------------|
+| UserPause    | → PausedUser | (no-op)      | → PausedBoth | (no-op)      |
+| UserResume   | (no-op)      | → Running    | (no-op)      | → PausedAgent|
+| AgentPause   | → PausedAgent| → PausedBoth | (no-op)      | (no-op)      |
+| AgentResume  | (no-op)      | (no-op)      | → Running    | → PausedUser |
+
+**Implementation:** `pkg/mergequeue/pause_state.go`
+
+**Agent Types That Can Pause:**
+- **Resolver agents**: Spawned during merge conflict resolution
+- **Repair agents**: Spawned when post-merge validation fails
+- **Future**: Architect agents, documentation agents, etc.
+
+**Usage Example:**
 
 ```go
-// pkg/orchestrator/orchestrator.go
+// During conflict resolution
+p.queue.AgentPause()           // Pause queue for agent work
+defer p.queue.AgentResume()    // Resume when agent completes
 
-func (o *Orchestrator) handleConflict(conflict *merge.Conflict) error {
-    // Pause merge queue
-    o.mergeQueue.Pause()
-    defer o.mergeQueue.Resume()
-
-    // Spawn resolver agent
-    resolver := resolver.New(o.executor)
-    result, err := resolver.Resolve(ctx, conflict)
-
-    return err
-}
+// Spawn resolver/repair agent
+result, err := p.resolveAsync(ctx, conflictCtx)
+// Queue resumes automatically via defer
 ```
 
 ---

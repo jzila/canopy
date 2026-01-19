@@ -231,13 +231,13 @@ interface BackendRuntimeState {
   };
   is_paused: boolean;
   is_paused_by_user: boolean;
-  is_paused_by_resolver: boolean;
+  is_paused_by_agent: boolean;
   pause_state: PauseState;
   start_time: string;
 }
 
 // Pause state enum matching Go backend (ipc/protocol.go)
-type PauseState = 'running' | 'paused_user' | 'paused_resolver' | 'paused_both';
+type PauseState = 'running' | 'paused_user' | 'paused_agent' | 'paused_both';
 
 interface StateSyncEvent {
   type: 'state:sync';
@@ -255,7 +255,7 @@ interface RepoSyncPayload {
 interface OrchPauseStatusPayload {
   is_paused: boolean;
   is_paused_by_user: boolean;
-  is_paused_by_resolver: boolean;
+  is_paused_by_agent: boolean;
   pause_state: PauseState;
 }
 
@@ -426,7 +426,7 @@ export function useWebSocket() {
                 },
                 is_paused: backendState.is_paused,
                 is_paused_by_user: backendState.is_paused_by_user ?? false,
-                is_paused_by_resolver: backendState.is_paused_by_resolver ?? false,
+                is_paused_by_agent: backendState.is_paused_by_agent ?? false,
                 pause_state: backendState.pause_state ?? 'running',
                 start_time: backendState.start_time,
               });
@@ -571,16 +571,16 @@ export function useWebSocket() {
             }
 
             case 'orch:paused': {
-              const { is_paused, is_paused_by_user, is_paused_by_resolver, pause_state } = message.payload;
+              const { is_paused, is_paused_by_user, is_paused_by_agent, pause_state } = message.payload;
               console.log('[WebSocket] Orchestrator paused:', pause_state);
-              setPauseState(is_paused, is_paused_by_user, is_paused_by_resolver, pause_state);
+              setPauseState(is_paused, is_paused_by_user, is_paused_by_agent, pause_state);
               break;
             }
 
             case 'orch:resumed': {
-              const { is_paused, is_paused_by_user, is_paused_by_resolver, pause_state } = message.payload;
+              const { is_paused, is_paused_by_user, is_paused_by_agent, pause_state } = message.payload;
               console.log('[WebSocket] Orchestrator resumed:', pause_state);
-              setPauseState(is_paused, is_paused_by_user, is_paused_by_resolver, pause_state);
+              setPauseState(is_paused, is_paused_by_user, is_paused_by_agent, pause_state);
               break;
             }
 

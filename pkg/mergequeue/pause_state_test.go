@@ -24,7 +24,7 @@ func TestPauseStateString(t *testing.T) {
 	}{
 		{Running, "running"},
 		{PausedUser, "paused_user"},
-		{PausedResolver, "paused_resolver"},
+		{PausedAgent, "paused_agent"},
 		{PausedBoth, "paused_both"},
 		{PauseState(99), "unknown"},
 	}
@@ -64,7 +64,7 @@ func TestIsPausedByUser(t *testing.T) {
 		t.Error("should be paused by user after UserPause")
 	}
 
-	psm.ResolverPause()
+	psm.AgentPause()
 	if !psm.IsPausedByUser() {
 		t.Error("should still be paused by user in PausedBoth")
 	}
@@ -75,25 +75,25 @@ func TestIsPausedByUser(t *testing.T) {
 	}
 }
 
-func TestIsPausedByResolver(t *testing.T) {
+func TestIsPausedByAgent(t *testing.T) {
 	psm := NewPauseStateMachine()
-	if psm.IsPausedByResolver() {
-		t.Error("new state machine should not be paused by resolver")
+	if psm.IsPausedByAgent() {
+		t.Error("new state machine should not be paused by agent")
 	}
 
-	psm.ResolverPause()
-	if !psm.IsPausedByResolver() {
-		t.Error("should be paused by resolver after ResolverPause")
+	psm.AgentPause()
+	if !psm.IsPausedByAgent() {
+		t.Error("should be paused by agent after AgentPause")
 	}
 
 	psm.UserPause()
-	if !psm.IsPausedByResolver() {
-		t.Error("should still be paused by resolver in PausedBoth")
+	if !psm.IsPausedByAgent() {
+		t.Error("should still be paused by agent in PausedBoth")
 	}
 
-	psm.ResolverResume()
-	if psm.IsPausedByResolver() {
-		t.Error("should not be paused by resolver after ResolverResume")
+	psm.AgentResume()
+	if psm.IsPausedByAgent() {
+		t.Error("should not be paused by agent after AgentResume")
 	}
 }
 
@@ -113,9 +113,9 @@ func TestUserPauseTransitions(t *testing.T) {
 			wantAfter:  PausedUser,
 		},
 		{
-			name:       "PausedResolver -> PausedBoth",
-			initial:    func(psm *PauseStateMachine) { psm.ResolverPause() },
-			wantBefore: PausedResolver,
+			name:       "PausedAgent -> PausedBoth",
+			initial:    func(psm *PauseStateMachine) { psm.AgentPause() },
+			wantBefore: PausedAgent,
 			wantAfter:  PausedBoth,
 		},
 		{
@@ -128,7 +128,7 @@ func TestUserPauseTransitions(t *testing.T) {
 			name: "PausedBoth -> PausedBoth (no change)",
 			initial: func(psm *PauseStateMachine) {
 				psm.UserPause()
-				psm.ResolverPause()
+				psm.AgentPause()
 			},
 			wantBefore: PausedBoth,
 			wantAfter:  PausedBoth,
@@ -164,13 +164,13 @@ func TestUserResumeTransitions(t *testing.T) {
 			wantAfter:  Running,
 		},
 		{
-			name: "PausedBoth -> PausedResolver",
+			name: "PausedBoth -> PausedAgent",
 			initial: func(psm *PauseStateMachine) {
 				psm.UserPause()
-				psm.ResolverPause()
+				psm.AgentPause()
 			},
 			wantBefore: PausedBoth,
-			wantAfter:  PausedResolver,
+			wantAfter:  PausedAgent,
 		},
 		{
 			name:       "Running -> Running (no change)",
@@ -179,10 +179,10 @@ func TestUserResumeTransitions(t *testing.T) {
 			wantAfter:  Running,
 		},
 		{
-			name:       "PausedResolver -> PausedResolver (no change)",
-			initial:    func(psm *PauseStateMachine) { psm.ResolverPause() },
-			wantBefore: PausedResolver,
-			wantAfter:  PausedResolver,
+			name:       "PausedAgent -> PausedAgent (no change)",
+			initial:    func(psm *PauseStateMachine) { psm.AgentPause() },
+			wantBefore: PausedAgent,
+			wantAfter:  PausedAgent,
 		},
 	}
 
@@ -201,7 +201,7 @@ func TestUserResumeTransitions(t *testing.T) {
 	}
 }
 
-func TestResolverPauseTransitions(t *testing.T) {
+func TestAgentPauseTransitions(t *testing.T) {
 	tests := []struct {
 		name       string
 		initial    func(*PauseStateMachine)
@@ -209,10 +209,10 @@ func TestResolverPauseTransitions(t *testing.T) {
 		wantAfter  PauseState
 	}{
 		{
-			name:       "Running -> PausedResolver",
+			name:       "Running -> PausedAgent",
 			initial:    func(psm *PauseStateMachine) {},
 			wantBefore: Running,
-			wantAfter:  PausedResolver,
+			wantAfter:  PausedAgent,
 		},
 		{
 			name:       "PausedUser -> PausedBoth",
@@ -221,16 +221,16 @@ func TestResolverPauseTransitions(t *testing.T) {
 			wantAfter:  PausedBoth,
 		},
 		{
-			name:       "PausedResolver -> PausedResolver (no change)",
-			initial:    func(psm *PauseStateMachine) { psm.ResolverPause() },
-			wantBefore: PausedResolver,
-			wantAfter:  PausedResolver,
+			name:       "PausedAgent -> PausedAgent (no change)",
+			initial:    func(psm *PauseStateMachine) { psm.AgentPause() },
+			wantBefore: PausedAgent,
+			wantAfter:  PausedAgent,
 		},
 		{
 			name: "PausedBoth -> PausedBoth (no change)",
 			initial: func(psm *PauseStateMachine) {
 				psm.UserPause()
-				psm.ResolverPause()
+				psm.AgentPause()
 			},
 			wantBefore: PausedBoth,
 			wantAfter:  PausedBoth,
@@ -242,17 +242,17 @@ func TestResolverPauseTransitions(t *testing.T) {
 			psm := NewPauseStateMachine()
 			tt.initial(psm)
 			if got := psm.State(); got != tt.wantBefore {
-				t.Errorf("before ResolverPause: got %v, want %v", got, tt.wantBefore)
+				t.Errorf("before AgentPause: got %v, want %v", got, tt.wantBefore)
 			}
-			psm.ResolverPause()
+			psm.AgentPause()
 			if got := psm.State(); got != tt.wantAfter {
-				t.Errorf("after ResolverPause: got %v, want %v", got, tt.wantAfter)
+				t.Errorf("after AgentPause: got %v, want %v", got, tt.wantAfter)
 			}
 		})
 	}
 }
 
-func TestResolverResumeTransitions(t *testing.T) {
+func TestAgentResumeTransitions(t *testing.T) {
 	tests := []struct {
 		name       string
 		initial    func(*PauseStateMachine)
@@ -260,16 +260,16 @@ func TestResolverResumeTransitions(t *testing.T) {
 		wantAfter  PauseState
 	}{
 		{
-			name:       "PausedResolver -> Running",
-			initial:    func(psm *PauseStateMachine) { psm.ResolverPause() },
-			wantBefore: PausedResolver,
+			name:       "PausedAgent -> Running",
+			initial:    func(psm *PauseStateMachine) { psm.AgentPause() },
+			wantBefore: PausedAgent,
 			wantAfter:  Running,
 		},
 		{
 			name: "PausedBoth -> PausedUser",
 			initial: func(psm *PauseStateMachine) {
 				psm.UserPause()
-				psm.ResolverPause()
+				psm.AgentPause()
 			},
 			wantBefore: PausedBoth,
 			wantAfter:  PausedUser,
@@ -293,11 +293,11 @@ func TestResolverResumeTransitions(t *testing.T) {
 			psm := NewPauseStateMachine()
 			tt.initial(psm)
 			if got := psm.State(); got != tt.wantBefore {
-				t.Errorf("before ResolverResume: got %v, want %v", got, tt.wantBefore)
+				t.Errorf("before AgentResume: got %v, want %v", got, tt.wantBefore)
 			}
-			psm.ResolverResume()
+			psm.AgentResume()
 			if got := psm.State(); got != tt.wantAfter {
-				t.Errorf("after ResolverResume: got %v, want %v", got, tt.wantAfter)
+				t.Errorf("after AgentResume: got %v, want %v", got, tt.wantAfter)
 			}
 		})
 	}
@@ -346,9 +346,9 @@ func TestWaitUntilRunningUserResume(t *testing.T) {
 	}
 }
 
-func TestWaitUntilRunningResolverResume(t *testing.T) {
+func TestWaitUntilRunningAgentResume(t *testing.T) {
 	psm := NewPauseStateMachine()
-	psm.ResolverPause()
+	psm.AgentPause()
 
 	done := make(chan error)
 	go func() {
@@ -363,7 +363,7 @@ func TestWaitUntilRunningResolverResume(t *testing.T) {
 	default:
 	}
 
-	psm.ResolverResume()
+	psm.AgentResume()
 
 	select {
 	case err := <-done:
@@ -371,7 +371,7 @@ func TestWaitUntilRunningResolverResume(t *testing.T) {
 			t.Errorf("WaitUntilRunning should return nil after resume, got %v", err)
 		}
 	case <-time.After(100 * time.Millisecond):
-		t.Fatal("WaitUntilRunning should return after ResolverResume")
+		t.Fatal("WaitUntilRunning should return after AgentResume")
 	}
 }
 
@@ -436,7 +436,7 @@ func TestWaitUntilRunningTimeout(t *testing.T) {
 func TestWaitUntilRunningPausedBothNeedsBothResume(t *testing.T) {
 	psm := NewPauseStateMachine()
 	psm.UserPause()
-	psm.ResolverPause()
+	psm.AgentPause()
 
 	done := make(chan error)
 	go func() {
@@ -451,12 +451,12 @@ func TestWaitUntilRunningPausedBothNeedsBothResume(t *testing.T) {
 
 	select {
 	case <-done:
-		t.Fatal("WaitUntilRunning should still block when resolver is paused")
+		t.Fatal("WaitUntilRunning should still block when agent is paused")
 	default:
 	}
 
-	// Now resume resolver
-	psm.ResolverResume()
+	// Now resume agent
+	psm.AgentResume()
 
 	select {
 	case err := <-done:
@@ -484,8 +484,8 @@ func TestConcurrentStateTransitions(t *testing.T) {
 		}()
 		go func() {
 			defer wg.Done()
-			psm.ResolverPause()
-			psm.ResolverResume()
+			psm.AgentPause()
+			psm.AgentResume()
 		}()
 	}
 
@@ -545,17 +545,17 @@ func TestIdempotentOperations(t *testing.T) {
 		t.Errorf("expected Running after multiple UserResume, got %v", psm.State())
 	}
 
-	// Same for resolver
-	psm.ResolverPause()
-	psm.ResolverPause()
-	if psm.State() != PausedResolver {
-		t.Errorf("expected PausedResolver after multiple ResolverPause, got %v", psm.State())
+	// Same for agent
+	psm.AgentPause()
+	psm.AgentPause()
+	if psm.State() != PausedAgent {
+		t.Errorf("expected PausedAgent after multiple AgentPause, got %v", psm.State())
 	}
 
-	psm.ResolverResume()
-	psm.ResolverResume()
+	psm.AgentResume()
+	psm.AgentResume()
 	if psm.State() != Running {
-		t.Errorf("expected Running after multiple ResolverResume, got %v", psm.State())
+		t.Errorf("expected Running after multiple AgentResume, got %v", psm.State())
 	}
 }
 
@@ -577,7 +577,7 @@ func TestStateQueryDuringTransition(t *testing.T) {
 				_ = psm.State()
 				_ = psm.IsRunning()
 				_ = psm.IsPausedByUser()
-				_ = psm.IsPausedByResolver()
+				_ = psm.IsPausedByAgent()
 			}
 		}
 	}()
@@ -585,9 +585,9 @@ func TestStateQueryDuringTransition(t *testing.T) {
 	// Do many transitions
 	for i := 0; i < 1000; i++ {
 		psm.UserPause()
-		psm.ResolverPause()
+		psm.AgentPause()
 		psm.UserResume()
-		psm.ResolverResume()
+		psm.AgentResume()
 	}
 
 	close(stop)

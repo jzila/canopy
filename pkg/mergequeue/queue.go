@@ -66,7 +66,7 @@ func (q *Queue) Dequeue() *MergeRequest {
 }
 
 // DequeueCtx retrieves the next merge request from the queue with context support.
-// Blocks if the queue is paused (by user or resolver), waiting until running.
+// Blocks if the queue is paused (by user or agent), waiting until running.
 // Returns nil if the queue is closed or the context is cancelled.
 func (q *Queue) DequeueCtx(ctx context.Context) *MergeRequest {
 	// Check context early
@@ -124,25 +124,25 @@ func (q *Queue) Resume() {
 	q.pauseState.UserResume()
 }
 
-// ResolverPause pauses the queue for resolver operations.
-// This should be called before spawning a resolver agent.
-func (q *Queue) ResolverPause() {
-	q.pauseState.ResolverPause()
+// AgentPause pauses the queue for agent operations (resolver, repair, etc.).
+// This should be called before spawning an agent that needs exclusive access.
+func (q *Queue) AgentPause() {
+	q.pauseState.AgentPause()
 }
 
-// ResolverResume resumes the queue after resolver operations.
-// This should be called after the resolver agent completes.
-func (q *Queue) ResolverResume() {
-	q.pauseState.ResolverResume()
+// AgentResume resumes the queue after agent operations.
+// This should be called after the agent completes.
+func (q *Queue) AgentResume() {
+	q.pauseState.AgentResume()
 }
 
-// IsResolverActive returns whether a resolver agent is running
-// (i.e., the queue is paused by the resolver).
-func (q *Queue) IsResolverActive() bool {
-	return q.pauseState.IsPausedByResolver()
+// IsAgentActive returns whether an agent is running
+// (i.e., the queue is paused by an agent).
+func (q *Queue) IsAgentActive() bool {
+	return q.pauseState.IsPausedByAgent()
 }
 
-// IsPaused returns whether the queue is currently paused (by user or resolver).
+// IsPaused returns whether the queue is currently paused (by user or agent).
 func (q *Queue) IsPaused() bool {
 	return !q.pauseState.IsRunning()
 }
@@ -186,7 +186,7 @@ func (q *Queue) Close() {
 	// Resume to wake any goroutines blocked in WaitUntilRunning.
 	// This ensures DequeueCtx calls return promptly on shutdown.
 	q.pauseState.UserResume()
-	q.pauseState.ResolverResume()
+	q.pauseState.AgentResume()
 	q.mu.Unlock()
 
 	// Drain remaining requests and send error responses

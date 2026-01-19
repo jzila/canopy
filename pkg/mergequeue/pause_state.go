@@ -13,9 +13,9 @@ const (
 	Running PauseState = iota
 	// PausedUser indicates the system was paused by user request.
 	PausedUser
-	// PausedResolver indicates the system was paused for conflict resolution.
-	PausedResolver
-	// PausedBoth indicates both user and resolver have paused the system.
+	// PausedAgent indicates the system was paused by an agent (resolver, repair, etc.).
+	PausedAgent
+	// PausedBoth indicates both user and agent have paused the system.
 	PausedBoth
 )
 
@@ -26,8 +26,8 @@ func (s PauseState) String() string {
 		return "running"
 	case PausedUser:
 		return "paused_user"
-	case PausedResolver:
-		return "paused_resolver"
+	case PausedAgent:
+		return "paused_agent"
 	case PausedBoth:
 		return "paused_both"
 	default:
@@ -36,7 +36,7 @@ func (s PauseState) String() string {
 }
 
 // PauseStateMachine manages pause state from two independent sources:
-// user-initiated pauses and resolver-initiated pauses. The system only
+// user-initiated pauses and agent-initiated pauses. The system only
 // runs when neither source has paused it.
 type PauseStateMachine struct {
 	mu    sync.Mutex
@@ -75,18 +75,18 @@ func (psm *PauseStateMachine) IsPausedByUser() bool {
 	return psm.state == PausedUser || psm.state == PausedBoth
 }
 
-// IsPausedByResolver returns true if the resolver has paused the system
-// (either PausedResolver or PausedBoth).
-func (psm *PauseStateMachine) IsPausedByResolver() bool {
+// IsPausedByAgent returns true if an agent has paused the system
+// (either PausedAgent or PausedBoth).
+func (psm *PauseStateMachine) IsPausedByAgent() bool {
 	psm.mu.Lock()
 	defer psm.mu.Unlock()
-	return psm.state == PausedResolver || psm.state == PausedBoth
+	return psm.state == PausedAgent || psm.state == PausedBoth
 }
 
 // UserPause transitions the state machine to account for a user-initiated pause.
 // State transitions:
 //   - Running -> PausedUser
-//   - PausedResolver -> PausedBoth
+//   - PausedAgent -> PausedBoth
 //   - PausedUser, PausedBoth -> no change (already paused by user)
 func (psm *PauseStateMachine) UserPause() {
 	psm.mu.Lock()
@@ -95,7 +95,7 @@ func (psm *PauseStateMachine) UserPause() {
 	switch psm.state {
 	case Running:
 		psm.state = PausedUser
-	case PausedResolver:
+	case PausedAgent:
 		psm.state = PausedBoth
 	// PausedUser, PausedBoth: already paused by user, no change
 	}
@@ -104,8 +104,8 @@ func (psm *PauseStateMachine) UserPause() {
 // UserResume transitions the state machine to account for a user-initiated resume.
 // State transitions:
 //   - PausedUser -> Running
-//   - PausedBoth -> PausedResolver
-//   - Running, PausedResolver -> no change (user hasn't paused)
+//   - PausedBoth -> PausedAgent
+//   - Running, PausedAgent -> no change (user hasn't paused)
 //
 // Broadcasts to wake any goroutines waiting in WaitUntilRunning if
 // the state becomes Running.
@@ -118,48 +118,48 @@ func (psm *PauseStateMachine) UserResume() {
 		psm.state = Running
 		psm.cond.Broadcast()
 	case PausedBoth:
-		psm.state = PausedResolver
-	// Running, PausedResolver: user hasn't paused, no change
+		psm.state = PausedAgent
+	// Running, PausedAgent: user hasn't paused, no change
 	}
 }
 
-// ResolverPause transitions the state machine to account for a resolver-initiated pause.
+// AgentPause transitions the state machine to account for an agent-initiated pause.
 // State transitions:
-//   - Running -> PausedResolver
+//   - Running -> PausedAgent
 //   - PausedUser -> PausedBoth
-//   - PausedResolver, PausedBoth -> no change (already paused by resolver)
-func (psm *PauseStateMachine) ResolverPause() {
+//   - PausedAgent, PausedBoth -> no change (already paused by agent)
+func (psm *PauseStateMachine) AgentPause() {
 	psm.mu.Lock()
 	defer psm.mu.Unlock()
 
 	switch psm.state {
 	case Running:
-		psm.state = PausedResolver
+		psm.state = PausedAgent
 	case PausedUser:
 		psm.state = PausedBoth
-	// PausedResolver, PausedBoth: already paused by resolver, no change
+	// PausedAgent, PausedBoth: already paused by agent, no change
 	}
 }
 
-// ResolverResume transitions the state machine to account for a resolver-initiated resume.
+// AgentResume transitions the state machine to account for an agent-initiated resume.
 // State transitions:
-//   - PausedResolver -> Running
+//   - PausedAgent -> Running
 //   - PausedBoth -> PausedUser
-//   - Running, PausedUser -> no change (resolver hasn't paused)
+//   - Running, PausedUser -> no change (agent hasn't paused)
 //
 // Broadcasts to wake any goroutines waiting in WaitUntilRunning if
 // the state becomes Running.
-func (psm *PauseStateMachine) ResolverResume() {
+func (psm *PauseStateMachine) AgentResume() {
 	psm.mu.Lock()
 	defer psm.mu.Unlock()
 
 	switch psm.state {
-	case PausedResolver:
+	case PausedAgent:
 		psm.state = Running
 		psm.cond.Broadcast()
 	case PausedBoth:
 		psm.state = PausedUser
-	// Running, PausedUser: resolver hasn't paused, no change
+	// Running, PausedUser: agent hasn't paused, no change
 	}
 }
 

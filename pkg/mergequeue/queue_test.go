@@ -278,21 +278,21 @@ func TestDoubleClose(t *testing.T) {
 	q.Close() // Should not panic
 }
 
-func TestResolverActive(t *testing.T) {
+func TestAgentActive(t *testing.T) {
 	q := NewQueue(10)
 
-	if q.IsResolverActive() {
-		t.Error("resolver should not be active initially")
+	if q.IsAgentActive() {
+		t.Error("agent should not be active initially")
 	}
 
-	q.ResolverPause()
-	if !q.IsResolverActive() {
-		t.Error("resolver should be active after ResolverPause()")
+	q.AgentPause()
+	if !q.IsAgentActive() {
+		t.Error("agent should be active after AgentPause()")
 	}
 
-	q.ResolverResume()
-	if q.IsResolverActive() {
-		t.Error("resolver should not be active after ResolverResume()")
+	q.AgentResume()
+	if q.IsAgentActive() {
+		t.Error("agent should not be active after AgentResume()")
 	}
 }
 

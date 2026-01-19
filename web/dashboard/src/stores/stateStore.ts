@@ -130,7 +130,7 @@ export interface Stats {
 }
 
 // Pause state enum matching Go backend (ipc/protocol.go)
-export type PauseState = 'running' | 'paused_user' | 'paused_resolver' | 'paused_both';
+export type PauseState = 'running' | 'paused_user' | 'paused_agent' | 'paused_both';
 
 export interface RuntimeState {
   agents: Record<string, AgentState>;
@@ -138,7 +138,7 @@ export interface RuntimeState {
   stats: Stats;
   is_paused: boolean;
   is_paused_by_user: boolean;
-  is_paused_by_resolver: boolean;
+  is_paused_by_agent: boolean;
   pause_state: PauseState;
   start_time: string;
 }
@@ -152,7 +152,7 @@ interface StateStore {
   stats: Stats;
   isPaused: boolean;
   isPausedByUser: boolean;
-  isPausedByResolver: boolean;
+  isPausedByAgent: boolean;
   pauseState: PauseState;
   selectedAgentId: string | null;
   highlightedTaskId: string | null;
@@ -180,7 +180,7 @@ interface StateStore {
   setPauseState: (
     isPaused: boolean,
     isPausedByUser: boolean,
-    isPausedByResolver: boolean,
+    isPausedByAgent: boolean,
     pauseState: PauseState
   ) => void;
   setRepositories: (repositories: Repository[], activeRepoId: string) => void;
@@ -273,7 +273,7 @@ export const useStateStore = create<StateStore>((set) => ({
   stats: initialStats,
   isPaused: false,
   isPausedByUser: false,
-  isPausedByResolver: false,
+  isPausedByAgent: false,
   pauseState: 'running',
   selectedAgentId: null,
   highlightedTaskId: null,
@@ -357,7 +357,7 @@ export const useStateStore = create<StateStore>((set) => ({
       stats: runtimeState.stats,
       isPaused: runtimeState.is_paused,
       isPausedByUser: runtimeState.is_paused_by_user,
-      isPausedByResolver: runtimeState.is_paused_by_resolver,
+      isPausedByAgent: runtimeState.is_paused_by_agent,
       pauseState: runtimeState.pause_state,
     }),
 
@@ -430,8 +430,8 @@ export const useStateStore = create<StateStore>((set) => ({
 
   setSelectedBead: (selectedBeadId) => set({ selectedBeadId }),
 
-  setPauseState: (isPaused, isPausedByUser, isPausedByResolver, pauseState) =>
-    set({ isPaused, isPausedByUser, isPausedByResolver, pauseState }),
+  setPauseState: (isPaused, isPausedByUser, isPausedByAgent, pauseState) =>
+    set({ isPaused, isPausedByUser, isPausedByAgent, pauseState }),
 
   setRepositories: (repositories, activeRepoId) =>
     set({

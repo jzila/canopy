@@ -24,6 +24,7 @@ type MergeQueueInterface interface {
 	Resume()
 	IsPaused() bool
 	IsPausedByUser() bool
+	IsAgentActive() bool
 	PauseStateString() string
 }
 
@@ -586,15 +587,15 @@ func (h *Handler) HandleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 
 // MergeQueueState represents the current state of the merge queue
 type MergeQueueState struct {
-	Completed          []MergeCompletedItem `json:"completed"`
-	Resolvers          []MergeResolverItem  `json:"resolvers"`
-	Pending            []MergePendingItem   `json:"pending"`
-	ActiveWorkers      []MergeWorkerItem    `json:"active_workers"`
-	IsPaused           bool                 `json:"is_paused"`
-	IsPausedByUser     bool                 `json:"is_paused_by_user"`
-	IsPausedByResolver bool                 `json:"is_paused_by_resolver"`
-	PauseState         string               `json:"pause_state"`
-	QueueLength        int                  `json:"queue_length"`
+	Completed       []MergeCompletedItem `json:"completed"`
+	Resolvers       []MergeResolverItem  `json:"resolvers"`
+	Pending         []MergePendingItem   `json:"pending"`
+	ActiveWorkers   []MergeWorkerItem    `json:"active_workers"`
+	IsPaused        bool                 `json:"is_paused"`
+	IsPausedByUser  bool                 `json:"is_paused_by_user"`
+	IsPausedByAgent bool                 `json:"is_paused_by_agent"`
+	PauseState      string               `json:"pause_state"`
+	QueueLength     int                  `json:"queue_length"`
 }
 
 // MergeCompletedItem represents a completed merge
@@ -652,7 +653,7 @@ func (h *Handler) HandleGetMergeQueue(w http.ResponseWriter, r *http.Request) {
 	if h.mergeQueue != nil {
 		state.IsPaused = h.mergeQueue.IsPaused()
 		state.IsPausedByUser = h.mergeQueue.IsPausedByUser()
-		state.IsPausedByResolver = h.mergeQueue.IsPaused() && !h.mergeQueue.IsPausedByUser()
+		state.IsPausedByAgent = h.mergeQueue.IsAgentActive()
 		state.PauseState = h.mergeQueue.PauseStateString()
 	}
 

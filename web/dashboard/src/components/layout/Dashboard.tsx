@@ -94,7 +94,7 @@ export const Dashboard: React.FC = () => {
   const agents = useStateStore((state) => state.agents);
   const stats = useStateStore((state) => state.stats);
   const isPaused = useStateStore((state) => state.isPaused);
-  const isPausedByResolver = useStateStore((state) => state.isPausedByResolver);
+  const isPausedByAgent = useStateStore((state) => state.isPausedByAgent);
   const pauseState = useStateStore((state) => state.pauseState);
   const selectedAgentId = useStateStore((state) => state.selectedAgentId);
   const setSelectedAgent = useStateStore((state) => state.setSelectedAgent);
@@ -259,7 +259,7 @@ export const Dashboard: React.FC = () => {
       <DashboardHeader
         connected={connected}
         isPaused={isPaused}
-        isPausedByResolver={isPausedByResolver}
+        isPausedByAgent={isPausedByAgent}
         pauseState={pauseState}
         isPauseLoading={isPauseLoading}
         isResumeLoading={isResumeLoading}

@@ -18,7 +18,7 @@ export interface DashboardHeaderProps {
   // Connection & state
   connected: boolean;
   isPaused: boolean;
-  isPausedByResolver: boolean;
+  isPausedByAgent: boolean;
   pauseState: PauseState;
   isPauseLoading: boolean;
   isResumeLoading: boolean;
@@ -82,10 +82,10 @@ function getPauseButtonText(
   switch (pauseState) {
     case 'paused_user':
       return 'Paused';
-    case 'paused_resolver':
-      return 'Resolving...';
+    case 'paused_agent':
+      return 'Agent Active...';
     case 'paused_both':
-      return 'Paused (resolving)';
+      return 'Paused (agent active)';
     default:
       return 'Pause';
   }
@@ -99,10 +99,10 @@ function getPauseButtonTooltip(pauseState: PauseState, isPaused: boolean): strin
     switch (pauseState) {
       case 'paused_user':
         return 'Orchestrator paused by user. Click to resume spawning new agents.';
-      case 'paused_resolver':
-        return 'Orchestrator paused while resolving merge conflicts. Will auto-resume when complete.';
+      case 'paused_agent':
+        return 'Orchestrator paused while agent is active (resolving conflicts or repairing). Will auto-resume when complete.';
       case 'paused_both':
-        return 'Orchestrator paused by user while also resolving merge conflicts. Click to allow new agents after resolution completes.';
+        return 'Orchestrator paused by user while agent is active. Click to allow new agents after agent completes.';
       default:
         return 'Click to resume spawning new agents';
     }
@@ -113,7 +113,7 @@ function getPauseButtonTooltip(pauseState: PauseState, isPaused: boolean): strin
 export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
   connected,
   isPaused,
-  isPausedByResolver,
+  isPausedByAgent,
   pauseState,
   isPauseLoading,
   isResumeLoading,
@@ -209,16 +209,16 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
           {isPaused ? (
             <button
               onClick={onResume}
-              disabled={isResumeLoading || !connected || isPausedByResolver}
+              disabled={isResumeLoading || !connected || isPausedByAgent}
               title={buttonTooltip}
               className={`
                 header-control gap-2 px-4 text-white rounded-lg
                 font-medium transition-colors
-                ${pauseState === 'paused_resolver' ? 'bg-blue-500' : 'bg-green-500'}
+                ${pauseState === 'paused_agent' ? 'bg-blue-500' : 'bg-green-500'}
                 ${
-                  isResumeLoading || !connected || (isPausedByResolver && pauseState === 'paused_resolver')
+                  isResumeLoading || !connected || (isPausedByAgent && pauseState === 'paused_agent')
                     ? 'opacity-50 cursor-not-allowed'
-                    : pauseState === 'paused_resolver'
+                    : pauseState === 'paused_agent'
                       ? 'hover:bg-blue-600'
                       : 'hover:bg-green-600'
                 }
