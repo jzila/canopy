@@ -195,17 +195,6 @@ const buildDependencyTree = (tasks: TaskState[]): TreeNode[] => {
   return tree;
 };
 
-// Flatten tree for rendering with depth info
-const flattenTree = (nodes: TreeNode[]): TreeNode[] => {
-  const result: TreeNode[] = [];
-  const traverse = (node: TreeNode) => {
-    result.push(node);
-    node.children.forEach(traverse);
-  };
-  nodes.forEach(traverse);
-  return result;
-};
-
 const truncateId = (id: string, length: number = 11): string => {
   // For bead IDs like "canopy-abc", keep the prefix and short hash
   if (id.startsWith('canopy-') || id.startsWith('beads-')) {

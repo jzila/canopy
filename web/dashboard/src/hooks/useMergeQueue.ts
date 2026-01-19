@@ -30,6 +30,7 @@ function useDebouncedCallback<T extends (...args: unknown[]) => void>(
     };
   }, []);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   return useCallback(
     ((...args: unknown[]) => {
       if (timeoutRef.current !== null) {

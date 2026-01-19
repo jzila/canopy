@@ -115,6 +115,7 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({ agentId }) => {
       fitAddonRef.current = null;
       lastOutputRef.current = '';
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Update terminal theme when dark mode changes

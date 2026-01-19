@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { ChevronDown, ChevronRight, Check, X, Clock, Loader2, Wrench, GitMerge, Play, AlertTriangle } from 'lucide-react';
-import type { AgentState, ValidationStep, ValidationStatus } from '../../stores/stateStore';
+import { ChevronDown, ChevronRight, Check, X, Clock, Loader2, Wrench, GitMerge, Play } from 'lucide-react';
+import type { AgentState, ValidationStep } from '../../stores/stateStore';
 
 interface WorkerChainTimelineProps {
   agent: AgentState;

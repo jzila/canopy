@@ -52,12 +52,13 @@ const MergeCircle: React.FC<MergeCircleProps> = ({
     const base = 'w-3 h-3 rounded-full cursor-pointer flex-shrink-0 transition-all duration-500 ease-out';
 
     switch (status) {
-      case 'completed':
+      case 'completed': {
         // Recently completed items animate to separate from the group
         const completedBase = success
           ? `${base} bg-green-500/50 hover:bg-green-500/70`
           : `${base} bg-red-500/50 hover:bg-red-500/70`;
         return isRecent ? `${completedBase} animate-slide-separate` : completedBase;
+      }
       case 'active':
         return `${base} bg-blue-500 animate-heartbeat hover:bg-blue-400`;
       case 'resolving':

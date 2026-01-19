@@ -53,10 +53,6 @@ const formatCost = (cost: number): string => {
   return cost.toFixed(2);
 };
 
-const truncateId = (id: string, length: number = 8): string => {
-  return id.slice(0, length);
-};
-
 export const AgentCard: React.FC<AgentCardProps> = ({
   agent,
   onSelect,
