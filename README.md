@@ -41,7 +41,7 @@ Without Canopy, Claude Code processes tasks sequentially. A 10-task project take
 
 ## Requirements
 
-- **Linux or macOS** (Linux uses OverlayFS; macOS uses file copying)
+- **Linux or macOS** (Linux uses OverlayFS; macOS uses APFS clones)
 - **Go 1.24+** for building
 - **Claude Code CLI** (`claude`) installed and authenticated
 - **beads** (`bd`) for task tracking ([github.com/jzila/beads](https://github.com/jzila/beads))
@@ -198,13 +198,20 @@ Each agent operates in an isolated workspace. The isolation mechanism varies by 
 └──────────────────────────────────────────────────────────────┘
 ```
 
-**macOS (File Copy):** Creates a full copy of the repository:
+**macOS (APFS Clone):** Uses copy-on-write clones for efficient isolation:
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                WorkDir (Agent's View)                        │
+│                  MergedDir (Agent View)                      │
 │  ~/.cache/canopy/overlays/{id}/merged                        │
-│  (full copy of repository)                                   │
+│  (APFS clone of original repo - COW copy)                    │
+└──────────────────────────────────────────────────────────────┘
+                           │
+                           │ clonefile(2) / cp -c
+                           ▼
+┌──────────────────────────────────────────────────────────────┐
+│              Original Repo (Unmodified)                      │
+│  /Users/user/project (read-only reference)                   │
 └──────────────────────────────────────────────────────────────┘
 ```
 
