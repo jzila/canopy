@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/jzila/canopy/pkg/logging"
@@ -196,16 +197,15 @@ func (m *PersistenceManager) RestoreState() (*RestoredState, error) {
 // ConvertPersistenceAgentToState converts a persistence.Agent to a daemon.AgentState
 func ConvertPersistenceAgentToState(pAgent *persistence.Agent) *AgentState {
 	agent := &AgentState{
-		ID:              pAgent.ID,
-		RunID:           pAgent.RunID,
-		TaskID:          pAgent.TaskID,
-		TaskTitle:       pAgent.TaskTitle,
-		TaskDescription: pAgent.TaskDescription,
-		RepoID:          pAgent.RepoID,
-		ParentAgentID:   pAgent.ParentAgentID,
-		Status:          ConvertPersistenceStatus(pAgent.Status),
-		StartTime:       pAgent.StartedAt,
-		Duration:        pAgent.DurationSeconds,
+		ID:            pAgent.ID,
+		RunID:         pAgent.RunID,
+		TaskID:        pAgent.TaskID,
+		TaskTitle:     pAgent.TaskTitle,
+		RepoID:        pAgent.RepoID,
+		ParentAgentID: pAgent.ParentAgentID,
+		Status:        ConvertPersistenceStatus(pAgent.Status),
+		StartTime:     pAgent.StartedAt,
+		Duration:      pAgent.DurationSeconds,
 		TokenUsage: TokenUsage{
 			InputTokens:              pAgent.InputTokens,
 			OutputTokens:             pAgent.OutputTokens,
@@ -251,10 +251,22 @@ func ConvertPersistenceAgentToState(pAgent *persistence.Agent) *AgentState {
 		agent.MergeError = pAgent.MergeError
 	}
 
-	// Restore repair agent state fields
+	// Restore validation and repair agent state fields
 	agent.RepairAttempts = pAgent.RepairAttempts
 	agent.LastRepairOutput = pAgent.LastRepairOutput
 	agent.ValidationStatus = pAgent.ValidationStatus
+	agent.ValidationDuration = pAgent.ValidationDuration
+	agent.ValidationError = pAgent.ValidationError
+
+	// Parse validation steps from JSON if present
+	if pAgent.ValidationSteps != "" {
+		var steps []ValidationStep
+		if err := json.Unmarshal([]byte(pAgent.ValidationSteps), &steps); err != nil {
+			logging.Debug("failed to parse validation steps", "agent_id", pAgent.ID, "error", err)
+		} else {
+			agent.ValidationSteps = steps
+		}
+	}
 
 	return agent
 }

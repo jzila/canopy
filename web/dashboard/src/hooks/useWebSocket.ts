@@ -203,6 +203,22 @@ interface BackendAgentState {
   git_commits: BackendGitCommit[];
   archived: boolean;
   parent_agent_id?: string;
+  // Merge status fields
+  merge_status?: string;
+  merge_queue_pos?: number;
+  merge_error?: string;
+  // Validation and repair fields
+  validation_status?: string;
+  validation_steps?: Array<{
+    name: string;
+    status: string;
+    duration_ms: number;
+    output?: string;
+  }>;
+  validation_duration_ms?: number;
+  validation_error?: string;
+  repair_attempts?: number;
+  last_repair_output?: string;
 }
 
 interface BackendRuntimeState {
@@ -236,7 +252,6 @@ interface BackendRuntimeState {
   is_paused_by_agent: boolean;
   pause_state: PauseState;
   start_time: string;
-  current_run_id: string;
 }
 
 // Pause state enum matching Go backend (ipc/protocol.go)
@@ -320,7 +335,6 @@ export function useWebSocket() {
     setPauseState,
     setActiveRepo,
     updateAgentMergeStatus,
-    setCurrentRunId,
     addRun,
     updateRun,
   } = useStateStore();
@@ -406,6 +420,17 @@ export function useWebSocket() {
                   ...(agent.run_id && { run_id: agent.run_id }),
                   ...(agent.task_description && { task_description: agent.task_description }),
                   ...(agent.parent_agent_id && { parent_agent_id: agent.parent_agent_id }),
+                  // Merge status fields
+                  ...(agent.merge_status && { merge_status: agent.merge_status as import('../stores/stateStore').MergeStatus }),
+                  ...(agent.merge_queue_pos !== undefined && { merge_queue_pos: agent.merge_queue_pos }),
+                  ...(agent.merge_error && { merge_error: agent.merge_error }),
+                  // Validation and repair fields
+                  ...(agent.validation_status && { validation_status: agent.validation_status as import('../stores/stateStore').ValidationStatus }),
+                  ...(agent.validation_steps && { validation_steps: agent.validation_steps }),
+                  ...(agent.validation_duration_ms !== undefined && { validation_duration_ms: agent.validation_duration_ms }),
+                  ...(agent.validation_error && { validation_error: agent.validation_error }),
+                  ...(agent.repair_attempts !== undefined && { repair_attempts: agent.repair_attempts }),
+                  ...(agent.last_repair_output && { last_repair_output: agent.last_repair_output }),
                 };
               }
 
@@ -433,9 +458,8 @@ export function useWebSocket() {
                 is_paused_by_agent: backendState.is_paused_by_agent ?? false,
                 pause_state: backendState.pause_state ?? 'running',
                 start_time: backendState.start_time,
-                current_run_id: backendState.current_run_id ?? '',
               });
-              console.log('[WebSocket] State synced with', Object.keys(transformedAgents).length, 'agents', 'current_run_id:', backendState.current_run_id);
+              console.log('[WebSocket] State synced with', Object.keys(transformedAgents).length, 'agents');
               break;
             }
 
@@ -593,8 +617,6 @@ export function useWebSocket() {
             case 'run:started': {
               const { run_id, task_count, repo_id, repo_path, repo_name } = message.payload;
               console.log('[WebSocket] Run started:', run_id, 'tasks:', task_count);
-              // Set the current run ID for active run tracking
-              setCurrentRunId(run_id);
               addRun({
                 id: run_id,
                 started_at: message.timestamp,
@@ -622,8 +644,6 @@ export function useWebSocket() {
                 total_cost_usd,
               } = message.payload;
               console.log('[WebSocket] Run completed:', run_id, 'succeeded:', succeeded_tasks, 'failed:', failed_tasks);
-              // Clear the current run ID (no active run)
-              setCurrentRunId('');
               // Determine status based on results
               const status = failed_tasks > 0 ? 'partial' : 'completed';
               updateRun(run_id, {
@@ -680,7 +700,7 @@ export function useWebSocket() {
         }, backoffTime);
       }
     }
-  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, appendGitCommit, syncState, setPauseState, setActiveRepo, updateAgentMergeStatus, setCurrentRunId, addRun, updateRun]);
+  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, appendGitCommit, syncState, setPauseState, setActiveRepo, updateAgentMergeStatus, addRun, updateRun]);
 
   const disconnect = useCallback(() => {
     isManuallyClosedRef.current = true;

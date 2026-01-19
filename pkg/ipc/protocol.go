@@ -172,13 +172,9 @@ const (
 	MergeStatusMergedNeedsRepair = types.MergeStatusMergedNeedsRepair
 )
 
-// ValidationStep represents the result of a single validation step
-type ValidationStep struct {
-	Name     string `json:"name"`               // Name of the validation step (e.g., "build", "test", "lint")
-	Status   string `json:"status"`             // Status: "pending", "running", "passed", "failed", "skipped"
-	Duration int64  `json:"duration_ms"`        // Duration of the step in milliseconds
-	Output   string `json:"output,omitempty"`   // Output or error message from the step
-}
+// ValidationStep is an alias to types.ValidationStep for backwards compatibility.
+// New code should import types.ValidationStep directly.
+type ValidationStep = types.ValidationStep
 
 // AgentMergeStatusPayload is sent when an agent's merge status changes
 type AgentMergeStatusPayload struct {

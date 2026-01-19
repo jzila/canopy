@@ -93,3 +93,12 @@ func (r *AgentResult) ToTokenUsage() TokenUsage {
 		ModelUsage:               r.ModelUsage,
 	}
 }
+
+// ValidationStep represents the result of a single validation step (build, test, lint, etc.).
+// Used consistently across IPC communication, daemon state, and persistence.
+type ValidationStep struct {
+	Name     string `json:"name"`             // Name of the validation step (e.g., "build", "test", "lint")
+	Status   string `json:"status"`           // Status: "pending", "running", "passed", "failed", "skipped"
+	Duration int64  `json:"duration_ms"`      // Duration of the step in milliseconds
+	Output   string `json:"output,omitempty"` // Output or error message from the step
+}
