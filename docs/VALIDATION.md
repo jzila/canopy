@@ -436,6 +436,133 @@ timeout = "10m"
 required = true
 ```
 
+## Worker Chains and Parent-Child Agent Relationships
+
+Worker chains track the relationship between agents that work together to complete a task. When an implementor agent finishes and validation fails, child agents (resolver, repair) are spawned to fix issues.
+
+### What is a Worker Chain?
+
+A worker chain is the sequence of agents that work on a single task:
+
+```
+┌─────────────────┐
+│  Worker Agent   │  ← Original implementor
+│  (implementor)  │
+└────────┬────────┘
+         │
+    ┌────┴────────────────────────────┐
+    │                                 │
+    ▼                                 ▼
+┌───────────────┐             ┌───────────────┐
+│   Resolver    │             │  Validation   │
+│  (optional)   │             │   (if merge   │
+│               │             │   succeeds)   │
+└───────────────┘             └───────┬───────┘
+                                      │ Fails
+                                      ▼
+                              ┌───────────────┐
+                              │ Repair Agent  │
+                              │   #1, #2...   │
+                              └───────────────┘
+```
+
+### Parent-Child Relationships
+
+Each spawned agent tracks its parent via `parent_agent_id`:
+
+| Agent Type | Parent | When Spawned |
+|------------|--------|--------------|
+| Resolver | Implementor | Merge conflict detected |
+| Repair Agent | Implementor | Validation fails after merge |
+
+**IPC Protocol Fields** (from `pkg/ipc/protocol.go`):
+
+```go
+type AgentStartPayload struct {
+    AgentID       string `json:"agent_id"`
+    ParentAgentID string `json:"parent_agent_id,omitempty"` // ID of parent agent
+    // ...
+}
+```
+
+### Agent ID Formats
+
+- **Implementor**: `agent-{runID[:8]}-{taskID}`
+- **Resolver**: `agent-{runID[:8]}-{taskID}-resolver`
+- **Repair Agent**: `agent-{runID[:8]}-{taskID}-repair-{attemptNum}`
+
+Example chain:
+```
+agent-abc12345-canopy-xyz           (implementor)
+├── agent-abc12345-canopy-xyz-resolver      (if conflict)
+├── agent-abc12345-canopy-xyz-repair-1      (first repair)
+└── agent-abc12345-canopy-xyz-repair-2      (second repair)
+```
+
+### When Child Agents Spawn
+
+**Resolver Agents** spawn when:
+- Merge queue attempts to apply patches from an implementor
+- `git am` fails due to conflicts with concurrent changes
+- The resolver receives the failed patches and current HEAD state
+
+**Repair Agents** spawn when:
+- Merge succeeds but validation fails (build error, test failure)
+- Previous repair attempts didn't fix the issue
+- `max_repair_attempts` hasn't been reached
+
+### How Chains are Built
+
+The daemon tracks parent-child relationships:
+
+1. **On agent_start**: If `parent_agent_id` is present, add child to parent's `child_agent_ids` list
+2. **On restore**: `RebuildAgentChildLinks()` reconstructs relationships from `parent_agent_id` fields
+3. **In the dashboard**: `WorkerChainTimeline` component queries all agents, filtering by `parent_agent_id`
+
+```typescript
+// From WorkerChainTimeline.tsx
+const resolverAgents = childAgents.filter(child =>
+  child.parent_agent_id === agent.id && !child.task_id.includes('repair')
+);
+
+const repairAgents = childAgents.filter(child =>
+  child.task_id.includes('repair') || child.parent_agent_id === agent.id
+);
+```
+
+### Timeline Visualization
+
+The dashboard's `WorkerChainTimeline` component renders the worker chain as a vertical timeline:
+
+```
+● Worker Agent          completed    2m 15s
+│
+├─● Conflict Resolver   resolved     45s
+│
+├─● Validation          failed       12s
+│  ├─ build            passed       8s
+│  └─ test             failed       4s
+│
+└─● Repair Agent #1     repairing    ...
+```
+
+Each timeline item shows:
+- **Icon**: Type-specific (play, merge, wrench, check/x)
+- **Title**: Agent type or validation step name
+- **Status**: Current state with color coding
+- **Duration**: Time taken (for completed items)
+- **Expandable output**: Error messages or validation details
+
+### Status Colors
+
+| Status | Color | Meaning |
+|--------|-------|---------|
+| `completed`/`passed`/`merged` | Green | Success |
+| `failed` | Red | Failure |
+| `running`/`pending`/`merging` | Blue | In progress |
+| `repairing` | Orange | Repair agent active |
+| `skipped` | Gray | Not executed |
+
 ## Dashboard Integration
 
 The dashboard shows validation status in real-time:
