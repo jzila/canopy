@@ -214,6 +214,7 @@ func (h *PersistenceHandler) handleAgentStarted(event Event) {
 
 	taskID, _ := payload["task_id"].(string)
 	taskTitle, _ := payload["task_title"].(string)
+	taskDescription, _ := payload["task_description"].(string)
 	repoID, _ := payload["repo_id"].(string)
 	parentAgentID, _ := payload["parent_agent_id"].(string)
 
@@ -223,14 +224,15 @@ func (h *PersistenceHandler) handleAgentStarted(event Event) {
 	h.mu.RUnlock()
 
 	agent := &persistence.Agent{
-		ID:            agentID,
-		RunID:         runID,
-		TaskID:        taskID,
-		TaskTitle:     taskTitle,
-		Status:        persistence.AgentStatusRunning,
-		StartedAt:     event.Timestamp,
-		RepoID:        repoID,
-		ParentAgentID: parentAgentID,
+		ID:              agentID,
+		RunID:           runID,
+		TaskID:          taskID,
+		TaskTitle:       taskTitle,
+		TaskDescription: taskDescription,
+		Status:          persistence.AgentStatusRunning,
+		StartedAt:       event.Timestamp,
+		RepoID:          repoID,
+		ParentAgentID:   parentAgentID,
 	}
 
 	if err := h.store.CreateAgent(agent); err != nil {

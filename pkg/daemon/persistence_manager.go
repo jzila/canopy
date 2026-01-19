@@ -196,15 +196,16 @@ func (m *PersistenceManager) RestoreState() (*RestoredState, error) {
 // ConvertPersistenceAgentToState converts a persistence.Agent to a daemon.AgentState
 func ConvertPersistenceAgentToState(pAgent *persistence.Agent) *AgentState {
 	agent := &AgentState{
-		ID:            pAgent.ID,
-		RunID:         pAgent.RunID,
-		TaskID:        pAgent.TaskID,
-		TaskTitle:     pAgent.TaskTitle,
-		RepoID:        pAgent.RepoID,
-		ParentAgentID: pAgent.ParentAgentID,
-		Status:        ConvertPersistenceStatus(pAgent.Status),
-		StartTime:     pAgent.StartedAt,
-		Duration:      pAgent.DurationSeconds,
+		ID:              pAgent.ID,
+		RunID:           pAgent.RunID,
+		TaskID:          pAgent.TaskID,
+		TaskTitle:       pAgent.TaskTitle,
+		TaskDescription: pAgent.TaskDescription,
+		RepoID:          pAgent.RepoID,
+		ParentAgentID:   pAgent.ParentAgentID,
+		Status:          ConvertPersistenceStatus(pAgent.Status),
+		StartTime:       pAgent.StartedAt,
+		Duration:        pAgent.DurationSeconds,
 		TokenUsage: TokenUsage{
 			InputTokens:              pAgent.InputTokens,
 			OutputTokens:             pAgent.OutputTokens,

@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-const currentSchemaVersion = 11
+const currentSchemaVersion = 12
 
 // migrate runs all pending database migrations
 func (s *Store) migrate() error {
@@ -87,6 +87,10 @@ func (s *Store) runMigration(version int) error {
 		}
 	case 11:
 		if err := s.migrateV11(tx); err != nil {
+			return err
+		}
+	case 12:
+		if err := s.migrateV12(tx); err != nil {
 			return err
 		}
 	default:
@@ -355,6 +359,22 @@ func (s *Store) migrateV11(tx *sql.Tx) error {
 		// Add repair agent tracking fields to agents table
 		`ALTER TABLE agents ADD COLUMN repair_attempts INTEGER DEFAULT 0`, // Number of repair attempts made
 		`ALTER TABLE agents ADD COLUMN last_repair_output TEXT`,           // Output/error from last repair attempt
+	}
+
+	for _, m := range migrations {
+		if _, err := tx.Exec(m); err != nil {
+			return fmt.Errorf("failed to execute migration: %s: %w", m, err)
+		}
+	}
+
+	return nil
+}
+
+// migrateV12 adds task_description column to agents table
+func (s *Store) migrateV12(tx *sql.Tx) error {
+	migrations := []string{
+		// Add task_description to store the full task description (from beads)
+		`ALTER TABLE agents ADD COLUMN task_description TEXT`,
 	}
 
 	for _, m := range migrations {
