@@ -316,6 +316,128 @@ func TestPersistenceHandler_SuccessfulRun(t *testing.T) {
 	}
 }
 
+func TestRebuildAgentChildLinks(t *testing.T) {
+	tests := []struct {
+		name     string
+		agents   map[string]*AgentState
+		expected map[string][]string // agentID -> expected ChildAgentIDs
+	}{
+		{
+			name:     "empty agents",
+			agents:   map[string]*AgentState{},
+			expected: map[string][]string{},
+		},
+		{
+			name: "single agent no parent",
+			agents: map[string]*AgentState{
+				"agent-1": {ID: "agent-1"},
+			},
+			expected: map[string][]string{
+				"agent-1": nil,
+			},
+		},
+		{
+			name: "parent with one child",
+			agents: map[string]*AgentState{
+				"parent":  {ID: "parent"},
+				"child-1": {ID: "child-1", ParentAgentID: "parent"},
+			},
+			expected: map[string][]string{
+				"parent":  {"child-1"},
+				"child-1": nil,
+			},
+		},
+		{
+			name: "parent with multiple children",
+			agents: map[string]*AgentState{
+				"parent":  {ID: "parent"},
+				"child-1": {ID: "child-1", ParentAgentID: "parent"},
+				"child-2": {ID: "child-2", ParentAgentID: "parent"},
+				"child-3": {ID: "child-3", ParentAgentID: "parent"},
+			},
+			expected: map[string][]string{
+				"parent":  {"child-1", "child-2", "child-3"},
+				"child-1": nil,
+				"child-2": nil,
+				"child-3": nil,
+			},
+		},
+		{
+			name: "nested parent-child relationships",
+			agents: map[string]*AgentState{
+				"grandparent": {ID: "grandparent"},
+				"parent":      {ID: "parent", ParentAgentID: "grandparent"},
+				"child":       {ID: "child", ParentAgentID: "parent"},
+			},
+			expected: map[string][]string{
+				"grandparent": {"parent"},
+				"parent":      {"child"},
+				"child":       nil,
+			},
+		},
+		{
+			name: "orphaned child (parent does not exist)",
+			agents: map[string]*AgentState{
+				"orphan": {ID: "orphan", ParentAgentID: "nonexistent"},
+			},
+			expected: map[string][]string{
+				"orphan": nil,
+			},
+		},
+		{
+			name: "clears existing ChildAgentIDs before rebuilding",
+			agents: map[string]*AgentState{
+				"parent":  {ID: "parent", ChildAgentIDs: []string{"stale-child"}},
+				"child-1": {ID: "child-1", ParentAgentID: "parent"},
+			},
+			expected: map[string][]string{
+				"parent":  {"child-1"},
+				"child-1": nil,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			RebuildAgentChildLinks(tt.agents)
+
+			for agentID, expectedChildren := range tt.expected {
+				agent, exists := tt.agents[agentID]
+				if !exists {
+					t.Errorf("agent %s not found", agentID)
+					continue
+				}
+
+				// For nil expected, check that actual is nil or empty
+				if expectedChildren == nil {
+					if len(agent.ChildAgentIDs) != 0 {
+						t.Errorf("agent %s: expected no children, got %v", agentID, agent.ChildAgentIDs)
+					}
+					continue
+				}
+
+				// Check that all expected children are present
+				if len(agent.ChildAgentIDs) != len(expectedChildren) {
+					t.Errorf("agent %s: expected %d children, got %d (%v)", agentID, len(expectedChildren), len(agent.ChildAgentIDs), agent.ChildAgentIDs)
+					continue
+				}
+
+				// Build a set of actual children for easy lookup
+				actualSet := make(map[string]bool)
+				for _, child := range agent.ChildAgentIDs {
+					actualSet[child] = true
+				}
+
+				for _, expected := range expectedChildren {
+					if !actualSet[expected] {
+						t.Errorf("agent %s: expected child %s not found in %v", agentID, expected, agent.ChildAgentIDs)
+					}
+				}
+			}
+		})
+	}
+}
+
 // Ensure dbPath cleanup
 func init() {
 	os.Setenv("XDG_CACHE_HOME", os.TempDir())
