@@ -21,7 +21,7 @@ func TailLines(n int) error {
 	if err != nil {
 		return fmt.Errorf("failed to open log file: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// Read all lines into memory (simple approach for typical log sizes)
 	var lines []string
@@ -60,7 +60,7 @@ func TailFollow(lines int) error {
 	if err != nil {
 		return fmt.Errorf("failed to open log file: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// First, show the last N lines
 	if lines > 0 {

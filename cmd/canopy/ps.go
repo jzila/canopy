@@ -221,7 +221,7 @@ func queryDaemonState(port int) (*StateResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to daemon: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("daemon returned status %d", resp.StatusCode)

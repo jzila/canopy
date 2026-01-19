@@ -52,7 +52,7 @@ func runStats(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to open history store: %w", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	var since *time.Time
 

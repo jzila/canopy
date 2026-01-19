@@ -149,7 +149,7 @@ func (r *Resolver) Resolve(ctx context.Context, conflict *ConflictContext) (*Res
 
 	// Mount the overlay
 	if err := overlay.Mount(); err != nil {
-		overlay.Cleanup()
+		_ = overlay.Cleanup()
 		result.Error = fmt.Sprintf("failed to mount resolver sandbox: %v", err)
 		result.Duration = time.Since(start)
 		return result, nil
@@ -157,8 +157,8 @@ func (r *Resolver) Resolve(ctx context.Context, conflict *ConflictContext) (*Res
 
 	// Write failed patches to sandbox for resolver to access
 	if err := r.writePatchFiles(overlay, conflict); err != nil {
-		overlay.Unmount()
-		overlay.Cleanup()
+		_ = overlay.Unmount()
+		_ = overlay.Cleanup()
 		result.Error = fmt.Sprintf("failed to write patch files: %v", err)
 		result.Duration = time.Since(start)
 		return result, nil
@@ -190,7 +190,7 @@ func (r *Resolver) Resolve(ctx context.Context, conflict *ConflictContext) (*Res
 	agentResult := r.executor.Execute(ctx, resolverTask, overlay, nil, nil)
 
 	// Cleanup overlay
-	overlay.Unmount()
+	_ = overlay.Unmount()
 	// Don't cleanup directories yet - they're needed for merge
 
 	result.AgentResult = agentResult

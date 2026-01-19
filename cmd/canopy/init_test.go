@@ -124,7 +124,7 @@ func TestRunApplyAnswers(t *testing.T) {
 
 		err = runApplyAnswers(tmpDir, string(answersJSON))
 
-		w.Close()
+		_ = w.Close()
 		os.Stdout = oldStdout
 
 		if err != nil {
@@ -195,7 +195,7 @@ func TestRunApplyAnswers(t *testing.T) {
 
 		err = runApplyAnswers(tmpDir, string(answersJSON))
 
-		w.Close()
+		_ = w.Close()
 		os.Stdout = oldStdout
 
 		if err != nil {
@@ -288,7 +288,7 @@ func TestAgentQuestionnaireOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chdir(oldWd)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	// Capture output
 	oldStdout := os.Stdout
@@ -297,7 +297,7 @@ func TestAgentQuestionnaireOutput(t *testing.T) {
 
 	err = runAgentQuestionnaire(tmpDir)
 
-	w.Close()
+	_ = w.Close()
 	os.Stdout = oldStdout
 
 	if err != nil {

@@ -21,7 +21,7 @@ func getAvailablePort(t *testing.T) int {
 		if err != nil {
 			continue // Port in use, try next
 		}
-		listener.Close()
+		_ = listener.Close()
 		return port
 	}
 	t.Fatal("Could not find an available port in range 8081-8199")
@@ -235,7 +235,7 @@ func TestRestoreStateFromDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	dbPath := filepath.Join(tmpDir, "test.db")
 	store, err := persistence.NewStoreWithPath(dbPath)
@@ -300,7 +300,7 @@ func TestRestoreStateFromDB(t *testing.T) {
 		}
 	}
 
-	store.Close()
+	_ = store.Close()
 
 	// Now create a daemon with persistence enabled using the same database
 	store2, err := persistence.NewStoreWithPath(dbPath)
@@ -389,7 +389,7 @@ func TestRestoreStateFromDB(t *testing.T) {
 		t.Errorf("expected restored agent-2 status failed (orphaned), got %s", restoredAgent2.Status)
 	}
 
-	store2.Close()
+	_ = store2.Close()
 }
 
 // TestRestoreStateFromDB_CompletedRun verifies historical restoration happens from completed runs
@@ -399,7 +399,7 @@ func TestRestoreStateFromDB_CompletedRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	dbPath := filepath.Join(tmpDir, "test.db")
 	store, err := persistence.NewStoreWithPath(dbPath)
@@ -456,7 +456,7 @@ func TestRestoreStateFromDB_CompletedRun(t *testing.T) {
 		t.Errorf("expected 2 agents (historical data), got %d", len(state.Agents))
 	}
 
-	store.Close()
+	_ = store.Close()
 }
 
 // TestRestoreStateFromDB_WithStdoutStderr verifies stdout/stderr are restored from database
@@ -466,7 +466,7 @@ func TestRestoreStateFromDB_WithStdoutStderr(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	dbPath := filepath.Join(tmpDir, "test.db")
 	store, err := persistence.NewStoreWithPath(dbPath)
@@ -500,7 +500,7 @@ func TestRestoreStateFromDB_WithStdoutStderr(t *testing.T) {
 		t.Fatalf("failed to create agent: %v", err)
 	}
 
-	store.Close()
+	_ = store.Close()
 
 	// Reopen store and create daemon to simulate restart
 	store2, err := persistence.NewStoreWithPath(dbPath)
@@ -533,7 +533,7 @@ func TestRestoreStateFromDB_WithStdoutStderr(t *testing.T) {
 		t.Errorf("expected stderr to be restored, got %q", restoredAgent.Output.Stderr)
 	}
 
-	store2.Close()
+	_ = store2.Close()
 }
 
 // TestRestoreStateFromDB_EmptyDB verifies no restoration happens when database is empty
@@ -543,7 +543,7 @@ func TestRestoreStateFromDB_EmptyDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	dbPath := filepath.Join(tmpDir, "test.db")
 	store, err := persistence.NewStoreWithPath(dbPath)
@@ -565,7 +565,7 @@ func TestRestoreStateFromDB_EmptyDB(t *testing.T) {
 		t.Errorf("expected 0 agents (empty DB), got %d", len(state.Agents))
 	}
 
-	store.Close()
+	_ = store.Close()
 }
 
 // TestSetActiveRepository verifies setting and getting active repository
@@ -575,12 +575,12 @@ func TestSetActiveRepository(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	// Set XDG_CACHE_HOME to our temp dir for registry storage
 	oldXDGCache := os.Getenv("XDG_CACHE_HOME")
-	os.Setenv("XDG_CACHE_HOME", tmpDir)
-	defer os.Setenv("XDG_CACHE_HOME", oldXDGCache)
+	_ = os.Setenv("XDG_CACHE_HOME", tmpDir)
+	defer func() { _ = os.Setenv("XDG_CACHE_HOME", oldXDGCache) }()
 
 	// Create the canopy cache directory
 	cacheDir := filepath.Join(tmpDir, "canopy")
@@ -648,7 +648,7 @@ func TestRestoreStateFromDB_WithRepoContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	dbPath := filepath.Join(tmpDir, "test.db")
 	store, err := persistence.NewStoreWithPath(dbPath)
@@ -706,7 +706,7 @@ func TestRestoreStateFromDB_WithRepoContext(t *testing.T) {
 		t.Errorf("expected agent repo ID 'test-repo-id', got '%s'", restoredAgent.RepoID)
 	}
 
-	store.Close()
+	_ = store.Close()
 }
 
 // TestListRepositories verifies listing repositories
@@ -905,7 +905,7 @@ func TestHistoricalLiveFeedEvents(t *testing.T) {
 		}
 	}
 
-	store.Close()
+	_ = store.Close()
 }
 
 // TestRestoreLiveFeedEventsFromJSONL verifies that live feed events are loaded from
@@ -917,8 +917,8 @@ func TestRestoreLiveFeedEventsFromJSONL(t *testing.T) {
 
 	// Override XDG_CACHE_HOME so live feed files go to temp directory
 	originalCacheDir := os.Getenv("XDG_CACHE_HOME")
-	os.Setenv("XDG_CACHE_HOME", tempDir)
-	defer os.Setenv("XDG_CACHE_HOME", originalCacheDir)
+	_ = os.Setenv("XDG_CACHE_HOME", tempDir)
+	defer func() { _ = os.Setenv("XDG_CACHE_HOME", originalCacheDir) }()
 
 	store, err := persistence.NewStoreWithPath(dbPath)
 	if err != nil {
@@ -1096,5 +1096,5 @@ func TestRestoreLiveFeedEventsFromJSONL(t *testing.T) {
 		}
 	}
 
-	store.Close()
+	_ = store.Close()
 }

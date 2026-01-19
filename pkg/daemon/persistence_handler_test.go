@@ -16,7 +16,7 @@ func TestPersistenceHandler_RunLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create store: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Create event bus and persistence handler
 	eventBus := NewEventBus()
@@ -93,7 +93,7 @@ func TestPersistenceHandler_AgentLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create store: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Create event bus and persistence handler
 	eventBus := NewEventBus()
@@ -204,7 +204,7 @@ func TestPersistenceHandler_AgentFailed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create store: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Create event bus and persistence handler
 	eventBus := NewEventBus()
@@ -273,7 +273,7 @@ func TestPersistenceHandler_SuccessfulRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create store: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Create event bus and persistence handler
 	eventBus := NewEventBus()
@@ -440,5 +440,5 @@ func TestRebuildAgentChildLinks(t *testing.T) {
 
 // Ensure dbPath cleanup
 func init() {
-	os.Setenv("XDG_CACHE_HOME", os.TempDir())
+	_ = os.Setenv("XDG_CACHE_HOME", os.TempDir())
 }

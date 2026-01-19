@@ -62,7 +62,7 @@ func runHistory(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to open history store: %w", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// If a run ID is provided, show details for that run
 	if len(args) > 0 {

@@ -124,12 +124,12 @@ func (m *mockResolver) GetLastConflict() *resolver.ConflictContext {
 
 // mockMerger simulates merger behavior for testing
 type mockMerger struct {
-	mu                sync.Mutex
-	mergeCalls        int
-	shouldPatchFail   bool
-	lastResult        *agent.Result
-	patchFailedTasks  map[string]bool
-	commitsApplied    int
+	mu               sync.Mutex
+	mergeCalls       int
+	shouldPatchFail  bool
+	lastResult       *agent.Result
+	patchFailedTasks map[string]bool
+	commitsApplied   int
 }
 
 func newMockMerger(shouldPatchFail bool) *mockMerger {
@@ -318,7 +318,7 @@ func TestIPCChildEventsOnResolverSpawn(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	// Subscribe to events
 	receivedEvents := make(chan events.Event, 100)
@@ -331,7 +331,7 @@ func TestIPCChildEventsOnResolverSpawn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Simulate resolver start event (child of original agent)
 	parentAgentID := "agent-canopy-test"
@@ -340,7 +340,7 @@ func TestIPCChildEventsOnResolverSpawn(t *testing.T) {
 
 	if err := client.SendAgentStart(
 		resolverAgentID,
-		"",    // no run ID in test
+		"", // no run ID in test
 		taskID,
 		"Resolve merge conflict for canopy-test",
 		"", // no description in test
@@ -410,7 +410,7 @@ func TestIPCChildEventsOnResolverFailure(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	// Subscribe to events
 	receivedEvents := make(chan events.Event, 100)
@@ -423,7 +423,7 @@ func TestIPCChildEventsOnResolverFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	parentAgentID := "agent-canopy-test"
 	resolverAgentID := "canopy-test-resolver"
@@ -431,7 +431,7 @@ func TestIPCChildEventsOnResolverFailure(t *testing.T) {
 	// Simulate resolver start
 	if err := client.SendAgentStart(
 		resolverAgentID,
-		"",    // no run ID in test
+		"", // no run ID in test
 		"canopy-test",
 		"Resolve merge conflict",
 		"", // no description in test
@@ -495,7 +495,7 @@ func TestMergeStatusTransitions(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	// Subscribe to events
 	receivedEvents := make(chan events.Event, 100)
@@ -508,7 +508,7 @@ func TestMergeStatusTransitions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	agentID := "agent-canopy-test"
 
@@ -560,7 +560,7 @@ func TestMergeStatusFailedOnResolverFailure(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	receivedEvents := make(chan events.Event, 100)
 	eventBus.Subscribe(func(event events.Event) {
@@ -571,7 +571,7 @@ func TestMergeStatusFailedOnResolverFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	agentID := "agent-canopy-test"
 
@@ -634,7 +634,7 @@ func TestResolverSuccessMarksTaskDone(t *testing.T) {
 
 	// Simulate marking task done after successful resolution
 	if resolverResult.Success {
-		mockBeads.Done("canopy-test")
+		_ = mockBeads.Done("canopy-test")
 	}
 
 	// Verify task status
@@ -681,7 +681,7 @@ func TestResolverFailureMarksTaskFailed(t *testing.T) {
 	// Simulate marking task failed after failed resolution
 	if !resolverResult.Success {
 		reason := "resolver failed: " + resolverResult.Error
-		mockBeads.Fail("canopy-test", reason)
+		_ = mockBeads.Fail("canopy-test", reason)
 	}
 
 	// Verify task status
@@ -704,8 +704,8 @@ func TestResolverFailureMarksTaskFailed(t *testing.T) {
 // TestResolverAgentIDFormat verifies resolver agent ID follows expected format
 func TestResolverAgentIDFormat(t *testing.T) {
 	testCases := []struct {
-		taskID           string
-		expectedAgentID  string
+		taskID          string
+		expectedAgentID string
 	}{
 		{"canopy-abc", "canopy-abc-resolver"},
 		{"canopy-xyz123", "canopy-xyz123-resolver"},
@@ -985,12 +985,9 @@ func TestResolverSpawnedWhenAgentHasCommitsThatFailedToApply(t *testing.T) {
 	mergeResult, _ := mockMerge.MergeSingle(result, nil)
 
 	// Simulate the processor logic for spawning resolver
-	needsResolver := false
+	needsResolver := len(mergeResult.Errors) > 0
 
 	// Case 1: Merge had errors
-	if len(mergeResult.Errors) > 0 {
-		needsResolver = true
-	}
 
 	// Case 2: No actual changes applied despite agent having git patches
 	if !needsResolver && mergeResult.CommitsApplied == 0 && len(mergeResult.Applied) == 0 {

@@ -81,7 +81,7 @@ func TestFetchInitialState(t *testing.T) {
 	// Create a mock server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/state" {
-			state := daemon.RuntimeState{
+			state := &daemon.RuntimeState{
 				IsPaused: true,
 				Stats: daemon.Stats{
 					RunningTasks:   2,
@@ -90,7 +90,7 @@ func TestFetchInitialState(t *testing.T) {
 				},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(state)
+			_ = json.NewEncoder(w).Encode(state)
 			return
 		}
 		http.NotFound(w, r)
@@ -239,7 +239,7 @@ func TestConnectWebSocket(t *testing.T) {
 			t.Logf("upgrade error: %v", err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		// Send a state sync event
 		event := events.Event{
@@ -252,7 +252,7 @@ func TestConnectWebSocket(t *testing.T) {
 			},
 		}
 		data, _ := json.Marshal(event)
-		conn.WriteMessage(websocket.TextMessage, data)
+		_ = conn.WriteMessage(websocket.TextMessage, data)
 
 		// Keep connection open briefly
 		time.Sleep(100 * time.Millisecond)
@@ -260,7 +260,7 @@ func TestConnectWebSocket(t *testing.T) {
 
 	stateHandler := func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(daemon.RuntimeState{})
+		_ = json.NewEncoder(w).Encode(daemon.RuntimeState{})
 	}
 
 	mux := http.NewServeMux()
@@ -285,7 +285,7 @@ func TestConnectWebSocket(t *testing.T) {
 	// Allow some time for WebSocket messages to be processed
 	time.Sleep(50 * time.Millisecond)
 
-	client.Close()
+	_ = client.Close()
 
 	// After close, connection should be marked as disconnected (eventually)
 	time.Sleep(50 * time.Millisecond)

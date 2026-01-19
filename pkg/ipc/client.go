@@ -100,7 +100,7 @@ func (c *Client) Connect() error {
 
 	// Close existing connection if present
 	if c.conn != nil {
-		c.conn.Close()
+		_ = c.conn.Close()
 	}
 
 	// Connect to Unix socket with timeout
@@ -153,7 +153,7 @@ func (c *Client) sendMessage(msgType MessageType, payload interface{}) error {
 	// Try to send
 	if _, err := c.conn.Write(data); err != nil {
 		// Connection failed - mark as disconnected, queue event, start reconnect
-		c.conn.Close()
+		_ = c.conn.Close()
 		c.conn = nil
 		c.encoder = nil
 		c.queueEventLocked(data, now)
@@ -300,7 +300,7 @@ func (c *Client) flushQueueLocked() {
 			// Keep remaining events in queue
 			failedEvents = append(failedEvents, event)
 			// Mark connection as dead
-			c.conn.Close()
+			_ = c.conn.Close()
 			c.conn = nil
 			c.encoder = nil
 			break

@@ -224,7 +224,7 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("daemon required: %w\n\nThe canopy daemon is required for orchestration. "+
 			"If the daemon failed to start, check the logs at ~/.cache/canopy/daemon.log", err)
 	}
-	defer ipcClient.Close()
+	defer func() { _ = ipcClient.Close() }()
 	ipcClient.SetVerbose(verbose) // Enable verbose logging for reconnection events
 	if verbose {
 		fmt.Println("Connected to canopy daemon")
@@ -410,17 +410,6 @@ func makeAgentID(runID, taskID string) string {
 		prefix = prefix[:8]
 	}
 	return fmt.Sprintf("agent-%s-%s", prefix, taskID)
-}
-
-// sendAgentCommits was used to send commit events from overlay commits.
-// This function is DEPRECATED - commit events are now sent by the merge processor
-// after merge completes, using the actual merged commit hashes from the repo.
-// Overlay commits have different hashes and may not exist after merge.
-// See pkg/mergequeue/processor.go sendMergedCommits() for the new implementation.
-func sendAgentCommits(client *ipc.Client, agentID string, result *agent.Result, verboseMode bool) {
-	// No-op: commits are now sent by the merge processor
-	// This function is kept for backwards compatibility in case it's called elsewhere,
-	// but intentionally does nothing.
 }
 
 // runStatsCollector tracks statistics across all agents in a run

@@ -83,9 +83,10 @@ func (m *mockPersistenceStore) GetStats(since *time.Time) (*persistence.Aggregat
 		FailedRuns:    0,
 	}
 	for _, run := range m.runs {
-		if run.Status == persistence.RunStatusCompleted {
+		switch run.Status {
+		case persistence.RunStatusCompleted:
 			stats.CompletedRuns++
-		} else if run.Status == persistence.RunStatusFailed {
+		case persistence.RunStatusFailed:
 			stats.FailedRuns++
 		}
 	}
@@ -103,9 +104,10 @@ func (m *mockPersistenceStore) GetStatsByRepo(repoID string, since *time.Time) (
 			continue
 		}
 		stats.TotalRuns++
-		if run.Status == persistence.RunStatusCompleted {
+		switch run.Status {
+		case persistence.RunStatusCompleted:
 			stats.CompletedRuns++
-		} else if run.Status == persistence.RunStatusFailed {
+		case persistence.RunStatusFailed:
 			stats.FailedRuns++
 		}
 	}

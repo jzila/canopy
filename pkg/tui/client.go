@@ -107,7 +107,7 @@ func (c *RemoteClient) fetchInitialState() error {
 	if err != nil {
 		return fmt.Errorf("HTTP request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, err := io.ReadAll(resp.Body)
@@ -179,12 +179,10 @@ func (c *RemoteClient) readLoop() {
 		}
 
 		// Read message with timeout
-		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		_ = c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 		_, message, err := c.conn.ReadMessage()
 		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				// Connection closed unexpectedly
-			}
+			// Any error (including unexpected close) terminates the read loop
 			return
 		}
 

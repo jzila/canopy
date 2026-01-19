@@ -198,8 +198,8 @@ func (h *Handler) HandleKillAgent(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
-		"status": "killed",
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"status":   "killed",
 		"agent_id": agentID,
 	})
 }
@@ -246,7 +246,7 @@ func (h *Handler) HandleCreateTask(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Failed to read request body: %v", err), http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	var req TaskCreateRequest
 	if err := json.Unmarshal(body, &req); err != nil {
@@ -283,9 +283,9 @@ func (h *Handler) HandleCreateTask(w http.ResponseWriter, r *http.Request) {
 	// Return the created task
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{
-		"id": taskID,
-		"title": req.Title,
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"id":     taskID,
+		"title":  req.Title,
 		"status": "created",
 	})
 }
@@ -315,7 +315,7 @@ func (h *Handler) HandleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Failed to read request body: %v", err), http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	var req TaskUpdateRequest
 	if err := json.Unmarshal(body, &req); err != nil {
@@ -346,21 +346,22 @@ func (h *Handler) HandleUpdateTask(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 		return
 	}
 
-	if req.Status == "in_progress" {
+	switch req.Status {
+	case "in_progress":
 		if err := h.beadsClient.Start(r.Context(), taskID); err != nil {
 			http.Error(w, fmt.Sprintf("Failed to update task in beads: %v", err), http.StatusInternalServerError)
 			return
 		}
-	} else if req.Status == "completed" {
+	case "completed":
 		if err := h.beadsClient.Done(r.Context(), taskID); err != nil {
 			http.Error(w, fmt.Sprintf("Failed to update task in beads: %v", err), http.StatusInternalServerError)
 			return
 		}
-	} else if req.Status == "failed" {
+	case "failed":
 		if err := h.beadsClient.Fail(r.Context(), taskID, "Task failed"); err != nil {
 			http.Error(w, fmt.Sprintf("Failed to update task in beads: %v", err), http.StatusInternalServerError)
 			return
@@ -378,7 +379,7 @@ func (h *Handler) HandleUpdateTask(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // HandlePauseOrch pauses the orchestrator
@@ -428,7 +429,7 @@ func (h *Handler) HandlePauseOrch(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // HandleResumeOrch resumes the orchestrator
@@ -491,7 +492,7 @@ func (h *Handler) HandleResumeOrch(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // HandleGetStats returns aggregate statistics
@@ -537,7 +538,7 @@ func (h *Handler) HandleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Failed to read request body: %v", err), http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
+	defer func() { _ = r.Body.Close() }()
 
 	var req AgentUpdateRequest
 	if err := json.Unmarshal(body, &req); err != nil {
@@ -582,7 +583,7 @@ func (h *Handler) HandleUpdateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // MergeQueueState represents the current state of the merge queue
@@ -728,9 +729,10 @@ func (h *Handler) HandleGetMergeQueue(w http.ResponseWriter, r *http.Request) {
 		parent := snapshot.Agents[parentID]
 		if parent != nil {
 			status := "running"
-			if resolver.Status == AgentStatusCompleted {
+			switch resolver.Status {
+			case AgentStatusCompleted:
 				status = "completed"
-			} else if resolver.Status == AgentStatusFailed {
+			case AgentStatusFailed:
 				status = "failed"
 			}
 			state.Resolvers = append(state.Resolvers, MergeResolverItem{

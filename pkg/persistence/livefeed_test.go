@@ -10,8 +10,8 @@ func TestAppendAndLoadLiveFeedEvents(t *testing.T) {
 	// Use temp directory for test
 	tempDir := t.TempDir()
 	originalCacheDir := os.Getenv("XDG_CACHE_HOME")
-	os.Setenv("XDG_CACHE_HOME", tempDir)
-	defer os.Setenv("XDG_CACHE_HOME", originalCacheDir)
+	_ = os.Setenv("XDG_CACHE_HOME", tempDir)
+	defer func() { _ = os.Setenv("XDG_CACHE_HOME", originalCacheDir) }()
 
 	agentID := "test-agent-123"
 
@@ -115,8 +115,8 @@ func TestGetLiveFeedDir(t *testing.T) {
 	// Test with XDG_CACHE_HOME set
 	tempDir := t.TempDir()
 	originalCacheDir := os.Getenv("XDG_CACHE_HOME")
-	os.Setenv("XDG_CACHE_HOME", tempDir)
-	defer os.Setenv("XDG_CACHE_HOME", originalCacheDir)
+	_ = os.Setenv("XDG_CACHE_HOME", tempDir)
+	defer func() { _ = os.Setenv("XDG_CACHE_HOME", originalCacheDir) }()
 
 	dir := GetLiveFeedDir()
 	expected := filepath.Join(tempDir, "canopy", "live_feed")
@@ -129,8 +129,8 @@ func TestConcurrentAppend(t *testing.T) {
 	// Use temp directory for test
 	tempDir := t.TempDir()
 	originalCacheDir := os.Getenv("XDG_CACHE_HOME")
-	os.Setenv("XDG_CACHE_HOME", tempDir)
-	defer os.Setenv("XDG_CACHE_HOME", originalCacheDir)
+	_ = os.Setenv("XDG_CACHE_HOME", tempDir)
+	defer func() { _ = os.Setenv("XDG_CACHE_HOME", originalCacheDir) }()
 
 	agentID := "concurrent-test-agent"
 	numGoroutines := 10
@@ -171,5 +171,5 @@ func TestConcurrentAppend(t *testing.T) {
 	}
 
 	// Cleanup
-	DeleteLiveFeedFile(agentID)
+	_ = DeleteLiveFeedFile(agentID)
 }

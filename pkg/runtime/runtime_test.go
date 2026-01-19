@@ -29,9 +29,9 @@ func TestRuntimeDir_Linux_XDG(t *testing.T) {
 
 	// Save and restore XDG_RUNTIME_DIR
 	orig := os.Getenv("XDG_RUNTIME_DIR")
-	defer os.Setenv("XDG_RUNTIME_DIR", orig)
+	defer func() { _ = os.Setenv("XDG_RUNTIME_DIR", orig) }()
 
-	os.Setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+	_ = os.Setenv("XDG_RUNTIME_DIR", "/run/user/1000")
 	dir := RuntimeDir()
 
 	want := "/run/user/1000/canopy"
@@ -49,12 +49,12 @@ func TestRuntimeDir_Fallback(t *testing.T) {
 	origXDG := os.Getenv("XDG_RUNTIME_DIR")
 	origTMP := os.Getenv("TMPDIR")
 	defer func() {
-		os.Setenv("XDG_RUNTIME_DIR", origXDG)
-		os.Setenv("TMPDIR", origTMP)
+		_ = os.Setenv("XDG_RUNTIME_DIR", origXDG)
+		_ = os.Setenv("TMPDIR", origTMP)
 	}()
 
-	os.Unsetenv("XDG_RUNTIME_DIR")
-	os.Setenv("TMPDIR", "/custom/tmp")
+	_ = os.Unsetenv("XDG_RUNTIME_DIR")
+	_ = os.Setenv("TMPDIR", "/custom/tmp")
 
 	dir := RuntimeDir()
 
@@ -88,9 +88,9 @@ func TestEnsureDir(t *testing.T) {
 
 	// Save and restore environment
 	origXDG := os.Getenv("XDG_RUNTIME_DIR")
-	defer os.Setenv("XDG_RUNTIME_DIR", origXDG)
+	defer func() { _ = os.Setenv("XDG_RUNTIME_DIR", origXDG) }()
 
-	os.Setenv("XDG_RUNTIME_DIR", tmpdir)
+	_ = os.Setenv("XDG_RUNTIME_DIR", tmpdir)
 
 	err := EnsureDir()
 	if err != nil {
@@ -118,9 +118,9 @@ func TestEnsureDir_Idempotent(t *testing.T) {
 	tmpdir := t.TempDir()
 
 	origXDG := os.Getenv("XDG_RUNTIME_DIR")
-	defer os.Setenv("XDG_RUNTIME_DIR", origXDG)
+	defer func() { _ = os.Setenv("XDG_RUNTIME_DIR", origXDG) }()
 
-	os.Setenv("XDG_RUNTIME_DIR", tmpdir)
+	_ = os.Setenv("XDG_RUNTIME_DIR", tmpdir)
 
 	// Call twice - should succeed both times
 	if err := EnsureDir(); err != nil {

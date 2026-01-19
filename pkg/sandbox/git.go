@@ -141,7 +141,7 @@ func applyPatch(targetDir, patch string) error {
 		// Try to abort the failed am
 		abortCmd := exec.Command("git", "am", "--abort")
 		abortCmd.Dir = targetDir
-		abortCmd.Run()
+		_ = abortCmd.Run()
 
 		return fmt.Errorf("%w: %s", err, stderr.String())
 	}

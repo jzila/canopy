@@ -20,7 +20,7 @@ func TestClientConnectClose(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	// Create client
 	client, err := NewClient(socketPath)
@@ -52,7 +52,7 @@ func TestClientConnectFailure(t *testing.T) {
 
 	client, err := NewClient(socketPath)
 	if err == nil {
-		client.Close()
+		_ = client.Close()
 		t.Fatal("Expected connection to fail, but it succeeded")
 	}
 }
@@ -66,7 +66,7 @@ func TestClientSendAgentStart(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	// Subscribe to events
 	receivedEvents := make(chan events.Event, 10)
@@ -79,7 +79,7 @@ func TestClientSendAgentStart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Send agent start event (empty run, description, parent and repo for top-level agent)
 	if err := client.SendAgentStart("agent-1", "", "task-1", "Test Task", "", "", ""); err != nil {
@@ -116,7 +116,7 @@ func TestClientSendAgentStartWithParent(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	// Subscribe to events
 	receivedEvents := make(chan events.Event, 10)
@@ -129,7 +129,7 @@ func TestClientSendAgentStartWithParent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Send agent start event with parent agent ID (no run, description or repo)
 	if err := client.SendAgentStart("agent-child", "", "task-1", "Child Task", "", "agent-parent", ""); err != nil {
@@ -162,7 +162,7 @@ func TestClientSendAgentOutput(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	receivedEvents := make(chan events.Event, 10)
 	eventBus.Subscribe(func(event events.Event) {
@@ -173,7 +173,7 @@ func TestClientSendAgentOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Test stdout output
 	t.Run("Stdout", func(t *testing.T) {
@@ -224,7 +224,7 @@ func TestClientSendAgentDone(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	receivedEvents := make(chan events.Event, 10)
 	eventBus.Subscribe(func(event events.Event) {
@@ -235,7 +235,7 @@ func TestClientSendAgentDone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	result := &AgentResult{
 		ExitCode:        0,
@@ -279,13 +279,13 @@ func TestClientSendAgentDoneNilResult(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	client, err := NewClient(socketPath)
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Should fail with nil result
 	if err := client.SendAgentDone("agent-1", "", nil); err == nil {
@@ -301,7 +301,7 @@ func TestClientSendAgentFail(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	receivedEvents := make(chan events.Event, 10)
 	eventBus.Subscribe(func(event events.Event) {
@@ -312,7 +312,7 @@ func TestClientSendAgentFail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	result := &AgentResult{
 		ExitCode:        1,
@@ -349,13 +349,13 @@ func TestClientSendAgentFailNilError(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	client, err := NewClient(socketPath)
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	result := &AgentResult{ExitCode: 1}
 
@@ -378,7 +378,7 @@ func TestClientSendRunStarted(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	receivedEvents := make(chan events.Event, 10)
 	eventBus.Subscribe(func(event events.Event) {
@@ -389,7 +389,7 @@ func TestClientSendRunStarted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	if err := client.SendRunStarted("run-123", 5, nil); err != nil {
 		t.Fatalf("Failed to send run started: %v", err)
@@ -421,7 +421,7 @@ func TestClientSendRunCompleted(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	receivedEvents := make(chan events.Event, 10)
 	eventBus.Subscribe(func(event events.Event) {
@@ -432,7 +432,7 @@ func TestClientSendRunCompleted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	stats := &RunStats{
 		TotalTasks:        10,
@@ -479,13 +479,13 @@ func TestClientSendRunCompletedNilStats(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	client, err := NewClient(socketPath)
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Should fail with nil stats
 	if err := client.SendRunCompleted("run-123", nil); err == nil {
@@ -539,7 +539,7 @@ func TestClientSendWithoutConnection(t *testing.T) {
 	}
 
 	// Stop the reconnect goroutine
-	client.Close()
+	_ = client.Close()
 }
 
 func TestClientReconnect(t *testing.T) {
@@ -550,13 +550,13 @@ func TestClientReconnect(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	client, err := NewClient(socketPath)
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Verify initial connection
 	time.Sleep(50 * time.Millisecond)
@@ -603,7 +603,7 @@ func TestClientMultipleMessages(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	receivedEvents := make(chan events.Event, 100)
 	eventBus.Subscribe(func(event events.Event) {
@@ -614,7 +614,7 @@ func TestClientMultipleMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Send multiple messages rapidly
 	for i := 0; i < 10; i++ {
@@ -646,20 +646,20 @@ func TestClientMessageFormat(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	client, err := NewClient(socketPath)
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Connect directly to socket to inspect raw messages
 	rawConn, err := net.Dial("unix", socketPath)
 	if err != nil {
 		t.Fatalf("Failed to connect: %v", err)
 	}
-	defer rawConn.Close()
+	defer func() { _ = rawConn.Close() }()
 
 	// Use the client connection and capture what would be sent
 	// We'll verify the message structure by parsing what the server receives
@@ -697,7 +697,7 @@ func TestClientDoubleClose(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	client, err := NewClient(socketPath)
 	if err != nil {
@@ -724,7 +724,7 @@ func TestClientProtocolVersion(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	// Create a raw listener to capture the actual bytes sent
 	receivedEvents := make(chan events.Event, 10)
@@ -736,7 +736,7 @@ func TestClientProtocolVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Send a message and verify it includes version
 	if err := client.SendAgentStart("agent-1", "", "task-1", "Test Task", "", "", ""); err != nil {
@@ -762,13 +762,13 @@ func TestClientMessageSizeLimit(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	client, err := NewClient(socketPath)
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Test message within limits
 	t.Run("WithinLimits", func(t *testing.T) {
@@ -826,7 +826,7 @@ func TestClientQueueOverflow(t *testing.T) {
 		t.Errorf("Expected 2 dropped events, got %d", dropped)
 	}
 
-	client.Close()
+	_ = client.Close()
 }
 
 func TestClientAutoReconnectAndFlush(t *testing.T) {
@@ -862,7 +862,7 @@ func TestClientAutoReconnectAndFlush(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	// Wait for reconnect and flush (up to 3 seconds with backoff)
 	deadline := time.Now().Add(3 * time.Second)
@@ -895,7 +895,7 @@ func TestClientAutoReconnectAndFlush(t *testing.T) {
 		t.Errorf("Expected 3 events to be received, got %d", received)
 	}
 
-	client.Close()
+	_ = client.Close()
 }
 
 func TestClientConnectionLostDuringWrite(t *testing.T) {
@@ -918,7 +918,7 @@ func TestClientConnectionLostDuringWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	// Send a message successfully first
 	if err := client.SendAgentStart("a1", "", "t1", "title", "", "", ""); err != nil {
@@ -933,7 +933,7 @@ func TestClientConnectionLostDuringWrite(t *testing.T) {
 	}
 
 	// Stop the server (simulates daemon restart)
-	server.Stop()
+	_ = server.Stop()
 
 	// Give time for connection to be detected as broken
 	time.Sleep(100 * time.Millisecond)
@@ -950,7 +950,7 @@ func TestClientConnectionLostDuringWrite(t *testing.T) {
 	if err := server2.Start(); err != nil {
 		t.Fatalf("Failed to restart server: %v", err)
 	}
-	defer server2.Stop()
+	defer func() { _ = server2.Stop() }()
 
 	// Wait for reconnect and flush
 	deadline := time.Now().Add(3 * time.Second)

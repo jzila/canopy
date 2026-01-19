@@ -13,7 +13,7 @@ func TestExecutor_NilConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	executor := NewExecutor(nil, tmpDir, false)
 	result, err := executor.Run(context.Background())
@@ -30,7 +30,7 @@ func TestExecutor_DisabledConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	config := &ValidationConfig{
 		Validation: ValidationSettings{
@@ -53,7 +53,7 @@ func TestExecutor_NoSteps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	config := &ValidationConfig{
 		Validation: ValidationSettings{
@@ -77,7 +77,7 @@ func TestExecutor_SinglePassingStep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	config := &ValidationConfig{
 		Validation: ValidationSettings{
@@ -115,7 +115,7 @@ func TestExecutor_SingleFailingStep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	config := &ValidationConfig{
 		Validation: ValidationSettings{
@@ -150,7 +150,7 @@ func TestExecutor_MultipleSteps_AllPass(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	config := &ValidationConfig{
 		Validation: ValidationSettings{
@@ -186,7 +186,7 @@ func TestExecutor_RequiredStepFailure_StopsExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	config := &ValidationConfig{
 		Validation: ValidationSettings{
@@ -221,7 +221,7 @@ func TestExecutor_OptionalStepFailure_ContinuesExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	config := &ValidationConfig{
 		Validation: ValidationSettings{
@@ -261,7 +261,7 @@ func TestExecutor_StrictMode_AnyFailureStops(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	config := &ValidationConfig{
 		Validation: ValidationSettings{
@@ -297,7 +297,7 @@ func TestExecutor_StepTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	config := &ValidationConfig{
 		Validation: ValidationSettings{
@@ -341,7 +341,7 @@ func TestExecutor_GlobalTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	config := &ValidationConfig{
 		Validation: ValidationSettings{
@@ -377,7 +377,7 @@ func TestExecutor_ContextCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	config := &ValidationConfig{
 		Validation: ValidationSettings{
@@ -422,7 +422,7 @@ func TestExecutor_CapturesStderr(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	config := &ValidationConfig{
 		Validation: ValidationSettings{
@@ -448,7 +448,7 @@ func TestExecutor_RunsInWorkDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	// Create a file in the work directory
 	testFile := "test-file.txt"
@@ -483,7 +483,7 @@ func TestExecutor_InvalidCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	config := &ValidationConfig{
 		Validation: ValidationSettings{
@@ -512,7 +512,7 @@ func TestExecutor_Duration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	config := &ValidationConfig{
 		Validation: ValidationSettings{

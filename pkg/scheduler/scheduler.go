@@ -224,7 +224,7 @@ func (s *Scheduler) executeTask(ctx context.Context, task *beads.Task) *agent.Re
 			fmt.Printf("Task %s failed: %s\n", task.ID, errMsg)
 		}
 		// Clean up on mount failure since we won't return the overlay
-		overlay.Cleanup()
+		_ = overlay.Cleanup()
 		return &agent.Result{
 			TaskID:  task.ID,
 			Success: false,
@@ -245,7 +245,7 @@ func (s *Scheduler) executeTask(ctx context.Context, task *beads.Task) *agent.Re
 	}()
 
 	// Unmount when task completes, but don't delete directories yet
-	defer overlay.Unmount()
+	defer func() { _ = overlay.Unmount() }()
 
 	// Create per-task live feed callback if handler is configured
 	var liveFeedCallback agent.LiveFeedCallback

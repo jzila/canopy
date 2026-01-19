@@ -507,7 +507,7 @@ func TestConcurrentWaitAndResume(t *testing.T) {
 	// Start multiple waiters
 	for i := 0; i < numWaiters; i++ {
 		go func() {
-			psm.WaitUntilRunning(context.Background())
+			_ = psm.WaitUntilRunning(context.Background())
 			done <- struct{}{}
 		}()
 	}

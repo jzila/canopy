@@ -220,7 +220,7 @@ func TestHandleWebSocket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to connect WebSocket: %v", err)
 	}
-	defer ws.Close()
+	defer func() { _ = ws.Close() }()
 
 	// Give time for client registration
 	time.Sleep(10 * time.Millisecond)
@@ -231,7 +231,7 @@ func TestHandleWebSocket(t *testing.T) {
 	}
 
 	// First, receive the initial state:sync event sent on connection
-	ws.SetReadDeadline(time.Now().Add(1 * time.Second))
+	_ = ws.SetReadDeadline(time.Now().Add(1 * time.Second))
 	var syncEvent Event
 	if err := ws.ReadJSON(&syncEvent); err != nil {
 		t.Logf("Expected to receive state:sync message, but got error: %v", err)
@@ -252,7 +252,7 @@ func TestHandleWebSocket(t *testing.T) {
 	eventBus.Publish(event)
 
 	// Try to receive the message (with timeout)
-	ws.SetReadDeadline(time.Now().Add(1 * time.Second))
+	_ = ws.SetReadDeadline(time.Now().Add(1 * time.Second))
 	var receivedEvent Event
 	if err := ws.ReadJSON(&receivedEvent); err != nil {
 		t.Logf("Expected to receive WebSocket message, but got error: %v", err)

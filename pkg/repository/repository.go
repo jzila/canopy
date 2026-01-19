@@ -39,7 +39,7 @@ func GetOrCreate(path string) (*Repository, error) {
 	for i := range lock.data.Repositories {
 		if lock.data.Repositories[i].Path == normalizedPath {
 			repo := lock.data.Repositories[i]
-			lock.Close()
+			_ = lock.Close()
 			return &repo, nil
 		}
 	}

@@ -48,14 +48,14 @@ func TestServerConnection(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	// Connect to server
 	conn, err := net.Dial("unix", socketPath)
 	if err != nil {
 		t.Fatalf("Failed to connect: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Wait for connection to be registered
 	time.Sleep(50 * time.Millisecond)
@@ -74,7 +74,7 @@ func TestServerEventForwarding(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	// Subscribe to event bus
 	receivedEvents := make(chan events.Event, 10)
@@ -87,7 +87,7 @@ func TestServerEventForwarding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to connect: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Test agent start event
 	t.Run("AgentStart", func(t *testing.T) {
@@ -241,7 +241,7 @@ func TestServerMultipleConnections(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	// Create multiple connections
 	conns := make([]net.Conn, 3)
@@ -251,7 +251,7 @@ func TestServerMultipleConnections(t *testing.T) {
 			t.Fatalf("Failed to connect: %v", err)
 		}
 		conns[i] = conn
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 	}
 
 	// Wait for connections to be registered
@@ -263,7 +263,7 @@ func TestServerMultipleConnections(t *testing.T) {
 	}
 
 	// Close one connection
-	conns[0].Close()
+	_ = conns[0].Close()
 	time.Sleep(50 * time.Millisecond)
 
 	// Verify updated count
@@ -280,7 +280,7 @@ func TestServerInvalidJSON(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	// Subscribe to event bus
 	receivedEvents := make(chan events.Event, 10)
@@ -292,7 +292,7 @@ func TestServerInvalidJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to connect: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Send invalid JSON
 	if _, err := conn.Write([]byte("invalid json\n")); err != nil {
@@ -335,7 +335,7 @@ func TestServerMessageSizeLimits(t *testing.T) {
 	if err := server.Start(); err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
-	defer server.Stop()
+	defer func() { _ = server.Stop() }()
 
 	receivedEvents := make(chan events.Event, 10)
 	eventBus.Subscribe(func(event events.Event) {
@@ -346,7 +346,7 @@ func TestServerMessageSizeLimits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to connect: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Test message within limits
 	t.Run("WithinLimits", func(t *testing.T) {

@@ -163,7 +163,7 @@ func TestValidate_PathExistence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	existingPath := filepath.Join(tmpDir, "exists")
 	if err := os.MkdirAll(existingPath, 0755); err != nil {
@@ -300,7 +300,7 @@ func TestLoadConfig_WithValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	configDir := filepath.Join(tmpDir, ".canopy")
 	if err := os.MkdirAll(configDir, 0755); err != nil {
@@ -367,7 +367,7 @@ func TestLoadConfigWithoutValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	configDir := filepath.Join(tmpDir, ".canopy")
 	if err := os.MkdirAll(configDir, 0755); err != nil {

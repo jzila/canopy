@@ -61,7 +61,7 @@ func RunRemote(addr string) error {
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	return dashboard.Run()
 }

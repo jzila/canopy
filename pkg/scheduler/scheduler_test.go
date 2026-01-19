@@ -25,7 +25,7 @@ func TestCleanupAll(t *testing.T) {
 	// Create temp directories
 	tempDir := filepath.Join(os.TempDir(), "canopy-test-scheduler")
 	workDir := filepath.Join(tempDir, "workdir")
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	if err := os.MkdirAll(workDir, 0755); err != nil {
 		t.Fatalf("Failed to create workdir: %v", err)

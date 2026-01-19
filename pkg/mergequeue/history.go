@@ -42,13 +42,13 @@ func (r *HistoryRecorder) RecordValidationFailure(ctx context.Context, taskID st
 
 // RepairAttempt represents a single repair attempt result.
 type RepairAttempt struct {
-	Number     int           // Attempt number (1-indexed)
-	Status     string        // "success", "failed", "timeout"
-	Duration   time.Duration // How long the repair took
-	Output     string        // Relevant output from the repair
-	Error      string        // Error message if failed
-	AgentID    string        // ID of the repair agent
-	CommitsApplied int       // Number of commits applied by repair
+	Number         int           // Attempt number (1-indexed)
+	Status         string        // "success", "failed", "timeout"
+	Duration       time.Duration // How long the repair took
+	Output         string        // Relevant output from the repair
+	Error          string        // Error message if failed
+	AgentID        string        // ID of the repair agent
+	CommitsApplied int           // Number of commits applied by repair
 }
 
 // RecordRepairAttempt records a repair attempt on the task bead.
@@ -68,10 +68,10 @@ func (r *HistoryRecorder) RecordRepairAttempt(ctx context.Context, taskID string
 type FinalValidationStatus string
 
 const (
-	FinalStatusValidated        FinalValidationStatus = "validated"        // Validation passed
-	FinalStatusRepaired         FinalValidationStatus = "repaired"         // Repair succeeded
-	FinalStatusNeedsManualFix   FinalValidationStatus = "needs_manual_fix" // Repair exhausted
-	FinalStatusSkipped          FinalValidationStatus = "skipped"          // Validation was skipped
+	FinalStatusValidated      FinalValidationStatus = "validated"        // Validation passed
+	FinalStatusRepaired       FinalValidationStatus = "repaired"         // Repair succeeded
+	FinalStatusNeedsManualFix FinalValidationStatus = "needs_manual_fix" // Repair exhausted
+	FinalStatusSkipped        FinalValidationStatus = "skipped"          // Validation was skipped
 )
 
 // RecordFinalStatus records the final validation/repair status on the task bead.
@@ -104,9 +104,10 @@ func formatValidationFailure(result *validation.Result, attemptNum int) string {
 		sb.WriteString("### Step Results\n\n")
 		for _, step := range result.Steps {
 			statusEmoji := "✅"
-			if step.Status == validation.ValidationStatusFailed {
+			switch step.Status {
+			case validation.ValidationStatusFailed:
 				statusEmoji = "❌"
-			} else if step.Status == validation.ValidationStatusSkipped {
+			case validation.ValidationStatusSkipped:
 				statusEmoji = "⏭️"
 			}
 

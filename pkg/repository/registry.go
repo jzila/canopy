@@ -44,13 +44,13 @@ func loadRegistry() (*registryData, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open registry: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Acquire shared lock
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH); err != nil {
 		return nil, fmt.Errorf("failed to acquire read lock: %w", err)
 	}
-	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	defer func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }()
 
 	// Read and parse
 	data, err := os.ReadFile(path)
@@ -118,7 +118,7 @@ func loadRegistryWithLock() (*registryLock, error) {
 
 		// If lock is held by another process, retry
 		if err == syscall.EWOULDBLOCK {
-			f.Close()
+			_ = f.Close()
 			if attempt == maxRetries-1 {
 				return nil, fmt.Errorf("failed to acquire lock after %d attempts: lock held by another process", maxRetries)
 			}
@@ -126,15 +126,15 @@ func loadRegistryWithLock() (*registryLock, error) {
 		}
 
 		// Other errors are fatal
-		f.Close()
+		_ = f.Close()
 		return nil, fmt.Errorf("failed to acquire lock: %w", err)
 	}
 
 	// Read file contents
 	info, err := f.Stat()
 	if err != nil {
-		syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		f.Close()
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = f.Close()
 		return nil, fmt.Errorf("failed to stat registry: %w", err)
 	}
 
@@ -146,14 +146,14 @@ func loadRegistryWithLock() (*registryLock, error) {
 	} else {
 		data := make([]byte, info.Size())
 		if _, err := f.Read(data); err != nil {
-			syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-			f.Close()
+			_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+			_ = f.Close()
 			return nil, fmt.Errorf("failed to read registry: %w", err)
 		}
 
 		if err := json.Unmarshal(data, &registry); err != nil {
-			syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-			f.Close()
+			_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+			_ = f.Close()
 			return nil, fmt.Errorf("failed to parse registry: %w", err)
 		}
 	}
@@ -163,7 +163,7 @@ func loadRegistryWithLock() (*registryLock, error) {
 
 // Save writes the registry data to disk and releases the lock.
 func (rl *registryLock) Save() error {
-	defer rl.Close()
+	defer func() { _ = rl.Close() }()
 
 	// Serialize with pretty formatting
 	data, err := json.MarshalIndent(rl.data, "", "  ")
@@ -195,7 +195,7 @@ func (rl *registryLock) Save() error {
 // Close releases the lock without saving (for read-only operations or error cases).
 func (rl *registryLock) Close() error {
 	if rl.file != nil {
-		syscall.Flock(int(rl.file.Fd()), syscall.LOCK_UN)
+		_ = syscall.Flock(int(rl.file.Fd()), syscall.LOCK_UN)
 		return rl.file.Close()
 	}
 	return nil

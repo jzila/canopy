@@ -274,7 +274,7 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 				pid := cmd.Process.Pid
 				if pid > 0 {
 					// Use our graceful termination: SIGTERM, wait, then SIGKILL
-					killProcessGroup(pid, processGroupGracePeriod)
+					_ = killProcessGroup(pid, processGroupGracePeriod)
 				}
 			}
 		case <-processDone:

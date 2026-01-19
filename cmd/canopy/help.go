@@ -22,7 +22,7 @@ Use --agent for detailed workflow explanation for AI agents.`,
 		}
 		// Default help behavior
 		if len(args) == 0 {
-			rootCmd.Help()
+			_ = rootCmd.Help()
 			return
 		}
 		// Find and show help for subcommand
@@ -31,7 +31,7 @@ Use --agent for detailed workflow explanation for AI agents.`,
 			fmt.Println(err)
 			return
 		}
-		c.Help()
+		_ = c.Help()
 	},
 }
 

@@ -354,7 +354,7 @@ func SetupFileLogging(cfg Config) (cleanup func(), err error) {
 	Configure(cfg)
 
 	cleanup = func() {
-		logFile.Close()
+		_ = logFile.Close()
 	}
 
 	return cleanup, nil
@@ -385,7 +385,7 @@ func rotateIfNeeded(logPath string) error {
 func rotate(logPath string) error {
 	// Remove oldest backup if it exists
 	oldestBackup := fmt.Sprintf("%s.%d", logPath, MaxBackups)
-	os.Remove(oldestBackup)
+	_ = os.Remove(oldestBackup)
 
 	// Shift existing backups
 	for i := MaxBackups - 1; i >= 1; i-- {

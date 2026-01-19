@@ -57,7 +57,7 @@ func setupTestRegistry(t *testing.T) (cleanup func()) {
 
 	// Set XDG_CACHE_HOME to use our temp directory
 	oldCache := os.Getenv("XDG_CACHE_HOME")
-	os.Setenv("XDG_CACHE_HOME", tmpDir)
+	_ = os.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	// Create the canopy subdirectory
 	canopyDir := filepath.Join(tmpDir, "canopy")
@@ -66,8 +66,8 @@ func setupTestRegistry(t *testing.T) (cleanup func()) {
 	}
 
 	return func() {
-		os.Setenv("XDG_CACHE_HOME", oldCache)
-		os.RemoveAll(tmpDir)
+		_ = os.Setenv("XDG_CACHE_HOME", oldCache)
+		_ = os.RemoveAll(tmpDir)
 	}
 }
 
@@ -80,7 +80,7 @@ func TestHandleListRepositories(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp repo: %v", err)
 	}
-	defer os.RemoveAll(tmpRepo)
+	defer func() { _ = os.RemoveAll(tmpRepo) }()
 
 	repo, err := repository.GetOrCreate(tmpRepo)
 	if err != nil {
@@ -128,7 +128,7 @@ func TestHandleGetRepository(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp repo: %v", err)
 	}
-	defer os.RemoveAll(tmpRepo)
+	defer func() { _ = os.RemoveAll(tmpRepo) }()
 
 	repo, err := repository.GetOrCreate(tmpRepo)
 	if err != nil {
@@ -208,7 +208,7 @@ func TestHandleActivateRepository(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp repo: %v", err)
 	}
-	defer os.RemoveAll(tmpRepo)
+	defer func() { _ = os.RemoveAll(tmpRepo) }()
 
 	repo, err := repository.GetOrCreate(tmpRepo)
 	if err != nil {

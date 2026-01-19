@@ -152,7 +152,7 @@ func runMigrateHistory(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to open SQLite store: %w", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Check if migration already completed (unless --force)
 	if !migrateHistoryForce {

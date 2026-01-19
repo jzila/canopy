@@ -29,7 +29,7 @@ func TestGetChanges_ContentComparison(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create overlay: %v", err)
 	}
-	defer overlay.Cleanup()
+	defer func() { _ = overlay.Cleanup() }()
 
 	t.Run("identical content not reported as change", func(t *testing.T) {
 		// Copy same content to upper (simulates copy-up without modification)
@@ -51,7 +51,7 @@ func TestGetChanges_ContentComparison(t *testing.T) {
 		}
 
 		// Clean up for next test
-		os.Remove(upperFile)
+		_ = os.Remove(upperFile)
 	})
 
 	t.Run("modified content reported as change", func(t *testing.T) {
@@ -86,7 +86,7 @@ func TestGetChanges_ContentComparison(t *testing.T) {
 		}
 
 		// Clean up for next test
-		os.Remove(upperFile)
+		_ = os.Remove(upperFile)
 	})
 
 	t.Run("new file reported as created", func(t *testing.T) {
@@ -116,7 +116,7 @@ func TestGetChanges_ContentComparison(t *testing.T) {
 		}
 
 		// Clean up
-		os.Remove(upperFile)
+		_ = os.Remove(upperFile)
 	})
 }
 

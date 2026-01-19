@@ -321,7 +321,7 @@ func (d *Daemon) Start() error {
 	logging.Info("starting canopy daemon")
 
 	// Clean up any stale pidfile from previous crash
-	d.lifecycle.CleanupStalePidFile()
+	_ = d.lifecycle.CleanupStalePidFile()
 
 	// Write pidfile
 	if err := d.lifecycle.WritePidFile(); err != nil {
@@ -369,7 +369,7 @@ func (d *Daemon) Start() error {
 	select {
 	case err := <-httpErrChan:
 		logging.Error("HTTP server error", "error", err)
-		d.lifecycle.StopIPC()
+		_ = d.lifecycle.StopIPC()
 		return err
 	case sig := <-sigChan:
 		logging.Info("received shutdown signal", "signal", sig)

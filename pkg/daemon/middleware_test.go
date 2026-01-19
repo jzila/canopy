@@ -93,7 +93,7 @@ func TestLoggingMiddleware(t *testing.T) {
 	// Handler that returns 201 Created
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
-		w.Write([]byte("created"))
+		_, _ = w.Write([]byte("created"))
 	})
 
 	// Wrap with middleware

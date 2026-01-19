@@ -93,14 +93,14 @@ func NewOverlay(baseDir, lowerDir string) (*Overlay, error) {
 	// Create directory structure
 	for _, dir := range []string{overlay.UpperDir, overlay.WorkDir, overlay.MergedDir} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
-			overlay.Cleanup()
+			_ = overlay.Cleanup()
 			return nil, fmt.Errorf("failed to create %s: %w", dir, err)
 		}
 	}
 
 	// Create whiteouts for hidden paths
 	if err := overlay.createWhiteouts(); err != nil {
-		overlay.Cleanup()
+		_ = overlay.Cleanup()
 		return nil, fmt.Errorf("failed to create whiteouts: %w", err)
 	}
 
@@ -324,7 +324,7 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer srcFile.Close()
+	defer func() { _ = srcFile.Close() }()
 
 	// Get source file mode
 	srcInfo, err := srcFile.Stat()
@@ -336,7 +336,7 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer dstFile.Close()
+	defer func() { _ = dstFile.Close() }()
 
 	_, err = io.Copy(dstFile, srcFile)
 	return err
@@ -368,7 +368,7 @@ func copyDir(src, dst string) error {
 // generateID creates a random hex ID
 func generateID() string {
 	b := make([]byte, 8)
-	rand.Read(b)
+	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
 }
 
@@ -378,7 +378,7 @@ func hashFile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {

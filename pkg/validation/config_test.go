@@ -279,7 +279,7 @@ func TestLoadValidationConfig_FileNotExists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	cfg, err := LoadValidationConfig(tmpDir)
 	if err != nil {
@@ -299,7 +299,7 @@ func TestLoadValidationConfig_ValidFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	configDir := filepath.Join(tmpDir, ".canopy")
 	if err := os.MkdirAll(configDir, 0755); err != nil {
@@ -407,7 +407,7 @@ max_repair_attempts = 0
 			if err != nil {
 				t.Fatalf("failed to create temp dir: %v", err)
 			}
-			defer os.RemoveAll(tmpDir)
+			defer func() { _ = os.RemoveAll(tmpDir) }()
 
 			configDir := filepath.Join(tmpDir, ".canopy")
 			if err := os.MkdirAll(configDir, 0755); err != nil {
@@ -437,7 +437,7 @@ func TestLoadValidationConfig_InvalidTOML(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	configDir := filepath.Join(tmpDir, ".canopy")
 	if err := os.MkdirAll(configDir, 0755); err != nil {
@@ -467,7 +467,7 @@ func TestLoadValidationConfig_InvalidValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	configDir := filepath.Join(tmpDir, ".canopy")
 	if err := os.MkdirAll(configDir, 0755); err != nil {
@@ -742,7 +742,7 @@ func TestSaveConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	cfg := &ValidationConfig{
 		Validation: ValidationSettings{
@@ -793,7 +793,7 @@ func TestSaveConfig_CreatesDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	// Ensure .canopy directory doesn't exist
 	configDir := filepath.Join(tmpDir, ".canopy")

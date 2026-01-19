@@ -135,11 +135,11 @@ func TestReadPidFileInvalidContent(t *testing.T) {
 
 	// Create directory
 	cacheDir := filepath.Join(tmpDir, "canopy")
-	os.MkdirAll(cacheDir, 0755)
+	_ = os.MkdirAll(cacheDir, 0755)
 
 	// Write invalid content
 	pidPath := filepath.Join(cacheDir, "daemon.pid")
-	os.WriteFile(pidPath, []byte("not-a-number\n"), 0644)
+	_ = os.WriteFile(pidPath, []byte("not-a-number\n"), 0644)
 
 	_, err := ReadPidFile()
 	if err == nil {
@@ -203,11 +203,11 @@ func TestIsRunningStaleFile(t *testing.T) {
 
 	// Create directory
 	cacheDir := filepath.Join(tmpDir, "canopy")
-	os.MkdirAll(cacheDir, 0755)
+	_ = os.MkdirAll(cacheDir, 0755)
 
 	// Write stale pidfile (process doesn't exist)
 	pidPath := filepath.Join(cacheDir, "daemon.pid")
-	os.WriteFile(pidPath, []byte("999999999\n"), 0644)
+	_ = os.WriteFile(pidPath, []byte("999999999\n"), 0644)
 
 	// Should report not running and clean up
 	running, pid, err := IsRunning()
@@ -242,9 +242,9 @@ func TestCleanStalePidFile(t *testing.T) {
 
 	// Create stale pidfile
 	cacheDir := filepath.Join(tmpDir, "canopy")
-	os.MkdirAll(cacheDir, 0755)
+	_ = os.MkdirAll(cacheDir, 0755)
 	pidPath := filepath.Join(cacheDir, "daemon.pid")
-	os.WriteFile(pidPath, []byte("999999999\n"), 0644)
+	_ = os.WriteFile(pidPath, []byte("999999999\n"), 0644)
 
 	// Clean it
 	cleaned, err = CleanStalePidFile()
@@ -317,9 +317,9 @@ func TestStopDaemonStaleProcess(t *testing.T) {
 
 	// Create pidfile with non-existent process
 	cacheDir := filepath.Join(tmpDir, "canopy")
-	os.MkdirAll(cacheDir, 0755)
+	_ = os.MkdirAll(cacheDir, 0755)
 	pidPath := filepath.Join(cacheDir, "daemon.pid")
-	os.WriteFile(pidPath, []byte("999999999\n"), 0644)
+	_ = os.WriteFile(pidPath, []byte("999999999\n"), 0644)
 
 	// StopDaemon should handle the stale pidfile gracefully
 	// IsRunning will clean up the stale file, so StopDaemon returns ErrDaemonNotRunning

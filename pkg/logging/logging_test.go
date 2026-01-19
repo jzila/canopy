@@ -57,7 +57,7 @@ func TestOpenLogFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenLogFile() error = %v", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Write something to verify it works
 	_, err = f.WriteString("test log entry\n")

@@ -211,9 +211,9 @@ func TestMockClient_Reset(t *testing.T) {
 	mock.SetReadyTasks([]Task{{ID: "task-1"}})
 
 	// Make some calls
-	mock.Ready(ctx)
-	mock.Show(ctx, "task-1")
-	mock.Done(ctx, "task-1")
+	_, _ = mock.Ready(ctx)
+	_, _ = mock.Show(ctx, "task-1")
+	_ = mock.Done(ctx, "task-1")
 	mock.Errors.Ready = errors.New("test")
 
 	// Reset
@@ -279,10 +279,10 @@ func TestMockClient_ConcurrentAccess(t *testing.T) {
 	// Run concurrent operations
 	for i := 0; i < 10; i++ {
 		go func() {
-			mock.Ready(ctx)
-			mock.Show(ctx, "task-1")
-			mock.Done(ctx, "task-1")
-			mock.Sync(ctx)
+			_, _ = mock.Ready(ctx)
+			_, _ = mock.Show(ctx, "task-1")
+			_ = mock.Done(ctx, "task-1")
+			_ = mock.Sync(ctx)
 			done <- true
 		}()
 	}

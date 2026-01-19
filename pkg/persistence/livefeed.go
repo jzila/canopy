@@ -70,7 +70,7 @@ func AppendLiveFeedEvent(agentID string, eventType string, rawData map[string]in
 	if err != nil {
 		return fmt.Errorf("failed to open live feed file: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	event := LiveFeedEvent{
 		EventType: eventType,
@@ -105,7 +105,7 @@ func LoadLiveFeedEvents(agentID string) ([]LiveFeedEvent, error) {
 		}
 		return nil, fmt.Errorf("failed to open live feed file: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var events []LiveFeedEvent
 	scanner := bufio.NewScanner(f)

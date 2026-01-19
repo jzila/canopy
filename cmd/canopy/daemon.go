@@ -316,11 +316,11 @@ func runDaemonWithTUI(d *daemon.Daemon) error {
 		return fmt.Errorf("daemon error: %w", err)
 	case err := <-tuiDone:
 		// TUI exited (user pressed q), stop daemon
-		d.Stop()
+		_ = d.Stop()
 		return err
 	case <-sigChan:
 		// Signal received, stop both
-		d.Stop()
+		_ = d.Stop()
 		return nil
 	}
 }

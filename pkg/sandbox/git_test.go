@@ -164,7 +164,7 @@ func setupTestGitRepo(t *testing.T) (*Overlay, func()) {
 	}
 
 	cleanup := func() {
-		os.RemoveAll(tempDir)
+		_ = os.RemoveAll(tempDir)
 	}
 
 	// Initialize git repo
@@ -351,7 +351,7 @@ func TestExtractNewCommits_GitError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	overlay := &Overlay{
 		ID:        "test",
@@ -419,7 +419,7 @@ func TestGetCommitInfoFromDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	// Initialize git repo
 	cmd := exec.Command("git", "init")
@@ -520,7 +520,7 @@ func TestGetCommitInfoFromDir_InvalidCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	// Initialize git repo
 	cmd := exec.Command("git", "init")

@@ -53,8 +53,8 @@ func TestGetOrCreateDifferentPaths(t *testing.T) {
 	// Create two test repository directories
 	repoDir1 := filepath.Join(tmpDir, "repo1")
 	repoDir2 := filepath.Join(tmpDir, "repo2")
-	os.MkdirAll(repoDir1, 0755)
-	os.MkdirAll(repoDir2, 0755)
+	_ = os.MkdirAll(repoDir1, 0755)
+	_ = os.MkdirAll(repoDir2, 0755)
 
 	repo1, err := GetOrCreate(repoDir1)
 	if err != nil {
@@ -76,7 +76,7 @@ func TestFromPath(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	repoDir := filepath.Join(tmpDir, "test-repo")
-	os.MkdirAll(repoDir, 0755)
+	_ = os.MkdirAll(repoDir, 0755)
 
 	// FromPath on non-existent repo should return nil
 	repo, err := FromPath(repoDir)
@@ -111,7 +111,7 @@ func TestFromID(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	repoDir := filepath.Join(tmpDir, "test-repo")
-	os.MkdirAll(repoDir, 0755)
+	_ = os.MkdirAll(repoDir, 0755)
 
 	// FromID on non-existent ID should return nil
 	repo, err := FromID("nonexistent-id")
@@ -157,7 +157,7 @@ func TestList(t *testing.T) {
 	// Create some repos
 	for i := 0; i < 3; i++ {
 		repoDir := filepath.Join(tmpDir, "repo"+string(rune('a'+i)))
-		os.MkdirAll(repoDir, 0755)
+		_ = os.MkdirAll(repoDir, 0755)
 		if _, err := GetOrCreate(repoDir); err != nil {
 			t.Fatalf("GetOrCreate failed: %v", err)
 		}
@@ -179,7 +179,7 @@ func TestPathNormalization(t *testing.T) {
 
 	// Create actual directory
 	repoDir := filepath.Join(tmpDir, "actual-repo")
-	os.MkdirAll(repoDir, 0755)
+	_ = os.MkdirAll(repoDir, 0755)
 
 	// Create symlink to it
 	symlinkDir := filepath.Join(tmpDir, "symlink-repo")
@@ -210,14 +210,14 @@ func TestRelativePathNormalization(t *testing.T) {
 
 	// Create actual directory
 	repoDir := filepath.Join(tmpDir, "test-repo")
-	os.MkdirAll(repoDir, 0755)
+	_ = os.MkdirAll(repoDir, 0755)
 
 	// Change to temp dir and use relative path
 	oldWd, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("failed to get working directory: %v", err)
 	}
-	defer os.Chdir(oldWd)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	if err := os.Chdir(tmpDir); err != nil {
 		t.Fatalf("failed to chdir: %v", err)
@@ -246,7 +246,7 @@ func TestConcurrentAccess(t *testing.T) {
 
 	// Create test repo directory
 	repoDir := filepath.Join(tmpDir, "concurrent-repo")
-	os.MkdirAll(repoDir, 0755)
+	_ = os.MkdirAll(repoDir, 0755)
 
 	// Run multiple goroutines trying to GetOrCreate the same repo
 	const numGoroutines = 10
@@ -296,7 +296,7 @@ func TestConcurrentDifferentPaths(t *testing.T) {
 	repoDirs := make([]string, numRepos)
 	for i := 0; i < numRepos; i++ {
 		repoDirs[i] = filepath.Join(tmpDir, "repo"+string(rune('a'+i)))
-		os.MkdirAll(repoDirs[i], 0755)
+		_ = os.MkdirAll(repoDirs[i], 0755)
 	}
 
 	// Run goroutines for each repo concurrently

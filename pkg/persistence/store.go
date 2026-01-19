@@ -224,7 +224,7 @@ func NewStoreWithPath(dbPath string) (*Store, error) {
 
 	// Run migrations
 	if err := store.migrate(); err != nil {
-		db.Close()
+		_ = db.Close()
 		return nil, fmt.Errorf("failed to run migrations: %w", err)
 	}
 
@@ -266,7 +266,7 @@ type Tx struct {
 //
 //	tx, err := store.BeginTx()
 //	if err != nil { return err }
-//	defer tx.Rollback() // no-op if already committed
+//	defer func() { _ = tx.Rollback() }() // no-op if already committed
 //
 //	// perform operations...
 //	if err := tx.CreateRun(run); err != nil { return err }
@@ -556,7 +556,7 @@ func (s *Store) FindRunByPrefix(prefix string) (*Run, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to query runs by prefix: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var matches []*Run
 	for rows.Next() {
@@ -623,7 +623,7 @@ func (s *Store) ListRuns(filter RunFilter) (*RunListResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to query runs: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	runs := []Run{}
 	for rows.Next() {
@@ -916,7 +916,7 @@ func (s *Store) GetAgentsByRun(runID string) ([]Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to query agents: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	agents := []Agent{}
 	for rows.Next() {
@@ -949,7 +949,7 @@ func (s *Store) GetAllNonArchivedAgents() ([]Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to query non-archived agents: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	agents := []Agent{}
 	for rows.Next() {
@@ -971,7 +971,7 @@ func (s *Store) GetAllAgents() ([]Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to query all agents: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	agents := []Agent{}
 	for rows.Next() {
@@ -1138,7 +1138,7 @@ func (s *Store) GetRunsByRepo(repoID string) ([]Run, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to query runs by repo: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	runs := []Run{}
 	for rows.Next() {
@@ -1266,7 +1266,7 @@ func (s *Store) DeleteRun(runID string) error {
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Delete associated agents first
 	if _, err := tx.Exec("DELETE FROM agents WHERE run_id = ?", runID); err != nil {
@@ -1307,7 +1307,7 @@ func (s *Store) MigrateOrphanedRepoIDs(lookupFn RepoIDLookupFunc) (int64, error)
 	for rows.Next() {
 		var runID, repoPath string
 		if err := rows.Scan(&runID, &repoPath); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return 0, fmt.Errorf("failed to scan orphaned run: %w", err)
 		}
 
@@ -1321,7 +1321,7 @@ func (s *Store) MigrateOrphanedRepoIDs(lookupFn RepoIDLookupFunc) (int64, error)
 			})
 		}
 	}
-	rows.Close()
+	_ = rows.Close()
 
 	if len(orphanedRuns) == 0 {
 		return 0, nil
@@ -1332,7 +1332,7 @@ func (s *Store) MigrateOrphanedRepoIDs(lookupFn RepoIDLookupFunc) (int64, error)
 	if err != nil {
 		return 0, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Use bulk updates to avoid N+1 queries
 	// Group runs by repo_id for efficient updates
@@ -1710,7 +1710,7 @@ func (s *Store) GetTasks(repoID string) ([]Task, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to query tasks: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tasks := []Task{}
 	for rows.Next() {
@@ -1730,7 +1730,7 @@ func (s *Store) GetTasksByStatus(status string) ([]Task, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to query tasks by status: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tasks := []Task{}
 	for rows.Next() {
@@ -1750,7 +1750,7 @@ func (s *Store) GetAllTasks() ([]Task, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to query all tasks: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	tasks := []Task{}
 	for rows.Next() {

@@ -42,7 +42,7 @@ func (s *Store) runMigration(version int) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	switch version {
 	case 1:

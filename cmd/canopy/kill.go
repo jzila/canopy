@@ -119,7 +119,7 @@ func runKill(cmd *cobra.Command, args []string) error {
 		fmt.Print("\nConfirm [y/N]: ")
 
 		var response string
-		fmt.Scanln(&response)
+		_, _ = fmt.Scanln(&response)
 		response = strings.ToLower(strings.TrimSpace(response))
 		if response != "y" && response != "yes" {
 			fmt.Println("Aborted.")
@@ -152,7 +152,7 @@ func killAgent(agentID string) error {
 	if err != nil {
 		return fmt.Errorf("failed to send kill request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotFound {
 		return fmt.Errorf("agent %s not found (may have already completed)", agentID)

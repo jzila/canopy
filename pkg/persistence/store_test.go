@@ -17,14 +17,14 @@ func TestNewStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	dbPath := filepath.Join(tmpDir, "test.db")
 	store, err := NewStoreWithPath(dbPath)
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Verify database file was created
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
@@ -34,7 +34,7 @@ func TestNewStore(t *testing.T) {
 
 func TestCreateAndGetRun(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 	run := &Run{
@@ -73,7 +73,7 @@ func TestCreateAndGetRun(t *testing.T) {
 
 func TestUpdateRun(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 	run := &Run{
@@ -111,7 +111,7 @@ func TestUpdateRun(t *testing.T) {
 
 func TestListRuns(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -163,7 +163,7 @@ func TestListRuns(t *testing.T) {
 
 func TestListRuns_Pagination(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -195,7 +195,7 @@ func TestListRuns_Pagination(t *testing.T) {
 
 func TestCreateAndGetAgent(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -241,7 +241,7 @@ func TestCreateAndGetAgent(t *testing.T) {
 
 func TestGetAgentsByRun(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -276,7 +276,7 @@ func TestGetAgentsByRun(t *testing.T) {
 
 func TestGetAllNonArchivedAgents(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -369,7 +369,7 @@ func TestGetAllNonArchivedAgents(t *testing.T) {
 // parents are excluded from GetAllNonArchivedAgents results (inherited archive status).
 func TestGetAllNonArchivedAgents_InheritedArchiveStatus(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -508,7 +508,7 @@ func TestGetAllNonArchivedAgents_InheritedArchiveStatus(t *testing.T) {
 
 func TestGetAllAgents(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -599,7 +599,7 @@ func TestGetAllAgents(t *testing.T) {
 
 func TestGetStats(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -655,7 +655,7 @@ func TestGetStats(t *testing.T) {
 
 func TestGetStats_WithSince(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -685,7 +685,7 @@ func TestGetStats_WithSince(t *testing.T) {
 
 func TestGetStats_ResolverStats(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -746,7 +746,7 @@ func TestGetStats_ResolverStats(t *testing.T) {
 
 func TestGetRun_NotFound(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	run, err := store.GetRun("nonexistent")
 	if err != nil {
@@ -759,7 +759,7 @@ func TestGetRun_NotFound(t *testing.T) {
 
 func TestGetRunningRun(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -797,7 +797,7 @@ func TestGetRunningRun(t *testing.T) {
 
 func TestGetRunningRun_NoRunning(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -826,7 +826,7 @@ func TestGetRunningRun_NoRunning(t *testing.T) {
 
 func TestGetRunningRun_MultipleRunning(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -859,7 +859,7 @@ func TestGetRunningRun_MultipleRunning(t *testing.T) {
 
 func TestMarkOrphanedRunsFailed(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -937,7 +937,7 @@ func TestMarkOrphanedRunsFailed(t *testing.T) {
 
 func TestMarkOrphanedRunsFailed_NoOrphans(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -966,7 +966,7 @@ func TestMarkOrphanedRunsFailed_NoOrphans(t *testing.T) {
 
 func TestMarkOrphanedAgentsFailed(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -1049,7 +1049,7 @@ func TestMarkOrphanedAgentsFailed(t *testing.T) {
 
 func TestMarkOrphanedAgentsFailed_NoOrphans(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -1084,7 +1084,7 @@ func TestMarkOrphanedAgentsFailed_NoOrphans(t *testing.T) {
 
 func TestGetMostRecentRun(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -1121,7 +1121,7 @@ func TestGetMostRecentRun(t *testing.T) {
 
 func TestGetMostRecentRun_Empty(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// No runs in database
 	mostRecent, err := store.GetMostRecentRun()
@@ -1136,7 +1136,7 @@ func TestGetMostRecentRun_Empty(t *testing.T) {
 
 func TestGetMostRecentRun_AfterMarkOrphaned(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -1180,7 +1180,7 @@ func TestGetMostRecentRun_AfterMarkOrphaned(t *testing.T) {
 
 func TestCreateRunWithRepoID(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 	run := &Run{
@@ -1222,7 +1222,7 @@ func TestCreateRunWithRepoID(t *testing.T) {
 
 func TestListRunsFilterByRepoID(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -1273,7 +1273,7 @@ func TestListRunsFilterByRepoID(t *testing.T) {
 
 func TestGetRunsByRepo(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -1328,7 +1328,7 @@ func TestGetRunsByRepo(t *testing.T) {
 
 func TestGetStatsByRepo(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -1393,7 +1393,7 @@ func TestGetStatsByRepo(t *testing.T) {
 
 func TestGetStatsByRepo_WithSince(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -1423,7 +1423,7 @@ func TestGetStatsByRepo_WithSince(t *testing.T) {
 
 func TestMigrateOrphanedRepoIDs(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -1513,7 +1513,7 @@ func TestMigrateOrphanedRepoIDs(t *testing.T) {
 
 func TestCreateAgentWithRepoID(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -1557,7 +1557,7 @@ func TestCreateAgentWithRepoID(t *testing.T) {
 
 func TestDeleteRun(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -1626,7 +1626,7 @@ func TestDeleteRun(t *testing.T) {
 
 func TestDeleteRun_NotFound(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Try to delete non-existent run
 	err := store.DeleteRun("nonexistent")
@@ -1638,7 +1638,7 @@ func TestDeleteRun_NotFound(t *testing.T) {
 func TestMigrationV2(t *testing.T) {
 	// Create a store, which runs migrations including v2
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Verify the new columns exist by creating a run with repo fields
 	now := time.Now()
@@ -1669,7 +1669,7 @@ func TestMigrationV2(t *testing.T) {
 // TestMigrateOrphanedRepoIDsTransaction tests that the migration is atomic
 func TestMigrateOrphanedRepoIDsTransaction(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -1746,7 +1746,7 @@ func TestMigrateOrphanedRepoIDsTransaction(t *testing.T) {
 
 func TestCheckpoint(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Create some data to ensure WAL has something to checkpoint
 	now := time.Now()
@@ -1791,7 +1791,7 @@ func TestCheckpoint(t *testing.T) {
 
 func TestConnectionPoolSettings(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// With single connection, concurrent writes should still work
 	// (they'll just be serialized)
@@ -1819,7 +1819,7 @@ func TestConnectionPoolSettings(t *testing.T) {
 
 func TestDB(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Verify DB() returns a non-nil database connection
 	db := store.DB()
@@ -1837,7 +1837,7 @@ func TestDB(t *testing.T) {
 
 func TestBeginTx(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -1896,7 +1896,7 @@ func TestBeginTx(t *testing.T) {
 
 func TestBeginTx_Rollback(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -1934,7 +1934,7 @@ func TestBeginTx_Rollback(t *testing.T) {
 
 func TestBeginTx_Atomicity(t *testing.T) {
 	store := createTestStore(t)
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	now := time.Now()
 
@@ -1954,7 +1954,7 @@ func TestBeginTx_Atomicity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to begin transaction: %v", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Create a new run
 	newRun := &Run{
@@ -2004,7 +2004,7 @@ func TestMigrateV8_BackfillParentAgentID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	dbPath := filepath.Join(tmpDir, "test.db")
 	now := time.Now().Unix()
@@ -2084,7 +2084,7 @@ func TestMigrateV8_BackfillParentAgentID(t *testing.T) {
 	`
 	_, err = db.Exec(setupSQL)
 	if err != nil {
-		db.Close()
+		_ = db.Close()
 		t.Fatalf("failed to create schema: %v", err)
 	}
 
@@ -2119,18 +2119,18 @@ func TestMigrateV8_BackfillParentAgentID(t *testing.T) {
 	`
 	_, err = db.Exec(insertSQL, now, now, now+60, now+120, now+180, now+240, now+3600, now+3660)
 	if err != nil {
-		db.Close()
+		_ = db.Close()
 		t.Fatalf("failed to insert test data: %v", err)
 	}
 
-	db.Close()
+	_ = db.Close()
 
 	// Step 2: Open with Store which will run the V8 migration
 	store, err := NewStoreWithPath(dbPath)
 	if err != nil {
 		t.Fatalf("failed to create store: %v", err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	// Step 3: Verify migration backfilled parent_agent_id correctly
 
@@ -2191,7 +2191,7 @@ func createTestStore(t *testing.T) *Store {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+	t.Cleanup(func() { _ = os.RemoveAll(tmpDir) })
 
 	dbPath := filepath.Join(tmpDir, "test.db")
 	store, err := NewStoreWithPath(dbPath)

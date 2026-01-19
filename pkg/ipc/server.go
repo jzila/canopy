@@ -59,7 +59,7 @@ func (s *Server) Start() error {
 
 	// Set socket permissions to owner-only (0600)
 	if err := os.Chmod(s.socketPath, 0600); err != nil {
-		listener.Close()
+		_ = listener.Close()
 		return fmt.Errorf("failed to set socket permissions: %w", err)
 	}
 
@@ -76,7 +76,7 @@ func (s *Server) acceptLoop() {
 
 	for {
 		// Set accept deadline to allow periodic stop checks
-		s.listener.(*net.UnixListener).SetDeadline(time.Now().Add(time.Second))
+		_ = s.listener.(*net.UnixListener).SetDeadline(time.Now().Add(time.Second))
 
 		conn, err := s.listener.Accept()
 		if err != nil {
@@ -120,7 +120,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 		delete(s.connections, conn)
 		s.mu.Unlock()
 
-		conn.Close()
+		_ = conn.Close()
 	}()
 
 	// Create limited reader to enforce message size limits
@@ -565,13 +565,13 @@ func (s *Server) Stop() error {
 
 	// Close listener (stops accepting new connections)
 	if s.listener != nil {
-		s.listener.Close()
+		_ = s.listener.Close()
 	}
 
 	// Close all active connections
 	s.mu.Lock()
 	for conn := range s.connections {
-		conn.Close()
+		_ = conn.Close()
 	}
 	s.mu.Unlock()
 

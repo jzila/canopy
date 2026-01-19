@@ -137,7 +137,7 @@ func parseJustfile(path string) []ValidationCommand {
 	if err != nil {
 		return nil
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var commands []ValidationCommand
 	scanner := bufio.NewScanner(file)
@@ -196,7 +196,7 @@ func parseMakefile(path string) []ValidationCommand {
 	if err != nil {
 		return nil
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	var commands []ValidationCommand
 	scanner := bufio.NewScanner(file)
