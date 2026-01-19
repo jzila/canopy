@@ -4,6 +4,16 @@ This project uses **bd** (beads) for issue tracking and **canopy** for parallel 
 
 Run `bd onboard` to learn beads, and `canopy help` to learn the orchestrator.
 
+## IMPORTANT: Filing vs Implementing
+
+**When the user asks to "file beads", "file issues", "create tickets", or similar phrasing, STOP after filing.** You may investigate to understand the problem, but once the bead is created with `bd create`, you are DONE. Do NOT proceed to implement or fix.
+
+- "file a bead for X" → investigate if needed, `bd create`, then **stop**
+- "create tickets for these bugs" → `bd create` for each, then **stop**
+- "track this as an issue" → `bd create`, then **stop**
+
+If the user wants implementation, they will say "fix", "implement", "resolve", or explicitly ask you to work on it.
+
 ## Git Setup
 Before any git operations, verify identity is configured:
 ```bash

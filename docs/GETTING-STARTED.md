@@ -25,7 +25,7 @@ claude auth
 
 ```bash
 # Clone and build beads
-git clone https://github.com/jzila/beads
+git clone https://github.com/steveyegge/beads
 cd beads
 go build -o bd ./cmd/bd
 sudo mv bd /usr/local/bin/

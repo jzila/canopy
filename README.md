@@ -50,10 +50,30 @@ Without Canopy, Claude Code processes tasks sequentially. A 10-task project take
 - **Linux or macOS** (Linux uses OverlayFS; macOS uses APFS clones)
 - **Go 1.24+** for building
 - **Claude Code CLI** (`claude`) installed and authenticated
-- **beads** (`bd`) for task tracking ([github.com/jzila/beads](https://github.com/jzila/beads))
+- **beads** (`bd`) for task tracking ([github.com/steveyegge/beads](https://github.com/steveyegge/beads))
 - **bubblewrap** (`bwrap`) optional, for full sandbox isolation
 
 ## Installation
+
+### Using devenv (Recommended)
+
+If you have [devenv](https://devenv.sh/) installed, the development environment is fully automated:
+
+```bash
+# Clone repository
+git clone https://github.com/jzila/canopy
+cd canopy
+
+# Allow direnv to load the environment automatically
+direnv allow
+
+# Or manually enter the devenv shell
+devenv shell
+```
+
+This provides Go, beads (`bd`), git, sqlite, and fuse-overlayfs with a pre-commit hook that verifies Go compilation.
+
+### Manual Build
 
 ```bash
 # Clone and build
@@ -72,7 +92,7 @@ canopy version
 
 ### 1. Set up task tracking
 
-Canopy uses [beads](https://github.com/jzila/beads) for task management:
+Canopy uses [beads](https://github.com/steveyegge/beads) for task management:
 
 ```bash
 # Initialize beads with a separate sync branch
@@ -367,7 +387,7 @@ All state lives in `~/.cache/canopy/` (or `$XDG_CACHE_HOME/canopy/`):
 
 ## Integration with Beads
 
-Canopy integrates with [beads](https://github.com/jzila/beads) for task tracking:
+Canopy integrates with [beads](https://github.com/steveyegge/beads) for task tracking:
 
 ```bash
 # Create tasks with dependencies
