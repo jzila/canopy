@@ -1,5 +1,9 @@
 # Canopy
 
+[![Go](https://github.com/jzila/canopy/actions/workflows/go.yml/badge.svg)](https://github.com/jzila/canopy/actions/workflows/go.yml)
+[![Dashboard CI](https://github.com/jzila/canopy/actions/workflows/dashboard.yml/badge.svg)](https://github.com/jzila/canopy/actions/workflows/dashboard.yml)
+[![Nix](https://github.com/jzila/canopy/actions/workflows/nix.yml/badge.svg)](https://github.com/jzila/canopy/actions/workflows/nix.yml)
+
 > **⚠️ HERE BE DRAGONS ⚠️**
 >
 > This is **very early alpha software**. It might eat your commits, corrupt your repo, make questionable life choices with your filesystem, or spontaneously decide that `main` was more of a suggestion than a branch name.
