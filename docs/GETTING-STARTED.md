@@ -6,7 +6,7 @@ This guide walks you through setting up and using Canopy to parallelize your Cla
 
 Before starting, ensure you have:
 
-1. **Linux** - Canopy uses OverlayFS which requires Linux
+1. **Linux or macOS** - Canopy uses filesystem overlays (OverlayFS on Linux, custom implementation on macOS)
 2. **Go 1.24+** - For building from source
 3. **Claude Code CLI** - Installed and authenticated
 4. **beads** - Task tracking system
