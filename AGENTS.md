@@ -321,6 +321,29 @@ Audit when adding new metrics: `pkg/ipc/server.go` → `web/dashboard/src/hooks/
 
 Running raw `tsc` without `--noEmit` generates `.js`, `.d.ts`, and `.map` files in `src/` which pollute the working directory. These are gitignored but cause issues with overlay change detection.
 
+## Dashboard Typography Conventions
+
+The dashboard uses **IBM Plex** fonts with strict weight rules:
+
+| Element | Font | Weight | Class |
+|---------|------|--------|-------|
+| Main title ("Canopy") | Mono | Light (300) | `font-mono font-light` |
+| All other UI text | Mono | Normal (400) | `font-mono font-normal` |
+| Body text | Sans | Normal (400) | (default) |
+
+**Invariants:**
+
+1. **`font-light` is ONLY for the main title** - Never use on section headers, labels, or tabs
+2. **Navigation/chrome uses mono font** - Tabs, filter buttons, section headers all use `font-mono`
+3. **Consistent sizing within context** - Labels and counts in the same component use the same `text-*` size
+4. **Filter chips are compact** - Use `px-3 py-2` not `px-5 py-3`; avoid fixed heights like `h-12`
+5. **Counts use `font-normal`** - Never `font-semibold` or `font-medium` for numeric badges
+
+**Files:**
+- Font config: `web/dashboard/tailwind.config.js` (weights, tracking, sizes)
+- Global styles: `web/dashboard/src/index.css` (base typography rules)
+- Font import: `web/dashboard/index.html` (Google Fonts link)
+
 ## Persistence Invariant
 
 **ALL canopy persistence MUST live at `$XDG_CACHE_HOME/canopy/` or `~/.cache/canopy/`.**
