@@ -72,7 +72,7 @@ export const AgentGrid: React.FC<AgentGridProps> = ({
       <button
         onClick={() => onStatusFilterChange('all')}
         className={`
-          flex items-center gap-3 px-5 py-3 rounded-lg font-medium transition-all cursor-pointer h-12
+          flex items-center gap-2 px-3 py-2 rounded-lg transition-all cursor-pointer
           ${
             statusFilter === 'all'
               ? 'bg-gray-200 dark:bg-gray-600 ring-2 ring-gray-400 dark:ring-gray-500'
@@ -81,8 +81,8 @@ export const AgentGrid: React.FC<AgentGridProps> = ({
         `}
       >
         <ListTodo className="w-4 h-4 text-gray-600 dark:text-gray-400" />
-        <span className="text-sm tracking-wider text-gray-600 dark:text-gray-300">All</span>
-        <span className="text-lg font-mono font-semibold tabular-nums tracking-mono-normal text-gray-900 dark:text-gray-100">
+        <span className="text-sm font-mono font-normal text-gray-600 dark:text-gray-300">All</span>
+        <span className="text-sm font-mono font-normal tabular-nums text-gray-900 dark:text-gray-100">
           {stats.total_tasks}
         </span>
       </button>
@@ -91,7 +91,7 @@ export const AgentGrid: React.FC<AgentGridProps> = ({
       <button
         onClick={() => toggleFilter('running')}
         className={`
-          flex items-center gap-3 px-5 py-3 rounded-lg font-medium transition-all cursor-pointer h-12
+          flex items-center gap-2 px-3 py-2 rounded-lg transition-all cursor-pointer
           ${
             statusFilter === 'running'
               ? 'bg-blue-100 dark:bg-blue-900/50 ring-2 ring-blue-500'
@@ -100,8 +100,8 @@ export const AgentGrid: React.FC<AgentGridProps> = ({
         `}
       >
         <Activity className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-        <span className="text-sm tracking-wider text-blue-600 dark:text-blue-400">Running</span>
-        <span className="text-lg font-mono font-semibold tabular-nums tracking-mono-normal text-blue-700 dark:text-blue-300">
+        <span className="text-sm font-mono font-normal text-blue-600 dark:text-blue-400">Running</span>
+        <span className="text-sm font-mono font-normal tabular-nums text-blue-700 dark:text-blue-300">
           {stats.running_tasks}
         </span>
       </button>
@@ -110,7 +110,7 @@ export const AgentGrid: React.FC<AgentGridProps> = ({
       <button
         onClick={() => toggleFilter('completed')}
         className={`
-          flex items-center gap-3 px-5 py-3 rounded-lg font-medium transition-all cursor-pointer h-12
+          flex items-center gap-2 px-3 py-2 rounded-lg transition-all cursor-pointer
           ${
             statusFilter === 'completed'
               ? 'bg-green-100 dark:bg-green-900/50 ring-2 ring-green-500'
@@ -119,10 +119,10 @@ export const AgentGrid: React.FC<AgentGridProps> = ({
         `}
       >
         <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
-        <span className="text-sm tracking-wider text-green-600 dark:text-green-400">
+        <span className="text-sm font-mono font-normal text-green-600 dark:text-green-400">
           Completed
         </span>
-        <span className="text-lg font-mono font-semibold tabular-nums tracking-mono-normal text-green-700 dark:text-green-300">
+        <span className="text-sm font-mono font-normal tabular-nums text-green-700 dark:text-green-300">
           {stats.completed_tasks}
         </span>
       </button>
@@ -131,7 +131,7 @@ export const AgentGrid: React.FC<AgentGridProps> = ({
       <button
         onClick={() => toggleFilter('failed')}
         className={`
-          flex items-center gap-3 px-5 py-3 rounded-lg font-medium transition-all cursor-pointer h-12
+          flex items-center gap-2 px-3 py-2 rounded-lg transition-all cursor-pointer
           ${
             statusFilter === 'failed'
               ? 'bg-red-100 dark:bg-red-900/50 ring-2 ring-red-500'
@@ -140,8 +140,8 @@ export const AgentGrid: React.FC<AgentGridProps> = ({
         `}
       >
         <XCircle className="w-4 h-4 text-red-600 dark:text-red-400" />
-        <span className="text-sm tracking-wider text-red-600 dark:text-red-400">Failed</span>
-        <span className="text-lg font-mono font-semibold tabular-nums tracking-mono-normal text-red-700 dark:text-red-300">
+        <span className="text-sm font-mono font-normal text-red-600 dark:text-red-400">Failed</span>
+        <span className="text-sm font-mono font-normal tabular-nums text-red-700 dark:text-red-300">
           {stats.failed_tasks}
         </span>
       </button>
@@ -153,7 +153,7 @@ export const AgentGrid: React.FC<AgentGridProps> = ({
       <button
         onClick={onToggleShowArchived}
         className={`
-          flex items-center gap-3 px-5 py-3 rounded-lg font-medium transition-all cursor-pointer h-12
+          flex items-center gap-2 px-3 py-2 rounded-lg transition-all cursor-pointer
           ${
             showArchivedAgents
               ? 'bg-purple-100 dark:bg-purple-900/50 ring-2 ring-purple-500'
@@ -170,7 +170,7 @@ export const AgentGrid: React.FC<AgentGridProps> = ({
           }`}
         />
         <span
-          className={`text-sm tracking-wider ${
+          className={`text-sm font-mono font-normal ${
             showArchivedAgents
               ? 'text-purple-600 dark:text-purple-400'
               : 'text-gray-600 dark:text-gray-400'
@@ -179,7 +179,7 @@ export const AgentGrid: React.FC<AgentGridProps> = ({
           {showArchivedAgents ? 'Hide' : 'Show'} Archived
         </span>
         <span
-          className={`text-lg font-mono font-semibold tabular-nums tracking-mono-normal ${
+          className={`text-sm font-mono font-normal tabular-nums ${
             showArchivedAgents
               ? 'text-purple-700 dark:text-purple-300'
               : 'text-gray-700 dark:text-gray-300'
