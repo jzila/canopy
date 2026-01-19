@@ -63,7 +63,7 @@ canopy run --prompt "Only work on frontend tasks"
 
 1. Connects to daemon (auto-starts if not running)
 2. Fetches ready tasks from `bd ready`
-3. Spawns agents in isolated OverlayFS sandboxes
+3. Spawns agents in isolated sandboxes
 4. Executes `claude --print --output-format json`
 5. Merges changes sequentially
 6. Marks completed tasks with `bd done`
