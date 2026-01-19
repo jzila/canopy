@@ -252,6 +252,7 @@ interface BackendRuntimeState {
   is_paused_by_agent: boolean;
   pause_state: PauseState;
   start_time: string;
+  current_run_id: string;
 }
 
 // Pause state enum matching Go backend (ipc/protocol.go)
@@ -458,6 +459,7 @@ export function useWebSocket() {
                 is_paused_by_agent: backendState.is_paused_by_agent ?? false,
                 pause_state: backendState.pause_state ?? 'running',
                 start_time: backendState.start_time,
+                current_run_id: backendState.current_run_id ?? '',
               });
               console.log('[WebSocket] State synced with', Object.keys(transformedAgents).length, 'agents');
               break;
