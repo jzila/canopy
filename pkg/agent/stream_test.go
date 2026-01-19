@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -112,6 +113,67 @@ func TestParseResultEvent(t *testing.T) {
 	}
 	if result.Usage.OutputTokens != 50 {
 		t.Errorf("Expected output_tokens=50, got %d", result.Usage.OutputTokens)
+	}
+}
+
+func TestStreamParserLongLine(t *testing.T) {
+	// Test that the parser can handle lines larger than the default 64KB buffer
+	// Generate a line that's 100KB
+	largeContent := strings.Repeat("a", 100*1024)
+	stream := fmt.Sprintf(`{"type":"system","data":"init"}
+{"type":"assistant","data":"%s"}
+{"type":"result","data":"final","usage":{"input_tokens":100,"output_tokens":50}}
+`, largeContent)
+
+	reader := strings.NewReader(stream)
+	parser := NewStreamParser(reader)
+
+	eventCount := 0
+	var lastType string
+	for parser.scanner.Scan() {
+		line := parser.scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+
+		var eventType struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(line, &eventType); err != nil {
+			continue
+		}
+		eventCount++
+		lastType = eventType.Type
+	}
+
+	// Should have no scanner error
+	if err := parser.Err(); err != nil {
+		t.Errorf("Expected no scanner error, got: %v", err)
+	}
+
+	// Should have read all 3 events
+	if eventCount != 3 {
+		t.Errorf("Expected 3 events, got %d", eventCount)
+	}
+
+	// Last event should be result
+	if lastType != "result" {
+		t.Errorf("Expected last type=result, got %s", lastType)
+	}
+}
+
+func TestStreamParserErr(t *testing.T) {
+	// Test that the Err() method returns nil on normal completion
+	stream := `{"type":"result","data":"done"}`
+	reader := strings.NewReader(stream)
+	parser := NewStreamParser(reader)
+
+	for parser.scanner.Scan() {
+		// Just consume
+	}
+
+	if err := parser.Err(); err != nil {
+		t.Errorf("Expected no error on normal completion, got: %v", err)
 	}
 }
 

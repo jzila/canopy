@@ -327,6 +327,14 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 		}
 	}
 
+	// Check for scanner errors (e.g., token too long, buffer overflow)
+	// This is critical because scanner.Scan() returns false on both EOF and error,
+	// and we need to distinguish between normal completion and failure.
+	if scanErr := parser.Err(); scanErr != nil {
+		// Log scanner errors - this indicates something went wrong with stream parsing
+		fmt.Fprintf(os.Stderr, "warning: stream scanner error (token/cost metrics may be incomplete): %v\n", scanErr)
+	}
+
 	// Wait for command to complete
 	err = cmd.Wait()
 
@@ -345,6 +353,7 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 	// - Agent was killed/timed out before emitting result event
 	// - Claude CLI crashed or exited abnormally
 	// - JSON parsing of the result event failed
+	// - Scanner encountered an error (buffer overflow, token too long)
 	// In these cases, token/cost metrics will be zero.
 	if finalResult == nil && e.config.Verbose {
 		fmt.Fprintf(os.Stderr, "warning: no result event received from claude CLI, token/cost metrics will be zero\n")

@@ -169,6 +169,11 @@ func (e *LiveFeedEvent) GetTextData() (TextEventData, bool) {
 	return TextEventData{}, false
 }
 
+// MaxStreamLineSize is the maximum size of a single line in the stream.
+// Claude CLI can emit large events (assistant messages with code blocks,
+// tool outputs, etc.) so we use a larger buffer than the default 64KB.
+const MaxStreamLineSize = 4 * 1024 * 1024 // 4MB
+
 // StreamParser reads and filters events from Claude's stream-json output
 type StreamParser struct {
 	scanner *bufio.Scanner
@@ -176,9 +181,21 @@ type StreamParser struct {
 
 // NewStreamParser creates a parser for Claude's stream-json output
 func NewStreamParser(reader io.Reader) *StreamParser {
+	scanner := bufio.NewScanner(reader)
+	// Use a larger buffer to handle long lines (assistant messages with code blocks, etc.)
+	// The default 64KB can be exceeded by large tool outputs or code blocks
+	buf := make([]byte, 64*1024) // Start with 64KB
+	scanner.Buffer(buf, MaxStreamLineSize)
 	return &StreamParser{
-		scanner: bufio.NewScanner(reader),
+		scanner: scanner,
 	}
+}
+
+// Err returns any error that occurred during scanning.
+// This should be called after the scan loop to check for scanner errors
+// like buffer overflow (token too long).
+func (p *StreamParser) Err() error {
+	return p.scanner.Err()
 }
 
 // NextEvent reads and parses the next event from the stream
