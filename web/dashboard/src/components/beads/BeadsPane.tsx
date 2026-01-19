@@ -451,7 +451,7 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
       <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700">
         <div className="flex items-center gap-3 h-8">
           <h2 className="text-sm font-mono font-normal tracking-mono-wide text-gray-900 dark:text-gray-100">Beads</h2>
-          <span className="px-2.5 py-1 text-xs font-mono font-medium tabular-nums tracking-mono-normal rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
+          <span className="px-2.5 py-1 text-xs font-mono font-normal tabular-nums tracking-mono-normal rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
             {filteredBeads.length}
           </span>
         </div>
@@ -522,25 +522,25 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
         {statusCounts.running > 0 && (
           <div className="flex items-center gap-2.5 text-xs">
             <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
-            <span className="font-mono tabular-nums tracking-mono-normal text-blue-600 dark:text-blue-400">{statusCounts.running}</span>
+            <span className="font-mono font-normal tabular-nums tracking-mono-normal text-blue-600 dark:text-blue-400">{statusCounts.running}</span>
           </div>
         )}
         {statusCounts.blocked > 0 && (
           <div className="flex items-center gap-2.5 text-xs">
             <Clock className="w-4 h-4 text-yellow-500" />
-            <span className="font-mono tabular-nums tracking-mono-normal text-yellow-600 dark:text-yellow-400">{statusCounts.blocked}</span>
+            <span className="font-mono font-normal tabular-nums tracking-mono-normal text-yellow-600 dark:text-yellow-400">{statusCounts.blocked}</span>
           </div>
         )}
         {statusCounts.ready > 0 && (
           <div className="flex items-center gap-2.5 text-xs">
             <Circle className="w-4 h-4 text-gray-400" />
-            <span className="font-mono tabular-nums tracking-mono-normal text-gray-600 dark:text-gray-400">{statusCounts.ready}</span>
+            <span className="font-mono font-normal tabular-nums tracking-mono-normal text-gray-600 dark:text-gray-400">{statusCounts.ready}</span>
           </div>
         )}
         {statusCounts.failed > 0 && (
           <div className="flex items-center gap-2.5 text-xs">
             <AlertCircle className="w-4 h-4 text-red-500" />
-            <span className="font-mono tabular-nums tracking-mono-normal text-red-600 dark:text-red-400">{statusCounts.failed}</span>
+            <span className="font-mono font-normal tabular-nums tracking-mono-normal text-red-600 dark:text-red-400">{statusCounts.failed}</span>
           </div>
         )}
         {incompleteBeads.length === 0 && !showCompleted && (
@@ -549,7 +549,7 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
         {showCompleted && completedBeadsCount > 0 && (
           <div className="flex items-center gap-2.5 text-xs">
             <CheckCircle2 className="w-4 h-4 text-green-500" />
-            <span className="font-mono tabular-nums tracking-mono-normal text-green-600 dark:text-green-400">{completedBeadsCount}</span>
+            <span className="font-mono font-normal tabular-nums tracking-mono-normal text-green-600 dark:text-green-400">{completedBeadsCount}</span>
           </div>
         )}
       </div>
