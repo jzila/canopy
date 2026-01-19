@@ -69,17 +69,19 @@ type Run struct {
 }
 
 // MergeStatus is an alias to types.MergeStatus for backwards compatibility.
-// The persistence layer only uses a subset of MergeStatus values (None, Merged, Failed, Resolved)
-// but shares the same underlying type for consistency.
+// The persistence layer uses final MergeStatus values (None, Merged, Failed, Resolved,
+// Skipped, MergedNeedsRepair) but shares the same underlying type for consistency.
 type MergeStatus = types.MergeStatus
 
 // MergeStatus constants - aliases to types package for backwards compatibility.
-// Note: persistence only uses None, Merged, Failed, and Resolved (not queue states).
+// Note: persistence uses final statuses (not queue states like pending, merging).
 const (
-	MergeStatusNone     = types.MergeStatusNone
-	MergeStatusMerged   = types.MergeStatusMerged
-	MergeStatusFailed   = types.MergeStatusFailed
-	MergeStatusResolved = types.MergeStatusResolved
+	MergeStatusNone             = types.MergeStatusNone
+	MergeStatusMerged           = types.MergeStatusMerged
+	MergeStatusFailed           = types.MergeStatusFailed
+	MergeStatusResolved         = types.MergeStatusResolved
+	MergeStatusSkipped          = types.MergeStatusSkipped
+	MergeStatusMergedNeedsRepair = types.MergeStatusMergedNeedsRepair
 )
 
 // Task represents a beads task persisted in the database

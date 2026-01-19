@@ -163,18 +163,20 @@ func (h *PersistenceHandler) handleAgentMergeStatus(event Event) {
 		}
 	}
 
-	// Only persist final merge statuses
-	if mergeStatus != "merged" && mergeStatus != "failed" {
-		return
-	}
-
-	// Map IPC merge status to persistence merge status
+	// Map IPC merge status to persistence merge status - only persist final statuses
 	var persistMergeStatus persistence.MergeStatus
 	switch mergeStatus {
 	case "merged":
 		persistMergeStatus = persistence.MergeStatusMerged
 	case "failed":
 		persistMergeStatus = persistence.MergeStatusFailed
+	case "skipped":
+		persistMergeStatus = persistence.MergeStatusSkipped
+	case "merged_needs_repair":
+		persistMergeStatus = persistence.MergeStatusMergedNeedsRepair
+	default:
+		// Not a final status, don't persist
+		return
 	}
 
 	// Extract merge result details from payload

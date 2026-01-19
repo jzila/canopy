@@ -380,6 +380,36 @@ func (s *Server) convertToEvent(msg *Message) *events.Event {
 		if payload.Error != "" {
 			eventPayload["error"] = payload.Error
 		}
+		// Forward merge result fields (for final status updates)
+		if payload.CommitsApplied > 0 {
+			eventPayload["commits_applied"] = payload.CommitsApplied
+		}
+		if payload.HadConflict {
+			eventPayload["had_conflict"] = payload.HadConflict
+		}
+		if payload.ResolverSpawned {
+			eventPayload["resolver_spawned"] = payload.ResolverSpawned
+		}
+		// Forward validation fields
+		if payload.ValidationStatus != "" {
+			eventPayload["validation_status"] = payload.ValidationStatus
+		}
+		if payload.ValidationError != "" {
+			eventPayload["validation_error"] = payload.ValidationError
+		}
+		if payload.ValidationDuration > 0 {
+			eventPayload["validation_duration_ms"] = payload.ValidationDuration
+		}
+		if len(payload.ValidationSteps) > 0 {
+			eventPayload["validation_steps"] = payload.ValidationSteps
+		}
+		// Forward repair tracking fields
+		if payload.RepairAttempts > 0 {
+			eventPayload["repair_attempts"] = payload.RepairAttempts
+		}
+		if payload.LastRepairOutput != "" {
+			eventPayload["last_repair_output"] = payload.LastRepairOutput
+		}
 		return &events.Event{
 			Type:      events.EventAgentMergeStatus,
 			Timestamp: msg.Timestamp,
