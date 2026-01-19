@@ -324,7 +324,7 @@ export const AgentCard: React.FC<AgentCardProps> = ({
 
       {/* Worker chain timeline (expandable) */}
       {showWorkerChain && hasWorkerChainData && (
-        <WorkerChainTimeline agent={agent} childAgents={childAgents} />
+        <WorkerChainTimeline agent={agent} childAgents={childAgents} onSelectAgent={onSelect} />
       )}
 
       {agent.error && (

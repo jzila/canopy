@@ -5,6 +5,7 @@ import type { AgentState, ValidationStep, ValidationStatus } from '../../stores/
 interface WorkerChainTimelineProps {
   agent: AgentState;
   childAgents?: AgentState[];
+  onSelectAgent?: (agentId: string) => void;
 }
 
 const formatDuration = (ms: number): string => {
@@ -72,6 +73,8 @@ interface TimelineItemProps {
   output?: string | undefined;
   isLast?: boolean;
   children?: React.ReactNode;
+  onClick?: (() => void) | undefined;
+  isClickable?: boolean;
 }
 
 const TimelineItem: React.FC<TimelineItemProps> = ({
@@ -82,9 +85,19 @@ const TimelineItem: React.FC<TimelineItemProps> = ({
   output,
   isLast = false,
   children,
+  onClick,
+  isClickable = false,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const hasExpandableContent = output || children;
+
+  const handleClick = () => {
+    if (isClickable && onClick) {
+      onClick();
+    } else if (hasExpandableContent) {
+      setIsExpanded(!isExpanded);
+    }
+  };
 
   return (
     <div className="relative">
@@ -95,31 +108,41 @@ const TimelineItem: React.FC<TimelineItemProps> = ({
 
       <div className="flex items-start gap-3">
         {/* Status indicator */}
-        <div className="flex-shrink-0 w-5 h-5 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center border border-gray-200 dark:border-gray-700">
+        <div className={`flex-shrink-0 w-5 h-5 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center border border-gray-200 dark:border-gray-700 ${isClickable ? 'ring-2 ring-amber-400 dark:ring-amber-500' : ''}`}>
           {icon}
         </div>
 
         {/* Content */}
         <div className="flex-1 min-w-0 pb-4">
           <div
-            className={`flex items-center gap-2 ${hasExpandableContent ? 'cursor-pointer' : ''}`}
-            onClick={() => hasExpandableContent && setIsExpanded(!isExpanded)}
+            className={`flex items-center gap-2 ${
+              isClickable
+                ? 'cursor-pointer hover:bg-amber-50 dark:hover:bg-amber-900/30 -mx-1 px-1 py-0.5 rounded transition-colors'
+                : hasExpandableContent
+                  ? 'cursor-pointer'
+                  : ''
+            }`}
+            onClick={handleClick}
+            title={isClickable ? 'Click to view logs' : undefined}
           >
-            {hasExpandableContent && (
+            {hasExpandableContent && !isClickable && (
               isExpanded
                 ? <ChevronDown className="w-3 h-3 text-gray-400" />
                 : <ChevronRight className="w-3 h-3 text-gray-400" />
             )}
-            <span className="text-xs font-medium text-gray-700 dark:text-gray-300">{title}</span>
+            <span className={`text-xs font-medium ${isClickable ? 'text-amber-700 dark:text-amber-300' : 'text-gray-700 dark:text-gray-300'}`}>{title}</span>
             <span className={`text-xs ${getStatusColor(status)}`}>{status}</span>
             {duration !== undefined && (
               <span className="text-xs text-gray-400 font-mono tabular-nums ml-auto">
                 {formatDuration(duration)}
               </span>
             )}
+            {isClickable && (
+              <span className="text-xs text-amber-500 dark:text-amber-400 ml-1">→</span>
+            )}
           </div>
 
-          {isExpanded && (
+          {isExpanded && !isClickable && (
             <div className="mt-2 text-xs">
               {output && (
                 <pre className="p-2 bg-gray-100 dark:bg-gray-900 rounded text-gray-600 dark:text-gray-400 overflow-x-auto max-h-32 overflow-y-auto whitespace-pre-wrap">
@@ -138,6 +161,7 @@ const TimelineItem: React.FC<TimelineItemProps> = ({
 export const WorkerChainTimeline: React.FC<WorkerChainTimelineProps> = ({
   agent,
   childAgents = [],
+  onSelectAgent,
 }) => {
   // Build the worker chain from agent state
   const items: Array<{
@@ -148,6 +172,7 @@ export const WorkerChainTimeline: React.FC<WorkerChainTimelineProps> = ({
     output?: string | undefined;
     steps?: ValidationStep[] | undefined;
     attempt?: number | undefined;
+    agentId?: string | undefined;
   }> = [];
 
   // 1. Original worker agent
@@ -170,6 +195,7 @@ export const WorkerChainTimeline: React.FC<WorkerChainTimelineProps> = ({
       status: resolver.status === 'completed' ? 'resolved' : resolver.status,
       duration: resolver.duration * 1000,
       output: resolver.error || undefined,
+      agentId: resolver.id,
     });
   }
 
@@ -236,12 +262,14 @@ export const WorkerChainTimeline: React.FC<WorkerChainTimelineProps> = ({
         Worker Chain
       </div>
       <div className="ml-1">
-        {items.map((item, index) => (
+        {items.map((item, index) => {
+          const isResolverClickable = item.type === 'resolver' && item.agentId && onSelectAgent;
+          return (
           <TimelineItem
             key={`${item.type}-${index}`}
             icon={
               item.type === 'agent' ? <Play className="w-3 h-3" /> :
-              item.type === 'resolver' ? <GitMerge className="w-3 h-3" /> :
+              item.type === 'resolver' ? <GitMerge className="w-3 h-3 text-amber-500" /> :
               item.type === 'validation' ? getStatusIcon(item.status) :
               <Wrench className="w-3 h-3" />
             }
@@ -250,6 +278,8 @@ export const WorkerChainTimeline: React.FC<WorkerChainTimelineProps> = ({
             duration={item.duration}
             output={item.output}
             isLast={index === items.length - 1}
+            isClickable={Boolean(isResolverClickable)}
+            onClick={isResolverClickable ? () => onSelectAgent(item.agentId!) : undefined}
           >
             {/* Render validation steps if available */}
             {item.type === 'validation' && item.steps && item.steps.length > 0 && (
@@ -269,7 +299,8 @@ export const WorkerChainTimeline: React.FC<WorkerChainTimelineProps> = ({
               </div>
             )}
           </TimelineItem>
-        ))}
+        );
+        })}
       </div>
     </div>
   );

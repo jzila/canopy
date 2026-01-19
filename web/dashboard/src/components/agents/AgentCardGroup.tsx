@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { ChevronDown, ChevronUp, GitMerge, ExternalLink, Clock, Zap, DollarSign } from 'lucide-react';
+import { ChevronDown, ChevronUp, GitMerge, ExternalLink, Clock, Zap, DollarSign, Wrench } from 'lucide-react';
 import { AgentCard } from './AgentCard';
 import type { AgentState } from '../../stores/stateStore';
 import { useStateStore } from '../../stores/stateStore';
@@ -21,34 +21,62 @@ export const AgentCardGroup: React.FC<AgentCardGroupProps> = ({
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
 
-  const hasChildren = childAgents.length > 0;
-
-  // Check if any child is currently active (running or starting)
-  const hasActiveChild = useMemo(() => {
-    return childAgents.some(
-      (child) => child.status === 'running' || child.status === 'starting'
-    );
+  // Separate resolver agents (conflict resolvers) from repair agents
+  // Resolvers are now shown only in the WorkerChainTimeline, not as stacked cards
+  const resolverAgents = useMemo(() => {
+    return childAgents.filter(child => !child.task_id.includes('repair'));
   }, [childAgents]);
 
-  // Auto-expand when a child is actively running
+  const repairAgents = useMemo(() => {
+    return childAgents.filter(child => child.task_id.includes('repair'));
+  }, [childAgents]);
+
+  // Only repair agents show as stacked cards; resolvers are hidden from card stack
+  const stackedChildren = repairAgents;
+  const hasStackedChildren = stackedChildren.length > 0;
+
+  // Check if any resolver is currently active (for the "Resolving" badge on parent)
+  const hasActiveResolver = useMemo(() => {
+    return resolverAgents.some(
+      (child) => child.status === 'running' || child.status === 'starting'
+    );
+  }, [resolverAgents]);
+
+  // Check if any repair agent is currently active (for auto-expand)
+  const hasActiveRepair = useMemo(() => {
+    return repairAgents.some(
+      (child) => child.status === 'running' || child.status === 'starting'
+    );
+  }, [repairAgents]);
+
+  // Auto-expand when a repair agent is actively running
   React.useEffect(() => {
-    if (hasActiveChild) {
+    if (hasActiveRepair) {
       setIsExpanded(true);
     }
-  }, [hasActiveChild]);
+  }, [hasActiveRepair]);
 
-  // Check if parent is in a "resolving" state (has active resolver child)
-  const isResolving = hasActiveChild;
+  // Show "Resolving" badge when a resolver is active
+  const isResolving = hasActiveResolver;
 
-  if (!hasChildren) {
-    // No children - render just the parent card
+  if (!hasStackedChildren) {
+    // No repair children to stack - render just the parent card with resolving badge if needed
     return (
-      <AgentCard
-        agent={parentAgent}
-        onSelect={onSelect}
-        isSelected={parentAgent.id === selectedAgentId}
-        {...(onArchiveToggle && { onArchiveToggle })}
-      />
+      <div className="relative">
+        <AgentCard
+          agent={parentAgent}
+          onSelect={onSelect}
+          isSelected={parentAgent.id === selectedAgentId}
+          {...(onArchiveToggle && { onArchiveToggle })}
+        />
+        {/* Resolving badge overlay when resolver is active but no stacked cards */}
+        {isResolving && (
+          <div className="absolute -top-2 -right-2 flex items-center gap-1 px-2 py-1 bg-amber-500 text-white text-xs font-medium rounded-full shadow-lg animate-pulse z-20">
+            <GitMerge className="w-3 h-3" />
+            Resolving
+          </div>
+        )}
+      </div>
     );
   }
 
@@ -58,7 +86,7 @@ export const AgentCardGroup: React.FC<AgentCardGroupProps> = ({
   };
 
   // Number of peek cards to show (max 3 for visual balance)
-  const peekCount = Math.min(childAgents.length, 3);
+  const peekCount = Math.min(stackedChildren.length, 3);
 
   return (
     <div className="relative agent-card-group">
@@ -70,8 +98,8 @@ export const AgentCardGroup: React.FC<AgentCardGroupProps> = ({
           marginBottom: isExpanded ? 0 : `${peekCount * 6}px`,
         }}
       >
-        {/* Peeking resolver cards (collapsed state) - stacked behind parent */}
-        {!isExpanded && childAgents.slice(0, peekCount).map((child, index) => {
+        {/* Peeking repair cards (collapsed state) - stacked behind parent */}
+        {!isExpanded && stackedChildren.slice(0, peekCount).map((child, index) => {
           const offset = (index + 1) * 6;
           const scale = 1 - (index + 1) * 0.015;
           return (
@@ -122,8 +150,8 @@ export const AgentCardGroup: React.FC<AgentCardGroupProps> = ({
               shadow-sm hover:shadow-md
             `}
           >
-            <GitMerge className="w-3 h-3" />
-            <span>{childAgents.length}</span>
+            <Wrench className="w-3 h-3" />
+            <span>{stackedChildren.length}</span>
             {isExpanded ? (
               <ChevronUp className="w-3 h-3" />
             ) : (
@@ -133,14 +161,14 @@ export const AgentCardGroup: React.FC<AgentCardGroupProps> = ({
         </div>
       </div>
 
-      {/* Expanded resolver cards - drawer sliding out */}
+      {/* Expanded repair cards - drawer sliding out */}
       <div
         className={`
           overflow-hidden transition-all duration-300 ease-out
           ${isExpanded ? 'opacity-100' : 'opacity-0 pointer-events-none'}
         `}
         style={{
-          maxHeight: isExpanded ? `${childAgents.length * 150 + 20}px` : '0px',
+          maxHeight: isExpanded ? `${stackedChildren.length * 150 + 20}px` : '0px',
         }}
       >
         {/* Connector from parent to children */}
@@ -151,9 +179,9 @@ export const AgentCardGroup: React.FC<AgentCardGroupProps> = ({
             style={{ height: `calc(100% - 8px)` }}
           />
 
-          {/* Resolver cards */}
+          {/* Repair agent cards */}
           <div className="space-y-2 pl-4">
-            {childAgents.map((child, index) => (
+            {stackedChildren.map((child, index) => (
               <div
                 key={child.id}
                 className="relative resolver-card-slide"
