@@ -1975,6 +1975,16 @@ func (s *Store) MarkOverlayCompleted(agentID string) error {
 	return nil
 }
 
+// UpdateOverlayStatus updates the status of an overlay (active, completed, orphaned)
+func (s *Store) UpdateOverlayStatus(agentID, status string) error {
+	query := `UPDATE active_overlays SET status = ? WHERE agent_id = ?`
+	_, err := s.db.Exec(query, status, agentID)
+	if err != nil {
+		return fmt.Errorf("failed to update overlay status: %w", err)
+	}
+	return nil
+}
+
 // GetActiveOverlays retrieves all overlays with status 'active'
 func (s *Store) GetActiveOverlays() ([]*ActiveOverlay, error) {
 	query := `SELECT agent_id, task_id, run_id, session_id, upper_dir, merged_dir, lower_dir, work_dir, created_at, status FROM active_overlays WHERE status = 'active'`

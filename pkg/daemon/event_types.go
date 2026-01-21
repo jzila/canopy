@@ -16,11 +16,14 @@ const (
 	EventRunStarted       = events.EventRunStarted
 	EventRunCompleted     = events.EventRunCompleted
 	EventAgentStarted     = events.EventAgentStarted
+	EventAgentResumed     = events.EventAgentResumed
 	EventAgentOutput      = events.EventAgentOutput
 	EventAgentLiveFeed    = events.EventAgentLiveFeed
 	EventAgentCommit      = events.EventAgentCommit
 	EventAgentMergeStatus = events.EventAgentMergeStatus
 	EventAgentCompleted   = events.EventAgentCompleted
+	EventAgentDone        = events.EventAgentDone
+	EventAgentFailed      = events.EventAgentFailed
 	EventTaskUpdated      = events.EventTaskUpdated
 	EventOrchPaused       = events.EventOrchPaused
 	EventOrchResumed      = events.EventOrchResumed

@@ -342,6 +342,57 @@ func CleanupStaleMounts(baseDir string) (int, []error) {
 	return cleaned, errors
 }
 
+// RemountOverlay recreates an Overlay struct from persisted paths and remounts it.
+// On Darwin, this restores the overlay state if the clone directory still exists.
+// Unlike Linux, Darwin doesn't have a real mount to restore - just the clone directory.
+func RemountOverlay(lowerDir, upperDir, workDir, mergedDir string) (*Overlay, error) {
+	// Verify merged directory exists and has content
+	if _, err := os.Stat(mergedDir); os.IsNotExist(err) {
+		return nil, fmt.Errorf("merged directory does not exist: %s", mergedDir)
+	}
+
+	// Check if it has content
+	entries, err := os.ReadDir(mergedDir)
+	if err != nil {
+		return nil, fmt.Errorf("read merged directory: %w", err)
+	}
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("merged directory is empty: %s", mergedDir)
+	}
+
+	// Extract ID from the directory structure (baseDir/ID/merged)
+	id := filepath.Base(filepath.Dir(mergedDir))
+
+	overlay := &Overlay{
+		ID:        id,
+		LowerDir:  lowerDir,
+		UpperDir:  upperDir,
+		WorkDir:   workDir,
+		MergedDir: mergedDir,
+		mounted:   true,
+		useFuse:   false,
+	}
+
+	// Take a new baseline snapshot for change detection
+	// Since we're resuming, changes from before the crash are still there
+	excludes := append([]string{}, DefaultPassthroughPaths...)
+	excludes = append(excludes, DefaultHiddenPaths...)
+	excludes = append(excludes, HomeExcludedPaths...)
+
+	snapshot, err := TakeSnapshot(mergedDir, excludes)
+	if err != nil {
+		return nil, fmt.Errorf("take baseline snapshot: %w", err)
+	}
+
+	// Store Darwin-specific state
+	darwinState[id] = &DarwinOverlayState{
+		BaseSnapshot: snapshot,
+		CloneTime:    time.Now(), // Reset to now since we're resuming
+	}
+
+	return overlay, nil
+}
+
 // RecoverFromCrash performs cleanup operations needed after a crash.
 // On Darwin, this removes stale clone directories.
 func RecoverFromCrash(baseDir string) (cleaned int, stale int, errors []error) {

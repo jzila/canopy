@@ -82,6 +82,7 @@ type MessageType string
 const (
 	// Agent lifecycle events
 	MessageTypeAgentStart       MessageType = "agent_start"
+	MessageTypeAgentResumed     MessageType = "agent_resumed" // Agent resumed after daemon restart
 	MessageTypeAgentOutput      MessageType = "agent_output"
 	MessageTypeAgentOutputClear MessageType = "agent_output_clear"
 	MessageTypeAgentLiveFeed    MessageType = "agent_live_feed"
@@ -128,6 +129,21 @@ type AgentStartPayload struct {
 	TaskDescription string `json:"task_description,omitempty"` // Task description for display
 	ParentAgentID   string `json:"parent_agent_id,omitempty"`   // ID of parent agent if spawned by another agent
 	RepoID          string `json:"repo_id,omitempty"`           // Repository ID for tracking
+	IsResume        bool   `json:"is_resume,omitempty"`         // True if this agent is being resumed after daemon restart
+	ResumeCount     int    `json:"resume_count,omitempty"`      // Number of times this agent has been resumed
+	SessionID       string `json:"session_id,omitempty"`        // Claude CLI session ID being resumed
+}
+
+// AgentResumedPayload is sent when an agent is resumed after daemon restart
+type AgentResumedPayload struct {
+	AgentID       string `json:"agent_id"`
+	RunID         string `json:"run_id,omitempty"`         // Run ID this agent belongs to
+	TaskID        string `json:"task_id"`
+	TaskTitle     string `json:"task_title"`
+	SessionID     string `json:"session_id"`               // Claude CLI session ID being resumed
+	ResumeCount   int    `json:"resume_count"`             // Number of times this agent has been resumed (including this time)
+	InterruptedAt int64  `json:"interrupted_at"`           // Unix timestamp of when the agent was interrupted
+	ResumedAt     int64  `json:"resumed_at"`               // Unix timestamp of when the agent was resumed
 }
 
 // AgentOutputPayload is sent when an agent produces output

@@ -434,6 +434,9 @@ type AgentState struct {
 	ValidationDuration int64           `json:"validation_duration_ms,omitempty"` // Total validation duration in milliseconds
 	ValidationError    string          `json:"validation_error,omitempty"`     // Error message if validation failed
 	SessionID          string          `json:"session_id,omitempty"`           // Claude CLI session ID for claude --resume support
+	IsResume           bool            `json:"is_resume,omitempty"`            // True if this agent was resumed after daemon restart
+	ResumeCount        int             `json:"resume_count,omitempty"`         // Number of times this agent has been resumed
+	InterruptedAt      *time.Time      `json:"interrupted_at,omitempty"`       // When the agent was interrupted (for resumed agents)
 	mu                 sync.RWMutex
 }
 
@@ -490,6 +493,9 @@ func (a *AgentState) GetSnapshot() AgentState {
 		ValidationDuration: a.ValidationDuration,
 		ValidationError:    a.ValidationError,
 		SessionID:          a.SessionID,
+		IsResume:           a.IsResume,
+		ResumeCount:        a.ResumeCount,
+		InterruptedAt:      a.InterruptedAt,
 		// mu is intentionally not copied
 	}
 }
