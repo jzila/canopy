@@ -15,6 +15,8 @@ const (
 	dirName = "canopy"
 	// socketName is the default socket filename
 	socketName = "canopy.sock"
+	// DefaultDaemonPort is the default HTTP port for the canopy daemon
+	DefaultDaemonPort = 8080
 )
 
 // RuntimeDir returns the platform-appropriate runtime directory for canopy.

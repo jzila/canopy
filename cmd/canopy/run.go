@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -19,6 +22,7 @@ import (
 	"github.com/jzila/canopy/pkg/ipc"
 	"github.com/jzila/canopy/pkg/orchestrator"
 	"github.com/jzila/canopy/pkg/repository"
+	"github.com/jzila/canopy/pkg/runtime"
 	"github.com/jzila/canopy/pkg/sandbox"
 )
 
@@ -30,6 +34,7 @@ var (
 	maxRetries      int
 	maxPriority     int
 	resolverTimeout time.Duration
+	resumeAgents    bool
 )
 
 var runCmd = &cobra.Command{
@@ -94,7 +99,10 @@ Example:
 
   # Set resolver timeout for conflict resolution
   canopy run --resolver-timeout 15m   # 15 minute timeout (default: 10m)
-  canopy run --resolver-timeout 30m   # 30 minute timeout for complex conflicts`,
+  canopy run --resolver-timeout 30m   # 30 minute timeout for complex conflicts
+
+  # Resume interrupted agents after daemon restart
+  canopy run --resume                 # Resume agents that were interrupted`,
 	RunE: runOrchestrator,
 }
 
@@ -106,6 +114,7 @@ func init() {
 	runCmd.Flags().IntVar(&maxRetries, "max-retries", 3, "Maximum retry attempts for failed tasks (0=no retries, -1=infinite)")
 	runCmd.Flags().IntVar(&maxPriority, "max-priority", -1, "Hard filter: only run tasks with priority <= this value (0-4, -1=no filter)")
 	runCmd.Flags().DurationVar(&resolverTimeout, "resolver-timeout", 0, "Timeout for resolver agents when resolving merge conflicts (e.g., 10m, 15m, 1h). Default: 10m. Set from CANOPY_RESOLVER_TIMEOUT env var if not specified.")
+	runCmd.Flags().BoolVar(&resumeAgents, "resume", false, "Resume agents that were interrupted by daemon restart")
 
 	rootCmd.AddCommand(runCmd)
 }
@@ -220,6 +229,21 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 	ipcClient.SetVerbose(verbose) // Enable verbose logging for reconnection events
 	if verbose {
 		fmt.Println("Connected to canopy daemon")
+	}
+
+	// If --resume flag is set, resume interrupted agents first
+	if resumeAgents {
+		resumed, errs := resumeInterruptedAgents(ctx, absWorkdir, useSandbox, verbose, ipcClient)
+		if resumed > 0 {
+			fmt.Printf("Resumed %d interrupted agent(s)\n", resumed)
+		}
+		for _, err := range errs {
+			fmt.Fprintf(os.Stderr, "warning: resume error: %v\n", err)
+		}
+		// Exit after resuming if --resume was the primary operation
+		if dryRun {
+			return nil
+		}
 	}
 
 	// Create and run orchestrator
@@ -474,5 +498,124 @@ func (r *runStatsCollector) getStats() *ipc.RunStats {
 		GitCommits:                   r.gitCommits,
 		ConflictsResolved:            r.conflictsRes,
 	}
+}
+
+// resumableAgentInfo is the wire format for resumable agent data from the daemon
+type resumableAgentInfo struct {
+	AgentID       string `json:"agent_id"`
+	TaskID        string `json:"task_id"`
+	TaskTitle     string `json:"task_title,omitempty"`
+	RunID         string `json:"run_id"`
+	SessionID     string `json:"session_id"`
+	UpperDir      string `json:"upper_dir"`
+	LowerDir      string `json:"lower_dir"`
+	WorkDir       string `json:"work_dir"`
+	MergedDir     string `json:"merged_dir"`
+	InterruptedAt int64  `json:"interrupted_at"`
+}
+
+// resumeInterruptedAgents queries the daemon for resumable agents and resumes them.
+// Returns the number of agents successfully resumed and any errors encountered.
+func resumeInterruptedAgents(ctx context.Context, workDir string, useBwrap, verbose bool, ipcClient *ipc.Client) (int, []error) {
+	// Get daemon HTTP endpoint (use default port - could be made configurable)
+	url := fmt.Sprintf("http://localhost:%d/api/agents/resumable", runtime.DefaultDaemonPort)
+
+	// Query daemon for resumable agents
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0, []error{fmt.Errorf("failed to create request: %w", err)}
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, []error{fmt.Errorf("failed to query daemon: %w", err)}
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return 0, []error{fmt.Errorf("daemon returned %d: %s", resp.StatusCode, string(body))}
+	}
+
+	// Parse response
+	var agents []resumableAgentInfo
+	if err := json.NewDecoder(resp.Body).Decode(&agents); err != nil {
+		return 0, []error{fmt.Errorf("failed to decode response: %w", err)}
+	}
+
+	if len(agents) == 0 {
+		if verbose {
+			fmt.Println("No interrupted agents to resume")
+		}
+		return 0, nil
+	}
+
+	if verbose {
+		fmt.Printf("Found %d interrupted agent(s) to resume\n", len(agents))
+	}
+
+	// Create executor for resuming agents
+	executor := agent.NewExecutor(&agent.Config{
+		WorkDir:  workDir,
+		UseBwrap: useBwrap,
+		Verbose:  verbose,
+	})
+
+	var resumed int
+	var errors []error
+
+	// Resume each agent
+	for _, a := range agents {
+		if verbose {
+			fmt.Printf("Resuming agent %s (task: %s, session: %s)\n", a.AgentID, a.TaskID, a.SessionID)
+		}
+
+		// Remount the overlay
+		overlay, err := sandbox.RemountOverlay(a.LowerDir, a.UpperDir, a.WorkDir, a.MergedDir)
+		if err != nil {
+			errors = append(errors, fmt.Errorf("failed to remount overlay for %s: %w", a.AgentID, err))
+			continue
+		}
+
+		// Create task object for executor
+		task := &beads.Task{
+			ID:    a.TaskID,
+			Title: a.TaskTitle,
+		}
+
+		// Create live feed callback to send events to daemon
+		liveFeedCallback := func(event *agent.LiveFeedEvent) {
+			if ipcClient != nil {
+				_ = ipcClient.SendAgentLiveFeed(a.AgentID, string(event.EventType), event.RawData)
+			}
+		}
+
+		// Resume the agent using claude --resume
+		result := executor.ExecuteResume(ctx, task, overlay, a.SessionID, liveFeedCallback)
+
+		// Send result to daemon via IPC
+		if result != nil && ipcClient != nil {
+			ipcResult := convertToIPCResult(result)
+			if result.ExitCode == 0 && result.Error == "" {
+				_ = ipcClient.SendAgentDone(a.AgentID, "", ipcResult)
+			} else {
+				execErr := fmt.Errorf("%s", result.Error)
+				if result.Error == "" {
+					execErr = fmt.Errorf("agent exited with code %d", result.ExitCode)
+				}
+				_ = ipcClient.SendAgentFail(a.AgentID, "", execErr, ipcResult)
+			}
+		}
+
+		// Cleanup overlay after execution
+		if err := overlay.Cleanup(); err != nil {
+			errors = append(errors, fmt.Errorf("failed to cleanup overlay for %s: %w", a.AgentID, err))
+		}
+
+		resumed++
+	}
+
+	return resumed, errors
 }
 

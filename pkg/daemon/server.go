@@ -210,6 +210,12 @@ func (s *Server) handleAgentsRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if this is a resumable agents request: /api/agents/resumable
+	if strings.HasSuffix(path, "/resumable") {
+		s.handleGetResumableAgents(w, r)
+		return
+	}
+
 	// Handle method-based routing for /api/agents
 	switch r.Method {
 	case http.MethodGet:
@@ -218,6 +224,64 @@ func (s *Server) handleAgentsRoutes(w http.ResponseWriter, r *http.Request) {
 		s.handler.HandleUpdateAgent(w, r)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// ResumableAgentInfo contains the information needed to resume an agent
+type ResumableAgentInfo struct {
+	AgentID       string `json:"agent_id"`
+	TaskID        string `json:"task_id"`
+	TaskTitle     string `json:"task_title,omitempty"`
+	RunID         string `json:"run_id"`
+	SessionID     string `json:"session_id"`
+	UpperDir      string `json:"upper_dir"`
+	LowerDir      string `json:"lower_dir"`
+	WorkDir       string `json:"work_dir"`
+	MergedDir     string `json:"merged_dir"`
+	InterruptedAt int64  `json:"interrupted_at"`
+}
+
+// handleGetResumableAgents returns agents that can be resumed after daemon restart
+func (s *Server) handleGetResumableAgents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.daemon == nil {
+		http.Error(w, "Daemon not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Get resumable overlays from daemon
+	overlays, err := s.daemon.GetResumableOverlays(r.Context())
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get resumable agents: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Convert to wire format
+	agents := make([]ResumableAgentInfo, 0, len(overlays))
+	for _, o := range overlays {
+		info := ResumableAgentInfo{
+			AgentID:       o.Agent.ID,
+			TaskID:        o.Agent.TaskID,
+			TaskTitle:     o.Agent.TaskTitle,
+			RunID:         o.Agent.RunID,
+			SessionID:     o.Overlay.SessionID,
+			UpperDir:      o.Overlay.UpperDir,
+			LowerDir:      o.Overlay.LowerDir,
+			WorkDir:       o.Overlay.WorkDir,
+			MergedDir:     o.Overlay.MergedDir,
+			InterruptedAt: o.InterruptedAt.Unix(),
+		}
+		agents = append(agents, info)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(agents); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to encode resumable agents: %v", err), http.StatusInternalServerError)
+		return
 	}
 }
 
