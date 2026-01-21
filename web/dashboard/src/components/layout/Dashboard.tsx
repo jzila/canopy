@@ -9,12 +9,15 @@ import { DashboardHeader } from './DashboardHeader';
 import { TerminalPanel } from './TerminalPanel';
 import { AgentGrid } from '../agents/AgentGrid';
 import { RunConfigDialog } from '../runs/RunConfigDialog';
+import { RulesPanel } from '../rules/RulesPanel';
 
 const SHOW_ARCHIVED_AGENTS_KEY = 'canopy-show-archived-agents';
 const SHOW_COMPLETED_BEADS_KEY = 'canopy-show-completed-beads';
 
 export const Dashboard: React.FC = () => {
-  const { connected } = useWebSocket();
+  // Initialize WebSocket connection
+  useWebSocket();
+  const connected = useStateStore((state) => state.connected);
 
   // Orchestrator control state
   const [isPauseLoading, setIsPauseLoading] = useState(false);
@@ -60,10 +63,29 @@ export const Dashboard: React.FC = () => {
     maxWidthRatio: 0.5,
   });
 
+  // Rules pane state
+  const [rulesPaneExpanded, setRulesPaneExpanded] = useState(() => {
+    const saved = localStorage.getItem('rulesPaneExpanded');
+    return saved !== null ? saved === 'true' : false;
+  });
+
+  // Resizable rules pane width
+  const { width: rulesPaneWidth, isResizing: isRulesResizing, handleResizeStart: handleRulesResizeStart } = useResizableWidth({
+    storageKey: 'rulesPaneWidth',
+    defaultWidth: 280,
+    minWidth: 200,
+    maxWidthRatio: 0.4,
+  });
+
   // Persist beads pane state
   useEffect(() => {
     localStorage.setItem('beadsPaneExpanded', String(beadsPaneExpanded));
   }, [beadsPaneExpanded]);
+
+  // Persist rules pane state
+  useEffect(() => {
+    localStorage.setItem('rulesPaneExpanded', String(rulesPaneExpanded));
+  }, [rulesPaneExpanded]);
 
   // Persist show completed beads state
   useEffect(() => {
@@ -370,36 +392,47 @@ export const Dashboard: React.FC = () => {
 
         {/* Main Content */}
         <main className="flex-1 flex flex-col overflow-hidden">
-          {/* Agent Grid */}
-          <div className="flex-1 overflow-y-auto p-8">
-            <AgentGrid
-              groupedAgents={groupedAgents}
-              totalAgentCount={totalAgentCount}
-              statusFilter={statusFilter}
-              onStatusFilterChange={setStatusFilter}
-              stats={stats}
-              showArchivedAgents={showArchivedAgents}
-              archivedAgentCount={archivedCount}
-              onToggleShowArchived={() => setShowArchivedAgents(!showArchivedAgents)}
-              selectedAgentId={selectedAgentId}
-              onSelectAgent={handleSelectAgent}
-              onArchiveToggle={handleAgentArchiveToggle}
-              selectedBeadId={selectedBeadId}
-              selectedBeadTitle={selectedBeadId ? tasks[selectedBeadId]?.title : undefined}
-              onClearBeadFilter={() => setSelectedBead(null)}
-              isPaused={isPaused}
-              isPausedByAgent={isPausedByAgent}
-              pauseState={pauseState}
-              isPauseLoading={isPauseLoading}
-              isResumeLoading={isResumeLoading}
-              currentRunId={currentRunId}
-              connected={connected}
-              onPause={handlePause}
-              onResume={handleResume}
-              isStartingRun={isStartingRun}
-              isStoppingRun={isStoppingRun}
-              onStartRun={handleOpenRunConfig}
-              onStopRun={handleStopRun}
+          <div className="flex-1 flex overflow-hidden">
+            {/* Agent Grid */}
+            <div className="flex-1 overflow-y-auto p-8">
+              <AgentGrid
+                groupedAgents={groupedAgents}
+                totalAgentCount={totalAgentCount}
+                statusFilter={statusFilter}
+                onStatusFilterChange={setStatusFilter}
+                stats={stats}
+                showArchivedAgents={showArchivedAgents}
+                archivedAgentCount={archivedCount}
+                onToggleShowArchived={() => setShowArchivedAgents(!showArchivedAgents)}
+                selectedAgentId={selectedAgentId}
+                onSelectAgent={handleSelectAgent}
+                onArchiveToggle={handleAgentArchiveToggle}
+                selectedBeadId={selectedBeadId}
+                selectedBeadTitle={selectedBeadId ? tasks[selectedBeadId]?.title : undefined}
+                onClearBeadFilter={() => setSelectedBead(null)}
+                isPaused={isPaused}
+                isPausedByAgent={isPausedByAgent}
+                pauseState={pauseState}
+                isPauseLoading={isPauseLoading}
+                isResumeLoading={isResumeLoading}
+                currentRunId={currentRunId}
+                connected={connected}
+                onPause={handlePause}
+                onResume={handleResume}
+                isStartingRun={isStartingRun}
+                isStoppingRun={isStoppingRun}
+                onStartRun={handleOpenRunConfig}
+                onStopRun={handleStopRun}
+              />
+            </div>
+
+            {/* Rules Panel (Right Side) */}
+            <RulesPanel
+              isExpanded={rulesPaneExpanded}
+              onToggle={() => setRulesPaneExpanded(!rulesPaneExpanded)}
+              width={rulesPaneWidth}
+              isResizing={isRulesResizing}
+              onResizeStart={handleRulesResizeStart}
             />
           </div>
 

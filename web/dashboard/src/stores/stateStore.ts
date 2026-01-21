@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Repository, MergeQueueState, Run, ActiveRunStatus, StartRunRequest } from '../api/client';
+import type { Repository, MergeQueueState, Run, ActiveRunStatus, StartRunRequest, ConfigRulesSettings, RuntimeRule } from '../api/client';
 
 // Types based on Go backend structures
 
@@ -190,6 +190,12 @@ interface StateStore {
   runConfig: RunConfig;
   showRunConfigDialog: boolean;
   activeOrchestratorRun: ActiveRunStatus | null; // Currently running orchestrator run
+  // Rules state
+  configRules: ConfigRulesSettings | null;
+  customRules: RuntimeRule[];
+  runtimeRules: RuntimeRule[];
+  isRulesLoading: boolean;
+  showAddRuleDialog: boolean;
 
   // Actions
   setConnected: (connected: boolean) => void;
@@ -240,6 +246,14 @@ interface StateStore {
   setShowRunConfigDialog: (show: boolean) => void;
   setActiveOrchestratorRun: (run: ActiveRunStatus | null) => void;
   updateActiveOrchestratorRun: (update: Partial<ActiveRunStatus>) => void;
+  // Rules actions
+  setRulesState: (configRules: ConfigRulesSettings | null, customRules: RuntimeRule[], runtimeRules: RuntimeRule[]) => void;
+  setRulesLoading: (loading: boolean) => void;
+  setShowAddRuleDialog: (show: boolean) => void;
+  addRuntimeRule: (rule: RuntimeRule) => void;
+  updateRuntimeRule: (name: string, enabled: boolean) => void;
+  removeRuntimeRule: (name: string) => void;
+  updateConfigRules: (configRules: ConfigRulesSettings) => void;
 }
 
 // Initial stats
@@ -328,6 +342,12 @@ export const useStateStore = create<StateStore>((set) => ({
   runConfig: DEFAULT_RUN_CONFIG,
   showRunConfigDialog: false,
   activeOrchestratorRun: null,
+  // Rules state
+  configRules: null,
+  customRules: [],
+  runtimeRules: [],
+  isRulesLoading: false,
+  showAddRuleDialog: false,
 
   // Actions
   setConnected: (connected) => set({ connected }),
@@ -613,4 +633,43 @@ export const useStateStore = create<StateStore>((set) => ({
         activeOrchestratorRun: { ...state.activeOrchestratorRun, ...update },
       };
     }),
+
+  // Rules actions
+  setRulesState: (configRules, customRules, runtimeRules) =>
+    set({ configRules, customRules, runtimeRules }),
+
+  setRulesLoading: (isRulesLoading) => set({ isRulesLoading }),
+
+  setShowAddRuleDialog: (showAddRuleDialog) => set({ showAddRuleDialog }),
+
+  addRuntimeRule: (rule) =>
+    set((state) => ({
+      runtimeRules: [...state.runtimeRules, rule],
+    })),
+
+  updateRuntimeRule: (name, enabled) =>
+    set((state) => {
+      // Check if it's a runtime rule
+      const runtimeIndex = state.runtimeRules.findIndex((r) => r.name === name);
+      if (runtimeIndex !== -1) {
+        const newRules = [...state.runtimeRules];
+        newRules[runtimeIndex] = { ...newRules[runtimeIndex]!, enabled };
+        return { runtimeRules: newRules };
+      }
+      // Check if it's a custom (config) rule
+      const customIndex = state.customRules.findIndex((r) => r.name === name);
+      if (customIndex !== -1) {
+        const newRules = [...state.customRules];
+        newRules[customIndex] = { ...newRules[customIndex]!, enabled };
+        return { customRules: newRules };
+      }
+      return state;
+    }),
+
+  removeRuntimeRule: (name) =>
+    set((state) => ({
+      runtimeRules: state.runtimeRules.filter((r) => r.name !== name),
+    })),
+
+  updateConfigRules: (configRules) => set({ configRules }),
 }));
