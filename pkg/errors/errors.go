@@ -52,6 +52,10 @@ var (
 
 	// ErrSandboxNotSupported indicates sandboxing is not supported on this platform.
 	ErrSandboxNotSupported = errors.New("sandbox not supported on this platform")
+
+	// ErrDirtyWorkingDirectory indicates the working directory has uncommitted changes
+	// when it should be clean. This is a critical error that indicates merge cleanup failed.
+	ErrDirtyWorkingDirectory = errors.New("dirty working directory")
 )
 
 // MergeError provides detailed information about merge failures.

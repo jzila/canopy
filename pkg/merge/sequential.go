@@ -392,8 +392,15 @@ func (m *SequentialMerger) MergeSingle(result *agent.Result, opts *MergeOptions)
 			if err != nil {
 				// Commit failed - reset working directory to clean HEAD state
 				// This prevents partial changes from affecting subsequent operations
-				if resetErr := m.resetToHead(headCommit, paths); resetErr != nil && m.verbose {
-					fmt.Fprintf(os.Stderr, "warning: failed to reset working directory after merge failure: %v\n", resetErr)
+				if resetErr := m.resetToHead(headCommit, paths); resetErr != nil {
+					// Cleanup failure is a CRITICAL error - we cannot continue with dirty state
+					// Return the error rather than just recording it, so the caller knows
+					// the merge queue must stop
+					mergeResult.Errors = append(mergeResult.Errors,
+						fmt.Sprintf("CRITICAL: failed to clean working directory after merge failure for %s: %v (original error: %v)",
+							result.TaskID, resetErr, err))
+					return mergeResult, fmt.Errorf("failed to clean working directory after merge failure: %w: original error: %v",
+						resetErr, err)
 				}
 				mergeResult.Errors = append(mergeResult.Errors,
 					fmt.Sprintf("failed to commit changes from %s: %v", result.TaskID, err))
@@ -431,9 +438,80 @@ func (m *SequentialMerger) getCurrentHead() (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// isWorkingDirectoryClean checks if the working directory has no uncommitted changes
+// for the specified paths. Returns true if clean, false if dirty.
+func (m *SequentialMerger) isWorkingDirectoryClean(paths []string) (bool, error) {
+	if len(paths) == 0 {
+		return true, nil
+	}
+
+	// Use git status --porcelain to check for changes
+	// Returns non-empty output if there are changes
+	cmd := exec.Command("git", "status", "--porcelain", "--")
+	cmd.Args = append(cmd.Args, paths...)
+	cmd.Dir = m.outputDir
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return false, fmt.Errorf("git status failed: %w: %s", err, stderr.String())
+	}
+
+	// Empty output means clean
+	return strings.TrimSpace(stdout.String()) == "", nil
+}
+
 // resetToHead restores the working directory to a clean HEAD state.
 // This is called when merge fails to ensure no partial changes remain.
+// It performs soft reset first, then verifies the state is clean.
+// If soft reset fails, it falls back to a hard reset.
+// Returns an error if the working directory cannot be cleaned.
 func (m *SequentialMerger) resetToHead(headCommit string, paths []string) error {
+	// First, try soft reset: reset staged changes and checkout files
+	softResetErr := m.softResetToHead(headCommit, paths)
+
+	// Verify the working directory is actually clean after soft reset
+	if softResetErr == nil {
+		clean, checkErr := m.isWorkingDirectoryClean(paths)
+		if checkErr != nil {
+			if m.verbose {
+				fmt.Fprintf(os.Stderr, "warning: failed to verify working directory state: %v\n", checkErr)
+			}
+			// Fall through to hard reset
+		} else if clean {
+			return nil // Success - working directory is clean
+		}
+		// Soft reset didn't fully clean the working directory
+		if m.verbose {
+			fmt.Fprintf(os.Stderr, "warning: soft reset did not fully clean working directory, falling back to hard reset\n")
+		}
+	} else if m.verbose {
+		fmt.Fprintf(os.Stderr, "warning: soft reset failed: %v, falling back to hard reset\n", softResetErr)
+	}
+
+	// Fallback: hard reset to HEAD
+	hardResetErr := m.hardResetToHead(headCommit)
+	if hardResetErr != nil {
+		return fmt.Errorf("failed to clean working directory: soft reset: %v, hard reset: %w", softResetErr, hardResetErr)
+	}
+
+	// Final verification after hard reset
+	clean, checkErr := m.isWorkingDirectoryClean(paths)
+	if checkErr != nil {
+		return fmt.Errorf("hard reset succeeded but failed to verify clean state: %w", checkErr)
+	}
+	if !clean {
+		return fmt.Errorf("hard reset completed but working directory still has uncommitted changes")
+	}
+
+	return nil
+}
+
+// softResetToHead performs a targeted reset of specific paths.
+// This preserves changes to other files while cleaning up the failed merge.
+func (m *SequentialMerger) softResetToHead(headCommit string, paths []string) error {
 	// First, reset any staged changes
 	resetCmd := exec.Command("git", "reset", "HEAD", "--")
 	resetCmd.Args = append(resetCmd.Args, paths...)
@@ -458,6 +536,19 @@ func (m *SequentialMerger) resetToHead(headCommit string, paths []string) error 
 		return fmt.Errorf("git checkout failed: %w: %s", err, checkoutStderr.String())
 	}
 
+	return nil
+}
+
+// hardResetToHead performs a git reset --hard to HEAD.
+// This is a fallback when soft reset fails - it discards ALL uncommitted changes.
+func (m *SequentialMerger) hardResetToHead(headCommit string) error {
+	cmd := exec.Command("git", "reset", "--hard", headCommit)
+	cmd.Dir = m.outputDir
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("git reset --hard failed: %w: %s", err, stderr.String())
+	}
 	return nil
 }
 

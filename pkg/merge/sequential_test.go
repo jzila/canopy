@@ -721,6 +721,172 @@ node_modules/
 	}
 }
 
+func TestIsWorkingDirectoryClean(t *testing.T) {
+	// Create a temp git repo
+	tempDir := t.TempDir()
+	initGitRepo(t, tempDir)
+
+	merger := NewSequentialMerger(tempDir, tempDir, true)
+
+	// Initially clean
+	clean, err := merger.isWorkingDirectoryClean([]string{"README.md"})
+	if err != nil {
+		t.Fatalf("isWorkingDirectoryClean failed: %v", err)
+	}
+	if !clean {
+		t.Error("Expected working directory to be clean initially")
+	}
+
+	// Create an untracked file
+	newFile := filepath.Join(tempDir, "new.txt")
+	if err := os.WriteFile(newFile, []byte("new content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Check clean for untracked file - git status --porcelain shows ?? for untracked
+	clean, err = merger.isWorkingDirectoryClean([]string{"new.txt"})
+	if err != nil {
+		t.Fatalf("isWorkingDirectoryClean failed: %v", err)
+	}
+	if clean {
+		t.Error("Expected working directory to be dirty with untracked file")
+	}
+
+	// Check clean for existing tracked file (should still be clean)
+	clean, err = merger.isWorkingDirectoryClean([]string{"README.md"})
+	if err != nil {
+		t.Fatalf("isWorkingDirectoryClean failed: %v", err)
+	}
+	if !clean {
+		t.Error("Expected README.md to be clean")
+	}
+
+	// Modify a tracked file
+	readmeFile := filepath.Join(tempDir, "README.md")
+	if err := os.WriteFile(readmeFile, []byte("modified content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Check clean for modified file
+	clean, err = merger.isWorkingDirectoryClean([]string{"README.md"})
+	if err != nil {
+		t.Fatalf("isWorkingDirectoryClean failed: %v", err)
+	}
+	if clean {
+		t.Error("Expected working directory to be dirty with modified file")
+	}
+
+	// Empty paths should return clean
+	clean, err = merger.isWorkingDirectoryClean([]string{})
+	if err != nil {
+		t.Fatalf("isWorkingDirectoryClean failed: %v", err)
+	}
+	if !clean {
+		t.Error("Expected empty paths to be considered clean")
+	}
+}
+
+func TestHardResetToHead(t *testing.T) {
+	// Create a temp git repo
+	tempDir := t.TempDir()
+	initGitRepo(t, tempDir)
+
+	// Create a file and commit it
+	testFile := filepath.Join(tempDir, "test.txt")
+	if err := os.WriteFile(testFile, []byte("original"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, tempDir, "add", "test.txt")
+	runGit(t, tempDir, "commit", "-m", "add test file")
+
+	// Get HEAD
+	merger := NewSequentialMerger(tempDir, tempDir, true)
+	head, err := merger.getCurrentHead()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Modify the file and stage it
+	if err := os.WriteFile(testFile, []byte("modified"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, tempDir, "add", "test.txt")
+
+	// Create a new untracked file
+	newFile := filepath.Join(tempDir, "new.txt")
+	if err := os.WriteFile(newFile, []byte("new file"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Hard reset to HEAD
+	err = merger.hardResetToHead(head)
+	if err != nil {
+		t.Fatalf("hardResetToHead failed: %v", err)
+	}
+
+	// Verify tracked file was restored
+	content, _ := os.ReadFile(testFile)
+	if string(content) != "original" {
+		t.Errorf("File should be restored to 'original', got: %s", content)
+	}
+
+	// Note: untracked files are NOT removed by git reset --hard
+	// (this is expected git behavior)
+	if _, err := os.Stat(newFile); os.IsNotExist(err) {
+		t.Error("Untracked file should still exist after hard reset")
+	}
+}
+
+func TestResetToHeadWithVerification(t *testing.T) {
+	// Create a temp git repo
+	tempDir := t.TempDir()
+	initGitRepo(t, tempDir)
+
+	// Create a file and commit it
+	testFile := filepath.Join(tempDir, "test.txt")
+	if err := os.WriteFile(testFile, []byte("original"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, tempDir, "add", "test.txt")
+	runGit(t, tempDir, "commit", "-m", "add test file")
+
+	// Get HEAD
+	merger := NewSequentialMerger(tempDir, tempDir, true)
+	head, err := merger.getCurrentHead()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Modify the file (simulating failed merge)
+	if err := os.WriteFile(testFile, []byte("modified"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Stage the change (simulating partial commit)
+	runGit(t, tempDir, "add", "test.txt")
+
+	// Reset should clean up both staged and unstaged changes
+	err = merger.resetToHead(head, []string{"test.txt"})
+	if err != nil {
+		t.Fatalf("resetToHead failed: %v", err)
+	}
+
+	// Verify file was restored
+	content, _ := os.ReadFile(testFile)
+	if string(content) != "original" {
+		t.Errorf("File should be restored to 'original', got: %s", content)
+	}
+
+	// Verify working directory is actually clean
+	clean, err := merger.isWorkingDirectoryClean([]string{"test.txt"})
+	if err != nil {
+		t.Fatalf("isWorkingDirectoryClean failed: %v", err)
+	}
+	if !clean {
+		t.Error("Expected working directory to be clean after reset")
+	}
+}
+
 func TestMergeSingleWithGitignored(t *testing.T) {
 	// Create a temp git repo with .gitignore
 	tempDir := t.TempDir()
