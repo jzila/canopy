@@ -34,11 +34,18 @@ func NewRemoteClient(addr string) *RemoteClient {
 	baseURL := normalizeAddr(addr)
 	wsURL := httpToWS(baseURL)
 
+	state := daemon.NewRuntimeState()
+	eventBus := events.NewEventBus()
+
+	// Subscribe state to eventBus so WebSocket events update the state
+	// This mirrors what daemon.go does for in-process mode
+	_ = state.SubscribeToEventBus(eventBus)
+
 	return &RemoteClient{
 		baseURL:  baseURL,
 		wsURL:    wsURL,
-		state:    daemon.NewRuntimeState(),
-		eventBus: events.NewEventBus(),
+		state:    state,
+		eventBus: eventBus,
 		done:     make(chan struct{}),
 	}
 }
