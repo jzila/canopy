@@ -12,6 +12,7 @@ import (
 
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
+	cfgpkg "github.com/jzila/canopy/pkg/config"
 	"github.com/jzila/canopy/pkg/ipc"
 	"github.com/jzila/canopy/pkg/mergecoordinator"
 	"github.com/jzila/canopy/pkg/sandbox"
@@ -83,6 +84,7 @@ type Config struct {
 	MaxRetries      int           // Maximum number of times to retry failed tasks (0 = no retries, -1 = infinite)
 	MaxPriority     int           // Hard filter: only run tasks with priority <= this value (-1 = no filter)
 	ResolverTimeout time.Duration // Timeout for resolver agents (0 = use default 10m)
+	Rules           *cfgpkg.RulesSettings // Task selection rules from config (nil = use MaxPriority only)
 }
 
 // Orchestrator coordinates the execution of tasks from beads
@@ -95,6 +97,7 @@ type Orchestrator struct {
 	callbackManager  *CallbackManager
 	failureCounts    map[string]int // Tracks how many times each task has failed
 	sandboxConfig    *sandbox.SandboxConfig
+	taskFilter       *cfgpkg.TaskFilter // Task filter from rules settings
 
 	// In-flight task tracking for dynamic task assignment
 	inFlightMu sync.RWMutex
@@ -171,6 +174,12 @@ func New(config *Config) (*Orchestrator, error) {
 		return nil, fmt.Errorf("failed to create merge coordinator: %w", err)
 	}
 
+	// Create task filter from rules settings
+	var taskFilter *cfgpkg.TaskFilter
+	if config.Rules != nil {
+		taskFilter = cfgpkg.NewTaskFilter(config.Rules)
+	}
+
 	o := &Orchestrator{
 		config:           config,
 		beadsClient:      beadsClient,
@@ -180,6 +189,7 @@ func New(config *Config) (*Orchestrator, error) {
 		callbackManager:  NewCallbackManager(),
 		failureCounts:    make(map[string]int),
 		sandboxConfig:    sandboxConfig,
+		taskFilter:       taskFilter,
 		inFlight:         make(map[string]bool),
 	}
 
@@ -484,12 +494,13 @@ func (o *Orchestrator) dryRun(ctx context.Context) error {
 		return fmt.Errorf("failed to get ready tasks: %w", err)
 	}
 
-	// Apply hard max-priority filter
-	if o.config.MaxPriority >= 0 {
-		tasks = filterTasksByMaxPriority(tasks, o.config.MaxPriority)
-		if o.config.Verbose {
-			fmt.Printf("After max-priority filter (<= P%d): %d tasks\n", o.config.MaxPriority, len(tasks))
-		}
+	beforeCount := len(tasks)
+
+	// Apply task filtering rules
+	tasks = o.filterTasks(tasks)
+
+	if o.config.Verbose && len(tasks) != beforeCount {
+		fmt.Printf("After rules filter: %d tasks (from %d ready)\n", len(tasks), beforeCount)
 	}
 
 	if len(tasks) == 0 {
@@ -516,6 +527,7 @@ func (o *Orchestrator) GetScheduler() *scheduler.Scheduler {
 
 // filterTasksByMaxPriority filters tasks to only include those with priority <= maxPriority.
 // This is a hard filter applied after fetching tasks from beads.
+// Deprecated: Use TaskFilter.FilterTasks() instead for full rules support.
 func filterTasksByMaxPriority(tasks []beads.Task, maxPriority int) []beads.Task {
 	if maxPriority < 0 {
 		return tasks
@@ -528,6 +540,18 @@ func filterTasksByMaxPriority(tasks []beads.Task, maxPriority int) []beads.Task 
 		}
 	}
 	return filtered
+}
+
+// filterTasks applies configured rules to filter tasks.
+// If task filter is configured, uses full rules; otherwise falls back to maxPriority.
+func (o *Orchestrator) filterTasks(tasks []beads.Task) []beads.Task {
+	// If we have a task filter, use it
+	if o.taskFilter != nil {
+		return o.taskFilter.FilterTasks(tasks)
+	}
+
+	// Fall back to simple maxPriority filter for backward compatibility
+	return filterTasksByMaxPriority(tasks, o.config.MaxPriority)
 }
 
 // markInFlight marks a task as currently in-flight
@@ -561,10 +585,8 @@ func (o *Orchestrator) getNextTask(ctx context.Context) (*beads.Task, bool, erro
 		return nil, false, fmt.Errorf("failed to get ready tasks: %w", err)
 	}
 
-	// Apply hard max-priority filter
-	if o.config.MaxPriority >= 0 {
-		tasks = filterTasksByMaxPriority(tasks, o.config.MaxPriority)
-	}
+	// Apply task filtering rules
+	tasks = o.filterTasks(tasks)
 
 	// Filter out in-flight tasks and find the first available one
 	o.inFlightMu.Lock()

@@ -27,14 +27,19 @@ import (
 )
 
 var (
-	concurrency     int
-	outputDir       string
-	dryRun          bool
-	useSandbox      bool
-	maxRetries      int
-	maxPriority     int
-	resolverTimeout time.Duration
-	resumeAgents    bool
+	concurrency      int
+	outputDir        string
+	dryRun           bool
+	useSandbox       bool
+	maxRetries       int
+	maxPriority      int
+	resolverTimeout  time.Duration
+	resumeAgents     bool
+	filterTypes      []string
+	excludeTypes     []string
+	filterLabels     []string
+	excludeLabels    []string
+	filterAssignee   string
 )
 
 var runCmd = &cobra.Command{
@@ -74,8 +79,15 @@ SECURITY
   - Only /workspace writable
 
 TASK SELECTION
-  Canopy uses explicit filters for task selection (no natural language parsing):
+  Canopy uses explicit filters for task selection (no natural language parsing).
+
+  CLI flags override settings in .canopy/config.toml [rules] section:
   - --max-priority: Only run tasks with priority <= this value (0-4)
+  - --type: Only run tasks of these types (comma-separated: bug,task,feature,chore)
+  - --exclude-type: Exclude tasks of these types (comma-separated)
+  - --label: Only run tasks with these labels (comma-separated)
+  - --exclude-label: Exclude tasks with these labels (comma-separated)
+  - --assignee: Filter by assignee ("" = unassigned, "*" = any, name = exact match)
 
 Example:
   # Run with default settings (auto-starts daemon if needed)
@@ -97,6 +109,18 @@ Example:
   canopy run --max-priority 2   # Only P0, P1, P2 tasks (excludes P3, P4)
   canopy run --max-priority 0   # Only P0 tasks (critical only)
 
+  # Filter by type
+  canopy run --type bug,task        # Only bugs and tasks
+  canopy run --exclude-type epic    # Exclude epics
+
+  # Filter by labels
+  canopy run --label frontend       # Only tasks with frontend label
+  canopy run --exclude-label wip    # Exclude work-in-progress tasks
+
+  # Filter by assignee
+  canopy run --assignee john        # Only tasks assigned to john
+  canopy run --assignee ""          # Only unassigned tasks
+
   # Set resolver timeout for conflict resolution
   canopy run --resolver-timeout 15m   # 15 minute timeout (default: 10m)
   canopy run --resolver-timeout 30m   # 30 minute timeout for complex conflicts
@@ -115,6 +139,13 @@ func init() {
 	runCmd.Flags().IntVar(&maxPriority, "max-priority", -1, "Hard filter: only run tasks with priority <= this value (0-4, -1=no filter)")
 	runCmd.Flags().DurationVar(&resolverTimeout, "resolver-timeout", 0, "Timeout for resolver agents when resolving merge conflicts (e.g., 10m, 15m, 1h). Default: 10m. Set from CANOPY_RESOLVER_TIMEOUT env var if not specified.")
 	runCmd.Flags().BoolVar(&resumeAgents, "resume", false, "Resume agents that were interrupted by daemon restart")
+
+	// Task selection filters (override config.toml [rules] section)
+	runCmd.Flags().StringSliceVar(&filterTypes, "type", nil, "Only run tasks of these types (comma-separated: bug,task,feature,chore,epic)")
+	runCmd.Flags().StringSliceVar(&excludeTypes, "exclude-type", nil, "Exclude tasks of these types (comma-separated)")
+	runCmd.Flags().StringSliceVar(&filterLabels, "label", nil, "Only run tasks with these labels (comma-separated)")
+	runCmd.Flags().StringSliceVar(&excludeLabels, "exclude-label", nil, "Exclude tasks with these labels (comma-separated)")
+	runCmd.Flags().StringVar(&filterAssignee, "assignee", "", "Filter by assignee (\"\" = unassigned only, \"*\" = any, name = exact match)")
 
 	rootCmd.AddCommand(runCmd)
 }
@@ -246,6 +277,10 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Build rules settings from config and CLI flags
+	// CLI flags override config file settings
+	rules := buildRulesSettings(absWorkdir, cmd, verbose)
+
 	// Create and run orchestrator
 	orch, err = orchestrator.New(&orchestrator.Config{
 		WorkDir:         absWorkdir,
@@ -257,6 +292,7 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		MaxRetries:      maxRetries,
 		MaxPriority:     maxPriority,
 		ResolverTimeout: effectiveResolverTimeout,
+		Rules:           rules,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create orchestrator: %w", err)
@@ -616,5 +652,61 @@ func resumeInterruptedAgents(ctx context.Context, workDir string, useBwrap, verb
 	}
 
 	return resumed, errors
+}
+
+// buildRulesSettings builds task selection rules from config file and CLI flags.
+// CLI flags take precedence over config file settings.
+func buildRulesSettings(workDir string, cmd *cobra.Command, verbose bool) *config.RulesSettings {
+	// Start with rules from config file
+	cfg, err := config.LoadConfig(workDir)
+	var rules config.RulesSettings
+	if err != nil {
+		if verbose {
+			fmt.Fprintf(os.Stderr, "warning: failed to load config for rules: %v\n", err)
+		}
+		rules = config.DefaultRulesSettings()
+	} else {
+		rules = cfg.Rules
+	}
+
+	// CLI flags override config settings
+
+	// maxPriority flag overrides config priority_max
+	if cmd.Flags().Changed("max-priority") {
+		rules.PriorityMax = maxPriority
+	}
+
+	// --type flag overrides config types
+	if cmd.Flags().Changed("type") {
+		rules.Types = filterTypes
+	}
+
+	// --exclude-type flag overrides config exclude_types
+	if cmd.Flags().Changed("exclude-type") {
+		rules.ExcludeTypes = excludeTypes
+	}
+
+	// --label flag overrides config labels
+	if cmd.Flags().Changed("label") {
+		rules.Labels = filterLabels
+	}
+
+	// --exclude-label flag overrides config exclude_labels
+	if cmd.Flags().Changed("exclude-label") {
+		rules.ExcludeLabels = excludeLabels
+	}
+
+	// --assignee flag overrides config assignee
+	if cmd.Flags().Changed("assignee") {
+		rules.Assignee = filterAssignee
+	}
+
+	// Validate the built rules
+	if errs := rules.Validate(); len(errs) > 0 {
+		fmt.Fprintf(os.Stderr, "warning: invalid rules configuration: %v\n", errs)
+		// Continue with potentially invalid rules - let the filter handle it gracefully
+	}
+
+	return &rules
 }
 
