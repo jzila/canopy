@@ -440,6 +440,9 @@ func (s *Server) convertToEvent(msg *Message) *events.Event {
 		if payload.ParentAgentID != "" {
 			eventPayload["parent_agent_id"] = payload.ParentAgentID
 		}
+		if payload.Result.SessionID != "" {
+			eventPayload["session_id"] = payload.Result.SessionID
+		}
 		return &events.Event{
 			Type:      events.EventAgentCompleted,
 			Timestamp: msg.Timestamp,
@@ -470,6 +473,9 @@ func (s *Server) convertToEvent(msg *Message) *events.Event {
 		}
 		if payload.ParentAgentID != "" {
 			eventPayload["parent_agent_id"] = payload.ParentAgentID
+		}
+		if payload.Result.SessionID != "" {
+			eventPayload["session_id"] = payload.Result.SessionID
 		}
 		return &events.Event{
 			Type:      events.EventAgentCompleted,
