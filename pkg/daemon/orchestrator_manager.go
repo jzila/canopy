@@ -10,7 +10,6 @@ import (
 
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
-	"github.com/jzila/canopy/pkg/errors"
 	"github.com/jzila/canopy/pkg/events"
 	"github.com/jzila/canopy/pkg/logging"
 	"github.com/jzila/canopy/pkg/orchestrator"
@@ -97,23 +96,9 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 		return "", fmt.Errorf("work_dir is required")
 	}
 
-	// Acquire lock to ensure atomicity of check-and-set for singleton enforcement
-	m.mu.Lock()
-
 	// Check if there's already a run for this repo
 	if existingRunID, loaded := m.runsByRepo.Load(config.WorkDir); loaded {
-		// Get the existing run's start time for the error message
-		var startedAt time.Time
-		if runStateI, ok := m.runs.Load(existingRunID); ok {
-			runState := runStateI.(*RunState)
-			startedAt = runState.StartTime
-		}
-		m.mu.Unlock()
-		return "", &errors.RunActiveError{
-			RepoPath:  config.WorkDir,
-			RunID:     existingRunID.(string),
-			StartedAt: startedAt,
-		}
+		return "", fmt.Errorf("run already active for repository %s (run ID: %s)", config.WorkDir, existingRunID)
 	}
 
 	// Apply defaults
@@ -133,13 +118,6 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 	// Generate run ID
 	runID := uuid.New().String()
 
-	// Reserve the repo slot before doing expensive work (orchestrator creation)
-	// This prevents races where two callers both pass the check, then both try to store.
-	m.runsByRepo.Store(config.WorkDir, runID)
-
-	// Release the lock now - we've secured our slot
-	m.mu.Unlock()
-
 	// Create orchestrator config
 	orchConfig := &orchestrator.Config{
 		WorkDir:         config.WorkDir,
@@ -156,8 +134,6 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 	// Create orchestrator
 	orch, err := orchestrator.New(orchConfig)
 	if err != nil {
-		// Clean up the reservation since we failed
-		m.runsByRepo.Delete(config.WorkDir)
 		return "", fmt.Errorf("failed to create orchestrator: %w", err)
 	}
 
@@ -186,8 +162,9 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 		orch.SetRepoID(config.RepoID)
 	}
 
-	// Store run state (repo slot was already reserved above)
+	// Store run state
 	m.runs.Store(runID, runState)
+	m.runsByRepo.Store(config.WorkDir, runID)
 
 	// Get initial ready tasks count
 	beadsClient, err := beads.NewClient(config.WorkDir)
@@ -311,6 +288,63 @@ func (m *OrchestratorManager) GetActiveRunForRepo(repoPath string) (*RunState, e
 	}
 
 	return m.GetRunStatus(runIDI.(string))
+}
+
+// UpdateRunConfig updates the configuration of a running orchestration.
+// Supports modifying concurrency, max priority filter, and pause state.
+// Returns an error if the run is not found or not active.
+func (m *OrchestratorManager) UpdateRunConfig(runID string, concurrency *int, maxPriority *int, paused *bool) error {
+	runStateI, ok := m.runs.Load(runID)
+	if !ok {
+		return fmt.Errorf("run not found: %s", runID)
+	}
+
+	runState := runStateI.(*RunState)
+
+	runState.mu.Lock()
+	defer runState.mu.Unlock()
+
+	if runState.Status != RunStatusRunning && runState.Status != RunStatusPending {
+		return fmt.Errorf("run %s is not active (status: %s)", runID, runState.Status)
+	}
+
+	// Update concurrency if specified
+	if concurrency != nil && *concurrency > 0 {
+		runState.Config.Concurrency = *concurrency
+		// Update the orchestrator's scheduler concurrency if available
+		if runState.orch != nil {
+			sched := runState.orch.GetScheduler()
+			if sched != nil {
+				sched.SetConcurrency(*concurrency)
+			}
+		}
+		logging.Info("updated run concurrency", "run_id", runID, "concurrency", *concurrency)
+	}
+
+	// Update max priority filter if specified
+	if maxPriority != nil {
+		runState.Config.MaxPriority = *maxPriority
+		// Note: MaxPriority changes will take effect on next task selection
+		logging.Info("updated run max priority", "run_id", runID, "max_priority", *maxPriority)
+	}
+
+	// Update pause state if specified
+	if paused != nil {
+		if runState.orch != nil {
+			sched := runState.orch.GetScheduler()
+			if sched != nil {
+				if *paused {
+					sched.Pause()
+					logging.Info("paused run", "run_id", runID)
+				} else {
+					sched.Resume()
+					logging.Info("resumed run", "run_id", runID)
+				}
+			}
+		}
+	}
+
+	return nil
 }
 
 // runOrchestrator executes the orchestrator and handles completion.

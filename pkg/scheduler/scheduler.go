@@ -462,6 +462,20 @@ func (s *Scheduler) IsPaused() bool {
 	return s.paused
 }
 
+// SetConcurrency updates the scheduler's concurrency limit.
+// This affects new task executions; currently running tasks are not affected.
+func (s *Scheduler) SetConcurrency(concurrency int) {
+	if concurrency <= 0 {
+		concurrency = 4
+	}
+	s.config.Concurrency = concurrency
+}
+
+// GetConcurrency returns the current concurrency limit.
+func (s *Scheduler) GetConcurrency() int {
+	return s.config.Concurrency
+}
+
 // Kill terminates a specific agent by its task ID
 func (s *Scheduler) Kill(agentID string) error {
 	if cancelFunc, ok := s.agentContexts.Load(agentID); ok {
