@@ -138,6 +138,8 @@ type Agent struct {
 	// Repair agent tracking fields
 	RepairAttempts   int    `json:"repair_attempts"`              // Number of repair attempts made (0 = no repairs attempted)
 	LastRepairOutput string `json:"last_repair_output,omitempty"` // Output/error from the last repair attempt
+	// Session tracking for claude --resume support
+	SessionID string `json:"session_id,omitempty"` // Claude CLI session ID for resumability
 }
 
 // RunFilter specifies criteria for querying runs
@@ -338,8 +340,8 @@ func (t *Tx) CreateRun(run *Run) error {
 // the existing record is updated with the new values.
 func (t *Tx) CreateAgent(agent *Agent) error {
 	query := `
-		INSERT INTO agents (id, run_id, task_id, task_title, task_description, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived, parent_agent_id, merge_status, merge_commits_applied, merge_had_conflict, merge_resolver_spawned, merge_error, validation_status, validation_duration_ms, validation_error, validation_steps)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO agents (id, run_id, task_id, task_title, task_description, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived, parent_agent_id, merge_status, merge_commits_applied, merge_had_conflict, merge_resolver_spawned, merge_error, validation_status, validation_duration_ms, validation_error, validation_steps, session_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			run_id = excluded.run_id,
 			task_description = excluded.task_description,
@@ -370,7 +372,8 @@ func (t *Tx) CreateAgent(agent *Agent) error {
 			validation_status = excluded.validation_status,
 			validation_duration_ms = excluded.validation_duration_ms,
 			validation_error = excluded.validation_error,
-			validation_steps = excluded.validation_steps
+			validation_steps = excluded.validation_steps,
+			session_id = excluded.session_id
 	`
 	var finishedAt *int64
 	if agent.FinishedAt != nil {
@@ -413,6 +416,7 @@ func (t *Tx) CreateAgent(agent *Agent) error {
 		agent.ValidationDuration,
 		nullString(agent.ValidationError),
 		nullString(agent.ValidationSteps),
+		nullString(agent.SessionID),
 	)
 	return err
 }
@@ -649,8 +653,8 @@ func (s *Store) ListRuns(filter RunFilter) (*RunListResult, error) {
 // the existing record is updated with the new values.
 func (s *Store) CreateAgent(agent *Agent) error {
 	query := `
-		INSERT INTO agents (id, run_id, task_id, task_title, task_description, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived, parent_agent_id, merge_status, merge_commits_applied, merge_had_conflict, merge_resolver_spawned, merge_error, validation_status, validation_duration_ms, validation_error, validation_steps)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO agents (id, run_id, task_id, task_title, task_description, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived, parent_agent_id, merge_status, merge_commits_applied, merge_had_conflict, merge_resolver_spawned, merge_error, validation_status, validation_duration_ms, validation_error, validation_steps, session_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			run_id = excluded.run_id,
 			task_description = excluded.task_description,
@@ -681,7 +685,8 @@ func (s *Store) CreateAgent(agent *Agent) error {
 			validation_status = excluded.validation_status,
 			validation_duration_ms = excluded.validation_duration_ms,
 			validation_error = excluded.validation_error,
-			validation_steps = excluded.validation_steps
+			validation_steps = excluded.validation_steps,
+			session_id = excluded.session_id
 	`
 	var finishedAt *int64
 	if agent.FinishedAt != nil {
@@ -724,6 +729,7 @@ func (s *Store) CreateAgent(agent *Agent) error {
 		agent.ValidationDuration,
 		nullString(agent.ValidationError),
 		nullString(agent.ValidationSteps),
+		nullString(agent.SessionID),
 	)
 	return err
 }
@@ -768,7 +774,8 @@ func (s *Store) UpdateAgent(agent *Agent) error {
 			validation_error = ?,
 			validation_steps = ?,
 			repair_attempts = ?,
-			last_repair_output = ?
+			last_repair_output = ?,
+			session_id = ?
 		WHERE id = ?
 	`
 	var finishedAt *int64
@@ -806,6 +813,7 @@ func (s *Store) UpdateAgent(agent *Agent) error {
 		nullString(agent.ValidationSteps),
 		agent.RepairAttempts,
 		nullString(agent.LastRepairOutput),
+		nullString(agent.SessionID),
 		agent.ID,
 	)
 	return err
@@ -840,7 +848,8 @@ func (s *Store) UpdateAgentCompletion(agent *Agent) error {
 			files_changed = ?,
 			git_commits_created = ?,
 			num_turns = ?,
-			result_message = ?
+			result_message = ?,
+			session_id = ?
 		WHERE id = ?
 	`
 	var finishedAt *int64
@@ -866,6 +875,7 @@ func (s *Store) UpdateAgentCompletion(agent *Agent) error {
 		agent.GitCommitsCreated,
 		agent.NumTurns,
 		agent.ResultMessage,
+		nullString(agent.SessionID),
 		agent.ID,
 	)
 	return err
@@ -932,7 +942,7 @@ func (s *Store) UpdateAgentRepairState(agentID string, repairAttempts int, lastR
 }
 
 // agentColumns lists all columns for agent queries
-const agentColumns = `id, run_id, task_id, task_title, task_description, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived, parent_agent_id, merge_status, merge_commits_applied, merge_had_conflict, merge_resolver_spawned, merge_error, validation_status, validation_duration_ms, validation_error, validation_steps, repair_attempts, last_repair_output`
+const agentColumns = `id, run_id, task_id, task_title, task_description, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived, parent_agent_id, merge_status, merge_commits_applied, merge_had_conflict, merge_resolver_spawned, merge_error, validation_status, validation_duration_ms, validation_error, validation_steps, repair_attempts, last_repair_output, session_id`
 
 // agentColumnsWithPrefix returns the agent columns with a table alias prefix.
 // This is used for queries with JOINs to disambiguate column names.
@@ -946,7 +956,7 @@ func agentColumnsWithPrefix(prefix string) string {
 		"merge_status", "merge_commits_applied", "merge_had_conflict",
 		"merge_resolver_spawned", "merge_error",
 		"validation_status", "validation_duration_ms", "validation_error", "validation_steps",
-		"repair_attempts", "last_repair_output",
+		"repair_attempts", "last_repair_output", "session_id",
 	}
 	result := make([]string, len(cols))
 	for i, col := range cols {
@@ -1546,6 +1556,7 @@ func (s *Store) scanAgent(row *sql.Row) (*Agent, error) {
 	var validationDuration sql.NullInt64
 	var repairAttempts sql.NullInt64
 	var lastRepairOutput sql.NullString
+	var sessionID sql.NullString
 
 	err := row.Scan(
 		&agent.ID,
@@ -1585,6 +1596,7 @@ func (s *Store) scanAgent(row *sql.Row) (*Agent, error) {
 		&validationSteps,
 		&repairAttempts,
 		&lastRepairOutput,
+		&sessionID,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -1622,6 +1634,7 @@ func (s *Store) scanAgent(row *sql.Row) (*Agent, error) {
 	agent.ValidationSteps = validationSteps.String
 	agent.RepairAttempts = int(repairAttempts.Int64)
 	agent.LastRepairOutput = lastRepairOutput.String
+	agent.SessionID = sessionID.String
 
 	return &agent, nil
 }
@@ -1640,6 +1653,7 @@ func (s *Store) scanAgentFromRows(rows *sql.Rows) (*Agent, error) {
 	var validationDuration sql.NullInt64
 	var repairAttempts sql.NullInt64
 	var lastRepairOutput sql.NullString
+	var sessionID sql.NullString
 
 	err := rows.Scan(
 		&agent.ID,
@@ -1679,6 +1693,7 @@ func (s *Store) scanAgentFromRows(rows *sql.Rows) (*Agent, error) {
 		&validationSteps,
 		&repairAttempts,
 		&lastRepairOutput,
+		&sessionID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan agent: %w", err)
@@ -1713,6 +1728,7 @@ func (s *Store) scanAgentFromRows(rows *sql.Rows) (*Agent, error) {
 	agent.ValidationSteps = validationSteps.String
 	agent.RepairAttempts = int(repairAttempts.Int64)
 	agent.LastRepairOutput = lastRepairOutput.String
+	agent.SessionID = sessionID.String
 
 	return &agent, nil
 }

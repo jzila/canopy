@@ -380,6 +380,7 @@ func convertToIPCResult(result *agent.Result) *ipc.AgentResult {
 		ipcResult.DurationAPIMS = result.Output.DurationAPIMS
 		ipcResult.NumTurns = result.Output.NumTurns
 		ipcResult.ResultMessage = result.Output.ResultMessage
+		ipcResult.SessionID = result.Output.SessionID
 
 		// Convert model usage
 		if result.Output.ModelUsage != nil {

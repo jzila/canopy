@@ -291,6 +291,7 @@ func (h *PersistenceHandler) handleAgentCompleted(event Event) {
 	resultMessage, _ := payload["result_message"].(string)
 	stdout, _ := payload["stdout"].(string)
 	stderr, _ := payload["stderr"].(string)
+	sessionID, _ := payload["session_id"].(string)
 
 	finishedAt := event.Timestamp
 	agent := &persistence.Agent{
@@ -313,6 +314,7 @@ func (h *PersistenceHandler) handleAgentCompleted(event Event) {
 		GitCommitsCreated:   commitsCreated,
 		NumTurns:            numTurns,
 		ResultMessage:       resultMessage,
+		SessionID:           sessionID,
 	}
 
 	// Use UpdateAgentCompletion to preserve merge/validation/repair fields

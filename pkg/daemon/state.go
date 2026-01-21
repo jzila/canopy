@@ -433,6 +433,7 @@ type AgentState struct {
 	ValidationSteps    []ValidationStep `json:"validation_steps,omitempty"`    // Results of individual validation steps
 	ValidationDuration int64           `json:"validation_duration_ms,omitempty"` // Total validation duration in milliseconds
 	ValidationError    string          `json:"validation_error,omitempty"`     // Error message if validation failed
+	SessionID          string          `json:"session_id,omitempty"`           // Claude CLI session ID for claude --resume support
 	mu                 sync.RWMutex
 }
 
@@ -488,6 +489,7 @@ func (a *AgentState) GetSnapshot() AgentState {
 		ValidationSteps:    append([]ValidationStep(nil), a.ValidationSteps...),
 		ValidationDuration: a.ValidationDuration,
 		ValidationError:    a.ValidationError,
+		SessionID:          a.SessionID,
 		// mu is intentionally not copied
 	}
 }
@@ -1345,6 +1347,9 @@ func (r *RuntimeState) handleAgentCompleted(payload map[string]interface{}, time
 		}
 		if resultMessage, ok := payload["result_message"].(string); ok {
 			a.ResultMessage = resultMessage
+		}
+		if sessionID, ok := payload["session_id"].(string); ok {
+			a.SessionID = sessionID
 		}
 
 		// Parse model usage if present

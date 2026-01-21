@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-const currentSchemaVersion = 12
+const currentSchemaVersion = 13
 
 // migrate runs all pending database migrations
 func (s *Store) migrate() error {
@@ -91,6 +91,10 @@ func (s *Store) runMigration(version int) error {
 		}
 	case 12:
 		if err := s.migrateV12(tx); err != nil {
+			return err
+		}
+	case 13:
+		if err := s.migrateV13(tx); err != nil {
 			return err
 		}
 	default:
@@ -375,6 +379,24 @@ func (s *Store) migrateV12(tx *sql.Tx) error {
 	migrations := []string{
 		// Add task_description to store the full task description (from beads)
 		`ALTER TABLE agents ADD COLUMN task_description TEXT`,
+	}
+
+	for _, m := range migrations {
+		if _, err := tx.Exec(m); err != nil {
+			return fmt.Errorf("failed to execute migration: %s: %w", m, err)
+		}
+	}
+
+	return nil
+}
+
+// migrateV13 adds session_id column to agents table for claude --resume support
+func (s *Store) migrateV13(tx *sql.Tx) error {
+	migrations := []string{
+		// Add session_id to store Claude CLI session ID for resumability
+		`ALTER TABLE agents ADD COLUMN session_id TEXT`,
+		// Index for efficient session lookups (used for claude --resume)
+		`CREATE INDEX IF NOT EXISTS idx_agents_session_id ON agents(session_id)`,
 	}
 
 	for _, m := range migrations {
