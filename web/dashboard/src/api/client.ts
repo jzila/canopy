@@ -274,4 +274,75 @@ export async function getRuns(filter?: RunListFilter): Promise<RunListResponse> 
   return fetchJson<RunListResponse>(endpoint);
 }
 
+// Orchestrator run control types
+export interface StartRunRequest {
+  work_dir: string;
+  output_dir?: string;
+  concurrency?: number;
+  verbose?: boolean;
+  dry_run?: boolean;
+  use_bwrap?: boolean;
+  max_retries?: number;
+  max_priority?: number;
+  resolver_timeout_ms?: number;
+  repo_id?: string;
+}
+
+export interface StartRunResponse {
+  success: boolean;
+  run_id?: string;
+  error?: string;
+}
+
+export interface StopRunRequest {
+  run_id: string;
+}
+
+export interface StopRunResponse {
+  success: boolean;
+  error?: string;
+}
+
+export interface ActiveRunStatus {
+  id: string;
+  repo_path: string;
+  repo_id?: string;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  start_time: number;
+  end_time?: number;
+  error?: string;
+  tasks_total: number;
+  tasks_done: number;
+  tasks_failed: number;
+}
+
+export interface ListActiveRunsResponse {
+  success: boolean;
+  runs?: ActiveRunStatus[];
+  error?: string;
+}
+
+export async function startRun(request: StartRunRequest): Promise<StartRunResponse> {
+  return fetchJson<StartRunResponse>('/api/orchestrator/run', {
+    method: 'POST',
+    body: JSON.stringify(request),
+  });
+}
+
+export async function stopRun(runId: string): Promise<StopRunResponse> {
+  const request: StopRunRequest = { run_id: runId };
+  return fetchJson<StopRunResponse>('/api/orchestrator/run/stop', {
+    method: 'POST',
+    body: JSON.stringify(request),
+  });
+}
+
+export async function getActiveRuns(): Promise<ListActiveRunsResponse> {
+  return fetchJson<ListActiveRunsResponse>('/api/orchestrator/runs');
+}
+
+export async function getActiveRunStatus(runId: string): Promise<{ success: boolean; run?: ActiveRunStatus; error?: string }> {
+  return fetchJson<{ success: boolean; run?: ActiveRunStatus; error?: string }>(`/api/orchestrator/runs/${runId}`);
+}
+
 export { ApiError };

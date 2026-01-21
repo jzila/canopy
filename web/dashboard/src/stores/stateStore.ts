@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Repository, MergeQueueState, Run } from '../api/client';
+import type { Repository, MergeQueueState, Run, ActiveRunStatus, StartRunRequest } from '../api/client';
 
 // Types based on Go backend structures
 
@@ -133,6 +133,22 @@ export interface Stats {
 // Pause state enum matching Go backend (ipc/protocol.go)
 export type PauseState = 'running' | 'paused_user' | 'paused_agent' | 'paused_both';
 
+// Run configuration for starting new runs
+export interface RunConfig {
+  concurrency: number;
+  max_priority: number;
+  use_bwrap: boolean;
+  max_retries: number;
+}
+
+// Default run configuration
+export const DEFAULT_RUN_CONFIG: RunConfig = {
+  concurrency: 4,
+  max_priority: 4,
+  use_bwrap: true,
+  max_retries: 3,
+};
+
 export interface RuntimeState {
   agents: Record<string, AgentState>;
   tasks: Record<string, TaskState>;
@@ -168,6 +184,12 @@ interface StateStore {
   runs: Run[];
   activeRunId: string; // empty string means "All runs" / current run
   isRunsLoading: boolean;
+  // Run control state
+  isStartingRun: boolean;
+  isStoppingRun: boolean;
+  runConfig: RunConfig;
+  showRunConfigDialog: boolean;
+  activeOrchestratorRun: ActiveRunStatus | null; // Currently running orchestrator run
 
   // Actions
   setConnected: (connected: boolean) => void;
@@ -211,6 +233,13 @@ interface StateStore {
   setRunsLoading: (loading: boolean) => void;
   addRun: (run: Run) => void;
   updateRun: (runId: string, update: Partial<Run>) => void;
+  // Run control actions
+  setStartingRun: (starting: boolean) => void;
+  setStoppingRun: (stopping: boolean) => void;
+  setRunConfig: (config: Partial<RunConfig>) => void;
+  setShowRunConfigDialog: (show: boolean) => void;
+  setActiveOrchestratorRun: (run: ActiveRunStatus | null) => void;
+  updateActiveOrchestratorRun: (update: Partial<ActiveRunStatus>) => void;
 }
 
 // Initial stats
@@ -293,6 +322,12 @@ export const useStateStore = create<StateStore>((set) => ({
   runs: [],
   activeRunId: '', // empty means "All runs"
   isRunsLoading: false,
+  // Run control state
+  isStartingRun: false,
+  isStoppingRun: false,
+  runConfig: DEFAULT_RUN_CONFIG,
+  showRunConfigDialog: false,
+  activeOrchestratorRun: null,
 
   // Actions
   setConnected: (connected) => set({ connected }),
@@ -555,5 +590,27 @@ export const useStateStore = create<StateStore>((set) => ({
         run.id === runId ? { ...run, ...update } : run
       );
       return { runs };
+    }),
+
+  // Run control actions
+  setStartingRun: (isStartingRun) => set({ isStartingRun }),
+
+  setStoppingRun: (isStoppingRun) => set({ isStoppingRun }),
+
+  setRunConfig: (config) =>
+    set((state) => ({
+      runConfig: { ...state.runConfig, ...config },
+    })),
+
+  setShowRunConfigDialog: (showRunConfigDialog) => set({ showRunConfigDialog }),
+
+  setActiveOrchestratorRun: (activeOrchestratorRun) => set({ activeOrchestratorRun }),
+
+  updateActiveOrchestratorRun: (update) =>
+    set((state) => {
+      if (!state.activeOrchestratorRun) return state;
+      return {
+        activeOrchestratorRun: { ...state.activeOrchestratorRun, ...update },
+      };
     }),
 }));

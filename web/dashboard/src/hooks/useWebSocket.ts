@@ -355,6 +355,7 @@ export function useWebSocket() {
     updateAgentMergeStatus,
     addRun,
     updateRun,
+    setCurrentRunId,
   } = useStateStore();
 
   const connect = useCallback(() => {
@@ -691,6 +692,8 @@ export function useWebSocket() {
             case 'run:started': {
               const { run_id, task_count, repo_id, repo_path, repo_name } = message.payload;
               console.log('[WebSocket] Run started:', run_id, 'tasks:', task_count);
+              // Set the current run ID for the orchestrator
+              setCurrentRunId(run_id);
               addRun({
                 id: run_id,
                 started_at: message.timestamp,
@@ -718,6 +721,8 @@ export function useWebSocket() {
                 total_cost_usd,
               } = message.payload;
               console.log('[WebSocket] Run completed:', run_id, 'succeeded:', succeeded_tasks, 'failed:', failed_tasks);
+              // Clear the current run ID as the run has completed
+              setCurrentRunId('');
               // Determine status based on results
               const status = failed_tasks > 0 ? 'partial' : 'completed';
               updateRun(run_id, {
