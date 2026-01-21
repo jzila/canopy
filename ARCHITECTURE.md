@@ -107,18 +107,17 @@ type Orchestrator struct {
     scheduler        *scheduler.Scheduler    // Parallel execution
     mergeCoordinator *mergecoordinator.MergeCoordinator
     failureCounts    map[string]int         // Retry tracking
-    promptFilter     *PromptFilter          // Task selection
+    sandboxConfig    *sandbox.SandboxConfig // Sandbox configuration
 }
 
 type Config struct {
-    WorkDir     string  // Repository directory
-    OutputDir   string  // Where merged changes are written
-    Concurrency int     // Parallel agents (default: 4)
-    UseBwrap    bool    // Full sandbox isolation
-    MaxRetries  int     // Retry failed tasks (default: 3)
-    Prompt      string  // Filter/direct work selection
-    MaxPriority int     // Only run tasks with priority <= this
-    StopAtGate  bool    // Stop at gate=true tasks
+    WorkDir         string        // Repository directory
+    OutputDir       string        // Where merged changes are written
+    Concurrency     int           // Parallel agents (default: 4)
+    UseBwrap        bool          // Full sandbox isolation
+    MaxRetries      int           // Retry failed tasks (default: 3)
+    MaxPriority     int           // Only run tasks with priority <= this (-1 = no filter)
+    ResolverTimeout time.Duration // Timeout for resolver agents
 }
 ```
 
