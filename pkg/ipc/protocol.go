@@ -83,6 +83,7 @@ const (
 	// Agent lifecycle events
 	MessageTypeAgentStart       MessageType = "agent_start"
 	MessageTypeAgentOutput      MessageType = "agent_output"
+	MessageTypeAgentOutputClear MessageType = "agent_output_clear"
 	MessageTypeAgentLiveFeed    MessageType = "agent_live_feed"
 	MessageTypeAgentCommit      MessageType = "agent_commit"
 	MessageTypeAgentMergeStatus MessageType = "agent_merge_status"
@@ -134,6 +135,12 @@ type AgentOutputPayload struct {
 	AgentID string `json:"agent_id"`
 	Output  string `json:"output"`
 	IsError bool   `json:"is_error"`
+}
+
+// AgentOutputClearPayload is sent to clear an agent's accumulated output buffer.
+// This is used when an agent is resumed after a resolver/repair completes.
+type AgentOutputClearPayload struct {
+	AgentID string `json:"agent_id"`
 }
 
 // AgentLiveFeedPayload is sent for real-time streaming events from agents

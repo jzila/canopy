@@ -32,6 +32,14 @@ interface AgentOutputEvent {
   };
 }
 
+interface AgentOutputClearEvent {
+  type: 'agent:output_clear';
+  timestamp: string;
+  payload: {
+    agent_id: string;
+  };
+}
+
 interface AgentLiveFeedEvent {
   type: 'agent:live_feed';
   timestamp: string;
@@ -300,6 +308,7 @@ type EventType =
   | StateSyncEvent
   | AgentStartedEvent
   | AgentOutputEvent
+  | AgentOutputClearEvent
   | AgentLiveFeedEvent
   | AgentCommitEvent
   | AgentCompletedEvent
@@ -337,6 +346,7 @@ export function useWebSocket() {
     updateAgent,
     updateTask,
     appendOutput,
+    clearOutput,
     appendLiveFeedEvent,
     appendGitCommit,
     syncState,
@@ -556,6 +566,12 @@ export function useWebSocket() {
             case 'agent:output': {
               const { agent_id, output, is_error } = message.payload;
               appendOutput(agent_id, output, is_error);
+              break;
+            }
+
+            case 'agent:output_clear': {
+              const { agent_id } = message.payload;
+              clearOutput(agent_id);
               break;
             }
 

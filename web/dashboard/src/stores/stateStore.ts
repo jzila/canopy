@@ -175,6 +175,7 @@ interface StateStore {
   updateTask: (id: string, update: Partial<TaskState>) => void;
   syncState: (state: RuntimeState) => void;
   appendOutput: (agentId: string, output: string, isError?: boolean) => void;
+  clearOutput: (agentId: string) => void;
   appendLiveFeedEvent: (agentId: string, event: LiveFeedEvent) => void;
   appendGitCommit: (agentId: string, commit: GitCommit) => void;
   setSelectedAgent: (id: string | null) => void;
@@ -381,6 +382,25 @@ export const useStateStore = create<StateStore>((set) => ({
             output: {
               stdout: isError ? agent.output.stdout : agent.output.stdout + output,
               stderr: isError ? agent.output.stderr + output : agent.output.stderr,
+            },
+          },
+        },
+      };
+    }),
+
+  clearOutput: (agentId) =>
+    set((state) => {
+      const agent = state.agents[agentId];
+      if (!agent) return state;
+
+      return {
+        agents: {
+          ...state.agents,
+          [agentId]: {
+            ...agent,
+            output: {
+              stdout: '',
+              stderr: '',
             },
           },
         },

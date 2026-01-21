@@ -349,6 +349,16 @@ func (c *Client) SendAgentOutput(agentID, output string, isError bool) error {
 	return c.sendMessage(MessageTypeAgentOutput, payload)
 }
 
+// SendAgentOutputClear sends a request to clear an agent's accumulated output buffer.
+// This is used when an agent resumes after a resolver/repair completes.
+func (c *Client) SendAgentOutputClear(agentID string) error {
+	payload := AgentOutputClearPayload{
+		AgentID: agentID,
+	}
+
+	return c.sendMessage(MessageTypeAgentOutputClear, payload)
+}
+
 // SendAgentLiveFeed sends real-time streaming events from an agent
 func (c *Client) SendAgentLiveFeed(agentID, eventType string, data map[string]interface{}) error {
 	payload := AgentLiveFeedPayload{

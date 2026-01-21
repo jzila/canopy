@@ -15,19 +15,20 @@ type EventType string
 
 // Event type constants
 const (
-	EventStateSync        EventType = "state:sync"
-	EventRunStarted       EventType = "run:started"
-	EventRunCompleted     EventType = "run:completed"
-	EventAgentStarted     EventType = "agent:started"
-	EventAgentOutput      EventType = "agent:output"
-	EventAgentLiveFeed    EventType = "agent:live_feed"
-	EventAgentCommit      EventType = "agent:commit"
-	EventAgentMergeStatus EventType = "agent:merge_status"
-	EventAgentCompleted   EventType = "agent:completed"
-	EventTaskUpdated      EventType = "task:updated"
-	EventOrchPaused       EventType = "orch:paused"
-	EventOrchResumed      EventType = "orch:resumed"
-	EventStatsUpdated     EventType = "stats:updated"
+	EventStateSync          EventType = "state:sync"
+	EventRunStarted         EventType = "run:started"
+	EventRunCompleted       EventType = "run:completed"
+	EventAgentStarted       EventType = "agent:started"
+	EventAgentOutput        EventType = "agent:output"
+	EventAgentOutputClear   EventType = "agent:output_clear"
+	EventAgentLiveFeed      EventType = "agent:live_feed"
+	EventAgentCommit        EventType = "agent:commit"
+	EventAgentMergeStatus   EventType = "agent:merge_status"
+	EventAgentCompleted     EventType = "agent:completed"
+	EventTaskUpdated        EventType = "task:updated"
+	EventOrchPaused         EventType = "orch:paused"
+	EventOrchResumed        EventType = "orch:resumed"
+	EventStatsUpdated       EventType = "stats:updated"
 )
 
 // IsCritical returns true if this event type must never be dropped.
