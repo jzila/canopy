@@ -159,6 +159,17 @@ func (d *Daemon) Init() {
 		if err := d.persistManager.Initialize(d.eventBus); err != nil {
 			logging.Warn("failed to initialize persistence", "error", err)
 		} else if d.persistManager.IsEnabled() {
+			// Recover orphaned overlays before restoring state
+			// This must happen early to clean up any stale filesystem state
+			if result, err := d.RecoverOrphanedOverlays(context.Background()); err != nil {
+				logging.Warn("failed to recover orphaned overlays", "error", err)
+			} else if result.Resumable > 0 || result.Cleaned > 0 || result.Failed > 0 {
+				logging.Info("overlay recovery complete",
+					"resumable", result.Resumable,
+					"cleaned", result.Cleaned,
+					"failed", result.Failed)
+			}
+
 			// Restore state from database
 			if err := d.restoreStateFromDB(); err != nil {
 				logging.Warn("failed to restore state from database", "error", err)
