@@ -85,6 +85,8 @@ type Config struct {
 	MaxPriority     int           // Hard filter: only run tasks with priority <= this value (-1 = no filter)
 	ResolverTimeout time.Duration // Timeout for resolver agents (0 = use default 10m)
 	Rules           *cfgpkg.RulesSettings // Task selection rules from config (nil = use MaxPriority only)
+	Watch           bool          // Watch mode: keep running and poll for new tasks instead of exiting when queue is empty
+	PollInterval    time.Duration // Interval between polling for new tasks in watch mode (default: 5s)
 }
 
 // Orchestrator coordinates the execution of tasks from beads
@@ -102,6 +104,12 @@ type Orchestrator struct {
 	// In-flight task tracking for dynamic task assignment
 	inFlightMu sync.RWMutex
 	inFlight   map[string]bool // Tasks currently being executed
+
+	// Watch mode statistics
+	watchStatsMu    sync.RWMutex
+	watchIterations int       // Number of polling iterations in watch mode
+	watchStartTime  time.Time // When watch mode started
+	watchTasksTotal int       // Total tasks processed in watch mode
 }
 
 // New creates a new orchestrator
@@ -295,6 +303,8 @@ func (o *Orchestrator) GetAgentID(taskID string) string {
 // Run executes the orchestration loop until no ready tasks remain.
 // This uses dynamic task assignment: each worker calls bd ready to get
 // fresh tasks, ensuring newly-unblocked tasks are picked up immediately.
+// In watch mode, the orchestrator polls for new tasks instead of exiting
+// when the queue is empty.
 func (o *Orchestrator) Run(ctx context.Context) error {
 	// Start the merge coordinator's processor goroutine
 	// It will process merge requests from the queue until context is cancelled
@@ -303,6 +313,25 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 	// Dry run: show what would execute and exit
 	if o.config.DryRun {
 		return o.dryRun(ctx)
+	}
+
+	// Set default poll interval for watch mode
+	pollInterval := o.config.PollInterval
+	if pollInterval == 0 {
+		pollInterval = 5 * time.Second
+	}
+
+	// Initialize watch mode statistics
+	if o.config.Watch {
+		o.watchStatsMu.Lock()
+		o.watchStartTime = time.Now()
+		o.watchIterations = 0
+		o.watchTasksTotal = 0
+		o.watchStatsMu.Unlock()
+
+		if o.config.Verbose {
+			fmt.Printf("Watch mode enabled, polling every %v\n", pollInterval)
+		}
 	}
 
 	// Create semaphore for bounded concurrency
@@ -341,11 +370,14 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 				fmt.Fprintf(os.Stderr, "ERROR: Task %s has failed %d times and will not be retried\n", taskID, o.failureCounts[taskID])
 
 				// Signal error but don't stop immediately - let other workers finish
-				runErrorMu.Lock()
-				if runError == nil {
-					runError = fmt.Errorf("task %s failed after %d retry attempts", taskID, o.config.MaxRetries)
+				// Note: In watch mode, we continue watching even after task failures
+				if !o.config.Watch {
+					runErrorMu.Lock()
+					if runError == nil {
+						runError = fmt.Errorf("task %s failed after %d retry attempts", taskID, o.config.MaxRetries)
+					}
+					runErrorMu.Unlock()
 				}
-				runErrorMu.Unlock()
 			}
 		}
 		resultsMu.Unlock()
@@ -362,35 +394,52 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if shouldStop {
-		if o.config.Verbose {
-			fmt.Println("No tasks to execute, orchestration complete")
+
+	// Handle initial state when no tasks are available
+	if shouldStop || task == nil {
+		if o.config.Watch {
+			// In watch mode, wait for tasks to appear
+			if o.config.Verbose {
+				fmt.Println("No ready tasks, watching for new tasks...")
+			}
+		} else {
+			// Normal mode: exit immediately
+			if o.config.Verbose {
+				if shouldStop {
+					fmt.Println("No tasks to execute, orchestration complete")
+				} else {
+					fmt.Println("No ready tasks, orchestration complete")
+				}
+			}
+			return nil
 		}
-		return nil
 	}
-	if task == nil {
+
+	// Start the first worker with the initial task (if we have one)
+	if task != nil {
 		if o.config.Verbose {
-			fmt.Println("No ready tasks, orchestration complete")
+			fmt.Printf("Starting task: %s: %s\n", task.ID, task.Title)
 		}
-		return nil
-	}
 
-	// Start the first worker with the initial task
-	if o.config.Verbose {
-		fmt.Printf("Starting task: %s: %s\n", task.ID, task.Title)
-	}
+		// Track task in watch mode stats
+		if o.config.Watch {
+			o.watchStatsMu.Lock()
+			o.watchTasksTotal++
+			o.watchStatsMu.Unlock()
+		}
 
-	// Acquire semaphore before spawning worker
-	if err := sem.Acquire(ctx, 1); err != nil {
-		return err
-	}
-	wg.Add(1)
-	go func(t *beads.Task) {
-		defer wg.Done()
-		defer sem.Release(1)
+		// Acquire semaphore before spawning worker
+		if err := sem.Acquire(ctx, 1); err != nil {
+			return err
+		}
+		wg.Add(1)
+		go func(t *beads.Task) {
+			defer wg.Done()
+			defer sem.Release(1)
 
-		o.scheduler.ExecuteTask(ctx, t, completionCallback)
-	}(task)
+			o.scheduler.ExecuteTask(ctx, t, completionCallback)
+		}(task)
+	}
 
 	// Main loop: keep spawning workers as slots become available
 	for {
@@ -398,6 +447,9 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			// Wait for in-flight tasks to complete
 			wg.Wait()
+			if o.config.Watch && o.config.Verbose {
+				o.printWatchStats()
+			}
 			return ctx.Err()
 
 		case <-taskComplete:
@@ -407,20 +459,25 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			// Try to acquire a semaphore slot (non-blocking check first)
 		}
 
-		// Check if we have an error that should stop us
-		runErrorMu.Lock()
-		if runError != nil {
+		// Check if we have an error that should stop us (only in non-watch mode)
+		if !o.config.Watch {
+			runErrorMu.Lock()
+			if runError != nil {
+				runErrorMu.Unlock()
+				// Wait for in-flight tasks
+				wg.Wait()
+				return runError
+			}
 			runErrorMu.Unlock()
-			// Wait for in-flight tasks
-			wg.Wait()
-			return runError
 		}
-		runErrorMu.Unlock()
 
 		// Try to acquire a semaphore slot
 		if err := sem.Acquire(ctx, 1); err != nil {
 			// Context cancelled
 			wg.Wait()
+			if o.config.Watch && o.config.Verbose {
+				o.printWatchStats()
+			}
 			return err
 		}
 
@@ -438,6 +495,9 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			wg.Wait()
 			if o.config.Verbose {
 				fmt.Println("Stop condition met, orchestration complete")
+				if o.config.Watch {
+					o.printWatchStats()
+				}
 			}
 			return nil
 		}
@@ -452,18 +512,45 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			o.inFlightMu.RUnlock()
 
 			if inFlightCount == 0 {
-				// No in-flight tasks and no ready tasks - we're done
-				wg.Wait()
-				if o.config.Verbose {
-					fmt.Println("No more tasks, orchestration complete")
+				// No in-flight tasks and no ready tasks
+				if o.config.Watch {
+					// Watch mode: poll for new tasks
+					o.watchStatsMu.Lock()
+					o.watchIterations++
+					o.watchStatsMu.Unlock()
+
+					if o.config.Verbose {
+						fmt.Printf("Watching for new tasks (iteration %d)...\n", o.watchIterations)
+					}
+
+					select {
+					case <-ctx.Done():
+						wg.Wait()
+						if o.config.Verbose {
+							o.printWatchStats()
+						}
+						return ctx.Err()
+					case <-time.After(pollInterval):
+						// Poll again
+						continue
+					}
+				} else {
+					// Normal mode: we're done
+					wg.Wait()
+					if o.config.Verbose {
+						fmt.Println("No more tasks, orchestration complete")
+					}
+					return nil
 				}
-				return nil
 			}
 
 			// Wait for a task to complete before trying again
 			select {
 			case <-ctx.Done():
 				wg.Wait()
+				if o.config.Watch && o.config.Verbose {
+					o.printWatchStats()
+				}
 				return ctx.Err()
 			case <-taskComplete:
 				// A task completed, loop back to try again
@@ -476,6 +563,13 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			fmt.Printf("Starting task: %s: %s\n", task.ID, task.Title)
 		}
 
+		// Track task in watch mode stats
+		if o.config.Watch {
+			o.watchStatsMu.Lock()
+			o.watchTasksTotal++
+			o.watchStatsMu.Unlock()
+		}
+
 		wg.Add(1)
 		go func(t *beads.Task) {
 			defer wg.Done()
@@ -484,6 +578,49 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			o.scheduler.ExecuteTask(ctx, t, completionCallback)
 		}(task)
 	}
+}
+
+// printWatchStats prints watch mode statistics to stderr.
+func (o *Orchestrator) printWatchStats() {
+	o.watchStatsMu.RLock()
+	defer o.watchStatsMu.RUnlock()
+
+	duration := time.Since(o.watchStartTime)
+	fmt.Fprintf(os.Stderr, "Watch mode: ran for %v, processed %d tasks across %d iterations\n",
+		duration.Round(time.Second), o.watchTasksTotal, o.watchIterations)
+}
+
+// WatchStats contains statistics for watch mode operation.
+type WatchStats struct {
+	Enabled     bool          `json:"enabled"`
+	StartTime   time.Time     `json:"start_time,omitempty"`
+	Duration    time.Duration `json:"duration,omitempty"`
+	Iterations  int           `json:"iterations"`
+	TasksTotal  int           `json:"tasks_total"`
+}
+
+// GetWatchStats returns current watch mode statistics.
+// Returns nil if watch mode is not enabled.
+func (o *Orchestrator) GetWatchStats() *WatchStats {
+	if !o.config.Watch {
+		return &WatchStats{Enabled: false}
+	}
+
+	o.watchStatsMu.RLock()
+	defer o.watchStatsMu.RUnlock()
+
+	return &WatchStats{
+		Enabled:    true,
+		StartTime:  o.watchStartTime,
+		Duration:   time.Since(o.watchStartTime),
+		Iterations: o.watchIterations,
+		TasksTotal: o.watchTasksTotal,
+	}
+}
+
+// IsWatchMode returns true if the orchestrator is running in watch mode.
+func (o *Orchestrator) IsWatchMode() bool {
+	return o.config.Watch
 }
 
 // dryRun shows what tasks would execute without actually running them

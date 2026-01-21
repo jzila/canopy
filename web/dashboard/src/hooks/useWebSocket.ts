@@ -145,6 +145,7 @@ interface RunStartedEvent {
     repo_id?: string;
     repo_path?: string;
     repo_name?: string;
+    watch_mode?: boolean;
   };
 }
 
@@ -166,6 +167,10 @@ interface RunCompletedEvent {
     files_changed: number;
     git_commits: number;
     conflicts_resolved: number;
+    // Watch mode stats
+    watch_mode?: boolean;
+    watch_iterations?: number;
+    watch_tasks_total?: number;
   };
 }
 
@@ -355,7 +360,6 @@ export function useWebSocket() {
     updateAgentMergeStatus,
     addRun,
     updateRun,
-    setCurrentRunId,
   } = useStateStore();
 
   const connect = useCallback(() => {
@@ -690,10 +694,8 @@ export function useWebSocket() {
             }
 
             case 'run:started': {
-              const { run_id, task_count, repo_id, repo_path, repo_name } = message.payload;
-              console.log('[WebSocket] Run started:', run_id, 'tasks:', task_count);
-              // Set the current run ID for the orchestrator
-              setCurrentRunId(run_id);
+              const { run_id, task_count, repo_id, repo_path, repo_name, watch_mode } = message.payload;
+              console.log('[WebSocket] Run started:', run_id, 'tasks:', task_count, 'watch_mode:', watch_mode);
               addRun({
                 id: run_id,
                 started_at: message.timestamp,
@@ -707,6 +709,7 @@ export function useWebSocket() {
                 ...(repo_id && { repo_id }),
                 ...(repo_path && { repo_path }),
                 ...(repo_name && { repo_name }),
+                ...(watch_mode && { watch_mode }),
               });
               break;
             }
@@ -719,10 +722,11 @@ export function useWebSocket() {
                 failed_tasks,
                 total_duration_seconds,
                 total_cost_usd,
+                watch_mode,
+                watch_iterations,
+                watch_tasks_total,
               } = message.payload;
               console.log('[WebSocket] Run completed:', run_id, 'succeeded:', succeeded_tasks, 'failed:', failed_tasks);
-              // Clear the current run ID as the run has completed
-              setCurrentRunId('');
               // Determine status based on results
               const status = failed_tasks > 0 ? 'partial' : 'completed';
               updateRun(run_id, {
@@ -733,6 +737,10 @@ export function useWebSocket() {
                 failed_tasks,
                 total_cost_usd,
                 duration_seconds: total_duration_seconds,
+                // Watch mode stats
+                ...(watch_mode !== undefined && { watch_mode }),
+                ...(watch_iterations !== undefined && { watch_iterations }),
+                ...(watch_tasks_total !== undefined && { watch_tasks_total }),
               });
               break;
             }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
+	"github.com/jzila/canopy/pkg/errors"
 	"github.com/jzila/canopy/pkg/events"
 	"github.com/jzila/canopy/pkg/logging"
 	"github.com/jzila/canopy/pkg/orchestrator"
@@ -28,6 +29,8 @@ type RunConfig struct {
 	MaxPriority     int           `json:"max_priority,omitempty"`
 	ResolverTimeout time.Duration `json:"resolver_timeout,omitempty"`
 	RepoID          string        `json:"repo_id,omitempty"`
+	Watch           bool          `json:"watch,omitempty"`           // Watch mode: keep running and poll for new tasks
+	PollInterval    time.Duration `json:"poll_interval,omitempty"`   // Interval between polling for new tasks in watch mode
 }
 
 // RunStatus represents the current status of an orchestration run.
@@ -54,6 +57,11 @@ type RunState struct {
 	TasksTotal   int          `json:"tasks_total"`
 	TasksDone    int          `json:"tasks_done"`
 	TasksFailed  int          `json:"tasks_failed"`
+
+	// Watch mode state
+	WatchMode        bool `json:"watch_mode,omitempty"`         // True if running in watch mode
+	WatchIterations  int  `json:"watch_iterations,omitempty"`   // Number of polling iterations
+	WatchTasksTotal  int  `json:"watch_tasks_total,omitempty"`  // Total tasks processed in watch mode
 
 	// Internal: orchestrator instance and cancellation
 	orch       *orchestrator.Orchestrator
@@ -96,9 +104,23 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 		return "", fmt.Errorf("work_dir is required")
 	}
 
+	// Acquire lock to ensure atomicity of check-and-set for singleton enforcement
+	m.mu.Lock()
+
 	// Check if there's already a run for this repo
 	if existingRunID, loaded := m.runsByRepo.Load(config.WorkDir); loaded {
-		return "", fmt.Errorf("run already active for repository %s (run ID: %s)", config.WorkDir, existingRunID)
+		// Get the existing run's start time for the error message
+		var startedAt time.Time
+		if runStateI, ok := m.runs.Load(existingRunID); ok {
+			runState := runStateI.(*RunState)
+			startedAt = runState.StartTime
+		}
+		m.mu.Unlock()
+		return "", &errors.RunActiveError{
+			RepoPath:  config.WorkDir,
+			RunID:     existingRunID.(string),
+			StartedAt: startedAt,
+		}
 	}
 
 	// Apply defaults
@@ -118,6 +140,13 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 	// Generate run ID
 	runID := uuid.New().String()
 
+	// Reserve the repo slot before doing expensive work (orchestrator creation)
+	// This prevents races where two callers both pass the check, then both try to store.
+	m.runsByRepo.Store(config.WorkDir, runID)
+
+	// Release the lock now - we've secured our slot
+	m.mu.Unlock()
+
 	// Create orchestrator config
 	orchConfig := &orchestrator.Config{
 		WorkDir:         config.WorkDir,
@@ -129,11 +158,15 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 		MaxRetries:      config.MaxRetries,
 		MaxPriority:     config.MaxPriority,
 		ResolverTimeout: config.ResolverTimeout,
+		Watch:           config.Watch,
+		PollInterval:    config.PollInterval,
 	}
 
 	// Create orchestrator
 	orch, err := orchestrator.New(orchConfig)
 	if err != nil {
+		// Clean up the reservation since we failed
+		m.runsByRepo.Delete(config.WorkDir)
 		return "", fmt.Errorf("failed to create orchestrator: %w", err)
 	}
 
@@ -148,6 +181,7 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 		Status:    RunStatusPending,
 		Config:    config,
 		StartTime: time.Now(),
+		WatchMode: config.Watch,
 		orch:      orch,
 		cancel:    cancel,
 	}
@@ -162,9 +196,8 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 		orch.SetRepoID(config.RepoID)
 	}
 
-	// Store run state
+	// Store run state (repo slot was already reserved above)
 	m.runs.Store(runID, runState)
-	m.runsByRepo.Store(config.WorkDir, runID)
 
 	// Get initial ready tasks count
 	beadsClient, err := beads.NewClient(config.WorkDir)
@@ -235,19 +268,32 @@ func (m *OrchestratorManager) GetRunStatus(runID string) (*RunState, error) {
 	runState.mu.RLock()
 	defer runState.mu.RUnlock()
 
+	// Get watch stats from orchestrator if available
+	var watchIterations, watchTasksTotal int
+	if runState.orch != nil && runState.WatchMode {
+		stats := runState.orch.GetWatchStats()
+		if stats != nil {
+			watchIterations = stats.Iterations
+			watchTasksTotal = stats.TasksTotal
+		}
+	}
+
 	// Return a copy without internal fields
 	return &RunState{
-		ID:          runState.ID,
-		RepoPath:    runState.RepoPath,
-		RepoID:      runState.RepoID,
-		Status:      runState.Status,
-		Config:      runState.Config,
-		StartTime:   runState.StartTime,
-		EndTime:     runState.EndTime,
-		Error:       runState.Error,
-		TasksTotal:  runState.TasksTotal,
-		TasksDone:   runState.TasksDone,
-		TasksFailed: runState.TasksFailed,
+		ID:              runState.ID,
+		RepoPath:        runState.RepoPath,
+		RepoID:          runState.RepoID,
+		Status:          runState.Status,
+		Config:          runState.Config,
+		StartTime:       runState.StartTime,
+		EndTime:         runState.EndTime,
+		Error:           runState.Error,
+		TasksTotal:      runState.TasksTotal,
+		TasksDone:       runState.TasksDone,
+		TasksFailed:     runState.TasksFailed,
+		WatchMode:       runState.WatchMode,
+		WatchIterations: watchIterations,
+		WatchTasksTotal: watchTasksTotal,
 	}, nil
 }
 
@@ -259,18 +305,30 @@ func (m *OrchestratorManager) ListRuns() []*RunState {
 		runState := value.(*RunState)
 
 		runState.mu.RLock()
+		// Get watch stats from orchestrator if available
+		var watchIterations, watchTasksTotal int
+		if runState.orch != nil && runState.WatchMode {
+			stats := runState.orch.GetWatchStats()
+			if stats != nil {
+				watchIterations = stats.Iterations
+				watchTasksTotal = stats.TasksTotal
+			}
+		}
 		runs = append(runs, &RunState{
-			ID:          runState.ID,
-			RepoPath:    runState.RepoPath,
-			RepoID:      runState.RepoID,
-			Status:      runState.Status,
-			Config:      runState.Config,
-			StartTime:   runState.StartTime,
-			EndTime:     runState.EndTime,
-			Error:       runState.Error,
-			TasksTotal:  runState.TasksTotal,
-			TasksDone:   runState.TasksDone,
-			TasksFailed: runState.TasksFailed,
+			ID:              runState.ID,
+			RepoPath:        runState.RepoPath,
+			RepoID:          runState.RepoID,
+			Status:          runState.Status,
+			Config:          runState.Config,
+			StartTime:       runState.StartTime,
+			EndTime:         runState.EndTime,
+			Error:           runState.Error,
+			TasksTotal:      runState.TasksTotal,
+			TasksDone:       runState.TasksDone,
+			TasksFailed:     runState.TasksFailed,
+			WatchMode:       runState.WatchMode,
+			WatchIterations: watchIterations,
+			WatchTasksTotal: watchTasksTotal,
 		})
 		runState.mu.RUnlock()
 
@@ -288,63 +346,6 @@ func (m *OrchestratorManager) GetActiveRunForRepo(repoPath string) (*RunState, e
 	}
 
 	return m.GetRunStatus(runIDI.(string))
-}
-
-// UpdateRunConfig updates the configuration of a running orchestration.
-// Supports modifying concurrency, max priority filter, and pause state.
-// Returns an error if the run is not found or not active.
-func (m *OrchestratorManager) UpdateRunConfig(runID string, concurrency *int, maxPriority *int, paused *bool) error {
-	runStateI, ok := m.runs.Load(runID)
-	if !ok {
-		return fmt.Errorf("run not found: %s", runID)
-	}
-
-	runState := runStateI.(*RunState)
-
-	runState.mu.Lock()
-	defer runState.mu.Unlock()
-
-	if runState.Status != RunStatusRunning && runState.Status != RunStatusPending {
-		return fmt.Errorf("run %s is not active (status: %s)", runID, runState.Status)
-	}
-
-	// Update concurrency if specified
-	if concurrency != nil && *concurrency > 0 {
-		runState.Config.Concurrency = *concurrency
-		// Update the orchestrator's scheduler concurrency if available
-		if runState.orch != nil {
-			sched := runState.orch.GetScheduler()
-			if sched != nil {
-				sched.SetConcurrency(*concurrency)
-			}
-		}
-		logging.Info("updated run concurrency", "run_id", runID, "concurrency", *concurrency)
-	}
-
-	// Update max priority filter if specified
-	if maxPriority != nil {
-		runState.Config.MaxPriority = *maxPriority
-		// Note: MaxPriority changes will take effect on next task selection
-		logging.Info("updated run max priority", "run_id", runID, "max_priority", *maxPriority)
-	}
-
-	// Update pause state if specified
-	if paused != nil {
-		if runState.orch != nil {
-			sched := runState.orch.GetScheduler()
-			if sched != nil {
-				if *paused {
-					sched.Pause()
-					logging.Info("paused run", "run_id", runID)
-				} else {
-					sched.Resume()
-					logging.Info("resumed run", "run_id", runID)
-				}
-			}
-		}
-	}
-
-	return nil
 }
 
 // runOrchestrator executes the orchestrator and handles completion.
@@ -575,6 +576,7 @@ func (m *OrchestratorManager) publishRunStarted(runID string, taskCount int, con
 			"task_count": taskCount,
 			"repo_id":    config.RepoID,
 			"repo_path":  config.WorkDir,
+			"watch_mode": config.Watch,
 		},
 	})
 }
@@ -589,17 +591,36 @@ func (m *OrchestratorManager) publishRunCompleted(runState *RunState) {
 		duration = runState.EndTime.Sub(runState.StartTime).Seconds()
 	}
 
+	// Get watch stats from orchestrator if available
+	var watchIterations, watchTasksTotal int
+	if runState.orch != nil && runState.WatchMode {
+		stats := runState.orch.GetWatchStats()
+		if stats != nil {
+			watchIterations = stats.Iterations
+			watchTasksTotal = stats.TasksTotal
+		}
+	}
+
+	stats := map[string]interface{}{
+		"total_tasks":     runState.TasksTotal,
+		"succeeded_tasks": runState.TasksDone,
+		"failed_tasks":    runState.TasksFailed,
+		"total_duration":  duration,
+	}
+
+	// Include watch mode stats if applicable
+	if runState.WatchMode {
+		stats["watch_mode"] = true
+		stats["watch_iterations"] = watchIterations
+		stats["watch_tasks_total"] = watchTasksTotal
+	}
+
 	m.eventBus.Publish(events.Event{
 		Type:      events.EventRunCompleted,
 		Timestamp: time.Now(),
 		Payload: map[string]interface{}{
 			"run_id": runState.ID,
-			"stats": map[string]interface{}{
-				"total_tasks":     runState.TasksTotal,
-				"succeeded_tasks": runState.TasksDone,
-				"failed_tasks":    runState.TasksFailed,
-				"total_duration":  duration,
-			},
+			"stats":  stats,
 		},
 	})
 }

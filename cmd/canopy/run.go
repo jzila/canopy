@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -28,17 +27,21 @@ import (
 )
 
 var (
-	concurrency     int
-	outputDir       string
-	dryRun          bool
-	useSandbox      bool
-	maxRetries      int
-	maxPriority     int
-	resolverTimeout time.Duration
-	resumeAgents    bool
-	stopRun         bool
-	showStatus      bool
-	runID           string
+	concurrency      int
+	outputDir        string
+	dryRun           bool
+	useSandbox       bool
+	maxRetries       int
+	maxPriority      int
+	resolverTimeout  time.Duration
+	resumeAgents     bool
+	filterTypes      []string
+	excludeTypes     []string
+	filterLabels     []string
+	excludeLabels    []string
+	filterAssignee   string
+	watchMode        bool
+	pollInterval     time.Duration
 )
 
 var runCmd = &cobra.Command{
@@ -78,8 +81,15 @@ SECURITY
   - Only /workspace writable
 
 TASK SELECTION
-  Canopy uses explicit filters for task selection (no natural language parsing):
+  Canopy uses explicit filters for task selection (no natural language parsing).
+
+  CLI flags override settings in .canopy/config.toml [rules] section:
   - --max-priority: Only run tasks with priority <= this value (0-4)
+  - --type: Only run tasks of these types (comma-separated: bug,task,feature,chore)
+  - --exclude-type: Exclude tasks of these types (comma-separated)
+  - --label: Only run tasks with these labels (comma-separated)
+  - --exclude-label: Exclude tasks with these labels (comma-separated)
+  - --assignee: Filter by assignee ("" = unassigned, "*" = any, name = exact match)
 
 Example:
   # Run with default settings (auto-starts daemon if needed)
@@ -101,6 +111,18 @@ Example:
   canopy run --max-priority 2   # Only P0, P1, P2 tasks (excludes P3, P4)
   canopy run --max-priority 0   # Only P0 tasks (critical only)
 
+  # Filter by type
+  canopy run --type bug,task        # Only bugs and tasks
+  canopy run --exclude-type epic    # Exclude epics
+
+  # Filter by labels
+  canopy run --label frontend       # Only tasks with frontend label
+  canopy run --exclude-label wip    # Exclude work-in-progress tasks
+
+  # Filter by assignee
+  canopy run --assignee john        # Only tasks assigned to john
+  canopy run --assignee ""          # Only unassigned tasks
+
   # Set resolver timeout for conflict resolution
   canopy run --resolver-timeout 15m   # 15 minute timeout (default: 10m)
   canopy run --resolver-timeout 30m   # 30 minute timeout for complex conflicts
@@ -108,15 +130,10 @@ Example:
   # Resume interrupted agents after daemon restart
   canopy run --resume                 # Resume agents that were interrupted
 
-RUN CONTROL (via REST API)
-  These commands control runs via the daemon's REST API.
-
-  # Show status of active runs
-  canopy run --status
-
-  # Stop an active run (requires --run-id or uses active run for current repo)
-  canopy run --stop
-  canopy run --stop --run-id abc123   # Stop a specific run by ID`,
+  # Watch mode: keep running and poll for new tasks
+  canopy run --watch                  # Run indefinitely, polling for new tasks
+  canopy run --watch --poll-interval 10s  # Poll every 10 seconds (default: 5s)
+  canopy run -w                       # Short form of --watch`,
 	RunE: runOrchestrator,
 }
 
@@ -130,10 +147,16 @@ func init() {
 	runCmd.Flags().DurationVar(&resolverTimeout, "resolver-timeout", 0, "Timeout for resolver agents when resolving merge conflicts (e.g., 10m, 15m, 1h). Default: 10m. Set from CANOPY_RESOLVER_TIMEOUT env var if not specified.")
 	runCmd.Flags().BoolVar(&resumeAgents, "resume", false, "Resume agents that were interrupted by daemon restart")
 
-	// Run control flags (use REST API to control daemon-owned runs)
-	runCmd.Flags().BoolVar(&stopRun, "stop", false, "Stop an active run (use with --run-id or stops run for current repo)")
-	runCmd.Flags().BoolVar(&showStatus, "status", false, "Show status of active runs")
-	runCmd.Flags().StringVar(&runID, "run-id", "", "Specific run ID for --stop or --status operations")
+	// Task selection filters (override config.toml [rules] section)
+	runCmd.Flags().StringSliceVar(&filterTypes, "type", nil, "Only run tasks of these types (comma-separated: bug,task,feature,chore,epic)")
+	runCmd.Flags().StringSliceVar(&excludeTypes, "exclude-type", nil, "Exclude tasks of these types (comma-separated)")
+	runCmd.Flags().StringSliceVar(&filterLabels, "label", nil, "Only run tasks with these labels (comma-separated)")
+	runCmd.Flags().StringSliceVar(&excludeLabels, "exclude-label", nil, "Exclude tasks with these labels (comma-separated)")
+	runCmd.Flags().StringVar(&filterAssignee, "assignee", "", "Filter by assignee (\"\" = unassigned only, \"*\" = any, name = exact match)")
+
+	// Watch mode flags
+	runCmd.Flags().BoolVarP(&watchMode, "watch", "w", false, "Watch mode: keep running and poll for new tasks instead of exiting when queue is empty")
+	runCmd.Flags().DurationVar(&pollInterval, "poll-interval", 5*time.Second, "Interval between polling for new tasks in watch mode")
 
 	rootCmd.AddCommand(runCmd)
 }
@@ -141,14 +164,6 @@ func init() {
 func runOrchestrator(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
-	// Handle run control flags first (these use REST API, don't require IPC)
-	if showStatus {
-		return handleShowStatus(ctx, runID)
-	}
-	if stopRun {
-		return handleStopRun(ctx, runID)
-	}
 
 	// Clean up any stale mounts from previous crashes before starting
 	// This prevents "permission denied" errors from orphaned FUSE mounts
@@ -273,6 +288,10 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Build rules settings from config and CLI flags
+	// CLI flags override config file settings
+	rules := buildRulesSettings(absWorkdir, cmd, verbose)
+
 	// Create and run orchestrator
 	orch, err = orchestrator.New(&orchestrator.Config{
 		WorkDir:         absWorkdir,
@@ -284,6 +303,9 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		MaxRetries:      maxRetries,
 		MaxPriority:     maxPriority,
 		ResolverTimeout: effectiveResolverTimeout,
+		Rules:           rules,
+		Watch:           watchMode,
+		PollInterval:    pollInterval,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create orchestrator: %w", err)
@@ -645,194 +667,59 @@ func resumeInterruptedAgents(ctx context.Context, workDir string, useBwrap, verb
 	return resumed, errors
 }
 
-// runStatusResponse matches daemon.RunStatusResponse
-type runStatusResponse struct {
-	Success bool            `json:"success"`
-	Run     *runStatusWire  `json:"run,omitempty"`
-	Runs    []runStatusWire `json:"runs,omitempty"`
-	Error   string          `json:"error,omitempty"`
-}
-
-// runStatusWire matches daemon.RunStatusWire
-type runStatusWire struct {
-	ID          string `json:"id"`
-	RepoPath    string `json:"repo_path"`
-	RepoID      string `json:"repo_id,omitempty"`
-	Status      string `json:"status"`
-	StartTime   int64  `json:"start_time"`
-	EndTime     int64  `json:"end_time,omitempty"`
-	Error       string `json:"error,omitempty"`
-	TasksTotal  int    `json:"tasks_total"`
-	TasksDone   int    `json:"tasks_done"`
-	TasksFailed int    `json:"tasks_failed"`
-}
-
-// stopRunResponse matches daemon.StopRunResponse
-type stopRunResponse struct {
-	Success bool   `json:"success"`
-	Error   string `json:"error,omitempty"`
-}
-
-// handleShowStatus shows the status of active runs via REST API
-func handleShowStatus(ctx context.Context, specificRunID string) error {
-	url := fmt.Sprintf("http://localhost:%d/api/orchestrator/runs/active", runtime.DefaultDaemonPort)
-
-	// If a specific run ID is requested, get just that run
-	if specificRunID != "" {
-		url = fmt.Sprintf("http://localhost:%d/api/orchestrator/runs/%s", runtime.DefaultDaemonPort, specificRunID)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+// buildRulesSettings builds task selection rules from config file and CLI flags.
+// CLI flags take precedence over config file settings.
+func buildRulesSettings(workDir string, cmd *cobra.Command, verbose bool) *config.RulesSettings {
+	// Start with rules from config file
+	cfg, err := config.LoadConfig(workDir)
+	var rules config.RulesSettings
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to query daemon (is it running?): %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("daemon returned %d: %s", resp.StatusCode, string(body))
-	}
-
-	var statusResp runStatusResponse
-	if err := json.NewDecoder(resp.Body).Decode(&statusResp); err != nil {
-		return fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	if !statusResp.Success {
-		return fmt.Errorf("error: %s", statusResp.Error)
-	}
-
-	// Handle single run response
-	if statusResp.Run != nil {
-		printRunStatus(statusResp.Run)
-		return nil
-	}
-
-	// Handle list of runs
-	if len(statusResp.Runs) == 0 {
-		fmt.Println("No active runs")
-		return nil
-	}
-
-	fmt.Printf("Active runs (%d):\n", len(statusResp.Runs))
-	for i, run := range statusResp.Runs {
-		if i > 0 {
-			fmt.Println()
+		if verbose {
+			fmt.Fprintf(os.Stderr, "warning: failed to load config for rules: %v\n", err)
 		}
-		printRunStatus(&run)
+		rules = config.DefaultRulesSettings()
+	} else {
+		rules = cfg.Rules
 	}
 
-	return nil
-}
+	// CLI flags override config settings
 
-// printRunStatus prints the status of a single run
-func printRunStatus(run *runStatusWire) {
-	startTime := time.Unix(run.StartTime, 0)
-	duration := time.Since(startTime)
-
-	fmt.Printf("Run: %s\n", run.ID)
-	fmt.Printf("  Repository: %s\n", run.RepoPath)
-	fmt.Printf("  Status: %s\n", run.Status)
-	fmt.Printf("  Started: %s (%s ago)\n", startTime.Format(time.RFC3339), duration.Round(time.Second))
-	fmt.Printf("  Progress: %d/%d tasks completed", run.TasksDone, run.TasksTotal)
-	if run.TasksFailed > 0 {
-		fmt.Printf(" (%d failed)", run.TasksFailed)
-	}
-	fmt.Println()
-
-	if run.Error != "" {
-		fmt.Printf("  Error: %s\n", run.Error)
-	}
-}
-
-// handleStopRun stops an active run via REST API
-func handleStopRun(ctx context.Context, specificRunID string) error {
-	targetRunID := specificRunID
-
-	// If no specific run ID, try to find the active run for the current repo
-	if targetRunID == "" {
-		absWorkdir, err := filepath.Abs(workdir)
-		if err != nil {
-			return fmt.Errorf("invalid workdir: %w", err)
-		}
-
-		// Get active runs and find one matching current repo
-		url := fmt.Sprintf("http://localhost:%d/api/orchestrator/runs/active", runtime.DefaultDaemonPort)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			return fmt.Errorf("failed to create request: %w", err)
-		}
-
-		client := &http.Client{Timeout: 10 * time.Second}
-		resp, err := client.Do(req)
-		if err != nil {
-			return fmt.Errorf("failed to query daemon (is it running?): %w", err)
-		}
-		defer func() { _ = resp.Body.Close() }()
-
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			return fmt.Errorf("daemon returned %d: %s", resp.StatusCode, string(body))
-		}
-
-		var statusResp runStatusResponse
-		if err := json.NewDecoder(resp.Body).Decode(&statusResp); err != nil {
-			return fmt.Errorf("failed to decode response: %w", err)
-		}
-
-		if !statusResp.Success {
-			return fmt.Errorf("error: %s", statusResp.Error)
-		}
-
-		// Find run for current repo
-		for _, run := range statusResp.Runs {
-			if run.RepoPath == absWorkdir {
-				targetRunID = run.ID
-				break
-			}
-		}
-
-		if targetRunID == "" {
-			if len(statusResp.Runs) == 0 {
-				return fmt.Errorf("no active runs to stop")
-			}
-			return fmt.Errorf("no active run found for %s\n\nUse --run-id to specify a run to stop, or run from the repository directory", absWorkdir)
-		}
+	// maxPriority flag overrides config priority_max
+	if cmd.Flags().Changed("max-priority") {
+		rules.PriorityMax = maxPriority
 	}
 
-	// Stop the run
-	url := fmt.Sprintf("http://localhost:%d/api/orchestrator/run/stop", runtime.DefaultDaemonPort)
-	reqBody := fmt.Sprintf(`{"run_id":"%s"}`, targetRunID)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(reqBody))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to stop run: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	var stopResp stopRunResponse
-	if err := json.NewDecoder(resp.Body).Decode(&stopResp); err != nil {
-		return fmt.Errorf("failed to decode response: %w", err)
+	// --type flag overrides config types
+	if cmd.Flags().Changed("type") {
+		rules.Types = filterTypes
 	}
 
-	if !stopResp.Success {
-		return fmt.Errorf("failed to stop run: %s", stopResp.Error)
+	// --exclude-type flag overrides config exclude_types
+	if cmd.Flags().Changed("exclude-type") {
+		rules.ExcludeTypes = excludeTypes
 	}
 
-	fmt.Printf("Stopped run: %s\n", targetRunID)
-	return nil
+	// --label flag overrides config labels
+	if cmd.Flags().Changed("label") {
+		rules.Labels = filterLabels
+	}
+
+	// --exclude-label flag overrides config exclude_labels
+	if cmd.Flags().Changed("exclude-label") {
+		rules.ExcludeLabels = excludeLabels
+	}
+
+	// --assignee flag overrides config assignee
+	if cmd.Flags().Changed("assignee") {
+		rules.Assignee = filterAssignee
+	}
+
+	// Validate the built rules
+	if errs := rules.Validate(); len(errs) > 0 {
+		fmt.Fprintf(os.Stderr, "warning: invalid rules configuration: %v\n", errs)
+		// Continue with potentially invalid rules - let the filter handle it gracefully
+	}
+
+	return &rules
 }
 
