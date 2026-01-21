@@ -10,6 +10,7 @@ import (
 
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
+	"github.com/jzila/canopy/pkg/errors"
 	"github.com/jzila/canopy/pkg/events"
 	"github.com/jzila/canopy/pkg/logging"
 	"github.com/jzila/canopy/pkg/orchestrator"
@@ -96,9 +97,23 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 		return "", fmt.Errorf("work_dir is required")
 	}
 
+	// Acquire lock to ensure atomicity of check-and-set for singleton enforcement
+	m.mu.Lock()
+
 	// Check if there's already a run for this repo
 	if existingRunID, loaded := m.runsByRepo.Load(config.WorkDir); loaded {
-		return "", fmt.Errorf("run already active for repository %s (run ID: %s)", config.WorkDir, existingRunID)
+		// Get the existing run's start time for the error message
+		var startedAt time.Time
+		if runStateI, ok := m.runs.Load(existingRunID); ok {
+			runState := runStateI.(*RunState)
+			startedAt = runState.StartTime
+		}
+		m.mu.Unlock()
+		return "", &errors.RunActiveError{
+			RepoPath:  config.WorkDir,
+			RunID:     existingRunID.(string),
+			StartedAt: startedAt,
+		}
 	}
 
 	// Apply defaults
@@ -118,6 +133,13 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 	// Generate run ID
 	runID := uuid.New().String()
 
+	// Reserve the repo slot before doing expensive work (orchestrator creation)
+	// This prevents races where two callers both pass the check, then both try to store.
+	m.runsByRepo.Store(config.WorkDir, runID)
+
+	// Release the lock now - we've secured our slot
+	m.mu.Unlock()
+
 	// Create orchestrator config
 	orchConfig := &orchestrator.Config{
 		WorkDir:         config.WorkDir,
@@ -134,6 +156,8 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 	// Create orchestrator
 	orch, err := orchestrator.New(orchConfig)
 	if err != nil {
+		// Clean up the reservation since we failed
+		m.runsByRepo.Delete(config.WorkDir)
 		return "", fmt.Errorf("failed to create orchestrator: %w", err)
 	}
 
@@ -162,9 +186,8 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 		orch.SetRepoID(config.RepoID)
 	}
 
-	// Store run state
+	// Store run state (repo slot was already reserved above)
 	m.runs.Store(runID, runState)
-	m.runsByRepo.Store(config.WorkDir, runID)
 
 	// Get initial ready tasks count
 	beadsClient, err := beads.NewClient(config.WorkDir)

@@ -2,9 +2,11 @@ package daemon
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/jzila/canopy/pkg/errors"
 	"github.com/jzila/canopy/pkg/events"
 )
 
@@ -226,4 +228,174 @@ func TestRunStatus(t *testing.T) {
 			t.Errorf("RunStatus %q != expected %q", tt.status, tt.expected)
 		}
 	}
+}
+
+func TestSingletonEnforcement(t *testing.T) {
+	eventBus := events.NewEventBus()
+	state := NewRuntimeState()
+	manager := NewOrchestratorManager(eventBus, state)
+
+	// Manually simulate an active run by storing directly in runsByRepo and runs
+	// This avoids needing a real beads database
+	repoPath := "/test/repo"
+	existingRunID := "existing-run-123"
+	existingStartTime := time.Now().Add(-2 * time.Minute)
+
+	existingRunState := &RunState{
+		ID:        existingRunID,
+		RepoPath:  repoPath,
+		Status:    RunStatusRunning,
+		StartTime: existingStartTime,
+	}
+	manager.runs.Store(existingRunID, existingRunState)
+	manager.runsByRepo.Store(repoPath, existingRunID)
+
+	// Try to start a new run for the same repo
+	ctx := context.Background()
+	_, err := manager.StartRun(ctx, RunConfig{
+		WorkDir: repoPath,
+	})
+
+	// Should get an error
+	if err == nil {
+		t.Fatal("expected error for concurrent run, got nil")
+	}
+
+	// Error should be a RunActiveError
+	var runActiveErr *errors.RunActiveError
+	if !errors.As(err, &runActiveErr) {
+		t.Fatalf("expected RunActiveError, got %T: %v", err, err)
+	}
+
+	// Verify error details
+	if runActiveErr.RepoPath != repoPath {
+		t.Errorf("expected RepoPath %q, got %q", repoPath, runActiveErr.RepoPath)
+	}
+	if runActiveErr.RunID != existingRunID {
+		t.Errorf("expected RunID %q, got %q", existingRunID, runActiveErr.RunID)
+	}
+	if runActiveErr.StartedAt != existingStartTime {
+		t.Errorf("expected StartedAt %v, got %v", existingStartTime, runActiveErr.StartedAt)
+	}
+
+	// Error should unwrap to ErrRunAlreadyActive
+	if !errors.Is(err, errors.ErrRunAlreadyActive) {
+		t.Error("expected error to unwrap to ErrRunAlreadyActive")
+	}
+
+	// Error message should include helpful suggestions
+	errMsg := err.Error()
+	if errMsg == "" {
+		t.Error("expected non-empty error message")
+	}
+	// Check for key parts of the message
+	expectedParts := []string{
+		existingRunID,
+		repoPath,
+		"canopy run --status",
+		"canopy run --stop",
+	}
+	for _, part := range expectedParts {
+		if !containsSubstring(errMsg, part) {
+			t.Errorf("error message should contain %q, got: %s", part, errMsg)
+		}
+	}
+}
+
+func TestSingletonEnforcementConcurrent(t *testing.T) {
+	// Test that concurrent StartRun calls are properly serialized
+	eventBus := events.NewEventBus()
+	state := NewRuntimeState()
+	manager := NewOrchestratorManager(eventBus, state)
+
+	repoPath := "/test/concurrent/repo"
+	ctx := context.Background()
+
+	// Launch multiple goroutines trying to start runs concurrently
+	const numGoroutines = 10
+	var wg sync.WaitGroup
+	errChan := make(chan error, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := manager.StartRun(ctx, RunConfig{
+				WorkDir: repoPath,
+			})
+			errChan <- err
+		}()
+	}
+
+	wg.Wait()
+	close(errChan)
+
+	// Count outcomes: exactly one should fail due to orchestrator.New (nonexistent path)
+	// The rest should fail due to singleton enforcement
+	var singletonErrors int
+	var otherErrors int
+	for err := range errChan {
+		if err != nil {
+			if errors.Is(err, errors.ErrRunAlreadyActive) {
+				singletonErrors++
+			} else {
+				otherErrors++
+			}
+		}
+	}
+
+	// At most one request should get past the singleton check
+	// (it will then fail for other reasons like missing beads)
+	if otherErrors > 1 {
+		t.Errorf("expected at most 1 non-singleton error, got %d", otherErrors)
+	}
+
+	// The rest should be singleton errors
+	if singletonErrors < numGoroutines-1 {
+		t.Errorf("expected at least %d singleton errors, got %d", numGoroutines-1, singletonErrors)
+	}
+}
+
+func TestDifferentReposAllowed(t *testing.T) {
+	eventBus := events.NewEventBus()
+	state := NewRuntimeState()
+	manager := NewOrchestratorManager(eventBus, state)
+
+	// Simulate an active run for repo1
+	repo1Path := "/test/repo1"
+	existingRunID := "run-repo1"
+	existingRunState := &RunState{
+		ID:        existingRunID,
+		RepoPath:  repo1Path,
+		Status:    RunStatusRunning,
+		StartTime: time.Now(),
+	}
+	manager.runs.Store(existingRunID, existingRunState)
+	manager.runsByRepo.Store(repo1Path, existingRunID)
+
+	// Try to start a run for a different repo - should be allowed (though will fail for other reasons)
+	ctx := context.Background()
+	repo2Path := "/test/repo2"
+	_, err := manager.StartRun(ctx, RunConfig{
+		WorkDir: repo2Path,
+	})
+
+	// Should NOT be a singleton error (will fail for other reasons like missing beads)
+	if err != nil && errors.Is(err, errors.ErrRunAlreadyActive) {
+		t.Error("should allow run for different repo, but got singleton error")
+	}
+}
+
+// containsSubstring checks if s contains substr
+func containsSubstring(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstringHelper(s, substr))
+}
+
+func containsSubstringHelper(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }
