@@ -845,3 +845,38 @@ func isPreCommitHookFailure(output string) bool {
 	// If output is non-empty and doesn't look like a git error, likely a hook failure
 	return len(strings.TrimSpace(output)) > 0
 }
+
+// isWorkingDirectoryClean checks if the specified paths have any uncommitted changes
+// (staged or unstaged). Returns true if all paths are clean, false otherwise.
+func (m *SequentialMerger) isWorkingDirectoryClean(paths []string) (bool, error) {
+	if len(paths) == 0 {
+		return true, nil
+	}
+
+	// Use git status --porcelain to check for changes
+	// This shows both staged and unstaged changes
+	cmd := exec.Command("git", "status", "--porcelain", "--")
+	cmd.Args = append(cmd.Args, paths...)
+	cmd.Dir = m.outputDir
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		return false, fmt.Errorf("git status failed: %w", err)
+	}
+
+	// If output is empty, all paths are clean
+	return len(strings.TrimSpace(stdout.String())) == 0, nil
+}
+
+// hardResetToHead performs a hard reset to the specified commit.
+// This discards all changes in the working directory and index.
+func (m *SequentialMerger) hardResetToHead(headCommit string) error {
+	cmd := exec.Command("git", "reset", "--hard", headCommit)
+	cmd.Dir = m.outputDir
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("git reset --hard failed: %w: %s", err, stderr.String())
+	}
+	return nil
+}
