@@ -289,6 +289,13 @@ func (o *Orchestrator) SetRunID(runID string) {
 	o.mergeCoordinator.SetRunID(runID)
 }
 
+// SetConcurrency updates the concurrency setting.
+// Note: This updates the config for future reference but doesn't affect
+// currently running tasks as the scheduler's semaphore is fixed at creation.
+func (o *Orchestrator) SetConcurrency(concurrency int) {
+	o.config.Concurrency = concurrency
+}
+
 // SetAgentID records the agentID for a taskID, enabling parent-child tracking for resolvers.
 // This should be called when an agent starts execution.
 func (o *Orchestrator) SetAgentID(taskID, agentID string) {

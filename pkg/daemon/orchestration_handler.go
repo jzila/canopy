@@ -56,10 +56,24 @@ type StopRunResponse struct {
 
 // RunStatusResponse is the JSON response for run status queries.
 type RunStatusResponse struct {
-	Success bool             `json:"success"`
-	Run     *RunStatusWire   `json:"run,omitempty"`
-	Runs    []RunStatusWire  `json:"runs,omitempty"`
-	Error   string           `json:"error,omitempty"`
+	Success bool            `json:"success"`
+	Run     *RunStatusWire  `json:"run,omitempty"`
+	Runs    []RunStatusWire `json:"runs,omitempty"`
+	Error   string          `json:"error,omitempty"`
+}
+
+// UpdateRunConfigRequest is the JSON request body for updating run configuration.
+type UpdateRunConfigRequest struct {
+	Concurrency  *int  `json:"concurrency,omitempty"`
+	MaxPriority  *int  `json:"max_priority,omitempty"`
+	Watch        *bool `json:"watch,omitempty"`
+	PollInterval *int  `json:"poll_interval_ms,omitempty"` // milliseconds
+}
+
+// UpdateRunConfigResponse is the JSON response for updating run configuration.
+type UpdateRunConfigResponse struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
 }
 
 // RunStatusWire is the wire format for run status.
@@ -247,6 +261,82 @@ func (h *OrchestrationHandler) HandleListRuns(w http.ResponseWriter, r *http.Req
 	})
 }
 
+// HandleListActiveRuns handles GET /api/orchestrator/runs/active requests.
+// Returns only active runs (running or pending status).
+func (h *OrchestrationHandler) HandleListActiveRuns(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if h.manager == nil {
+		writeJSON(w, http.StatusServiceUnavailable, RunStatusResponse{
+			Success: false,
+			Error:   "orchestration not available",
+		})
+		return
+	}
+
+	runs := h.manager.ListRuns()
+	wireRuns := make([]RunStatusWire, 0)
+	for _, run := range runs {
+		// Only include active runs (running or pending)
+		if run.Status == RunStatusRunning || run.Status == RunStatusPending {
+			wireRuns = append(wireRuns, *runStateToWire(run))
+		}
+	}
+
+	writeJSON(w, http.StatusOK, RunStatusResponse{
+		Success: true,
+		Runs:    wireRuns,
+	})
+}
+
+// HandleUpdateRunConfig handles PATCH /api/orchestrator/runs/:id/config requests.
+// Allows updating configuration of a running orchestration.
+func (h *OrchestrationHandler) HandleUpdateRunConfig(w http.ResponseWriter, r *http.Request, runID string) {
+	if r.Method != http.MethodPatch {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if h.manager == nil {
+		writeJSON(w, http.StatusServiceUnavailable, UpdateRunConfigResponse{
+			Success: false,
+			Error:   "orchestration not available",
+		})
+		return
+	}
+
+	var req UpdateRunConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, UpdateRunConfigResponse{
+			Success: false,
+			Error:   "invalid request body: " + err.Error(),
+		})
+		return
+	}
+
+	err := h.manager.UpdateRunConfig(runID, req)
+	if err != nil {
+		logging.Warn("failed to update run config",
+			"run_id", runID,
+			"error", err)
+
+		writeJSON(w, http.StatusInternalServerError, UpdateRunConfigResponse{
+			Success: false,
+			Error:   err.Error(),
+		})
+		return
+	}
+
+	logging.Info("updated run config via HTTP", "run_id", runID)
+
+	writeJSON(w, http.StatusOK, UpdateRunConfigResponse{
+		Success: true,
+	})
+}
+
 // runStateToWire converts RunState to wire format.
 func runStateToWire(rs *RunState) *RunStatusWire {
 	if rs == nil {
@@ -304,12 +394,30 @@ func (h *OrchestrationHandler) RouteOrchestrator(w http.ResponseWriter, r *http.
 		return
 	}
 
+	// GET /api/orchestrator/runs/active - list active runs only
+	if path == "/api/orchestrator/runs/active" && r.Method == http.MethodGet {
+		h.HandleListActiveRuns(w, r)
+		return
+	}
+
 	// GET /api/orchestrator/runs/:id - get specific run status
-	if strings.HasPrefix(path, "/api/orchestrator/runs/") && r.Method == http.MethodGet {
+	// PATCH /api/orchestrator/runs/:id/config - update run configuration
+	if strings.HasPrefix(path, "/api/orchestrator/runs/") {
 		parts := strings.Split(strings.TrimPrefix(path, "/api/orchestrator/runs/"), "/")
 		if len(parts) >= 1 && parts[0] != "" {
-			h.HandleGetRunStatus(w, r, parts[0])
-			return
+			runID := parts[0]
+
+			// PATCH /api/orchestrator/runs/:id/config
+			if len(parts) >= 2 && parts[1] == "config" && r.Method == http.MethodPatch {
+				h.HandleUpdateRunConfig(w, r, runID)
+				return
+			}
+
+			// GET /api/orchestrator/runs/:id
+			if r.Method == http.MethodGet {
+				h.HandleGetRunStatus(w, r, runID)
+				return
+			}
 		}
 	}
 

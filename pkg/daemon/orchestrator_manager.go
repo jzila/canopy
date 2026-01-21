@@ -348,6 +348,45 @@ func (m *OrchestratorManager) GetActiveRunForRepo(repoPath string) (*RunState, e
 	return m.GetRunStatus(runIDI.(string))
 }
 
+// UpdateRunConfig updates the configuration of a running orchestration.
+func (m *OrchestratorManager) UpdateRunConfig(runID string, req UpdateRunConfigRequest) error {
+	runStateI, ok := m.runs.Load(runID)
+	if !ok {
+		return fmt.Errorf("run not found: %s", runID)
+	}
+	runState := runStateI.(*RunState)
+
+	runState.mu.Lock()
+	defer runState.mu.Unlock()
+
+	// Update concurrency if specified
+	if req.Concurrency != nil {
+		runState.Config.Concurrency = *req.Concurrency
+		// If we have an active orchestrator, update its concurrency
+		if runState.orch != nil {
+			runState.orch.SetConcurrency(*req.Concurrency)
+		}
+	}
+
+	// Update max priority if specified
+	if req.MaxPriority != nil {
+		runState.Config.MaxPriority = *req.MaxPriority
+	}
+
+	// Update watch mode if specified
+	if req.Watch != nil {
+		runState.Config.Watch = *req.Watch
+		runState.WatchMode = *req.Watch
+	}
+
+	// Update poll interval if specified
+	if req.PollInterval != nil {
+		runState.Config.PollInterval = time.Duration(*req.PollInterval) * time.Millisecond
+	}
+
+	return nil
+}
+
 // runOrchestrator executes the orchestrator and handles completion.
 func (m *OrchestratorManager) runOrchestrator(ctx context.Context, runState *RunState) {
 	// Update status to running
