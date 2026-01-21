@@ -421,6 +421,14 @@ export const LiveFeed: React.FC<LiveFeedProps> = ({ agentId }) => {
   // Get live feed events from store
   const events = useStateStore((state) => state.agents[agentId]?.liveFeed || []);
 
+  // Reset auto-scroll when switching agents
+  useEffect(() => {
+    shouldAutoScroll.current = true;
+    if (containerRef.current) {
+      containerRef.current.scrollTop = 0;
+    }
+  }, [agentId]);
+
   // Auto-scroll to bottom when new events arrive
   useEffect(() => {
     if (shouldAutoScroll.current && containerRef.current) {

@@ -137,6 +137,15 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({ agentId }) => {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  // Reset terminal when agentId changes
+  useEffect(() => {
+    if (!xtermRef.current) return;
+
+    // Clear terminal and reset output tracking for new agent
+    xtermRef.current.clear();
+    lastOutputRef.current = '';
+  }, [agentId]);
+
   // Update terminal output when agent output changes
   useEffect(() => {
     if (!xtermRef.current || !agent) return;
