@@ -5,52 +5,59 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
-	"github.com/jzila/canopy/pkg/config"
 	"github.com/pelletier/go-toml/v2"
 )
 
-// Type aliases for backward compatibility.
-// These types are now defined in pkg/config and should be used from there.
-// These aliases are deprecated and will be removed in a future version.
-type (
-	// ValidationConfig is deprecated. Use config.Config instead.
-	// Deprecated: Use config.Config and access validation fields directly.
-	ValidationConfig = legacyValidationConfig
-
-	// ValidationSettings is deprecated. Use config.ValidationSettings instead.
-	ValidationSettings = config.ValidationSettings
-
-	// StepConfig is deprecated. Use config.StepConfig instead.
-	StepConfig = config.StepConfig
-
-	// ValidationError is deprecated. Use config.ValidationError instead.
-	ValidationError = config.ValidationError
-
-	// ValidationErrors is deprecated. Use config.ValidationErrors instead.
-	ValidationErrors = config.ValidationErrors
-)
-
-// legacyValidationConfig is the old validation config structure used for backward compatibility
-type legacyValidationConfig struct {
-	Validation config.ValidationSettings `toml:"validation"`
+// ValidationConfig represents the .canopy/validation.toml configuration
+type ValidationConfig struct {
+	Validation ValidationSettings `toml:"validation"`
 }
 
-// DefaultValidationConfig returns a config with validation disabled.
-// Deprecated: Use config.DefaultConfig() instead.
+// ValidationSettings contains validation options
+type ValidationSettings struct {
+	// Enabled controls whether validation is active (default: false)
+	Enabled bool `toml:"enabled"`
+	// Strict mode fails the task if any validation step fails (default: false)
+	Strict bool `toml:"strict"`
+	// Timeout is the default timeout for all validation steps (e.g., "5m", "30s")
+	Timeout string `toml:"timeout"`
+	// MaxRepairAttempts is the maximum number of repair attempts before giving up (default: 3)
+	MaxRepairAttempts int `toml:"max_repair_attempts"`
+	// Steps defines the validation steps to run
+	Steps []StepConfig `toml:"steps"`
+}
+
+// StepConfig defines a single validation step
+type StepConfig struct {
+	// Name is a human-readable identifier for this step
+	Name string `toml:"name"`
+	// Command is the shell command to execute
+	Command string `toml:"command"`
+	// Timeout overrides the global timeout for this step (e.g., "2m", "10s")
+	Timeout string `toml:"timeout"`
+	// Required marks this step as mandatory; if true and it fails, validation fails
+	Required bool `toml:"required"`
+}
+
+// DefaultValidationConfig returns a config with validation disabled
 func DefaultValidationConfig() *ValidationConfig {
-	def := config.DefaultConfig()
 	return &ValidationConfig{
-		Validation: def.Validation,
+		Validation: ValidationSettings{
+			Enabled:           false,
+			Strict:            false,
+			Timeout:           "5m",
+			MaxRepairAttempts: 3,
+			Steps:             []StepConfig{},
+		},
 	}
 }
 
 // LoadValidationConfig loads validation configuration from .canopy/validation.toml
 // Returns a default config with validation disabled if the file doesn't exist.
 // Returns an error if the file exists but cannot be read, parsed, or is invalid.
-//
-// Deprecated: Use config.LoadConfig() instead and access validation fields directly.
 func LoadValidationConfig(workDir string) (*ValidationConfig, error) {
 	configPath := filepath.Join(workDir, ".canopy", "validation.toml")
 
@@ -62,17 +69,44 @@ func LoadValidationConfig(workDir string) (*ValidationConfig, error) {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
 
-	var cfg ValidationConfig
-	if err := toml.Unmarshal(data, &cfg); err != nil {
+	var config ValidationConfig
+	if err := toml.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
 
 	// Validate the loaded configuration
-	if err := cfg.Validate(); err != nil {
+	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid config: %w", err)
 	}
 
-	return &cfg, nil
+	return &config, nil
+}
+
+// ValidationError contains details about a configuration validation failure
+type ValidationError struct {
+	Field   string
+	Message string
+}
+
+func (e *ValidationError) Error() string {
+	return fmt.Sprintf("%s: %s", e.Field, e.Message)
+}
+
+// ValidationErrors is a collection of validation errors
+type ValidationErrors []ValidationError
+
+func (e ValidationErrors) Error() string {
+	if len(e) == 0 {
+		return "no validation errors"
+	}
+	if len(e) == 1 {
+		return e[0].Error()
+	}
+	var msgs []string
+	for _, err := range e {
+		msgs = append(msgs, err.Error())
+	}
+	return fmt.Sprintf("multiple validation errors:\n  - %s", strings.Join(msgs, "\n  - "))
 }
 
 // Validate checks the configuration for errors and returns all validation issues found.
@@ -82,32 +116,78 @@ func (c *ValidationConfig) Validate() error {
 		return nil
 	}
 
-	// Convert to config.Config and validate
-	cfg := &config.Config{
-		Validation: c.Validation,
+	var errs ValidationErrors
+
+	// Validate global timeout format
+	if c.Validation.Timeout != "" {
+		if _, err := time.ParseDuration(c.Validation.Timeout); err != nil {
+			errs = append(errs, ValidationError{
+				Field:   "validation.timeout",
+				Message: fmt.Sprintf("invalid duration %q (expected e.g., \"5m\", \"30s\", \"1h\")", c.Validation.Timeout),
+			})
+		}
 	}
-	return cfg.ValidateWithoutPaths()
+
+	// Validate each step
+	for i, step := range c.Validation.Steps {
+		stepPrefix := fmt.Sprintf("validation.steps[%d]", i)
+
+		// Name is required
+		if strings.TrimSpace(step.Name) == "" {
+			errs = append(errs, ValidationError{
+				Field:   stepPrefix + ".name",
+				Message: "name is required",
+			})
+		}
+
+		// Command is required
+		if strings.TrimSpace(step.Command) == "" {
+			errs = append(errs, ValidationError{
+				Field:   stepPrefix + ".command",
+				Message: "command is required",
+			})
+		}
+
+		// Validate step timeout format if provided
+		if step.Timeout != "" {
+			if _, err := time.ParseDuration(step.Timeout); err != nil {
+				errs = append(errs, ValidationError{
+					Field:   stepPrefix + ".timeout",
+					Message: fmt.Sprintf("invalid duration %q (expected e.g., \"2m\", \"30s\")", step.Timeout),
+				})
+			}
+		}
+	}
+
+	if len(errs) > 0 {
+		return errs
+	}
+	return nil
 }
 
 // GetTimeout parses and returns the global timeout duration from config.
 // Returns the default (5 minutes) if not set or invalid.
 func (c *ValidationConfig) GetTimeout() time.Duration {
-	if c == nil {
+	if c == nil || c.Validation.Timeout == "" {
 		return 5 * time.Minute
 	}
-	cfg := &config.Config{
-		Validation: c.Validation,
+	d, err := time.ParseDuration(c.Validation.Timeout)
+	if err != nil {
+		return 5 * time.Minute
 	}
-	return cfg.GetValidationTimeout()
+	return d
 }
 
 // GetStepTimeout returns the timeout for a specific step.
 // Falls back to the global timeout if the step doesn't have one.
 func (c *ValidationConfig) GetStepTimeout(step *StepConfig) time.Duration {
-	cfg := &config.Config{
-		Validation: c.Validation,
+	if step.Timeout != "" {
+		d, err := time.ParseDuration(step.Timeout)
+		if err == nil {
+			return d
+		}
 	}
-	return cfg.GetStepTimeout(step)
+	return c.GetTimeout()
 }
 
 // IsEnabled returns whether validation is enabled.
@@ -130,9 +210,7 @@ func (c *ValidationConfig) GetMaxRepairAttempts() int {
 }
 
 // SaveConfig saves validation configuration to .canopy/validation.toml
-//
-// Deprecated: Use config.SaveConfig() instead to save the unified config.toml.
-func SaveConfig(workDir string, cfg *ValidationConfig) error {
+func SaveConfig(workDir string, config *ValidationConfig) error {
 	configDir := filepath.Join(workDir, ".canopy")
 	if err := os.MkdirAll(configDir, 0755); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
@@ -140,14 +218,13 @@ func SaveConfig(workDir string, cfg *ValidationConfig) error {
 
 	configPath := filepath.Join(configDir, "validation.toml")
 
-	data, err := toml.Marshal(cfg)
+	data, err := toml.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 
 	// Add header comment
 	header := `# Canopy Validation Configuration
-# DEPRECATED: This file is deprecated. Configuration should be in config.toml.
 # Defines validation steps to run after task completion.
 #
 # Example:

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/jzila/canopy/pkg/sandbox"
@@ -148,18 +147,24 @@ func TestRunApplyAnswers(t *testing.T) {
 		}
 
 		files := result["files_created"].([]interface{})
-		if len(files) != 1 {
-			t.Errorf("expected 1 file created (consolidated config.toml), got %d", len(files))
+		if len(files) != 2 {
+			t.Errorf("expected 2 files created, got %d", len(files))
 		}
 
-		// Verify config.toml exists
-		configPath := filepath.Join(tmpDir, ".canopy", "config.toml")
-		if _, err := os.Stat(configPath); os.IsNotExist(err) {
-			t.Error("config.toml was not created")
+		// Verify sandbox.toml exists
+		sandboxPath := filepath.Join(tmpDir, ".canopy", "sandbox.toml")
+		if _, err := os.Stat(sandboxPath); os.IsNotExist(err) {
+			t.Error("sandbox.toml was not created")
 		}
 
-		// Read and verify config
-		data, _ := os.ReadFile(configPath)
+		// Verify validation.toml exists
+		validationPath := filepath.Join(tmpDir, ".canopy", "validation.toml")
+		if _, err := os.Stat(validationPath); os.IsNotExist(err) {
+			t.Error("validation.toml was not created")
+		}
+
+		// Read and verify validation config
+		data, _ := os.ReadFile(validationPath)
 		content := string(data)
 		if !contains(content, "enabled = true") {
 			t.Error("validation should be enabled")
@@ -213,38 +218,16 @@ func TestRunApplyAnswers(t *testing.T) {
 			t.Errorf("expected 1 file created, got %d", len(files))
 		}
 
-		// Verify config.toml exists
-		configPath := filepath.Join(tmpDir, ".canopy", "config.toml")
-		if _, err := os.Stat(configPath); os.IsNotExist(err) {
-			t.Error("config.toml was not created")
+		// Verify sandbox.toml exists
+		sandboxPath := filepath.Join(tmpDir, ".canopy", "sandbox.toml")
+		if _, err := os.Stat(sandboxPath); os.IsNotExist(err) {
+			t.Error("sandbox.toml was not created")
 		}
 
-		// Verify config.toml has validation section with enabled = false
-		data, _ := os.ReadFile(configPath)
-		content := string(data)
-		// Check that the validation section exists and enabled is false
-		if !contains(content, "[validation]") {
-			t.Error("config.toml should contain [validation] section")
-		}
-		// Look for the validation.enabled field specifically (note: sandbox.enabled = true is separate)
-		// The TOML file will have the validation section with enabled = false
-		validationSection := ""
-		lines := strings.Split(content, "\n")
-		inValidation := false
-		for _, line := range lines {
-			if line == "[validation]" {
-				inValidation = true
-				continue
-			}
-			if inValidation && strings.HasPrefix(line, "[") {
-				break
-			}
-			if inValidation {
-				validationSection += line + "\n"
-			}
-		}
-		if contains(validationSection, "enabled = true") {
-			t.Error("validation.enabled should be false")
+		// Verify validation.toml does NOT exist
+		validationPath := filepath.Join(tmpDir, ".canopy", "validation.toml")
+		if _, err := os.Stat(validationPath); !os.IsNotExist(err) {
+			t.Error("validation.toml should not be created when validation is disabled")
 		}
 	})
 

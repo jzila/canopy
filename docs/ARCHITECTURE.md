@@ -84,7 +84,6 @@ canopy/
 ├── pkg/
 │   ├── orchestrator/        # Main orchestration logic
 │   │   ├── orchestrator.go  # Orchestrator struct, Run() loop
-│   │   ├── prompt.go        # Prompt filtering logic
 │   │   └── filter_test.go   # Filter tests
 │   │
 │   ├── scheduler/           # Parallel task execution
