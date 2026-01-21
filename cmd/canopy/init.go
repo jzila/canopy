@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/jzila/canopy/pkg/config"
 	"github.com/jzila/canopy/pkg/sandbox"
-	"github.com/jzila/canopy/pkg/validation"
 	"github.com/spf13/cobra"
 )
 
@@ -25,25 +25,24 @@ var (
 
 var initCmd = &cobra.Command{
 	Use:   "init",
-	Short: "Initialize canopy workspace with sandbox configuration",
+	Short: "Initialize canopy workspace with configuration",
 	Long: `Initializes a canopy workspace in the current directory.
 
 This command:
 1. Initializes beads (bd init) for task tracking if not already done
 2. Scans the project to detect tools and languages used
-3. Creates .canopy/sandbox.toml with recommended sandbox configuration
+3. Creates .canopy/config.toml with recommended configuration
 
-The sandbox configuration controls what paths are exposed to agents
-when running with --sandbox enabled. It supports:
-- Read-only tool paths (e.g., ~/.nvm, ~/.cargo)
-- Config files to copy (e.g., ~/.npmrc, ~/.gitconfig)
-- Cache directories for read-write access (e.g., ~/.npm)
+The configuration file controls:
+- Sandbox settings (paths exposed to agents, network policy)
+- Resource limits (memory, processes, timeouts)
+- Validation steps (build, test commands to run after merges)
 
 Examples:
   # Interactive initialization
   canopy init
 
-  # Re-run detection and reconfigure sandbox
+  # Re-run detection and reconfigure
   canopy init --reconfigure
 
   # Non-interactive mode (accept all defaults)
@@ -64,7 +63,7 @@ Examples:
 }
 
 func init() {
-	initCmd.Flags().BoolVar(&initReconfigure, "reconfigure", false, "Re-run detection and reconfigure sandbox (overwrites existing config)")
+	initCmd.Flags().BoolVar(&initReconfigure, "reconfigure", false, "Re-run detection and reconfigure (overwrites existing config)")
 	initCmd.Flags().BoolVar(&initSkipBeads, "skip-beads", false, "Skip beads initialization")
 	initCmd.Flags().BoolVar(&initNonInteractive, "non-interactive", false, "Accept all defaults without prompting")
 	initCmd.Flags().BoolVarP(&initNonInteractive, "yes", "y", false, "Accept all defaults without prompting (alias for --non-interactive)")
@@ -112,18 +111,18 @@ func runInit(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Step 2: Check for existing sandbox config
-	configPath := filepath.Join(workDir, ".canopy", "sandbox.toml")
+	// Step 2: Check for existing config
+	configPath := filepath.Join(workDir, ".canopy", "config.toml")
 
 	if _, err := os.Stat(configPath); err == nil && !initReconfigure {
-		fmt.Printf("\nSandbox configuration already exists at %s\n", configPath)
+		fmt.Printf("\nConfiguration already exists at %s\n", configPath)
 		fmt.Println("Use --reconfigure to regenerate the configuration.")
 		return nil
 	}
 
-	// Step 3: Run interactive sandbox bootstrapper
+	// Step 3: Run interactive configuration bootstrapper
 	fmt.Println("\n" + strings.Repeat("=", 50))
-	fmt.Println("Canopy Sandbox Bootstrapper")
+	fmt.Println("Canopy Configuration Bootstrapper")
 	fmt.Println(strings.Repeat("=", 50))
 
 	fmt.Println("\nScanning project for tool requirements...")
@@ -153,47 +152,47 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	// Build recommended config
-	config := sandbox.DefaultSandboxConfig()
-	config.Paths.ReadOnly = collapsePaths(detection.ToolPaths)
-	config.Paths.CopyConfigs = collapsePaths(detection.ConfigPaths)
-	config.Paths.CacheMounts = collapsePaths(detection.CachePaths)
+	cfg := config.DefaultConfig()
+	cfg.Paths.ReadOnly = collapsePaths(detection.ToolPaths)
+	cfg.Paths.CopyConfigs = collapsePaths(detection.ConfigPaths)
+	cfg.Paths.CacheMounts = collapsePaths(detection.CachePaths)
 
 	// Display recommended configuration
 	fmt.Println("\nRecommended Sandbox Configuration:")
 	fmt.Println(strings.Repeat("-", 40))
 
-	if len(config.Paths.ReadOnly) > 0 {
+	if len(cfg.Paths.ReadOnly) > 0 {
 		fmt.Println("\nRead-Only Tool Paths:")
 		fmt.Println("  These paths will be visible to agents but not writable.")
-		for _, p := range config.Paths.ReadOnly {
+		for _, p := range cfg.Paths.ReadOnly {
 			fmt.Printf("  %s\n", p)
 		}
 	}
 
-	if len(config.Paths.CopyConfigs) > 0 {
+	if len(cfg.Paths.CopyConfigs) > 0 {
 		fmt.Println("\nConfig Copies:")
 		fmt.Println("  These files will be COPIED to each agent's workspace.")
 		fmt.Println("  Agents can modify the copy but not your original.")
-		for _, p := range config.Paths.CopyConfigs {
+		for _, p := range cfg.Paths.CopyConfigs {
 			fmt.Printf("  %s\n", p)
 		}
 	}
 
-	if len(config.Paths.CacheMounts) > 0 {
+	if len(cfg.Paths.CacheMounts) > 0 {
 		fmt.Println("\nShared Cache Mounts:")
 		fmt.Println("  These are mounted read-write for performance.")
 		fmt.Println("  Warning: Agents CAN modify these shared caches.")
-		for _, p := range config.Paths.CacheMounts {
+		for _, p := range cfg.Paths.CacheMounts {
 			fmt.Printf("  %s\n", p)
 		}
 	}
 
 	fmt.Println("\nSecurity Blocklist (never exposed):")
-	for _, p := range sandbox.SecurityBlocklist[:5] { // Show first 5
+	for _, p := range config.SecurityBlocklist[:5] { // Show first 5
 		fmt.Printf("  %s - BLOCKED\n", p)
 	}
-	if len(sandbox.SecurityBlocklist) > 5 {
-		fmt.Printf("  ... and %d more\n", len(sandbox.SecurityBlocklist)-5)
+	if len(config.SecurityBlocklist) > 5 {
+		fmt.Printf("  ... and %d more\n", len(config.SecurityBlocklist)-5)
 	}
 
 	// Confirm or customize
@@ -210,20 +209,20 @@ func runInit(cmd *cobra.Command, args []string) error {
 			fmt.Println("Aborted.")
 			return nil
 		case "c", "customize":
-			config = customizeConfig(config, reader)
+			cfg = customizeConfig(cfg, reader)
 		default:
 			fmt.Println("Unknown response, proceeding with defaults.")
 		}
 	}
 
 	// Save config
-	if err := sandbox.SaveConfig(workDir, config); err != nil {
+	if err := config.SaveConfig(workDir, cfg); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
 
 	fmt.Printf("\nWriting %s...\n", configPath)
 	fmt.Println("Done! Run 'canopy run --sandbox' to start parallel agents with sandboxing.")
-	fmt.Println("\nTip: Edit .canopy/sandbox.toml to customize paths.")
+	fmt.Println("\nTip: Edit .canopy/config.toml to customize paths and validation.")
 	fmt.Println("     Run 'canopy init --reconfigure' to re-run this wizard.")
 
 	return nil
@@ -249,50 +248,50 @@ func collapsePaths(paths []string) []string {
 }
 
 // customizeConfig allows interactive customization of the config
-func customizeConfig(config *sandbox.SandboxConfig, reader *bufio.Reader) *sandbox.SandboxConfig {
+func customizeConfig(cfg *config.Config, reader *bufio.Reader) *config.Config {
 	fmt.Println("\n--- Customize Configuration ---")
 
 	// Customize read-only paths
 	fmt.Println("\nRead-only tool paths (comma-separated, or 'keep' to keep current):")
-	fmt.Printf("Current: %s\n", strings.Join(config.Paths.ReadOnly, ", "))
+	fmt.Printf("Current: %s\n", strings.Join(cfg.Paths.ReadOnly, ", "))
 	fmt.Print("> ")
 	input, _ := reader.ReadString('\n')
 	input = strings.TrimSpace(input)
 	if input != "" && input != "keep" {
-		config.Paths.ReadOnly = splitAndTrim(input)
+		cfg.Paths.ReadOnly = splitAndTrim(input)
 	}
 
 	// Customize copy configs
 	fmt.Println("\nConfig files to copy (comma-separated, or 'keep'):")
-	fmt.Printf("Current: %s\n", strings.Join(config.Paths.CopyConfigs, ", "))
+	fmt.Printf("Current: %s\n", strings.Join(cfg.Paths.CopyConfigs, ", "))
 	fmt.Print("> ")
 	input, _ = reader.ReadString('\n')
 	input = strings.TrimSpace(input)
 	if input != "" && input != "keep" {
-		config.Paths.CopyConfigs = splitAndTrim(input)
+		cfg.Paths.CopyConfigs = splitAndTrim(input)
 	}
 
 	// Customize cache mounts
 	fmt.Println("\nCache mounts (comma-separated, or 'keep'):")
-	fmt.Printf("Current: %s\n", strings.Join(config.Paths.CacheMounts, ", "))
+	fmt.Printf("Current: %s\n", strings.Join(cfg.Paths.CacheMounts, ", "))
 	fmt.Print("> ")
 	input, _ = reader.ReadString('\n')
 	input = strings.TrimSpace(input)
 	if input != "" && input != "keep" {
-		config.Paths.CacheMounts = splitAndTrim(input)
+		cfg.Paths.CacheMounts = splitAndTrim(input)
 	}
 
 	// Network policy
 	fmt.Println("\nNetwork policy (allow/deny):")
-	fmt.Printf("Current: %s\n", config.Sandbox.Network)
+	fmt.Printf("Current: %s\n", cfg.Sandbox.Network)
 	fmt.Print("> ")
 	input, _ = reader.ReadString('\n')
 	input = strings.TrimSpace(strings.ToLower(input))
 	if input == "allow" || input == "deny" {
-		config.Sandbox.Network = input
+		cfg.Sandbox.Network = input
 	}
 
-	return config
+	return cfg
 }
 
 func splitAndTrim(s string) []string {
@@ -590,22 +589,16 @@ func runApplyAnswers(workDir string, answersJSON string) error {
 		return fmt.Errorf("project detection failed: %w", err)
 	}
 
-	// Create sandbox config
-	sandboxConfig := sandbox.DefaultSandboxConfig()
-	sandboxConfig.Paths.ReadOnly = collapsePaths(detection.ToolPaths)
-	sandboxConfig.Paths.CopyConfigs = collapsePaths(detection.ConfigPaths)
-	sandboxConfig.Paths.CacheMounts = collapsePaths(detection.CachePaths)
+	// Create consolidated config
+	cfg := config.DefaultConfig()
+	cfg.Paths.ReadOnly = collapsePaths(detection.ToolPaths)
+	cfg.Paths.CopyConfigs = collapsePaths(detection.ConfigPaths)
+	cfg.Paths.CacheMounts = collapsePaths(detection.CachePaths)
 
-	if err := sandbox.SaveConfig(workDir, sandboxConfig); err != nil {
-		return fmt.Errorf("failed to save sandbox config: %w", err)
-	}
-	fmt.Fprintf(os.Stderr, "Created .canopy/sandbox.toml\n")
-
-	// Create validation config if enabled
+	// Configure validation if enabled
 	if answers.ConfirmValidation == "yes" {
-		validationConfig := validation.DefaultValidationConfig()
-		validationConfig.Validation.Enabled = true
-		validationConfig.Validation.Strict = answers.ValidationMode == "strict"
+		cfg.Validation.Enabled = true
+		cfg.Validation.Strict = answers.ValidationMode == "strict"
 
 		// Get validation detection for command mapping
 		validationDetection := sandbox.DetectValidationCommands(workDir, detection.ProjectTypes)
@@ -617,7 +610,7 @@ func runApplyAnswers(workDir string, answersJSON string) error {
 		// Add selected validation steps
 		for _, stepName := range answers.ValidationSteps {
 			if cmd, ok := commandMap[stepName]; ok {
-				validationConfig.Validation.Steps = append(validationConfig.Validation.Steps, validation.StepConfig{
+				cfg.Validation.Steps = append(cfg.Validation.Steps, config.StepConfig{
 					Name:     stepName,
 					Command:  cmd,
 					Required: true,
@@ -629,30 +622,27 @@ func runApplyAnswers(workDir string, answersJSON string) error {
 		if answers.ExtraCommands != "" {
 			extras := splitAndTrim(answers.ExtraCommands)
 			for _, extra := range extras {
-				validationConfig.Validation.Steps = append(validationConfig.Validation.Steps, validation.StepConfig{
+				cfg.Validation.Steps = append(cfg.Validation.Steps, config.StepConfig{
 					Name:     extractCommandName(extra),
 					Command:  extra,
 					Required: false,
 				})
 			}
 		}
-
-		if err := validation.SaveConfig(workDir, validationConfig); err != nil {
-			return fmt.Errorf("failed to save validation config: %w", err)
-		}
-		fmt.Fprintf(os.Stderr, "Created .canopy/validation.toml\n")
 	}
+
+	// Save consolidated config
+	if err := config.SaveConfig(workDir, cfg); err != nil {
+		return fmt.Errorf("failed to save config: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "Created .canopy/config.toml\n")
 
 	// Output success message
 	result := map[string]interface{}{
 		"success": true,
 		"files_created": []string{
-			".canopy/sandbox.toml",
+			".canopy/config.toml",
 		},
-	}
-
-	if answers.ConfirmValidation == "yes" {
-		result["files_created"] = append(result["files_created"].([]string), ".canopy/validation.toml")
 	}
 
 	encoder := json.NewEncoder(os.Stdout)
