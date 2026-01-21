@@ -165,7 +165,7 @@ export const ConfigSettingsCard: React.FC<ConfigSettingsCardProps> = ({
             </label>
             <input
               type="text"
-              value={(editState.exclude_labels ?? config.exclude_labels).join(', ')}
+              value={(editState.exclude_labels ?? config.exclude_labels ?? []).join(', ')}
               onChange={(e) =>
                 setEditState((s) => ({
                   ...s,
