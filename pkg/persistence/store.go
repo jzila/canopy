@@ -818,6 +818,59 @@ func (s *Store) SetAgentArchived(agentID string, archived bool) error {
 	return err
 }
 
+// UpdateAgentCompletion updates only the completion-related fields of an agent.
+// This does NOT update merge/validation/repair fields, preserving any previously
+// persisted merge status. Use this when handling agent completion events.
+func (s *Store) UpdateAgentCompletion(agent *Agent) error {
+	query := `
+		UPDATE agents SET
+			status = ?,
+			finished_at = ?,
+			duration_seconds = ?,
+			exit_code = ?,
+			error_message = ?,
+			stdout = ?,
+			stderr = ?,
+			input_tokens = ?,
+			output_tokens = ?,
+			total_tokens = ?,
+			cache_creation_tokens = ?,
+			cache_read_tokens = ?,
+			cost_usd = ?,
+			files_changed = ?,
+			git_commits_created = ?,
+			num_turns = ?,
+			result_message = ?
+		WHERE id = ?
+	`
+	var finishedAt *int64
+	if agent.FinishedAt != nil {
+		ts := agent.FinishedAt.Unix()
+		finishedAt = &ts
+	}
+	_, err := s.db.Exec(query,
+		string(agent.Status),
+		finishedAt,
+		agent.DurationSeconds,
+		agent.ExitCode,
+		agent.ErrorMessage,
+		agent.Stdout,
+		agent.Stderr,
+		agent.InputTokens,
+		agent.OutputTokens,
+		agent.TotalTokens,
+		agent.CacheCreationTokens,
+		agent.CacheReadTokens,
+		agent.CostUSD,
+		agent.FilesChanged,
+		agent.GitCommitsCreated,
+		agent.NumTurns,
+		agent.ResultMessage,
+		agent.ID,
+	)
+	return err
+}
+
 // UpdateAgentMergeResult updates only the merge result fields of an agent
 func (s *Store) UpdateAgentMergeResult(agentID string, mergeStatus MergeStatus, commitsApplied int, hadConflict, resolverSpawned bool, mergeError string) error {
 	query := `

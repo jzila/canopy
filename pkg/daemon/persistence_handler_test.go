@@ -316,6 +316,495 @@ func TestPersistenceHandler_SuccessfulRun(t *testing.T) {
 	}
 }
 
+func TestPersistenceHandler_AgentMergeStatus(t *testing.T) {
+	// Create a temporary database
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	store, err := persistence.NewStoreWithPath(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// Create event bus and persistence handler
+	eventBus := NewEventBus()
+	handler := NewPersistenceHandler(store, eventBus)
+	unsubscribe := handler.Start()
+	defer unsubscribe()
+
+	// Start a run first
+	runID := "test-run-merge"
+	eventBus.Publish(Event{
+		Type:      EventRunStarted,
+		Timestamp: time.Now(),
+		Payload: map[string]interface{}{
+			"run_id":     runID,
+			"task_count": 1,
+		},
+	})
+	time.Sleep(10 * time.Millisecond)
+
+	// Start an agent
+	agentID := "agent-merge-test"
+	eventBus.Publish(Event{
+		Type:      EventAgentStarted,
+		Timestamp: time.Now(),
+		Payload: map[string]interface{}{
+			"agent_id":   agentID,
+			"task_id":    "task-merge",
+			"task_title": "Merge Test Task",
+		},
+	})
+	time.Sleep(10 * time.Millisecond)
+
+	// Verify agent was created
+	agent, err := store.GetAgent(agentID)
+	if err != nil {
+		t.Fatalf("Failed to get agent: %v", err)
+	}
+	if agent == nil {
+		t.Fatal("Agent was not created")
+	}
+
+	// Send merge status event with "merged" status (final status)
+	eventBus.Publish(Event{
+		Type:      EventAgentMergeStatus,
+		Timestamp: time.Now(),
+		Payload: map[string]interface{}{
+			"agent_id":         agentID,
+			"merge_status":     "merged",
+			"commits_applied":  3,
+			"had_conflict":     true,
+			"resolver_spawned": true,
+		},
+	})
+	time.Sleep(10 * time.Millisecond)
+
+	// Verify merge status was persisted
+	agent, err = store.GetAgent(agentID)
+	if err != nil {
+		t.Fatalf("Failed to get agent after merge: %v", err)
+	}
+	if agent.MergeStatus != persistence.MergeStatusMerged {
+		t.Errorf("Expected merge_status 'merged', got %q", agent.MergeStatus)
+	}
+	if agent.MergeCommitsApplied != 3 {
+		t.Errorf("Expected merge_commits_applied 3, got %d", agent.MergeCommitsApplied)
+	}
+	if !agent.MergeHadConflict {
+		t.Error("Expected merge_had_conflict to be true")
+	}
+	if !agent.MergeResolverSpawned {
+		t.Error("Expected merge_resolver_spawned to be true")
+	}
+}
+
+func TestPersistenceHandler_AgentMergeStatus_Failed(t *testing.T) {
+	// Create a temporary database
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	store, err := persistence.NewStoreWithPath(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// Create event bus and persistence handler
+	eventBus := NewEventBus()
+	handler := NewPersistenceHandler(store, eventBus)
+	unsubscribe := handler.Start()
+	defer unsubscribe()
+
+	// Start a run first
+	runID := "test-run-merge-fail"
+	eventBus.Publish(Event{
+		Type:      EventRunStarted,
+		Timestamp: time.Now(),
+		Payload: map[string]interface{}{
+			"run_id":     runID,
+			"task_count": 1,
+		},
+	})
+	time.Sleep(10 * time.Millisecond)
+
+	// Start an agent
+	agentID := "agent-merge-fail-test"
+	eventBus.Publish(Event{
+		Type:      EventAgentStarted,
+		Timestamp: time.Now(),
+		Payload: map[string]interface{}{
+			"agent_id":   agentID,
+			"task_id":    "task-merge-fail",
+			"task_title": "Merge Fail Test Task",
+		},
+	})
+	time.Sleep(10 * time.Millisecond)
+
+	// Send merge status event with "failed" status
+	eventBus.Publish(Event{
+		Type:      EventAgentMergeStatus,
+		Timestamp: time.Now(),
+		Payload: map[string]interface{}{
+			"agent_id":     agentID,
+			"merge_status": "failed",
+			"error":        "merge conflict could not be resolved",
+			"had_conflict": true,
+		},
+	})
+	time.Sleep(10 * time.Millisecond)
+
+	// Verify merge status was persisted
+	agent, err := store.GetAgent(agentID)
+	if err != nil {
+		t.Fatalf("Failed to get agent after merge: %v", err)
+	}
+	if agent.MergeStatus != persistence.MergeStatusFailed {
+		t.Errorf("Expected merge_status 'failed', got %q", agent.MergeStatus)
+	}
+	if agent.MergeError != "merge conflict could not be resolved" {
+		t.Errorf("Expected merge_error message, got %q", agent.MergeError)
+	}
+	if !agent.MergeHadConflict {
+		t.Error("Expected merge_had_conflict to be true")
+	}
+}
+
+func TestPersistenceHandler_AgentMergeStatus_IntermediateStatusIgnored(t *testing.T) {
+	// Create a temporary database
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	store, err := persistence.NewStoreWithPath(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// Create event bus and persistence handler
+	eventBus := NewEventBus()
+	handler := NewPersistenceHandler(store, eventBus)
+	unsubscribe := handler.Start()
+	defer unsubscribe()
+
+	// Start a run first
+	runID := "test-run-intermediate"
+	eventBus.Publish(Event{
+		Type:      EventRunStarted,
+		Timestamp: time.Now(),
+		Payload: map[string]interface{}{
+			"run_id":     runID,
+			"task_count": 1,
+		},
+	})
+	time.Sleep(10 * time.Millisecond)
+
+	// Start an agent
+	agentID := "agent-intermediate-test"
+	eventBus.Publish(Event{
+		Type:      EventAgentStarted,
+		Timestamp: time.Now(),
+		Payload: map[string]interface{}{
+			"agent_id":   agentID,
+			"task_id":    "task-intermediate",
+			"task_title": "Intermediate Status Test",
+		},
+	})
+	time.Sleep(10 * time.Millisecond)
+
+	// Send intermediate status events (should be ignored for persistence)
+	intermediateStatuses := []string{"pending", "queued", "merging", "resolving"}
+	for _, status := range intermediateStatuses {
+		eventBus.Publish(Event{
+			Type:      EventAgentMergeStatus,
+			Timestamp: time.Now(),
+			Payload: map[string]interface{}{
+				"agent_id":     agentID,
+				"merge_status": status,
+			},
+		})
+	}
+	time.Sleep(10 * time.Millisecond)
+
+	// Verify merge status was NOT persisted (still empty)
+	agent, err := store.GetAgent(agentID)
+	if err != nil {
+		t.Fatalf("Failed to get agent: %v", err)
+	}
+	if agent.MergeStatus != "" {
+		t.Errorf("Expected empty merge_status for intermediate statuses, got %q", agent.MergeStatus)
+	}
+}
+
+func TestPersistenceHandler_AgentMergeStatus_WithValidation(t *testing.T) {
+	// Create a temporary database
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	store, err := persistence.NewStoreWithPath(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// Create event bus and persistence handler
+	eventBus := NewEventBus()
+	handler := NewPersistenceHandler(store, eventBus)
+	unsubscribe := handler.Start()
+	defer unsubscribe()
+
+	// Start a run first
+	runID := "test-run-validation"
+	eventBus.Publish(Event{
+		Type:      EventRunStarted,
+		Timestamp: time.Now(),
+		Payload: map[string]interface{}{
+			"run_id":     runID,
+			"task_count": 1,
+		},
+	})
+	time.Sleep(10 * time.Millisecond)
+
+	// Start an agent
+	agentID := "agent-validation-test"
+	eventBus.Publish(Event{
+		Type:      EventAgentStarted,
+		Timestamp: time.Now(),
+		Payload: map[string]interface{}{
+			"agent_id":   agentID,
+			"task_id":    "task-validation",
+			"task_title": "Validation Test Task",
+		},
+	})
+	time.Sleep(10 * time.Millisecond)
+
+	// Send merge status with validation info
+	eventBus.Publish(Event{
+		Type:      EventAgentMergeStatus,
+		Timestamp: time.Now(),
+		Payload: map[string]interface{}{
+			"agent_id":              agentID,
+			"merge_status":          "merged",
+			"commits_applied":       2,
+			"validation_status":     "passed",
+			"validation_duration_ms": int64(1500),
+			"validation_steps": []interface{}{
+				map[string]interface{}{"name": "build", "passed": true},
+				map[string]interface{}{"name": "test", "passed": true},
+			},
+		},
+	})
+	time.Sleep(10 * time.Millisecond)
+
+	// Verify merge and validation status were persisted
+	agent, err := store.GetAgent(agentID)
+	if err != nil {
+		t.Fatalf("Failed to get agent: %v", err)
+	}
+	if agent.MergeStatus != persistence.MergeStatusMerged {
+		t.Errorf("Expected merge_status 'merged', got %q", agent.MergeStatus)
+	}
+	if agent.ValidationStatus != "passed" {
+		t.Errorf("Expected validation_status 'passed', got %q", agent.ValidationStatus)
+	}
+	if agent.ValidationDuration != 1500 {
+		t.Errorf("Expected validation_duration_ms 1500, got %d", agent.ValidationDuration)
+	}
+}
+
+func TestPersistenceHandler_AgentMergeStatus_WithRepair(t *testing.T) {
+	// Create a temporary database
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	store, err := persistence.NewStoreWithPath(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// Create event bus and persistence handler
+	eventBus := NewEventBus()
+	handler := NewPersistenceHandler(store, eventBus)
+	unsubscribe := handler.Start()
+	defer unsubscribe()
+
+	// Start a run first
+	runID := "test-run-repair"
+	eventBus.Publish(Event{
+		Type:      EventRunStarted,
+		Timestamp: time.Now(),
+		Payload: map[string]interface{}{
+			"run_id":     runID,
+			"task_count": 1,
+		},
+	})
+	time.Sleep(10 * time.Millisecond)
+
+	// Start an agent
+	agentID := "agent-repair-test"
+	eventBus.Publish(Event{
+		Type:      EventAgentStarted,
+		Timestamp: time.Now(),
+		Payload: map[string]interface{}{
+			"agent_id":   agentID,
+			"task_id":    "task-repair",
+			"task_title": "Repair Test Task",
+		},
+	})
+	time.Sleep(10 * time.Millisecond)
+
+	// Send merge status with repair info (validation repairing)
+	eventBus.Publish(Event{
+		Type:      EventAgentMergeStatus,
+		Timestamp: time.Now(),
+		Payload: map[string]interface{}{
+			"agent_id":           agentID,
+			"merge_status":       "merged_needs_repair",
+			"commits_applied":    1,
+			"validation_status":  "repairing",
+			"repair_attempts":    2,
+			"last_repair_output": "Fixed linting errors in main.go",
+		},
+	})
+	time.Sleep(10 * time.Millisecond)
+
+	// Verify repair state was persisted
+	agent, err := store.GetAgent(agentID)
+	if err != nil {
+		t.Fatalf("Failed to get agent: %v", err)
+	}
+	if agent.MergeStatus != persistence.MergeStatusMergedNeedsRepair {
+		t.Errorf("Expected merge_status 'merged_needs_repair', got %q", agent.MergeStatus)
+	}
+	if agent.RepairAttempts != 2 {
+		t.Errorf("Expected repair_attempts 2, got %d", agent.RepairAttempts)
+	}
+	if agent.LastRepairOutput != "Fixed linting errors in main.go" {
+		t.Errorf("Expected last_repair_output, got %q", agent.LastRepairOutput)
+	}
+}
+
+func TestPersistenceHandler_MergeStatusNotOverwrittenByCompletion(t *testing.T) {
+	// This test verifies the fix for the bug where agent completion events
+	// would overwrite previously persisted merge status values.
+	// The sequence is:
+	// 1. Agent started
+	// 2. Merge status event arrives (merge_status = "merged")
+	// 3. Agent completed event arrives
+	// 4. Verify merge_status is still "merged" (not overwritten to empty)
+
+	// Create a temporary database
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	store, err := persistence.NewStoreWithPath(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create store: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	// Create event bus and persistence handler
+	eventBus := NewEventBus()
+	handler := NewPersistenceHandler(store, eventBus)
+	unsubscribe := handler.Start()
+	defer unsubscribe()
+
+	// Start a run first
+	runID := "test-run-overwrite"
+	eventBus.Publish(Event{
+		Type:      EventRunStarted,
+		Timestamp: time.Now(),
+		Payload: map[string]interface{}{
+			"run_id":     runID,
+			"task_count": 1,
+		},
+	})
+	time.Sleep(10 * time.Millisecond)
+
+	// Start an agent
+	agentID := "agent-overwrite-test"
+	eventBus.Publish(Event{
+		Type:      EventAgentStarted,
+		Timestamp: time.Now(),
+		Payload: map[string]interface{}{
+			"agent_id":   agentID,
+			"task_id":    "task-overwrite",
+			"task_title": "Overwrite Test Task",
+		},
+	})
+	time.Sleep(10 * time.Millisecond)
+
+	// Send merge status event BEFORE completion
+	eventBus.Publish(Event{
+		Type:      EventAgentMergeStatus,
+		Timestamp: time.Now(),
+		Payload: map[string]interface{}{
+			"agent_id":              agentID,
+			"merge_status":          "merged",
+			"commits_applied":       5,
+			"had_conflict":          true,
+			"resolver_spawned":      true,
+			"validation_status":     "passed",
+			"validation_duration_ms": int64(2000),
+			"repair_attempts":       1,
+		},
+	})
+	time.Sleep(10 * time.Millisecond)
+
+	// Verify merge status was persisted
+	agent, err := store.GetAgent(agentID)
+	if err != nil {
+		t.Fatalf("Failed to get agent after merge status: %v", err)
+	}
+	if agent.MergeStatus != persistence.MergeStatusMerged {
+		t.Fatalf("Merge status not persisted correctly, got %q", agent.MergeStatus)
+	}
+
+	// Now send agent completion event (this would have overwritten merge status before the fix)
+	eventBus.Publish(Event{
+		Type:      EventAgentCompleted,
+		Timestamp: time.Now(),
+		Payload: map[string]interface{}{
+			"agent_id":      agentID,
+			"exit_code":     0,
+			"duration":      30.0,
+			"input_tokens":  500,
+			"output_tokens": 1000,
+			"cost_usd":      0.10,
+		},
+	})
+	time.Sleep(10 * time.Millisecond)
+
+	// CRITICAL CHECK: Verify merge status was NOT overwritten by completion event
+	agent, err = store.GetAgent(agentID)
+	if err != nil {
+		t.Fatalf("Failed to get agent after completion: %v", err)
+	}
+
+	// Agent completion fields should be updated
+	if agent.Status != persistence.AgentStatusCompleted {
+		t.Errorf("Expected status completed, got %s", agent.Status)
+	}
+	if agent.InputTokens != 500 {
+		t.Errorf("Expected input_tokens 500, got %d", agent.InputTokens)
+	}
+
+	// Merge fields should be preserved (not overwritten to empty/zero)
+	if agent.MergeStatus != persistence.MergeStatusMerged {
+		t.Errorf("REGRESSION: merge_status was overwritten! Expected 'merged', got %q", agent.MergeStatus)
+	}
+	if agent.MergeCommitsApplied != 5 {
+		t.Errorf("REGRESSION: merge_commits_applied was overwritten! Expected 5, got %d", agent.MergeCommitsApplied)
+	}
+	if !agent.MergeHadConflict {
+		t.Error("REGRESSION: merge_had_conflict was overwritten! Expected true")
+	}
+	if !agent.MergeResolverSpawned {
+		t.Error("REGRESSION: merge_resolver_spawned was overwritten! Expected true")
+	}
+
+	// Validation/repair fields should also be preserved
+	if agent.ValidationStatus != "passed" {
+		t.Errorf("REGRESSION: validation_status was overwritten! Expected 'passed', got %q", agent.ValidationStatus)
+	}
+	if agent.ValidationDuration != 2000 {
+		t.Errorf("REGRESSION: validation_duration was overwritten! Expected 2000, got %d", agent.ValidationDuration)
+	}
+	if agent.RepairAttempts != 1 {
+		t.Errorf("REGRESSION: repair_attempts was overwritten! Expected 1, got %d", agent.RepairAttempts)
+	}
+}
+
 func TestRebuildAgentChildLinks(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -436,539 +925,6 @@ func TestRebuildAgentChildLinks(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestPersistenceHandler_AgentMergeStatus_FinalStatuses(t *testing.T) {
-	tests := []struct {
-		name               string
-		mergeStatus        string
-		expectedPersisted  bool
-		expectedMergeStatus persistence.MergeStatus
-	}{
-		{
-			name:               "merged status is persisted",
-			mergeStatus:        "merged",
-			expectedPersisted:  true,
-			expectedMergeStatus: persistence.MergeStatusMerged,
-		},
-		{
-			name:               "failed status is persisted",
-			mergeStatus:        "failed",
-			expectedPersisted:  true,
-			expectedMergeStatus: persistence.MergeStatusFailed,
-		},
-		{
-			name:               "skipped status is persisted",
-			mergeStatus:        "skipped",
-			expectedPersisted:  true,
-			expectedMergeStatus: persistence.MergeStatusSkipped,
-		},
-		{
-			name:               "merged_needs_repair status is persisted",
-			mergeStatus:        "merged_needs_repair",
-			expectedPersisted:  true,
-			expectedMergeStatus: persistence.MergeStatusMergedNeedsRepair,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dbPath := filepath.Join(t.TempDir(), "test.db")
-			store, err := persistence.NewStoreWithPath(dbPath)
-			if err != nil {
-				t.Fatalf("Failed to create store: %v", err)
-			}
-			defer func() { _ = store.Close() }()
-
-			eventBus := NewEventBus()
-			handler := NewPersistenceHandler(store, eventBus)
-			unsubscribe := handler.Start()
-			defer unsubscribe()
-
-			// Start a run first
-			runID := "test-run-merge-" + tt.mergeStatus
-			eventBus.Publish(Event{
-				Type:      EventRunStarted,
-				Timestamp: time.Now(),
-				Payload: map[string]interface{}{
-					"run_id":     runID,
-					"task_count": 1,
-				},
-			})
-			time.Sleep(10 * time.Millisecond)
-
-			// Start an agent
-			agentID := "agent-merge-" + tt.mergeStatus
-			eventBus.Publish(Event{
-				Type:      EventAgentStarted,
-				Timestamp: time.Now(),
-				Payload: map[string]interface{}{
-					"agent_id":   agentID,
-					"task_id":    "task-1",
-					"task_title": "Test Task",
-				},
-			})
-			time.Sleep(10 * time.Millisecond)
-
-			// Publish merge status event
-			eventBus.Publish(Event{
-				Type:      EventAgentMergeStatus,
-				Timestamp: time.Now(),
-				Payload: map[string]interface{}{
-					"agent_id":         agentID,
-					"merge_status":     tt.mergeStatus,
-					"commits_applied":  3,
-					"had_conflict":     true,
-					"resolver_spawned": true,
-				},
-			})
-			time.Sleep(10 * time.Millisecond)
-
-			// Verify agent merge result was persisted
-			agent, err := store.GetAgent(agentID)
-			if err != nil {
-				t.Fatalf("Failed to get agent: %v", err)
-			}
-			if agent == nil {
-				t.Fatal("Agent was not found")
-			}
-
-			if tt.expectedPersisted {
-				if agent.MergeStatus != tt.expectedMergeStatus {
-					t.Errorf("Expected merge_status %s, got %s", tt.expectedMergeStatus, agent.MergeStatus)
-				}
-				if agent.MergeCommitsApplied != 3 {
-					t.Errorf("Expected merge_commits_applied 3, got %d", agent.MergeCommitsApplied)
-				}
-				if !agent.MergeHadConflict {
-					t.Error("Expected merge_had_conflict to be true")
-				}
-				if !agent.MergeResolverSpawned {
-					t.Error("Expected merge_resolver_spawned to be true")
-				}
-			}
-		})
-	}
-}
-
-func TestPersistenceHandler_AgentMergeStatus_IntermediateStatusesNotPersisted(t *testing.T) {
-	intermediateStatuses := []string{"pending", "merging", "resolving", "queued"}
-
-	for _, status := range intermediateStatuses {
-		t.Run(status+" status not persisted", func(t *testing.T) {
-			dbPath := filepath.Join(t.TempDir(), "test.db")
-			store, err := persistence.NewStoreWithPath(dbPath)
-			if err != nil {
-				t.Fatalf("Failed to create store: %v", err)
-			}
-			defer func() { _ = store.Close() }()
-
-			eventBus := NewEventBus()
-			handler := NewPersistenceHandler(store, eventBus)
-			unsubscribe := handler.Start()
-			defer unsubscribe()
-
-			// Start a run first
-			runID := "test-run-intermediate-" + status
-			eventBus.Publish(Event{
-				Type:      EventRunStarted,
-				Timestamp: time.Now(),
-				Payload: map[string]interface{}{
-					"run_id":     runID,
-					"task_count": 1,
-				},
-			})
-			time.Sleep(10 * time.Millisecond)
-
-			// Start an agent
-			agentID := "agent-intermediate-" + status
-			eventBus.Publish(Event{
-				Type:      EventAgentStarted,
-				Timestamp: time.Now(),
-				Payload: map[string]interface{}{
-					"agent_id":   agentID,
-					"task_id":    "task-1",
-					"task_title": "Test Task",
-				},
-			})
-			time.Sleep(10 * time.Millisecond)
-
-			// Publish intermediate merge status event
-			eventBus.Publish(Event{
-				Type:      EventAgentMergeStatus,
-				Timestamp: time.Now(),
-				Payload: map[string]interface{}{
-					"agent_id":        agentID,
-					"merge_status":    status,
-					"commits_applied": 5,
-				},
-			})
-			time.Sleep(10 * time.Millisecond)
-
-			// Verify merge status was NOT persisted (should still be empty)
-			agent, err := store.GetAgent(agentID)
-			if err != nil {
-				t.Fatalf("Failed to get agent: %v", err)
-			}
-			if agent == nil {
-				t.Fatal("Agent was not found")
-			}
-
-			if agent.MergeStatus != "" {
-				t.Errorf("Expected merge_status to be empty for intermediate status %s, got %s", status, agent.MergeStatus)
-			}
-			if agent.MergeCommitsApplied != 0 {
-				t.Errorf("Expected merge_commits_applied to be 0 for intermediate status %s, got %d", status, agent.MergeCommitsApplied)
-			}
-		})
-	}
-}
-
-func TestPersistenceHandler_AgentMergeStatus_ValidationResult(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	store, err := persistence.NewStoreWithPath(dbPath)
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer func() { _ = store.Close() }()
-
-	eventBus := NewEventBus()
-	handler := NewPersistenceHandler(store, eventBus)
-	unsubscribe := handler.Start()
-	defer unsubscribe()
-
-	// Start a run first
-	runID := "test-run-validation"
-	eventBus.Publish(Event{
-		Type:      EventRunStarted,
-		Timestamp: time.Now(),
-		Payload: map[string]interface{}{
-			"run_id":     runID,
-			"task_count": 1,
-		},
-	})
-	time.Sleep(10 * time.Millisecond)
-
-	// Start an agent
-	agentID := "agent-validation"
-	eventBus.Publish(Event{
-		Type:      EventAgentStarted,
-		Timestamp: time.Now(),
-		Payload: map[string]interface{}{
-			"agent_id":   agentID,
-			"task_id":    "task-1",
-			"task_title": "Test Task",
-		},
-	})
-	time.Sleep(10 * time.Millisecond)
-
-	// Publish merge status event with validation data
-	eventBus.Publish(Event{
-		Type:      EventAgentMergeStatus,
-		Timestamp: time.Now(),
-		Payload: map[string]interface{}{
-			"agent_id":               agentID,
-			"merge_status":           "merged",
-			"validation_status":      "passed",
-			"validation_duration_ms": int64(5000),
-			"validation_steps": []interface{}{
-				map[string]interface{}{"name": "build", "status": "passed"},
-				map[string]interface{}{"name": "test", "status": "passed"},
-			},
-		},
-	})
-	time.Sleep(10 * time.Millisecond)
-
-	// Verify validation result was persisted
-	agent, err := store.GetAgent(agentID)
-	if err != nil {
-		t.Fatalf("Failed to get agent: %v", err)
-	}
-	if agent == nil {
-		t.Fatal("Agent was not found")
-	}
-
-	if agent.ValidationStatus != "passed" {
-		t.Errorf("Expected validation_status 'passed', got %s", agent.ValidationStatus)
-	}
-	if agent.ValidationDuration != 5000 {
-		t.Errorf("Expected validation_duration_ms 5000, got %d", agent.ValidationDuration)
-	}
-	if agent.ValidationSteps == "" {
-		t.Error("Expected validation_steps to be set")
-	}
-	// Verify JSON contains expected step names
-	if agent.ValidationSteps != "" {
-		if !contains(agent.ValidationSteps, "build") || !contains(agent.ValidationSteps, "test") {
-			t.Errorf("Expected validation_steps to contain 'build' and 'test', got %s", agent.ValidationSteps)
-		}
-	}
-}
-
-func TestPersistenceHandler_AgentMergeStatus_ValidationFailed(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	store, err := persistence.NewStoreWithPath(dbPath)
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer func() { _ = store.Close() }()
-
-	eventBus := NewEventBus()
-	handler := NewPersistenceHandler(store, eventBus)
-	unsubscribe := handler.Start()
-	defer unsubscribe()
-
-	// Start a run first
-	runID := "test-run-validation-failed"
-	eventBus.Publish(Event{
-		Type:      EventRunStarted,
-		Timestamp: time.Now(),
-		Payload: map[string]interface{}{
-			"run_id":     runID,
-			"task_count": 1,
-		},
-	})
-	time.Sleep(10 * time.Millisecond)
-
-	// Start an agent
-	agentID := "agent-validation-failed"
-	eventBus.Publish(Event{
-		Type:      EventAgentStarted,
-		Timestamp: time.Now(),
-		Payload: map[string]interface{}{
-			"agent_id":   agentID,
-			"task_id":    "task-1",
-			"task_title": "Test Task",
-		},
-	})
-	time.Sleep(10 * time.Millisecond)
-
-	// Publish merge status event with failed validation
-	eventBus.Publish(Event{
-		Type:      EventAgentMergeStatus,
-		Timestamp: time.Now(),
-		Payload: map[string]interface{}{
-			"agent_id":               agentID,
-			"merge_status":           "merged_needs_repair",
-			"validation_status":      "failed",
-			"validation_error":       "go test failed: exit code 1",
-			"validation_duration_ms": int64(3000),
-		},
-	})
-	time.Sleep(10 * time.Millisecond)
-
-	// Verify validation failure was persisted
-	agent, err := store.GetAgent(agentID)
-	if err != nil {
-		t.Fatalf("Failed to get agent: %v", err)
-	}
-	if agent == nil {
-		t.Fatal("Agent was not found")
-	}
-
-	if agent.ValidationStatus != "failed" {
-		t.Errorf("Expected validation_status 'failed', got %s", agent.ValidationStatus)
-	}
-	if agent.ValidationError != "go test failed: exit code 1" {
-		t.Errorf("Expected validation_error 'go test failed: exit code 1', got %s", agent.ValidationError)
-	}
-	if agent.MergeStatus != persistence.MergeStatusMergedNeedsRepair {
-		t.Errorf("Expected merge_status 'merged_needs_repair', got %s", agent.MergeStatus)
-	}
-}
-
-func TestPersistenceHandler_AgentMergeStatus_RepairAttempts(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	store, err := persistence.NewStoreWithPath(dbPath)
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer func() { _ = store.Close() }()
-
-	eventBus := NewEventBus()
-	handler := NewPersistenceHandler(store, eventBus)
-	unsubscribe := handler.Start()
-	defer unsubscribe()
-
-	// Start a run first
-	runID := "test-run-repair"
-	eventBus.Publish(Event{
-		Type:      EventRunStarted,
-		Timestamp: time.Now(),
-		Payload: map[string]interface{}{
-			"run_id":     runID,
-			"task_count": 1,
-		},
-	})
-	time.Sleep(10 * time.Millisecond)
-
-	// Start an agent
-	agentID := "agent-repair"
-	eventBus.Publish(Event{
-		Type:      EventAgentStarted,
-		Timestamp: time.Now(),
-		Payload: map[string]interface{}{
-			"agent_id":   agentID,
-			"task_id":    "task-1",
-			"task_title": "Test Task",
-		},
-	})
-	time.Sleep(10 * time.Millisecond)
-
-	// Publish first repair attempt
-	eventBus.Publish(Event{
-		Type:      EventAgentMergeStatus,
-		Timestamp: time.Now(),
-		Payload: map[string]interface{}{
-			"agent_id":           agentID,
-			"merge_status":       "merging", // Intermediate status, merge result not persisted
-			"validation_status":  "repairing",
-			"repair_attempts":    1,
-			"last_repair_output": "First repair attempt: fixing test",
-		},
-	})
-	time.Sleep(10 * time.Millisecond)
-
-	// Verify repair state was persisted
-	agent, err := store.GetAgent(agentID)
-	if err != nil {
-		t.Fatalf("Failed to get agent: %v", err)
-	}
-	if agent == nil {
-		t.Fatal("Agent was not found")
-	}
-
-	if agent.RepairAttempts != 1 {
-		t.Errorf("Expected repair_attempts 1, got %d", agent.RepairAttempts)
-	}
-	if agent.LastRepairOutput != "First repair attempt: fixing test" {
-		t.Errorf("Expected last_repair_output 'First repair attempt: fixing test', got %s", agent.LastRepairOutput)
-	}
-	if agent.ValidationStatus != "repairing" {
-		t.Errorf("Expected validation_status 'repairing', got %s", agent.ValidationStatus)
-	}
-	// Merge status should NOT be persisted for intermediate status
-	if agent.MergeStatus != "" {
-		t.Errorf("Expected merge_status to be empty for intermediate 'merging' status, got %s", agent.MergeStatus)
-	}
-
-	// Publish second repair attempt with final success
-	eventBus.Publish(Event{
-		Type:      EventAgentMergeStatus,
-		Timestamp: time.Now(),
-		Payload: map[string]interface{}{
-			"agent_id":           agentID,
-			"merge_status":       "merged",
-			"validation_status":  "passed",
-			"repair_attempts":    2,
-			"last_repair_output": "Second repair attempt: all tests pass",
-		},
-	})
-	time.Sleep(10 * time.Millisecond)
-
-	// Verify final state
-	agent, err = store.GetAgent(agentID)
-	if err != nil {
-		t.Fatalf("Failed to get agent: %v", err)
-	}
-
-	if agent.RepairAttempts != 2 {
-		t.Errorf("Expected repair_attempts 2, got %d", agent.RepairAttempts)
-	}
-	if agent.LastRepairOutput != "Second repair attempt: all tests pass" {
-		t.Errorf("Expected last_repair_output 'Second repair attempt: all tests pass', got %s", agent.LastRepairOutput)
-	}
-	if agent.MergeStatus != persistence.MergeStatusMerged {
-		t.Errorf("Expected merge_status 'merged', got %s", agent.MergeStatus)
-	}
-	if agent.ValidationStatus != "passed" {
-		t.Errorf("Expected validation_status 'passed', got %s", agent.ValidationStatus)
-	}
-}
-
-func TestPersistenceHandler_AgentMergeStatus_MergeError(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	store, err := persistence.NewStoreWithPath(dbPath)
-	if err != nil {
-		t.Fatalf("Failed to create store: %v", err)
-	}
-	defer func() { _ = store.Close() }()
-
-	eventBus := NewEventBus()
-	handler := NewPersistenceHandler(store, eventBus)
-	unsubscribe := handler.Start()
-	defer unsubscribe()
-
-	// Start a run first
-	runID := "test-run-merge-error"
-	eventBus.Publish(Event{
-		Type:      EventRunStarted,
-		Timestamp: time.Now(),
-		Payload: map[string]interface{}{
-			"run_id":     runID,
-			"task_count": 1,
-		},
-	})
-	time.Sleep(10 * time.Millisecond)
-
-	// Start an agent
-	agentID := "agent-merge-error"
-	eventBus.Publish(Event{
-		Type:      EventAgentStarted,
-		Timestamp: time.Now(),
-		Payload: map[string]interface{}{
-			"agent_id":   agentID,
-			"task_id":    "task-1",
-			"task_title": "Test Task",
-		},
-	})
-	time.Sleep(10 * time.Millisecond)
-
-	// Publish merge failed event with error
-	eventBus.Publish(Event{
-		Type:      EventAgentMergeStatus,
-		Timestamp: time.Now(),
-		Payload: map[string]interface{}{
-			"agent_id":     agentID,
-			"merge_status": "failed",
-			"error":        "unresolvable conflict in main.go",
-			"had_conflict": true,
-		},
-	})
-	time.Sleep(10 * time.Millisecond)
-
-	// Verify merge error was persisted
-	agent, err := store.GetAgent(agentID)
-	if err != nil {
-		t.Fatalf("Failed to get agent: %v", err)
-	}
-	if agent == nil {
-		t.Fatal("Agent was not found")
-	}
-
-	if agent.MergeStatus != persistence.MergeStatusFailed {
-		t.Errorf("Expected merge_status 'failed', got %s", agent.MergeStatus)
-	}
-	if agent.MergeError != "unresolvable conflict in main.go" {
-		t.Errorf("Expected merge_error 'unresolvable conflict in main.go', got %s", agent.MergeError)
-	}
-	if !agent.MergeHadConflict {
-		t.Error("Expected merge_had_conflict to be true")
-	}
-}
-
-// contains checks if substr is in s
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
-}
-
-func containsHelper(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
 
 // Ensure dbPath cleanup

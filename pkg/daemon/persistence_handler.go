@@ -315,13 +315,15 @@ func (h *PersistenceHandler) handleAgentCompleted(event Event) {
 		ResultMessage:       resultMessage,
 	}
 
-	if err := h.store.UpdateAgent(agent); err != nil {
-		logging.Error("failed to update agent",
+	// Use UpdateAgentCompletion to preserve merge/validation/repair fields
+	// that may have been persisted earlier by handleAgentMergeStatus
+	if err := h.store.UpdateAgentCompletion(agent); err != nil {
+		logging.Error("failed to update agent completion",
 			"agent_id", agentID,
 			"error", err,
 			"component", "persistence")
 	} else {
-		logging.Debug("updated agent",
+		logging.Debug("updated agent completion",
 			"agent_id", agentID,
 			"status", status,
 			"component", "persistence")
