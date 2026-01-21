@@ -4,6 +4,7 @@ package rules
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/jzila/canopy/pkg/beads"
 	"github.com/jzila/canopy/pkg/config"
@@ -67,6 +68,278 @@ func (e *Engine) ClearRuntimeRules() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.runtime = nil
+}
+
+// RuntimeRule extends CustomRule with runtime-specific metadata.
+type RuntimeRule struct {
+	config.CustomRule
+	Source    string    `json:"source"`     // "config" or "runtime"
+	CreatedAt time.Time `json:"created_at"` // When the rule was added (for runtime rules)
+}
+
+// RulesSnapshot contains all rules and settings for API responses.
+type RulesSnapshot struct {
+	ConfigRules  *config.RulesSettings `json:"config_rules"`
+	CustomRules  []RuntimeRule         `json:"custom_rules"`  // Config-sourced custom rules
+	RuntimeRules []RuntimeRule         `json:"runtime_rules"` // Runtime-added rules
+}
+
+// GetSnapshot returns a complete snapshot of all rules and settings.
+func (e *Engine) GetSnapshot() RulesSnapshot {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	snapshot := RulesSnapshot{
+		ConfigRules:  e.config,
+		CustomRules:  make([]RuntimeRule, 0),
+		RuntimeRules: make([]RuntimeRule, 0),
+	}
+
+	// Add config-sourced custom rules
+	if e.config != nil {
+		for _, rule := range e.config.Custom {
+			snapshot.CustomRules = append(snapshot.CustomRules, RuntimeRule{
+				CustomRule: rule,
+				Source:     "config",
+			})
+		}
+	}
+
+	// Add runtime rules
+	for _, rule := range e.runtime {
+		snapshot.RuntimeRules = append(snapshot.RuntimeRules, RuntimeRule{
+			CustomRule: rule,
+			Source:     "runtime",
+		})
+	}
+
+	return snapshot
+}
+
+// GetRuntimeRules returns a copy of all runtime rules.
+func (e *Engine) GetRuntimeRules() []config.CustomRule {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if e.runtime == nil {
+		return nil
+	}
+
+	rules := make([]config.CustomRule, len(e.runtime))
+	copy(rules, e.runtime)
+	return rules
+}
+
+// GetRule returns a rule by name, searching both config and runtime rules.
+// Returns nil if not found.
+func (e *Engine) GetRule(name string) *RuntimeRule {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	// Search config rules first
+	if e.config != nil {
+		for _, rule := range e.config.Custom {
+			if rule.Name == name {
+				return &RuntimeRule{
+					CustomRule: rule,
+					Source:     "config",
+				}
+			}
+		}
+	}
+
+	// Search runtime rules
+	for _, rule := range e.runtime {
+		if rule.Name == name {
+			return &RuntimeRule{
+				CustomRule: rule,
+				Source:     "runtime",
+			}
+		}
+	}
+
+	return nil
+}
+
+// UpdateRule updates an existing rule's enabled state.
+// Returns an error if the rule is not found.
+// Note: Config rules can be disabled but not deleted; runtime rules can be both.
+func (e *Engine) UpdateRule(name string, enabled bool) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Search config rules first
+	if e.config != nil {
+		for i := range e.config.Custom {
+			if e.config.Custom[i].Name == name {
+				e.config.Custom[i].Enabled = &enabled
+				return nil
+			}
+		}
+	}
+
+	// Search runtime rules
+	for i := range e.runtime {
+		if e.runtime[i].Name == name {
+			e.runtime[i].Enabled = &enabled
+			return nil
+		}
+	}
+
+	return fmt.Errorf("rule %q not found", name)
+}
+
+// AddRuleWithValidation adds a runtime rule after validating it.
+// Returns an error if validation fails or if a rule with the same name exists.
+func (e *Engine) AddRuleWithValidation(rule config.CustomRule) error {
+	// Validate the rule
+	if rule.Name == "" {
+		return fmt.Errorf("rule name is required")
+	}
+	if rule.Condition == "" {
+		return fmt.Errorf("rule condition is required")
+	}
+	if rule.Action == "" {
+		return fmt.Errorf("rule action is required")
+	}
+
+	// Validate action format
+	action := parseAction(rule.Action)
+	if action.actionType == actionInclude && rule.Action != "include" && rule.Action != "allow" && rule.Action != "skip" {
+		// Check if it's a valid parameterized action
+		if len(rule.Action) > 6 && (rule.Action[:6] == "boost:" || rule.Action[:6] == "limit:") {
+			// Valid parameterized action
+		} else {
+			return fmt.Errorf("invalid action %q (allowed: skip, include, allow, boost:N, limit:N)", rule.Action)
+		}
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Check for duplicate name in config rules
+	if e.config != nil {
+		for _, r := range e.config.Custom {
+			if r.Name == rule.Name {
+				return fmt.Errorf("rule %q already exists in config", rule.Name)
+			}
+		}
+	}
+
+	// Check for duplicate name in runtime rules
+	for _, r := range e.runtime {
+		if r.Name == rule.Name {
+			return fmt.Errorf("rule %q already exists", rule.Name)
+		}
+	}
+
+	// Set default enabled state if not specified
+	if rule.Enabled == nil {
+		enabled := true
+		rule.Enabled = &enabled
+	}
+
+	e.runtime = append(e.runtime, rule)
+	return nil
+}
+
+// GetConfigSettings returns a copy of the config-based rules settings.
+// Returns nil if no config is set.
+func (e *Engine) GetConfigSettings() *config.RulesSettings {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if e.config == nil {
+		return nil
+	}
+
+	// Return a copy to prevent external modification
+	copy := *e.config
+	return &copy
+}
+
+// UpdateConfigSettings updates specific fields in the config settings.
+// Only non-nil fields in the update are applied.
+// Returns an error if validation fails.
+func (e *Engine) UpdateConfigSettings(update ConfigSettingsUpdate) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.config == nil {
+		e.config = &config.RulesSettings{}
+	}
+
+	// Apply updates
+	if update.PriorityMin != nil {
+		if *update.PriorityMin < 0 || *update.PriorityMin > 4 {
+			return fmt.Errorf("priority_min must be 0-4, got %d", *update.PriorityMin)
+		}
+		e.config.PriorityMin = *update.PriorityMin
+	}
+
+	if update.PriorityMax != nil {
+		if *update.PriorityMax != -1 && (*update.PriorityMax < 0 || *update.PriorityMax > 4) {
+			return fmt.Errorf("priority_max must be -1 (no filter) or 0-4, got %d", *update.PriorityMax)
+		}
+		e.config.PriorityMax = *update.PriorityMax
+	}
+
+	// Validate priority range after update
+	if e.config.PriorityMax != -1 && e.config.PriorityMin > e.config.PriorityMax {
+		return fmt.Errorf("priority_min (%d) cannot be greater than priority_max (%d)", e.config.PriorityMin, e.config.PriorityMax)
+	}
+
+	if update.Types != nil {
+		e.config.Types = *update.Types
+	}
+
+	if update.ExcludeTypes != nil {
+		e.config.ExcludeTypes = *update.ExcludeTypes
+	}
+
+	if update.Labels != nil {
+		e.config.Labels = *update.Labels
+	}
+
+	if update.ExcludeLabels != nil {
+		e.config.ExcludeLabels = *update.ExcludeLabels
+	}
+
+	if update.Assignee != nil {
+		e.config.Assignee = *update.Assignee
+	}
+
+	if update.MaxConcurrent != nil {
+		if *update.MaxConcurrent < 0 {
+			return fmt.Errorf("max_concurrent must be >= 0, got %d", *update.MaxConcurrent)
+		}
+		e.config.MaxConcurrent = *update.MaxConcurrent
+	}
+
+	if update.MaxConcurrentPerType != nil {
+		e.config.MaxConcurrentPerType = *update.MaxConcurrentPerType
+	}
+
+	if update.MaxConcurrentPerLabel != nil {
+		e.config.MaxConcurrentPerLabel = *update.MaxConcurrentPerLabel
+	}
+
+	return nil
+}
+
+// ConfigSettingsUpdate contains optional updates to config settings.
+// Only non-nil fields are applied.
+type ConfigSettingsUpdate struct {
+	PriorityMin           *int              `json:"priority_min,omitempty"`
+	PriorityMax           *int              `json:"priority_max,omitempty"`
+	Types                 *[]string         `json:"types,omitempty"`
+	ExcludeTypes          *[]string         `json:"exclude_types,omitempty"`
+	Labels                *[]string         `json:"labels,omitempty"`
+	ExcludeLabels         *[]string         `json:"exclude_labels,omitempty"`
+	Assignee              *string           `json:"assignee,omitempty"`
+	MaxConcurrent         *int              `json:"max_concurrent,omitempty"`
+	MaxConcurrentPerType  *map[string]int   `json:"max_concurrent_per_type,omitempty"`
+	MaxConcurrentPerLabel *map[string]int   `json:"max_concurrent_per_label,omitempty"`
 }
 
 // allRules returns combined config and runtime rules.

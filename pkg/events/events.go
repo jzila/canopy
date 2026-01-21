@@ -32,6 +32,7 @@ const (
 	EventOrchPaused         EventType = "orch:paused"
 	EventOrchResumed        EventType = "orch:resumed"
 	EventStatsUpdated       EventType = "stats:updated"
+	EventRulesChanged       EventType = "rules:changed" // Rules configuration changed at runtime
 )
 
 // IsCritical returns true if this event type must never be dropped.

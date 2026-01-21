@@ -317,7 +317,7 @@ func (h *OrchestrationHandler) HandleUpdateRunConfig(w http.ResponseWriter, r *h
 		return
 	}
 
-	err := h.manager.UpdateRunConfig(runID, req)
+	err := h.manager.UpdateRunConfig(runID, req.Concurrency, req.MaxPriority, req.Watch)
 	if err != nil {
 		logging.Warn("failed to update run config",
 			"run_id", runID,

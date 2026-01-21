@@ -28,6 +28,7 @@ const (
 	EventOrchPaused       = events.EventOrchPaused
 	EventOrchResumed      = events.EventOrchResumed
 	EventStatsUpdated     = events.EventStatsUpdated
+	EventRulesChanged     = events.EventRulesChanged
 )
 
 // NewEventBus creates a new EventBus instance.

@@ -25,6 +25,7 @@ type Server struct {
 	repoHandler  *RepoHandler
 	beadsHandler *BeadsHandler
 	orchHandler  *OrchestrationHandler
+	rulesHandler *RulesHandler
 	state        *RuntimeState
 	eventBus     *EventBus
 	upgrader     websocket.Upgrader
@@ -91,6 +92,12 @@ func NewServerWithDaemon(port int, state *RuntimeState, eventBus *EventBus, sche
 		orchHandler = NewOrchestrationHandler(daemon.GetOrchestratorManager())
 	}
 
+	// Create rules handler for runtime rule management (requires daemon reference)
+	var rulesHandler *RulesHandler
+	if daemon != nil {
+		rulesHandler = NewRulesHandler(daemon)
+	}
+
 	// Configure WebSocket upgrader
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:  1024,
@@ -109,6 +116,7 @@ func NewServerWithDaemon(port int, state *RuntimeState, eventBus *EventBus, sche
 		repoHandler:  repoHandler,
 		beadsHandler: beadsHandler,
 		orchHandler:  orchHandler,
+		rulesHandler: rulesHandler,
 		state:        state,
 		eventBus:     eventBus,
 		upgrader:     upgrader,
@@ -198,6 +206,10 @@ func (s *Server) setupRoutes() *http.ServeMux {
 
 	// REST API routes - orchestration control (daemon-owned runs)
 	mux.HandleFunc("/api/orchestrator/", s.handleOrchestratorRoutes) // Handles all /api/orchestrator/* routes
+
+	// REST API routes - rules management
+	mux.HandleFunc("/api/rules", s.handleRulesRoutes)  // Handles GET/POST /api/rules
+	mux.HandleFunc("/api/rules/", s.handleRulesRoutes) // Handles /api/rules/:name and /api/rules/config
 
 	// Prometheus metrics endpoint
 	mux.Handle("/metrics", promhttp.Handler())
@@ -378,6 +390,15 @@ func (s *Server) handleOrchestratorRoutes(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.orchHandler.RouteOrchestrator(w, r)
+}
+
+// handleRulesRoutes routes rules management requests
+func (s *Server) handleRulesRoutes(w http.ResponseWriter, r *http.Request) {
+	if s.rulesHandler == nil {
+		http.Error(w, "Rules management not available", http.StatusServiceUnavailable)
+		return
+	}
+	s.rulesHandler.RouteRules(w, r)
 }
 
 // handleRepositoriesRoutes routes repository management requests
