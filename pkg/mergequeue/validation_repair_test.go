@@ -2,6 +2,7 @@ package mergequeue
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -928,4 +929,145 @@ func TestIsStrict(t *testing.T) {
 // execCommand is a helper to run commands for tests
 func execCommand(name string, args ...string) *exec.Cmd {
 	return exec.Command(name, args...)
+}
+
+func TestValidateOverlayAccessible(t *testing.T) {
+	tests := []struct {
+		name        string
+		setup       func(t *testing.T) *sandbox.Overlay
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "nil overlay",
+			setup: func(t *testing.T) *sandbox.Overlay {
+				return nil
+			},
+			wantErr:     true,
+			errContains: "overlay is nil",
+		},
+		{
+			name: "empty upper directory (direct overlay)",
+			setup: func(t *testing.T) *sandbox.Overlay {
+				return &sandbox.Overlay{
+					UpperDir: "",
+				}
+			},
+			wantErr: false,
+		},
+		{
+			name: "accessible upper directory with files",
+			setup: func(t *testing.T) *sandbox.Overlay {
+				tmpDir := t.TempDir()
+				upperDir := tmpDir + "/upper"
+				if err := os.MkdirAll(upperDir, 0755); err != nil {
+					t.Fatalf("failed to create upper dir: %v", err)
+				}
+				// Create a test file
+				if err := os.WriteFile(upperDir+"/test.txt", []byte("content"), 0644); err != nil {
+					t.Fatalf("failed to create test file: %v", err)
+				}
+				return &sandbox.Overlay{
+					UpperDir: upperDir,
+				}
+			},
+			wantErr: false,
+		},
+		{
+			name: "accessible upper directory - empty but valid",
+			setup: func(t *testing.T) *sandbox.Overlay {
+				tmpDir := t.TempDir()
+				upperDir := tmpDir + "/upper"
+				if err := os.MkdirAll(upperDir, 0755); err != nil {
+					t.Fatalf("failed to create upper dir: %v", err)
+				}
+				return &sandbox.Overlay{
+					UpperDir: upperDir,
+				}
+			},
+			wantErr: false,
+		},
+		{
+			name: "non-existent upper directory",
+			setup: func(t *testing.T) *sandbox.Overlay {
+				return &sandbox.Overlay{
+					UpperDir: "/nonexistent/path/that/does/not/exist",
+				}
+			},
+			wantErr:     true,
+			errContains: "cannot read upper directory",
+		},
+		{
+			name: "accessible directory with only whiteout files",
+			setup: func(t *testing.T) *sandbox.Overlay {
+				tmpDir := t.TempDir()
+				upperDir := tmpDir + "/upper"
+				if err := os.MkdirAll(upperDir, 0755); err != nil {
+					t.Fatalf("failed to create upper dir: %v", err)
+				}
+				// Create only whiteout files (should be skipped)
+				if err := os.WriteFile(upperDir+"/.wh.deleted", []byte{}, 0644); err != nil {
+					t.Fatalf("failed to create whiteout file: %v", err)
+				}
+				return &sandbox.Overlay{
+					UpperDir: upperDir,
+				}
+			},
+			wantErr: false, // Should pass because we can read the directory
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			overlay := tt.setup(t)
+			p := &Processor{verbose: false}
+
+			err := p.validateOverlayAccessible(overlay)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("validateOverlayAccessible() expected error, got nil")
+				} else if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("validateOverlayAccessible() error = %v, want error containing %q", err, tt.errContains)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("validateOverlayAccessible() unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateOverlayAccessible_UnreadableFile(t *testing.T) {
+	// This test requires creating a file that can't be read
+	// Skip on Windows or if running as root
+	if os.Getuid() == 0 {
+		t.Skip("skipping test when running as root")
+	}
+
+	tmpDir := t.TempDir()
+	upperDir := tmpDir + "/upper"
+	if err := os.MkdirAll(upperDir, 0755); err != nil {
+		t.Fatalf("failed to create upper dir: %v", err)
+	}
+
+	// Create a file with no read permissions
+	unreadableFile := upperDir + "/unreadable.txt"
+	if err := os.WriteFile(unreadableFile, []byte("content"), 0000); err != nil {
+		t.Fatalf("failed to create unreadable file: %v", err)
+	}
+	defer os.Chmod(unreadableFile, 0644) // Restore for cleanup
+
+	overlay := &sandbox.Overlay{
+		UpperDir: upperDir,
+	}
+	p := &Processor{verbose: false}
+
+	err := p.validateOverlayAccessible(overlay)
+	if err == nil {
+		t.Error("validateOverlayAccessible() expected error for unreadable file, got nil")
+	} else if !strings.Contains(err.Error(), "cannot access file") {
+		t.Errorf("validateOverlayAccessible() error = %v, want error containing 'cannot access file'", err)
+	}
 }

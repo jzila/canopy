@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -469,6 +470,24 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 
 			// Merge the resolver's result
 			if resolverResult.AgentResult != nil && resolverResult.AgentResult.Overlay != nil {
+				// Validate resolver overlay is accessible before attempting merge
+				// This prevents infinite retry loops when overlays become inaccessible (e.g., permission denied)
+				if err := p.validateOverlayAccessible(resolverResult.AgentResult.Overlay); err != nil {
+					errMsg := fmt.Sprintf("resolver overlay inaccessible for %s: %v (cannot retry - overlay is stale)", taskID, err)
+					fmt.Fprintf(os.Stderr, "ERROR: %s\n", errMsg)
+					resp.Error = errMsg
+					// Clean up the inaccessible overlay
+					if cleanupErr := resolverResult.AgentResult.Overlay.Cleanup(); cleanupErr != nil && p.verbose {
+						fmt.Fprintf(os.Stderr, "warning: failed to cleanup stale resolver overlay for %s: %v\n", taskID, cleanupErr)
+					}
+					// Mark task as permanently failed - retrying won't help with a stale overlay
+					// The task will need manual intervention or the user needs to re-run canopy
+					p.markTaskFailed(ctx, taskID, errMsg)
+					p.sendTaskUpdated(taskID, req.Task.Title, "failed")
+					p.sendMergeStatusFull(taskID, ipc.MergeStatusFailed, errMsg, resp.CommitsApplied, resp.HadConflict, resp.ResolverSpawned)
+					return resp
+				}
+
 				resolverMergeResult, mergeErr := p.merger.MergeSingle(resolverResult.AgentResult, nil)
 
 				// Clean up resolver overlay regardless of merge outcome
@@ -1562,4 +1581,54 @@ func buildPreCommitRepairAttemptSummary(attempt int, repairResult *repairagent.R
 	}
 
 	return sb.String()
+}
+
+// validateOverlayAccessible checks if an overlay's upper directory is accessible.
+// This prevents infinite retry loops when overlays become inaccessible (e.g., permission denied,
+// FUSE mount issues, or stale mounts after crashes).
+//
+// The check reads the upper directory to verify files can be accessed. If this fails,
+// the overlay is considered stale and should not be used for merge operations.
+func (p *Processor) validateOverlayAccessible(overlay *sandbox.Overlay) error {
+	if overlay == nil {
+		return fmt.Errorf("overlay is nil")
+	}
+
+	// Check that the upper directory exists and is accessible
+	upperDir := overlay.UpperDir
+	if upperDir == "" {
+		// Direct overlay (no UpperDir) - these write directly to the repo
+		return nil
+	}
+
+	// Try to read the upper directory
+	entries, err := os.ReadDir(upperDir)
+	if err != nil {
+		return fmt.Errorf("cannot read upper directory %s: %w", upperDir, err)
+	}
+
+	// Try to access at least one file in the upper directory to verify permissions
+	// This catches cases where the directory is listable but files aren't readable
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		// Skip whiteout files and hidden files (these are overlayfs markers)
+		name := entry.Name()
+		if strings.HasPrefix(name, ".wh.") || strings.HasPrefix(name, ".") {
+			continue
+		}
+
+		// Try to open the file
+		filePath := filepath.Join(upperDir, name)
+		f, err := os.Open(filePath)
+		if err != nil {
+			return fmt.Errorf("cannot access file %s in upper directory: %w", filePath, err)
+		}
+		f.Close()
+		break // One successful file access is enough
+	}
+
+	return nil
 }
