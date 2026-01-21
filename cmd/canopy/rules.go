@@ -125,6 +125,28 @@ var rulesDeleteCmd = &cobra.Command{
 }
 
 var (
+	persistAll bool
+)
+
+var rulesPersistCmd = &cobra.Command{
+	Use:   "persist [name]",
+	Short: "Persist runtime rules to config file",
+	Long: `Persist runtime rules to .canopy/config.toml so they survive daemon restarts.
+
+Use this after creating rules via the UI or CLI during an incident to save
+useful rules for future use.
+
+EXAMPLES
+  # Persist a single rule
+  canopy rules persist pause-frontend
+
+  # Persist all runtime rules
+  canopy rules persist --all`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: runRulesPersist,
+}
+
+var (
 	configPriorityMin  int
 	configPriorityMax  int
 	configExcludeLabel string
@@ -164,6 +186,10 @@ func init() {
 
 	// Delete subcommand
 	rulesCmd.AddCommand(rulesDeleteCmd)
+
+	// Persist subcommand
+	rulesPersistCmd.Flags().BoolVar(&persistAll, "all", false, "Persist all runtime rules")
+	rulesCmd.AddCommand(rulesPersistCmd)
 
 	// Config subcommand
 	rulesConfigCmd.Flags().IntVar(&configPriorityMin, "priority-min", -1, "Minimum priority (0-4)")
@@ -477,6 +503,95 @@ func runRulesConfig(cmd *cobra.Command, args []string) error {
 	if result.ConfigRules != nil {
 		printConfigRules(result.ConfigRules)
 	}
+	return nil
+}
+
+func runRulesPersist(cmd *cobra.Command, args []string) error {
+	if err := checkDaemonRunning(); err != nil {
+		return err
+	}
+
+	// Determine if we're persisting one rule or all
+	if persistAll {
+		return persistAllRules()
+	}
+
+	if len(args) == 0 {
+		return fmt.Errorf("rule name required (or use --all to persist all runtime rules)")
+	}
+
+	return persistSingleRule(args[0])
+}
+
+func persistSingleRule(name string) error {
+	url := fmt.Sprintf("http://localhost:8080/api/rules/%s/persist", name)
+	req, err := http.NewRequest(http.MethodPost, url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to persist rule: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result struct {
+		Success    bool              `json:"success"`
+		Rule       rules.RuntimeRule `json:"rule,omitempty"`
+		ConfigPath string            `json:"config_path,omitempty"`
+		Error      string            `json:"error,omitempty"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if !result.Success {
+		return fmt.Errorf("failed to persist rule: %s", result.Error)
+	}
+
+	fmt.Printf("Persisted rule: %s\n", result.Rule.Name)
+	fmt.Printf("Config saved to: %s\n", result.ConfigPath)
+	return nil
+}
+
+func persistAllRules() error {
+	req, err := http.NewRequest(http.MethodPost, "http://localhost:8080/api/rules/persist-all", nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to persist rules: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result struct {
+		Success    bool     `json:"success"`
+		Persisted  []string `json:"persisted,omitempty"`
+		ConfigPath string   `json:"config_path,omitempty"`
+		Error      string   `json:"error,omitempty"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if !result.Success {
+		return fmt.Errorf("failed to persist rules: %s", result.Error)
+	}
+
+	if len(result.Persisted) == 0 {
+		fmt.Println("No runtime rules to persist")
+		return nil
+	}
+
+	fmt.Printf("Persisted %d rules: %s\n", len(result.Persisted), strings.Join(result.Persisted, ", "))
+	fmt.Printf("Config saved to: %s\n", result.ConfigPath)
 	return nil
 }
 

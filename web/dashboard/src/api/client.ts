@@ -407,6 +407,20 @@ export interface DeleteRuleResponse {
   error?: string;
 }
 
+export interface PersistRuleResponse {
+  success: boolean;
+  rule?: RuntimeRule;
+  config_path?: string;
+  error?: string;
+}
+
+export interface PersistAllRulesResponse {
+  success: boolean;
+  persisted?: string[];
+  config_path?: string;
+  error?: string;
+}
+
 export interface UpdateConfigRequest {
   priority_min?: number;
   priority_max?: number;
@@ -453,6 +467,18 @@ export async function updateRulesConfig(request: UpdateConfigRequest): Promise<U
   return fetchJson<UpdateConfigResponse>('/api/rules/config', {
     method: 'PATCH',
     body: JSON.stringify(request),
+  });
+}
+
+export async function persistRule(name: string): Promise<PersistRuleResponse> {
+  return fetchJson<PersistRuleResponse>(`/api/rules/${encodeURIComponent(name)}/persist`, {
+    method: 'POST',
+  });
+}
+
+export async function persistAllRules(): Promise<PersistAllRulesResponse> {
+  return fetchJson<PersistAllRulesResponse>('/api/rules/persist-all', {
+    method: 'POST',
   });
 }
 

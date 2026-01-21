@@ -641,3 +641,212 @@ func TestParseAction(t *testing.T) {
 		})
 	}
 }
+
+func TestEnginePersistRule(t *testing.T) {
+	cfg := &config.RulesSettings{
+		PriorityMax: -1,
+		Assignee:    "*",
+	}
+
+	engine := NewEngine(cfg)
+
+	// Add a runtime rule
+	enabled := true
+	engine.AddRule(config.CustomRule{
+		Name:      "test-persist",
+		Condition: "priority > 2",
+		Action:    "skip",
+		Reason:    "Test persist",
+		Enabled:   &enabled,
+	})
+
+	// Verify it's in runtime rules
+	runtimeRules := engine.GetRuntimeRules()
+	if len(runtimeRules) != 1 {
+		t.Fatalf("Expected 1 runtime rule, got %d", len(runtimeRules))
+	}
+	if runtimeRules[0].Name != "test-persist" {
+		t.Errorf("Expected rule name 'test-persist', got %q", runtimeRules[0].Name)
+	}
+
+	// Verify it's marked as runtime source in GetRule
+	rule := engine.GetRule("test-persist")
+	if rule.Source != "runtime" {
+		t.Errorf("Expected source 'runtime', got %q", rule.Source)
+	}
+
+	// Persist the rule
+	persistedRule, err := engine.PersistRule("test-persist")
+	if err != nil {
+		t.Fatalf("PersistRule failed: %v", err)
+	}
+	if persistedRule.Name != "test-persist" {
+		t.Errorf("Expected persisted rule name 'test-persist', got %q", persistedRule.Name)
+	}
+
+	// Verify it's moved from runtime to config
+	runtimeRules = engine.GetRuntimeRules()
+	if len(runtimeRules) != 0 {
+		t.Errorf("Expected 0 runtime rules after persist, got %d", len(runtimeRules))
+	}
+
+	// Verify it's now in config rules
+	rule = engine.GetRule("test-persist")
+	if rule == nil {
+		t.Fatal("Expected to find rule after persist")
+	}
+	if rule.Source != "config" {
+		t.Errorf("Expected source 'config' after persist, got %q", rule.Source)
+	}
+
+	// Verify it still works (task should be skipped)
+	task := &beads.Task{ID: "1", Priority: 3}
+	result := engine.Evaluate(task, nil, nil)
+	if !result.Skip {
+		t.Error("Expected task to be skipped by persisted rule")
+	}
+}
+
+func TestEnginePersistRule_NotFound(t *testing.T) {
+	cfg := &config.RulesSettings{
+		PriorityMax: -1,
+		Assignee:    "*",
+	}
+
+	engine := NewEngine(cfg)
+
+	// Try to persist a non-existent rule
+	_, err := engine.PersistRule("non-existent")
+	if err == nil {
+		t.Error("Expected error for non-existent rule")
+	}
+}
+
+func TestEnginePersistRule_AlreadyConfig(t *testing.T) {
+	cfg := &config.RulesSettings{
+		PriorityMax: -1,
+		Assignee:    "*",
+		Custom: []config.CustomRule{
+			{Name: "existing-config", Condition: "priority > 1", Action: "skip"},
+		},
+	}
+
+	engine := NewEngine(cfg)
+
+	// Try to persist a config rule
+	_, err := engine.PersistRule("existing-config")
+	if err == nil {
+		t.Error("Expected error for config rule")
+	}
+}
+
+func TestEnginePersistAllRules(t *testing.T) {
+	cfg := &config.RulesSettings{
+		PriorityMax: -1,
+		Assignee:    "*",
+	}
+
+	engine := NewEngine(cfg)
+
+	// Add multiple runtime rules
+	engine.AddRule(config.CustomRule{Name: "rule1", Condition: "priority > 2", Action: "skip"})
+	engine.AddRule(config.CustomRule{Name: "rule2", Condition: "type == bug", Action: "skip"})
+	engine.AddRule(config.CustomRule{Name: "rule3", Condition: "priority <= 1", Action: "allow"})
+
+	// Verify we have 3 runtime rules
+	runtimeRules := engine.GetRuntimeRules()
+	if len(runtimeRules) != 3 {
+		t.Fatalf("Expected 3 runtime rules, got %d", len(runtimeRules))
+	}
+
+	// Persist all rules
+	persisted, err := engine.PersistAllRules()
+	if err != nil {
+		t.Fatalf("PersistAllRules failed: %v", err)
+	}
+	if len(persisted) != 3 {
+		t.Errorf("Expected 3 persisted rules, got %d", len(persisted))
+	}
+
+	// Verify runtime rules are empty
+	runtimeRules = engine.GetRuntimeRules()
+	if len(runtimeRules) != 0 {
+		t.Errorf("Expected 0 runtime rules after persist all, got %d", len(runtimeRules))
+	}
+
+	// Verify all rules are now in config
+	for _, name := range persisted {
+		rule := engine.GetRule(name)
+		if rule == nil {
+			t.Errorf("Rule %q not found after persist", name)
+			continue
+		}
+		if rule.Source != "config" {
+			t.Errorf("Rule %q has source %q, expected 'config'", name, rule.Source)
+		}
+	}
+}
+
+func TestEnginePersistAllRules_Empty(t *testing.T) {
+	cfg := &config.RulesSettings{
+		PriorityMax: -1,
+		Assignee:    "*",
+	}
+
+	engine := NewEngine(cfg)
+
+	// Persist all rules when there are none
+	persisted, err := engine.PersistAllRules()
+	if err != nil {
+		t.Fatalf("PersistAllRules failed: %v", err)
+	}
+	if persisted != nil {
+		t.Errorf("Expected nil for empty persist, got %v", persisted)
+	}
+}
+
+func TestEngineGetConfigForPersistence(t *testing.T) {
+	cfg := &config.RulesSettings{
+		PriorityMin: 1,
+		PriorityMax: 3,
+		Assignee:    "testuser",
+		Custom: []config.CustomRule{
+			{Name: "existing", Condition: "priority > 1", Action: "skip"},
+		},
+	}
+
+	engine := NewEngine(cfg)
+
+	// Add a runtime rule and persist it
+	engine.AddRule(config.CustomRule{Name: "new-rule", Condition: "type == bug", Action: "skip"})
+	_, _ = engine.PersistRule("new-rule")
+
+	// Get config for persistence
+	persistConfig := engine.GetConfigForPersistence()
+	if persistConfig == nil {
+		t.Fatal("Expected non-nil config")
+	}
+
+	// Verify basic settings
+	if persistConfig.PriorityMin != 1 {
+		t.Errorf("PriorityMin = %d, want 1", persistConfig.PriorityMin)
+	}
+	if persistConfig.PriorityMax != 3 {
+		t.Errorf("PriorityMax = %d, want 3", persistConfig.PriorityMax)
+	}
+	if persistConfig.Assignee != "testuser" {
+		t.Errorf("Assignee = %q, want 'testuser'", persistConfig.Assignee)
+	}
+
+	// Verify both rules are present
+	if len(persistConfig.Custom) != 2 {
+		t.Errorf("Expected 2 custom rules, got %d", len(persistConfig.Custom))
+	}
+
+	// Verify the returned config is a copy (modifying it shouldn't affect the engine)
+	persistConfig.PriorityMax = 10
+	originalConfig := engine.GetConfigSettings()
+	if originalConfig.PriorityMax != 3 {
+		t.Error("GetConfigForPersistence didn't return a copy")
+	}
+}

@@ -1,11 +1,12 @@
 import React from 'react';
-import { Power, Trash2, Settings, Terminal } from 'lucide-react';
+import { Power, Trash2, Settings, Terminal, Save } from 'lucide-react';
 import type { RuntimeRule } from '../../api/client';
 
 interface RuleItemProps {
   rule: RuntimeRule;
   onToggle: (name: string, enabled: boolean) => void | Promise<void>;
   onDelete?: (name: string) => void | Promise<void>;
+  onPersist?: (name: string) => void | Promise<void>;
   isUpdating?: boolean;
 }
 
@@ -13,11 +14,13 @@ export const RuleItem: React.FC<RuleItemProps> = ({
   rule,
   onToggle,
   onDelete,
+  onPersist,
   isUpdating = false,
 }) => {
   const isEnabled = rule.enabled !== false;
   const isConfigRule = rule.source === 'config';
   const canDelete = !isConfigRule;
+  const canPersist = !isConfigRule;
 
   return (
     <div
@@ -94,6 +97,23 @@ export const RuleItem: React.FC<RuleItemProps> = ({
           >
             <Power className="w-4 h-4" />
           </button>
+
+          {canPersist && onPersist && (
+            <button
+              onClick={() => onPersist(rule.name)}
+              disabled={isUpdating}
+              className={`
+                p-1.5 rounded transition-colors
+                ${isUpdating
+                  ? 'opacity-50 cursor-not-allowed'
+                  : 'text-gray-400 dark:text-gray-500 hover:text-blue-500 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20'
+                }
+              `}
+              title="Save to config"
+            >
+              <Save className="w-4 h-4" />
+            </button>
+          )}
 
           {canDelete && onDelete && (
             <button

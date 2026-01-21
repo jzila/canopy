@@ -457,6 +457,16 @@ func (d *Daemon) GetOrchestratorManager() *OrchestratorManager {
 	return d.orchManager
 }
 
+// GetWorkDir returns the path of the currently active repository.
+// Returns an empty string if no repository is active.
+func (d *Daemon) GetWorkDir() string {
+	repo := d.repoManager.GetActiveRepository()
+	if repo == nil {
+		return ""
+	}
+	return repo.Path
+}
+
 // newDaemonForTest creates a daemon instance for testing with pre-configured components.
 // This is used internally by tests to bypass normal initialization.
 func newDaemonForTest(config Config, store *persistence.Store, beadsClient BeadsClientInterface) *Daemon {

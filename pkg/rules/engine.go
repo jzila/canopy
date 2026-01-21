@@ -130,6 +130,116 @@ func (e *Engine) GetRuntimeRules() []config.CustomRule {
 	return rules
 }
 
+// PersistRule moves a runtime rule to the config, making it permanent.
+// The rule is removed from runtime rules and added to config.Custom.
+// Returns the persisted rule on success.
+func (e *Engine) PersistRule(name string) (*config.CustomRule, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Find the runtime rule
+	var foundIdx = -1
+	var foundRule config.CustomRule
+	for i, r := range e.runtime {
+		if r.Name == name {
+			foundIdx = i
+			foundRule = r
+			break
+		}
+	}
+
+	if foundIdx == -1 {
+		// Check if it's already a config rule
+		if e.config != nil {
+			for _, r := range e.config.Custom {
+				if r.Name == name {
+					return nil, fmt.Errorf("rule %q is already a config rule", name)
+				}
+			}
+		}
+		return nil, fmt.Errorf("runtime rule %q not found", name)
+	}
+
+	// Initialize config if needed
+	if e.config == nil {
+		e.config = &config.RulesSettings{}
+	}
+
+	// Add to config custom rules
+	e.config.Custom = append(e.config.Custom, foundRule)
+
+	// Remove from runtime rules
+	e.runtime = append(e.runtime[:foundIdx], e.runtime[foundIdx+1:]...)
+
+	return &foundRule, nil
+}
+
+// PersistAllRules moves all runtime rules to config.
+// Returns the list of rule names that were persisted.
+func (e *Engine) PersistAllRules() ([]string, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if len(e.runtime) == 0 {
+		return nil, nil
+	}
+
+	// Initialize config if needed
+	if e.config == nil {
+		e.config = &config.RulesSettings{}
+	}
+
+	var persisted []string
+	for _, rule := range e.runtime {
+		e.config.Custom = append(e.config.Custom, rule)
+		persisted = append(persisted, rule.Name)
+	}
+
+	// Clear runtime rules
+	e.runtime = nil
+
+	return persisted, nil
+}
+
+// GetConfigForPersistence returns a copy of the current config settings
+// suitable for saving to disk. This includes any recently persisted rules.
+func (e *Engine) GetConfigForPersistence() *config.RulesSettings {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	if e.config == nil {
+		return nil
+	}
+
+	// Deep copy the config
+	copy := *e.config
+	if e.config.Custom != nil {
+		copy.Custom = make([]config.CustomRule, len(e.config.Custom))
+		for i, rule := range e.config.Custom {
+			ruleCopy := rule
+			if rule.Enabled != nil {
+				enabled := *rule.Enabled
+				ruleCopy.Enabled = &enabled
+			}
+			copy.Custom[i] = ruleCopy
+		}
+	}
+	if e.config.MaxConcurrentPerType != nil {
+		copy.MaxConcurrentPerType = make(map[string]int)
+		for k, v := range e.config.MaxConcurrentPerType {
+			copy.MaxConcurrentPerType[k] = v
+		}
+	}
+	if e.config.MaxConcurrentPerLabel != nil {
+		copy.MaxConcurrentPerLabel = make(map[string]int)
+		for k, v := range e.config.MaxConcurrentPerLabel {
+			copy.MaxConcurrentPerLabel[k] = v
+		}
+	}
+
+	return &copy
+}
+
 // GetRule returns a rule by name, searching both config and runtime rules.
 // Returns nil if not found.
 func (e *Engine) GetRule(name string) *RuntimeRule {

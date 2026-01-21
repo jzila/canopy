@@ -70,6 +70,22 @@ type DeleteRuleResponse struct {
 	Error   string `json:"error,omitempty"`
 }
 
+// PersistRuleResponse is the response for POST /api/rules/:name/persist
+type PersistRuleResponse struct {
+	Success    bool              `json:"success"`
+	Rule       rules.RuntimeRule `json:"rule,omitempty"`
+	ConfigPath string            `json:"config_path,omitempty"`
+	Error      string            `json:"error,omitempty"`
+}
+
+// PersistAllRulesResponse is the response for POST /api/rules/persist-all
+type PersistAllRulesResponse struct {
+	Success    bool     `json:"success"`
+	Persisted  []string `json:"persisted,omitempty"`
+	ConfigPath string   `json:"config_path,omitempty"`
+	Error      string   `json:"error,omitempty"`
+}
+
 // UpdateConfigResponse is the response for PATCH /api/rules/config
 type UpdateConfigResponse struct {
 	Success     bool                  `json:"success"`
@@ -100,8 +116,26 @@ func (h *RulesHandler) RouteRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse rule name from path: /api/rules/:name
+	// POST /api/rules/persist-all - persist all runtime rules
+	if path == "/api/rules/persist-all" && r.Method == http.MethodPost {
+		h.HandlePersistAllRules(w, r)
+		return
+	}
+
+	// Parse rule name from path: /api/rules/:name or /api/rules/:name/persist
 	parts := strings.Split(strings.Trim(path, "/"), "/")
+
+	// Handle /api/rules/:name/persist
+	if len(parts) == 4 && parts[0] == "api" && parts[1] == "rules" && parts[3] == "persist" {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.HandlePersistRule(w, r, parts[2])
+		return
+	}
+
+	// Handle /api/rules/:name
 	if len(parts) != 3 || parts[0] != "api" || parts[1] != "rules" {
 		http.Error(w, "Invalid path", http.StatusBadRequest)
 		return
@@ -391,4 +425,154 @@ func (h *RulesHandler) broadcastRulesChanged(action string, rule *rules.RuntimeR
 		Timestamp: time.Now(),
 		Payload:   payload,
 	})
+}
+
+// HandlePersistRule handles POST /api/rules/:name/persist
+// Persists a single runtime rule to the config file
+func (h *RulesHandler) HandlePersistRule(w http.ResponseWriter, r *http.Request, ruleName string) {
+	engine := h.getEngine()
+	if engine == nil {
+		http.Error(w, "Rules engine not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	if h.daemon == nil {
+		h.writeJSON(w, http.StatusServiceUnavailable, PersistRuleResponse{
+			Success: false,
+			Error:   "Daemon not available",
+		})
+		return
+	}
+
+	workDir := h.daemon.GetWorkDir()
+	if workDir == "" {
+		h.writeJSON(w, http.StatusServiceUnavailable, PersistRuleResponse{
+			Success: false,
+			Error:   "Work directory not set",
+		})
+		return
+	}
+
+	// Persist the rule in the engine (moves from runtime to config)
+	persistedRule, err := engine.PersistRule(ruleName)
+	if err != nil {
+		h.writeJSON(w, http.StatusBadRequest, PersistRuleResponse{
+			Success: false,
+			Error:   err.Error(),
+		})
+		return
+	}
+
+	// Save the config to disk
+	configPath, err := h.saveConfig(workDir, engine)
+	if err != nil {
+		// Note: The rule is already moved in memory, but disk save failed
+		// This is a partial failure state
+		h.writeJSON(w, http.StatusInternalServerError, PersistRuleResponse{
+			Success: false,
+			Error:   fmt.Sprintf("Rule persisted in memory but failed to save config: %v", err),
+		})
+		return
+	}
+
+	// Create RuntimeRule for response
+	runtimeRule := rules.RuntimeRule{
+		CustomRule: *persistedRule,
+		Source:     "config",
+	}
+
+	// Broadcast rules:changed event
+	h.broadcastRulesChanged("persisted", &runtimeRule)
+
+	h.writeJSON(w, http.StatusOK, PersistRuleResponse{
+		Success:    true,
+		Rule:       runtimeRule,
+		ConfigPath: configPath,
+	})
+}
+
+// HandlePersistAllRules handles POST /api/rules/persist-all
+// Persists all runtime rules to the config file
+func (h *RulesHandler) HandlePersistAllRules(w http.ResponseWriter, r *http.Request) {
+	engine := h.getEngine()
+	if engine == nil {
+		http.Error(w, "Rules engine not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	if h.daemon == nil {
+		h.writeJSON(w, http.StatusServiceUnavailable, PersistAllRulesResponse{
+			Success: false,
+			Error:   "Daemon not available",
+		})
+		return
+	}
+
+	workDir := h.daemon.GetWorkDir()
+	if workDir == "" {
+		h.writeJSON(w, http.StatusServiceUnavailable, PersistAllRulesResponse{
+			Success: false,
+			Error:   "Work directory not set",
+		})
+		return
+	}
+
+	// Persist all rules in the engine
+	persisted, err := engine.PersistAllRules()
+	if err != nil {
+		h.writeJSON(w, http.StatusInternalServerError, PersistAllRulesResponse{
+			Success: false,
+			Error:   err.Error(),
+		})
+		return
+	}
+
+	if len(persisted) == 0 {
+		h.writeJSON(w, http.StatusOK, PersistAllRulesResponse{
+			Success:   true,
+			Persisted: []string{},
+		})
+		return
+	}
+
+	// Save the config to disk
+	configPath, err := h.saveConfig(workDir, engine)
+	if err != nil {
+		h.writeJSON(w, http.StatusInternalServerError, PersistAllRulesResponse{
+			Success: false,
+			Error:   fmt.Sprintf("Rules persisted in memory but failed to save config: %v", err),
+		})
+		return
+	}
+
+	// Broadcast rules:changed event
+	h.broadcastRulesChanged("persisted_all", nil)
+
+	h.writeJSON(w, http.StatusOK, PersistAllRulesResponse{
+		Success:    true,
+		Persisted:  persisted,
+		ConfigPath: configPath,
+	})
+}
+
+// saveConfig saves the current rules configuration to disk
+func (h *RulesHandler) saveConfig(workDir string, engine *rules.Engine) (string, error) {
+	// Load existing config (or get default)
+	cfg, err := config.LoadConfig(workDir)
+	if err != nil {
+		return "", fmt.Errorf("load config: %w", err)
+	}
+
+	// Update rules settings from engine
+	rulesSettings := engine.GetConfigForPersistence()
+	if rulesSettings != nil {
+		cfg.Rules = *rulesSettings
+	}
+
+	// Save the config
+	if err := config.SaveConfig(workDir, cfg); err != nil {
+		return "", fmt.Errorf("save config: %w", err)
+	}
+
+	return fmt.Sprintf("%s/.canopy/config.toml", workDir), nil
 }

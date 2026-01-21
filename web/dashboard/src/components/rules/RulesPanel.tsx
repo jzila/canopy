@@ -7,6 +7,7 @@ import {
   updateRule,
   deleteRule,
   updateRulesConfig,
+  persistRule,
 } from '../../api/client';
 import type { AddRuleRequest, UpdateConfigRequest, RuntimeRule } from '../../api/client';
 import { RuleItem } from './RuleItem';
@@ -43,6 +44,7 @@ export const RulesPanel: React.FC<RulesPanelProps> = ({
   const addRuntimeRule = useStateStore((state) => state.addRuntimeRule);
   const updateRuntimeRule = useStateStore((state) => state.updateRuntimeRule);
   const removeRuntimeRule = useStateStore((state) => state.removeRuntimeRule);
+  const persistRuntimeRule = useStateStore((state) => state.persistRuntimeRule);
   const updateConfigRules = useStateStore((state) => state.updateConfigRules);
 
   // Load rules on mount
@@ -112,6 +114,21 @@ export const RulesPanel: React.FC<RulesPanelProps> = ({
       }
     } catch (error) {
       console.error('Failed to delete rule:', error);
+    } finally {
+      setIsUpdating(null);
+    }
+  };
+
+  // Handle persisting a rule to config
+  const handlePersistRule = async (name: string) => {
+    try {
+      setIsUpdating(name);
+      const response = await persistRule(name);
+      if (response.success && response.rule) {
+        persistRuntimeRule(name, response.rule);
+      }
+    } catch (error) {
+      console.error('Failed to persist rule:', error);
     } finally {
       setIsUpdating(null);
     }
@@ -241,9 +258,9 @@ export const RulesPanel: React.FC<RulesPanelProps> = ({
                     onToggle: handleToggleRule,
                     isUpdating: isUpdating === rule.name,
                   };
-                  // Conditionally pass onDelete only for runtime rules
+                  // Conditionally pass onDelete and onPersist only for runtime rules
                   return rule.source === 'runtime' ? (
-                    <RuleItem {...baseProps} onDelete={handleDeleteRule} />
+                    <RuleItem {...baseProps} onDelete={handleDeleteRule} onPersist={handlePersistRule} />
                   ) : (
                     <RuleItem {...baseProps} />
                   );

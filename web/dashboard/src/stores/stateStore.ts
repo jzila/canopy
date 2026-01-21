@@ -253,6 +253,7 @@ interface StateStore {
   addRuntimeRule: (rule: RuntimeRule) => void;
   updateRuntimeRule: (name: string, enabled: boolean) => void;
   removeRuntimeRule: (name: string) => void;
+  persistRuntimeRule: (name: string, persistedRule: RuntimeRule) => void;
   updateConfigRules: (configRules: ConfigRulesSettings) => void;
 }
 
@@ -669,6 +670,14 @@ export const useStateStore = create<StateStore>((set) => ({
   removeRuntimeRule: (name) =>
     set((state) => ({
       runtimeRules: state.runtimeRules.filter((r) => r.name !== name),
+    })),
+
+  persistRuntimeRule: (name, persistedRule) =>
+    set((state) => ({
+      // Remove from runtime rules
+      runtimeRules: state.runtimeRules.filter((r) => r.name !== name),
+      // Add to custom rules (config-sourced)
+      customRules: [...state.customRules, persistedRule],
     })),
 
   updateConfigRules: (configRules) => set({ configRules }),
