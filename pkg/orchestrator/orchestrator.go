@@ -81,9 +81,7 @@ type Config struct {
 	DryRun          bool
 	UseBwrap        bool          // Use bubblewrap sandbox for agent isolation
 	MaxRetries      int           // Maximum number of times to retry failed tasks (0 = no retries, -1 = infinite)
-	Prompt          string        // Prompt to filter/direct work selection
 	MaxPriority     int           // Hard filter: only run tasks with priority <= this value (-1 = no filter)
-	StopAtGate      bool          // Stop orchestration when encountering a task marked as a gate
 	ResolverTimeout time.Duration // Timeout for resolver agents (0 = use default 10m)
 }
 
@@ -96,7 +94,6 @@ type Orchestrator struct {
 	tempDir          string
 	callbackManager  *CallbackManager
 	failureCounts    map[string]int // Tracks how many times each task has failed
-	promptFilter     *PromptFilter  // Parsed prompt for filtering tasks
 	sandboxConfig    *sandbox.SandboxConfig
 
 	// In-flight task tracking for dynamic task assignment
@@ -143,7 +140,6 @@ func New(config *Config) (*Orchestrator, error) {
 		Verbose:       config.Verbose,
 		UseBwrap:      config.UseBwrap,
 		SandboxConfig: sandboxConfig,
-		UserPrompt:    config.Prompt, // Pass user prompt to agents for instruction precedence
 	})
 
 	// Create scheduler
@@ -158,16 +154,6 @@ func New(config *Config) (*Orchestrator, error) {
 	// Set default MaxRetries if not specified (default: 3 retries)
 	if config.MaxRetries == 0 {
 		config.MaxRetries = 3
-	}
-
-	// Parse prompt for filtering
-	promptFilter, err := ParsePrompt(config.Prompt)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse prompt: %w", err)
-	}
-
-	if config.Verbose && config.Prompt != "" {
-		fmt.Printf("Prompt filter: %+v\n", promptFilter)
 	}
 
 	// Create merge coordinator to handle all merge operations
@@ -193,7 +179,6 @@ func New(config *Config) (*Orchestrator, error) {
 		tempDir:          tempDir,
 		callbackManager:  NewCallbackManager(),
 		failureCounts:    make(map[string]int),
-		promptFilter:     promptFilter,
 		sandboxConfig:    sandboxConfig,
 		inFlight:         make(map[string]bool),
 	}
@@ -493,15 +478,8 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 
 // dryRun shows what tasks would execute without actually running them
 func (o *Orchestrator) dryRun(ctx context.Context) error {
-	// Get ready tasks from beads (with optional filtering from prompt)
-	var tasks []beads.Task
-	var err error
-	if o.promptFilter != nil && o.config.Prompt != "" {
-		args := o.promptFilter.BuildBdReadyArgs()
-		tasks, err = o.beadsClient.ReadyWithArgs(ctx, args...)
-	} else {
-		tasks, err = o.beadsClient.Ready(ctx)
-	}
+	// Get ready tasks from beads
+	tasks, err := o.beadsClient.Ready(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get ready tasks: %w", err)
 	}
@@ -512,18 +490,6 @@ func (o *Orchestrator) dryRun(ctx context.Context) error {
 		if o.config.Verbose {
 			fmt.Printf("After max-priority filter (<= P%d): %d tasks\n", o.config.MaxPriority, len(tasks))
 		}
-	}
-
-	// Apply gate-based stopping
-	if o.config.StopAtGate {
-		nonGateTasks, gateTasks := filterOutGateTasks(tasks)
-		if len(gateTasks) > 0 {
-			fmt.Printf("Gate tasks (would stop before):\n")
-			for _, t := range gateTasks {
-				fmt.Printf("  - %s: %s\n", t.ID, t.Title)
-			}
-		}
-		tasks = nonGateTasks
 	}
 
 	if len(tasks) == 0 {
@@ -564,21 +530,6 @@ func filterTasksByMaxPriority(tasks []beads.Task, maxPriority int) []beads.Task 
 	return filtered
 }
 
-// filterOutGateTasks separates tasks into non-gate tasks and gate tasks.
-// Returns (nonGateTasks, gateTasks).
-func filterOutGateTasks(tasks []beads.Task) ([]beads.Task, []beads.Task) {
-	nonGate := make([]beads.Task, 0, len(tasks))
-	gate := make([]beads.Task, 0)
-	for _, task := range tasks {
-		if task.Gate {
-			gate = append(gate, task)
-		} else {
-			nonGate = append(nonGate, task)
-		}
-	}
-	return nonGate, gate
-}
-
 // markInFlight marks a task as currently in-flight
 func (o *Orchestrator) markInFlight(taskID string) {
 	o.inFlightMu.Lock()
@@ -602,17 +553,10 @@ func (o *Orchestrator) isInFlight(taskID string) bool {
 
 // getNextTask fetches fresh ready tasks from beads and returns the first one
 // that is not currently in-flight. Returns nil if no available task is found.
-// Also returns whether we should stop due to stop conditions or gate tasks.
+// Also returns whether we should stop (always false now, stop conditions removed).
 func (o *Orchestrator) getNextTask(ctx context.Context) (*beads.Task, bool, error) {
 	// Get fresh ready tasks from beads
-	var tasks []beads.Task
-	var err error
-	if o.promptFilter != nil && o.config.Prompt != "" {
-		args := o.promptFilter.BuildBdReadyArgs()
-		tasks, err = o.beadsClient.ReadyWithArgs(ctx, args...)
-	} else {
-		tasks, err = o.beadsClient.Ready(ctx)
-	}
+	tasks, err := o.beadsClient.Ready(ctx)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to get ready tasks: %w", err)
 	}
@@ -620,30 +564,6 @@ func (o *Orchestrator) getNextTask(ctx context.Context) (*beads.Task, bool, erro
 	// Apply hard max-priority filter
 	if o.config.MaxPriority >= 0 {
 		tasks = filterTasksByMaxPriority(tasks, o.config.MaxPriority)
-	}
-
-	// Apply gate-based stopping: exclude gate tasks and check if only gates remain
-	if o.config.StopAtGate {
-		nonGateTasks, gateTasks := filterOutGateTasks(tasks)
-		if len(gateTasks) > 0 && len(nonGateTasks) == 0 {
-			// Only gate tasks remain - signal stop
-			if o.config.Verbose {
-				fmt.Printf("Stopping at gate: %d gate task(s) found, no non-gate tasks ready\n", len(gateTasks))
-				for _, t := range gateTasks {
-					fmt.Printf("  Gate task: %s: %s\n", t.ID, t.Title)
-				}
-			}
-			return nil, true, nil
-		}
-		tasks = nonGateTasks
-	}
-
-	// Check stop condition
-	if o.promptFilter != nil && o.promptFilter.ShouldStop(len(tasks)) {
-		if o.config.Verbose {
-			fmt.Printf("Stop condition met: %s\n", o.promptFilter.StopCondition)
-		}
-		return nil, true, nil
 	}
 
 	// Filter out in-flight tasks and find the first available one

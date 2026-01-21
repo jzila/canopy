@@ -229,32 +229,3 @@ func TestGetNextTask_AppliesMaxPriorityFilter(t *testing.T) {
 		t.Errorf("expected no task (P2 filtered out), got %v", task2)
 	}
 }
-
-func TestGetNextTask_StopsAtGate(t *testing.T) {
-	mockClient := &MockBeadsClientForDynamic{
-		tasks: []beads.Task{
-			{ID: "gate-1", Title: "Gate task", Gate: true},
-		},
-		closed: make(map[string]bool),
-	}
-
-	o := &Orchestrator{
-		config:      &Config{MaxPriority: -1, StopAtGate: true},
-		beadsClient: mockClient,
-		inFlight:    make(map[string]bool),
-	}
-
-	ctx := context.Background()
-
-	// Should stop because only gate tasks remain
-	task, shouldStop, err := o.getNextTask(ctx)
-	if err != nil {
-		t.Fatalf("getNextTask failed: %v", err)
-	}
-	if !shouldStop {
-		t.Error("should stop at gate")
-	}
-	if task != nil {
-		t.Errorf("expected no task when stopping at gate, got %v", task)
-	}
-}

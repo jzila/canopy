@@ -70,6 +70,10 @@ SECURITY
   - Read-only system mounts (/nix, /usr, /lib, /bin, /etc/ssl)
   - Only /workspace writable
 
+TASK SELECTION
+  Canopy uses explicit filters for task selection (no natural language parsing):
+  - --max-priority: Only run tasks with priority <= this value (0-4)
+
 Example:
   # Run with default settings (auto-starts daemon if needed)
   canopy run
@@ -86,17 +90,9 @@ Example:
   # Dry run to see what would execute
   canopy run --dry-run
 
-  # Filter work by prompt (soft filter - agents may ignore)
-  canopy run --prompt "Only work on P0 issues"
-  canopy run --prompt "Focus on tasks only"
-  canopy run --prompt "Stop after completing all P1s"
-
   # Hard filter by maximum priority (P0-P4, only tasks at or below this priority)
   canopy run --max-priority 2   # Only P0, P1, P2 tasks (excludes P3, P4)
   canopy run --max-priority 0   # Only P0 tasks (critical only)
-
-  # Stop at gate tasks (tasks marked with gate=true)
-  canopy run --stop-at-gate     # Stop before executing any gate task
 
   # Set resolver timeout for conflict resolution
   canopy run --resolver-timeout 15m   # 15 minute timeout (default: 10m)
@@ -110,10 +106,14 @@ func init() {
 	runCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show execution plan without running")
 	runCmd.Flags().BoolVar(&useSandbox, "sandbox", false, "Use bubblewrap (bwrap) for full process/filesystem isolation")
 	runCmd.Flags().IntVar(&maxRetries, "max-retries", 3, "Maximum retry attempts for failed tasks (0=no retries, -1=infinite)")
-	runCmd.Flags().StringVar(&prompt, "prompt", "", "Prompt to filter/direct work selection (e.g., 'Only work on P0 issues', 'Stop after completing all P1s')")
 	runCmd.Flags().IntVar(&maxPriority, "max-priority", -1, "Hard filter: only run tasks with priority <= this value (0-4, -1=no filter)")
-	runCmd.Flags().BoolVar(&stopAtGate, "stop-at-gate", false, "Stop orchestration when encountering a task marked as a gate")
 	runCmd.Flags().DurationVar(&resolverTimeout, "resolver-timeout", 0, "Timeout for resolver agents when resolving merge conflicts (e.g., 10m, 15m, 1h). Default: 10m. Set from CANOPY_RESOLVER_TIMEOUT env var if not specified.")
+
+	// Deprecated flags - kept for backwards compatibility but no longer functional
+	runCmd.Flags().StringVar(&prompt, "prompt", "", "DEPRECATED: Use explicit filters like --max-priority instead")
+	runCmd.Flags().BoolVar(&stopAtGate, "stop-at-gate", false, "DEPRECATED: Use rules.exclude_labels in config instead")
+	_ = runCmd.Flags().MarkDeprecated("prompt", "use explicit filters like --max-priority instead")
+	_ = runCmd.Flags().MarkDeprecated("stop-at-gate", "use rules.exclude_labels in config instead")
 
 	rootCmd.AddCommand(runCmd)
 }
@@ -121,6 +121,14 @@ func init() {
 func runOrchestrator(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Emit deprecation warnings for deprecated flags
+	if prompt != "" {
+		fmt.Fprintln(os.Stderr, "Warning: --prompt is deprecated and will be ignored. Use explicit filters like --max-priority instead.")
+	}
+	if stopAtGate {
+		fmt.Fprintln(os.Stderr, "Warning: --stop-at-gate is deprecated and will be ignored. Use rules.exclude_labels in config instead.")
+	}
 
 	// Clean up any stale mounts from previous crashes before starting
 	// This prevents "permission denied" errors from orphaned FUSE mounts
@@ -231,6 +239,7 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create and run orchestrator
+	// Note: Prompt and StopAtGate are deprecated and no longer passed to orchestrator
 	orch, err = orchestrator.New(&orchestrator.Config{
 		WorkDir:         absWorkdir,
 		OutputDir:       outputDir,
@@ -239,9 +248,7 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		DryRun:          dryRun,
 		UseBwrap:        useSandbox,
 		MaxRetries:      maxRetries,
-		Prompt:          prompt,
 		MaxPriority:     maxPriority,
-		StopAtGate:      stopAtGate,
 		ResolverTimeout: effectiveResolverTimeout,
 	})
 	if err != nil {

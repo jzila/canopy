@@ -29,6 +29,60 @@ Use plain `git` commands—the working directory is already set, so `-C` is unne
 - Run `go test ./...` before committing code changes
 - Run `go build ./...` to verify compilation (enforced by pre-commit hook)
 
+## Beads API Invariant
+
+Canopy treats beads as a **minimal issue tracker with dependencies**. It MUST NOT depend on:
+- Gates (human, timer, gh:*, bead)
+- Formulas or workflow automation
+- Watchers or notifications
+- GitHub integration
+- Cross-rig (gastown) references
+- Any field not in the core schema
+
+### Core Schema (canopy may use)
+
+```go
+type Task struct {
+    ID          string   `json:"id"`
+    Title       string   `json:"title"`
+    Description string   `json:"description,omitempty"`
+    Type        string   `json:"type,omitempty"`        // bug, feature, task, chore
+    Priority    int      `json:"priority,omitempty"`    // 0-4
+    Status      string   `json:"status,omitempty"`      // open, in_progress, closed, deferred
+    Labels      []string `json:"labels,omitempty"`
+    Assignee    string   `json:"assignee,omitempty"`
+    Blockers    []string `json:"blockers,omitempty"`    // Dependency IDs
+    UpdatedAt   string   `json:"updated_at,omitempty"`
+}
+```
+
+### Task Selection (Strict)
+
+Canopy filters tasks using ONLY these fields:
+- `priority` - numeric range (0-4)
+- `type` - exact match (bug, feature, task, chore)
+- `labels` - set membership
+- `assignee` - exact match or empty
+
+**No fuzzy/natural language filtering.** The `--prompt` flag is deprecated.
+
+### Commands (canopy may use)
+
+```bash
+bd ready                    # Actionable work (open, unblocked)
+bd ready --priority 2       # Filter by max priority
+bd ready --type bug         # Filter by type
+bd list --status=open       # Query by status
+bd show <id>                # Task details
+bd update <id> --status=X   # Change status
+bd close <id>               # Complete
+bd close <id> --reason="X"  # Complete with reason
+bd dep add <a> <b>          # a depends on b
+bd sync                     # Git sync
+```
+
+Reference: https://github.com/Dicklesworthstone/beads_rust
+
 ## Git Hooks
 
 The pre-commit hook (`scripts/hooks/pre-commit`) enforces:

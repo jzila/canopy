@@ -11,17 +11,22 @@ import (
 	"time"
 )
 
-// Task represents a beads task returned from bd ready
+// Task represents a beads task returned from bd ready.
+// This struct defines the minimal beads API surface that canopy depends on.
+// Canopy treats beads as a minimal issue tracker with dependencies and MUST NOT
+// depend on beads-specific features like gates, formulas, watchers, or GitHub integration.
 type Task struct {
 	ID          string   `json:"id"`
 	Title       string   `json:"title"`
 	Description string   `json:"description,omitempty"`
-	Priority    int      `json:"priority,omitempty"`
-	Status      string   `json:"status,omitempty"`
-	Blockers    []string `json:"blockers,omitempty"`    // Tasks this task depends on
+	Type        string   `json:"type,omitempty"`        // bug, feature, task, chore
+	Priority    int      `json:"priority,omitempty"`    // 0-4 (0=critical, 4=backlog)
+	Status      string   `json:"status,omitempty"`      // open, in_progress, closed, deferred
+	Labels      []string `json:"labels,omitempty"`
+	Assignee    string   `json:"assignee,omitempty"`
+	Blockers    []string `json:"blockers,omitempty"`    // Tasks this task depends on (dependency IDs)
 	BlockedBy   []string `json:"blocked_by,omitempty"`  // Alias for blockers
 	Timeout     string   `json:"timeout,omitempty"`     // Per-task timeout (e.g., "5m", "30m", "1h")
-	Gate        bool     `json:"gate,omitempty"`        // If true, orchestrator stops before this task when --stop-at-gate is set
 	UpdatedAt   string   `json:"updated_at,omitempty"`  // ISO 8601 timestamp of last update
 }
 
