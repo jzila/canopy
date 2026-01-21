@@ -210,3 +210,114 @@ func CleanupRepairContext(workDir string) error {
 	}
 	return nil
 }
+
+// RepairPreCommit spawns a repair agent to fix pre-commit hook failures.
+// Unlike Repair which handles post-merge validation failures, this handles failures
+// that occur at commit time when the pre-commit hook rejects the changes.
+//
+// The repair agent:
+//   - Runs directly on the working directory (changes are already applied)
+//   - Receives pre-commit hook failure context
+//   - Has access to the staged changes that failed to commit
+//   - Should fix the issue so the commit can be retried
+//   - Is flagged as a child of the implementor agent via ParentAgentID
+func (r *RepairAgent) RepairPreCommit(ctx context.Context, repairCtx *PreCommitRepairContext, parentAgentID string) (*Result, error) {
+	start := time.Now()
+
+	result := &Result{}
+
+	// Generate unique repair agent ID
+	repairAgentID := r.makeAgentID(repairCtx.TaskID, repairCtx.RepairAttempt)
+	result.RepairAgentID = repairAgentID
+
+	// Write repair context files to the working directory
+	if err := WritePreCommitRepairContext(r.config.WorkDir, repairCtx); err != nil {
+		result.Error = fmt.Sprintf("failed to write pre-commit repair context: %v", err)
+		result.Duration = time.Since(start)
+		return result, nil
+	}
+
+	// Build the repair prompt
+	prompt := BuildPreCommitRepairPrompt(repairCtx)
+
+	// Create a synthetic beads task for the repair agent
+	repairTask := &beads.Task{
+		ID:          repairAgentID,
+		Title:       fmt.Sprintf("Repair pre-commit hook failure for %s", repairCtx.TaskID),
+		Description: prompt,
+	}
+
+	// Send IPC event for repair agent start (child of original agent)
+	if r.ipcClient != nil {
+		if err := r.ipcClient.SendAgentStart(
+			repairAgentID,
+			r.config.RunID,             // Run ID for historical filtering
+			repairCtx.TaskID,           // TaskID is the original task
+			repairTask.Title,
+			repairCtx.TaskDescription,  // Task description from original task
+			parentAgentID,              // Parent is the implementor agent
+			r.config.RepoID,            // Repository ID for tracking
+		); err != nil && r.config.Verbose {
+			fmt.Fprintf(os.Stderr, "warning: failed to send pre-commit repair start event: %v\n", err)
+		}
+	}
+
+	// Create a direct overlay that wraps the working directory without isolation.
+	// This allows the repair agent to commit directly to the repo.
+	overlay := sandbox.NewDirectOverlay(r.config.WorkDir)
+
+	// Execute the repair agent
+	agentResult := r.executor.Execute(ctx, repairTask, overlay, nil, nil)
+
+	result.AgentResult = agentResult
+	result.Success = agentResult.Success
+	result.Duration = time.Since(start)
+
+	if !agentResult.Success {
+		result.Error = agentResult.Error
+	}
+
+	// Send IPC event for repair agent completion
+	if r.ipcClient != nil {
+		ipcResult := &ipc.AgentResult{
+			ExitCode:        agentResult.ExitCode,
+			DurationSeconds: result.Duration.Seconds(),
+			FilesChanged:    len(agentResult.Changes),
+		}
+
+		// Add token usage if available
+		if agentResult.Output != nil {
+			ipcResult.InputTokens = agentResult.Output.TotalInputTokens
+			ipcResult.OutputTokens = agentResult.Output.TotalOutputTokens
+			ipcResult.CostUSD = agentResult.Output.CostUSD
+			ipcResult.DurationMS = agentResult.Output.DurationMS
+			ipcResult.DurationAPIMS = agentResult.Output.DurationAPIMS
+			ipcResult.NumTurns = agentResult.Output.NumTurns
+		}
+
+		if agentResult.GitState != nil {
+			ipcResult.CommitsCreated = len(agentResult.GitState.NewCommits)
+		}
+
+		if result.Success {
+			if err := r.ipcClient.SendAgentDone(
+				repairAgentID,
+				parentAgentID,
+				ipcResult,
+			); err != nil && r.config.Verbose {
+				fmt.Fprintf(os.Stderr, "warning: failed to send pre-commit repair done event: %v\n", err)
+			}
+		} else {
+			if err := r.ipcClient.SendAgentFail(
+				repairAgentID,
+				parentAgentID,
+				fmt.Errorf("%s", result.Error),
+				ipcResult,
+			); err != nil && r.config.Verbose {
+				fmt.Fprintf(os.Stderr, "warning: failed to send pre-commit repair fail event: %v\n", err)
+			}
+		}
+	}
+
+	return result, nil
+}
