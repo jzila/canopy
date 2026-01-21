@@ -31,9 +31,9 @@ export const ConfigSettingsCard: React.FC<ConfigSettingsCardProps> = ({
     setEditState({
       priority_min: config.priority_min,
       priority_max: config.priority_max,
-      types: [...config.types],
-      exclude_types: [...config.exclude_types],
-      exclude_labels: [...config.exclude_labels],
+      types: [...(config.types ?? [])],
+      exclude_types: [...(config.exclude_types ?? [])],
+      exclude_labels: [...(config.exclude_labels ?? [])],
       assignee: config.assignee,
     });
     setIsEditing(true);
@@ -101,17 +101,17 @@ export const ConfigSettingsCard: React.FC<ConfigSettingsCardProps> = ({
             <span className="px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded font-mono text-xs">
               Priority: {priorityDisplay}
             </span>
-            {config.types.length > 0 && (
+            {(config.types?.length ?? 0) > 0 && (
               <span className="px-2 py-1 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded font-mono text-xs">
                 Types: {config.types.join(', ')}
               </span>
             )}
-            {config.exclude_types.length > 0 && (
+            {(config.exclude_types?.length ?? 0) > 0 && (
               <span className="px-2 py-1 bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded font-mono text-xs">
                 Exclude: {config.exclude_types.join(', ')}
               </span>
             )}
-            {config.exclude_labels.length > 0 && (
+            {(config.exclude_labels?.length ?? 0) > 0 && (
               <span className="px-2 py-1 bg-yellow-50 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 rounded font-mono text-xs">
                 Exclude labels: {config.exclude_labels.join(', ')}
               </span>
