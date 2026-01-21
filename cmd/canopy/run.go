@@ -557,7 +557,6 @@ func resumeInterruptedAgents(ctx context.Context, workDir string, useBwrap, verb
 
 	// Create executor for resuming agents
 	executor := agent.NewExecutor(&agent.Config{
-		WorkDir:  workDir,
 		UseBwrap: useBwrap,
 		Verbose:  verbose,
 	})
@@ -585,7 +584,7 @@ func resumeInterruptedAgents(ctx context.Context, workDir string, useBwrap, verb
 		}
 
 		// Create live feed callback to send events to daemon
-		liveFeedCallback := func(event *agent.LiveFeedEvent) {
+		liveFeedCallback := func(taskID string, event *agent.LiveFeedEvent) {
 			if ipcClient != nil {
 				_ = ipcClient.SendAgentLiveFeed(a.AgentID, string(event.EventType), event.RawData)
 			}

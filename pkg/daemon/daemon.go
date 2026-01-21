@@ -35,6 +35,7 @@ type BeadsClientFactory func(repoPath string) (BeadsClientInterface, error)
 //   - RepositoryManager: repository and beads client management
 //   - PersistenceManager: persistence layer coordination
 //   - LifecycleManager: signal handling, PID files, start/stop
+//   - OrchestratorManager: orchestrator lifecycle management
 //   - RuntimeState: agent and task state tracking
 //   - EventBus: event distribution
 type Daemon struct {
@@ -48,6 +49,7 @@ type Daemon struct {
 	repoManager    *RepositoryManager
 	persistManager *PersistenceManager
 	lifecycle      *LifecycleManager
+	orchManager    *OrchestratorManager
 
 	// Server components (managed by lifecycle)
 	ipcServer        IPCServer
@@ -152,6 +154,9 @@ func (d *Daemon) Init() {
 	}
 	if d.lifecycle == nil {
 		d.lifecycle = NewLifecycleManager()
+	}
+	if d.orchManager == nil {
+		d.orchManager = NewOrchestratorManager(d.eventBus, d.state)
 	}
 
 	// Initialize persistence if enabled
@@ -444,6 +449,12 @@ func (d *Daemon) GetRuntimeState() *RuntimeState {
 // Returns nil if persistence is disabled.
 func (d *Daemon) GetPersistenceStore() *PersistenceManager {
 	return d.persistManager
+}
+
+// GetOrchestratorManager returns the orchestrator manager for external access.
+// Returns nil if Init() has not been called yet.
+func (d *Daemon) GetOrchestratorManager() *OrchestratorManager {
+	return d.orchManager
 }
 
 // newDaemonForTest creates a daemon instance for testing with pre-configured components.

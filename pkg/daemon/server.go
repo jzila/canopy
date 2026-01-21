@@ -24,6 +24,7 @@ type Server struct {
 	runsHandler  *RunsHandler
 	repoHandler  *RepoHandler
 	beadsHandler *BeadsHandler
+	orchHandler  *OrchestrationHandler
 	state        *RuntimeState
 	eventBus     *EventBus
 	upgrader     websocket.Upgrader
@@ -84,6 +85,12 @@ func NewServerWithDaemon(port int, state *RuntimeState, eventBus *EventBus, sche
 		beadsHandler = NewBeadsHandler(daemon)
 	}
 
+	// Create orchestration handler for run control (requires daemon reference)
+	var orchHandler *OrchestrationHandler
+	if daemon != nil {
+		orchHandler = NewOrchestrationHandler(daemon.GetOrchestratorManager())
+	}
+
 	// Configure WebSocket upgrader
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:  1024,
@@ -101,6 +108,7 @@ func NewServerWithDaemon(port int, state *RuntimeState, eventBus *EventBus, sche
 		runsHandler:  runsHandler,
 		repoHandler:  repoHandler,
 		beadsHandler: beadsHandler,
+		orchHandler:  orchHandler,
 		state:        state,
 		eventBus:     eventBus,
 		upgrader:     upgrader,
@@ -187,6 +195,9 @@ func (s *Server) setupRoutes() *http.ServeMux {
 
 	// REST API routes - beads operations
 	mux.HandleFunc("/api/beads/sync", s.handleBeadsSyncRoute) // Handles POST /api/beads/sync
+
+	// REST API routes - orchestration control (daemon-owned runs)
+	mux.HandleFunc("/api/orchestrator/", s.handleOrchestratorRoutes) // Handles all /api/orchestrator/* routes
 
 	// Prometheus metrics endpoint
 	mux.Handle("/metrics", promhttp.Handler())
@@ -358,6 +369,15 @@ func (s *Server) handleBeadsSyncRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.beadsHandler.HandleSyncBeads(w, r)
+}
+
+// handleOrchestratorRoutes routes orchestration control requests
+func (s *Server) handleOrchestratorRoutes(w http.ResponseWriter, r *http.Request) {
+	if s.orchHandler == nil {
+		http.Error(w, "Orchestration not available", http.StatusServiceUnavailable)
+		return
+	}
+	s.orchHandler.RouteOrchestrator(w, r)
 }
 
 // handleRepositoriesRoutes routes repository management requests
