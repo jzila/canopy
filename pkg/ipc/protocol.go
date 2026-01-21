@@ -268,3 +268,33 @@ type OrchPauseStatusPayload struct {
 	IsPausedByAgent bool   `json:"is_paused_by_agent"`  // Whether paused by an agent (resolver, repair, etc.)
 	PauseState      string `json:"pause_state"`         // Detailed state: "running", "paused_user", "paused_agent", "paused_both"
 }
+
+// TasksPayload represents tasks with dual-source architecture.
+// Persistent tasks come from beads (source of truth), while runtime
+// tasks are ephemeral overlay state (in_progress, agent assignments).
+// The frontend merges these: runtime overlays persistent for display.
+type TasksPayload struct {
+	// Persistent contains tasks from beads (source of truth).
+	// These are the canonical task states that persist across daemon restarts.
+	Persistent map[string]*TaskState `json:"persistent"`
+
+	// Runtime contains ephemeral overlay state (in_progress status, agent assignments).
+	// These are rebuilt from agent events on startup and do not persist to beads.
+	// Frontend merges runtime onto persistent for display.
+	Runtime map[string]*TaskState `json:"runtime"`
+}
+
+// TaskState represents a task for the TasksPayload.
+// This is a wire format type for state:sync events.
+type TaskState struct {
+	ID           string   `json:"id"`
+	Title        string   `json:"title"`
+	Status       string   `json:"status"`               // ready, in_progress, completed, failed
+	Type         string   `json:"type,omitempty"`       // Task type (task, bug, feature, etc.)
+	AgentID      string   `json:"agent_id,omitempty"`   // ID of agent executing this task
+	Priority     int      `json:"priority"`
+	Dependencies []string `json:"dependencies"`         // Task IDs this task depends on
+	Archived     bool     `json:"archived"`             // Whether the task is archived
+	RepoID       string   `json:"repo_id,omitempty"`    // Repository this task belongs to
+	UpdatedAt    int64    `json:"updated_at,omitempty"` // Unix timestamp of last update
+}

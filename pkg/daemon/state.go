@@ -529,20 +529,29 @@ type Stats struct {
 // RuntimeState aggregates the complete state of an orchestration run
 type RuntimeState struct {
 	Agents       map[string]*AgentState `json:"agents"`        // Agent ID -> AgentState
-	Tasks        map[string]*TaskState  `json:"tasks"`         // Task ID -> TaskState
+	Tasks        map[string]*TaskState  `json:"tasks"`         // Task ID -> TaskState (legacy: merged view)
 	Stats        Stats                  `json:"stats"`         // Aggregate statistics
 	IsPaused     bool                   `json:"is_paused"`     // Whether orchestration is paused
 	StartTime    time.Time              `json:"start_time"`    // When orchestration started
 	CurrentRunID string                 `json:"current_run_id"` // Current run ID for new agents
-	mu           sync.RWMutex
+
+	// Hybrid overlay architecture: separate persistent (beads) from runtime state
+	// persistentTasks: canonical state from beads (source of truth)
+	// runtimeTasks: ephemeral overlay (in_progress, agent assignments)
+	persistentTasks map[string]*TaskState // From beads - does NOT get modified during runtime
+	runtimeTasks    map[string]*TaskState // Runtime overlay - rebuilt from agent events
+
+	mu sync.RWMutex
 }
 
 // NewRuntimeState creates a new runtime state tracker
 func NewRuntimeState() *RuntimeState {
 	return &RuntimeState{
-		Agents:    make(map[string]*AgentState),
-		Tasks:     make(map[string]*TaskState),
-		StartTime: time.Now(),
+		Agents:          make(map[string]*AgentState),
+		Tasks:           make(map[string]*TaskState),
+		persistentTasks: make(map[string]*TaskState),
+		runtimeTasks:    make(map[string]*TaskState),
+		StartTime:       time.Now(),
 	}
 }
 
@@ -565,7 +574,9 @@ func (r *RuntimeState) AddTask(task *beads.Task) {
 	r.AddTaskWithRepo(task, "")
 }
 
-// AddTaskWithRepo registers a task in the state with an associated repository ID
+// AddTaskWithRepo registers a task in the state with an associated repository ID.
+// This adds the task to persistentTasks (from beads) and also to the legacy Tasks map
+// for backwards compatibility.
 func (r *RuntimeState) AddTaskWithRepo(task *beads.Task, repoID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -578,7 +589,7 @@ func (r *RuntimeState) AddTaskWithRepo(task *beads.Task, repoID string) {
 		}
 	}
 
-	r.Tasks[task.ID] = &TaskState{
+	taskState := &TaskState{
 		ID:           task.ID,
 		Title:        task.Title,
 		Status:       task.Status,
@@ -586,6 +597,94 @@ func (r *RuntimeState) AddTaskWithRepo(task *beads.Task, repoID string) {
 		Dependencies: task.GetDependencies(),
 		RepoID:       repoID,
 		UpdatedAt:    updatedAt,
+	}
+
+	// Add to persistent tasks (canonical state from beads)
+	r.persistentTasks[task.ID] = taskState
+
+	// Also maintain legacy Tasks map for backwards compatibility
+	// Create a copy to avoid shared state issues
+	taskCopy := *taskState
+	if taskState.Dependencies != nil {
+		taskCopy.Dependencies = make([]string, len(taskState.Dependencies))
+		copy(taskCopy.Dependencies, taskState.Dependencies)
+	}
+	r.Tasks[task.ID] = &taskCopy
+}
+
+// SetRuntimeTaskStatus updates the runtime overlay for a task's status and agent assignment.
+// This is called when agents start working on tasks (in_progress) or complete them.
+// The runtime state overlays the persistent state from beads.
+func (r *RuntimeState) SetRuntimeTaskStatus(taskID, status, agentID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// Get or create runtime task entry
+	rt, exists := r.runtimeTasks[taskID]
+	if !exists {
+		// Create minimal runtime overlay with just the changed fields
+		rt = &TaskState{
+			ID: taskID,
+		}
+		r.runtimeTasks[taskID] = rt
+	}
+
+	rt.Status = status
+	rt.AgentID = agentID
+}
+
+// GetPersistentTasks returns a copy of the persistent tasks map (from beads).
+// This is the canonical source of truth for task definitions.
+func (r *RuntimeState) GetPersistentTasks() map[string]*TaskState {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	result := make(map[string]*TaskState, len(r.persistentTasks))
+	for id, task := range r.persistentTasks {
+		taskCopy := *task
+		if task.Dependencies != nil {
+			taskCopy.Dependencies = make([]string, len(task.Dependencies))
+			copy(taskCopy.Dependencies, task.Dependencies)
+		}
+		result[id] = &taskCopy
+	}
+	return result
+}
+
+// GetRuntimeTasks returns a copy of the runtime tasks overlay.
+// These are ephemeral states (in_progress, agent assignments) that overlay persistent tasks.
+func (r *RuntimeState) GetRuntimeTasks() map[string]*TaskState {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	result := make(map[string]*TaskState, len(r.runtimeTasks))
+	for id, task := range r.runtimeTasks {
+		taskCopy := *task
+		if task.Dependencies != nil {
+			taskCopy.Dependencies = make([]string, len(task.Dependencies))
+			copy(taskCopy.Dependencies, task.Dependencies)
+		}
+		result[id] = &taskCopy
+	}
+	return result
+}
+
+// ClearRuntimeTasksForRepo clears runtime task overlays for a specific repository.
+// Called when switching repositories or resetting state.
+func (r *RuntimeState) ClearRuntimeTasksForRepo(repoID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if repoID == "" {
+		r.runtimeTasks = make(map[string]*TaskState)
+		return
+	}
+
+	// We need to check persistent tasks to find the repo association
+	for taskID := range r.runtimeTasks {
+		if pt, exists := r.persistentTasks[taskID]; exists && pt.RepoID == repoID {
+			delete(r.runtimeTasks, taskID)
+		}
 	}
 }
 
@@ -596,6 +695,8 @@ func (r *RuntimeState) ClearTasksForRepo(repoID string) {
 	defer r.mu.Unlock()
 	if repoID == "" {
 		r.Tasks = make(map[string]*TaskState)
+		r.persistentTasks = make(map[string]*TaskState)
+		r.runtimeTasks = make(map[string]*TaskState)
 		return
 	}
 	for id, task := range r.Tasks {
@@ -603,16 +704,34 @@ func (r *RuntimeState) ClearTasksForRepo(repoID string) {
 			delete(r.Tasks, id)
 		}
 	}
+	for id, task := range r.persistentTasks {
+		if task.RepoID == repoID {
+			delete(r.persistentTasks, id)
+			delete(r.runtimeTasks, id) // Also clear runtime overlay
+		}
+	}
 }
 
-// UpdateTaskStatus updates the status of a task
+// UpdateTaskStatus updates the status of a task.
+// This updates both the legacy Tasks map and the runtime overlay.
 func (r *RuntimeState) UpdateTaskStatus(taskID, status, agentID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	// Update legacy Tasks map for backwards compatibility
 	if task, exists := r.Tasks[taskID]; exists {
 		task.Status = status
 		task.AgentID = agentID
 	}
+
+	// Update runtime overlay
+	rt, exists := r.runtimeTasks[taskID]
+	if !exists {
+		rt = &TaskState{ID: taskID}
+		r.runtimeTasks[taskID] = rt
+	}
+	rt.Status = status
+	rt.AgentID = agentID
 }
 
 // SetTaskArchived sets the archived status of a task
@@ -710,11 +829,18 @@ func (r *RuntimeState) Resume() {
 // Used to safely return state copies without triggering copylocks warnings.
 type RuntimeStateSnapshot struct {
 	Agents       map[string]*AgentState `json:"agents"`
-	Tasks        map[string]*TaskState  `json:"tasks"`
+	Tasks        map[string]*TaskState  `json:"tasks"`          // Legacy: merged view for backwards compat
 	Stats        Stats                  `json:"stats"`
 	IsPaused     bool                   `json:"is_paused"`
 	StartTime    time.Time              `json:"start_time"`
 	CurrentRunID string                 `json:"current_run_id"`
+
+	// Hybrid overlay architecture: dual-source task state
+	// PersistentTasks: canonical state from beads (source of truth)
+	// RuntimeTasks: ephemeral overlay (in_progress, agent assignments)
+	// Frontend merges: runtime overlays persistent for display
+	PersistentTasks map[string]*TaskState `json:"persistent_tasks,omitempty"`
+	RuntimeTasks    map[string]*TaskState `json:"runtime_tasks,omitempty"`
 }
 
 // GetSnapshot returns a complete snapshot of the runtime state (thread-safe)
@@ -726,12 +852,14 @@ func (r *RuntimeState) GetSnapshot() RuntimeStateSnapshot {
 	defer r.mu.RUnlock()
 
 	snapshot := RuntimeStateSnapshot{
-		Agents:       make(map[string]*AgentState),
-		Tasks:        make(map[string]*TaskState),
-		Stats:        r.Stats,
-		IsPaused:     r.IsPaused,
-		StartTime:    r.StartTime,
-		CurrentRunID: r.CurrentRunID,
+		Agents:          make(map[string]*AgentState),
+		Tasks:           make(map[string]*TaskState),
+		PersistentTasks: make(map[string]*TaskState),
+		RuntimeTasks:    make(map[string]*TaskState),
+		Stats:           r.Stats,
+		IsPaused:        r.IsPaused,
+		StartTime:       r.StartTime,
+		CurrentRunID:    r.CurrentRunID,
 	}
 
 	// Deep copy agents
@@ -740,7 +868,7 @@ func (r *RuntimeState) GetSnapshot() RuntimeStateSnapshot {
 		snapshot.Agents[id] = &agentCopy
 	}
 
-	// Deep copy tasks
+	// Deep copy legacy tasks (merged view for backwards compat)
 	for id, task := range r.Tasks {
 		taskCopy := *task
 		if task.Dependencies != nil {
@@ -748,6 +876,26 @@ func (r *RuntimeState) GetSnapshot() RuntimeStateSnapshot {
 			copy(taskCopy.Dependencies, task.Dependencies)
 		}
 		snapshot.Tasks[id] = &taskCopy
+	}
+
+	// Deep copy persistent tasks (from beads)
+	for id, task := range r.persistentTasks {
+		taskCopy := *task
+		if task.Dependencies != nil {
+			taskCopy.Dependencies = make([]string, len(task.Dependencies))
+			copy(taskCopy.Dependencies, task.Dependencies)
+		}
+		snapshot.PersistentTasks[id] = &taskCopy
+	}
+
+	// Deep copy runtime tasks (ephemeral overlay)
+	for id, task := range r.runtimeTasks {
+		taskCopy := *task
+		if task.Dependencies != nil {
+			taskCopy.Dependencies = make([]string, len(task.Dependencies))
+			copy(taskCopy.Dependencies, task.Dependencies)
+		}
+		snapshot.RuntimeTasks[id] = &taskCopy
 	}
 
 	return snapshot
@@ -785,11 +933,13 @@ func (r *RuntimeState) GetSnapshotForRepo(repoID string) RuntimeStateSnapshot {
 	defer r.mu.RUnlock()
 
 	snapshot := RuntimeStateSnapshot{
-		Agents:       make(map[string]*AgentState),
-		Tasks:        make(map[string]*TaskState),
-		IsPaused:     r.IsPaused,
-		StartTime:    r.StartTime,
-		CurrentRunID: r.CurrentRunID,
+		Agents:          make(map[string]*AgentState),
+		Tasks:           make(map[string]*TaskState),
+		PersistentTasks: make(map[string]*TaskState),
+		RuntimeTasks:    make(map[string]*TaskState),
+		IsPaused:        r.IsPaused,
+		StartTime:       r.StartTime,
+		CurrentRunID:    r.CurrentRunID,
 	}
 
 	// Filter and deep copy agents (note: agents don't have repo_id in struct yet,
@@ -800,7 +950,7 @@ func (r *RuntimeState) GetSnapshotForRepo(repoID string) RuntimeStateSnapshot {
 		snapshot.Agents[id] = &agentCopy
 	}
 
-	// Filter and deep copy tasks by repo
+	// Filter and deep copy legacy tasks by repo
 	for id, task := range r.Tasks {
 		if task.RepoID == repoID {
 			taskCopy := *task
@@ -809,6 +959,28 @@ func (r *RuntimeState) GetSnapshotForRepo(repoID string) RuntimeStateSnapshot {
 				copy(taskCopy.Dependencies, task.Dependencies)
 			}
 			snapshot.Tasks[id] = &taskCopy
+		}
+	}
+
+	// Filter and deep copy persistent tasks by repo
+	for id, task := range r.persistentTasks {
+		if task.RepoID == repoID {
+			taskCopy := *task
+			if task.Dependencies != nil {
+				taskCopy.Dependencies = make([]string, len(task.Dependencies))
+				copy(taskCopy.Dependencies, task.Dependencies)
+			}
+			snapshot.PersistentTasks[id] = &taskCopy
+
+			// Also include runtime overlay for this task if it exists
+			if rt, exists := r.runtimeTasks[id]; exists {
+				rtCopy := *rt
+				if rt.Dependencies != nil {
+					rtCopy.Dependencies = make([]string, len(rt.Dependencies))
+					copy(rtCopy.Dependencies, rt.Dependencies)
+				}
+				snapshot.RuntimeTasks[id] = &rtCopy
+			}
 		}
 	}
 

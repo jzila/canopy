@@ -221,19 +221,26 @@ interface BackendAgentState {
   last_repair_output?: string;
 }
 
+// Backend task state format
+interface BackendTaskState {
+  id: string;
+  title: string;
+  status: string;
+  type?: string;     // Task type (task, bug, feature, etc.)
+  agent_id: string;
+  priority: number;
+  dependencies: string[];
+  archived: boolean;
+  repo_id?: string;
+  updated_at?: number;  // Unix timestamp of last update
+}
+
 interface BackendRuntimeState {
   agents: Record<string, BackendAgentState>;
-  tasks: Record<string, {
-    id: string;
-    title: string;
-    status: string;
-    type?: string;     // Task type (task, bug, feature, etc.)
-    agent_id: string;
-    priority: number;
-    dependencies: string[];
-    archived: boolean;
-    updated_at?: number;  // Unix timestamp of last update
-  }>;
+  tasks: Record<string, BackendTaskState>;  // Legacy: merged view for backwards compat
+  // Hybrid overlay architecture: dual-source task state
+  persistent_tasks?: Record<string, BackendTaskState>;  // From beads (source of truth)
+  runtime_tasks?: Record<string, BackendTaskState>;     // Ephemeral overlay (in_progress, agent assignments)
   stats: {
     total_tasks: number;
     completed_tasks: number;
@@ -435,9 +442,58 @@ export function useWebSocket() {
                 };
               }
 
+              // Merge dual-source tasks: runtime overlays persistent for display
+              // If new dual-source fields exist, merge them; otherwise fall back to legacy tasks
+              let mergedTasks: Record<string, import('../stores/stateStore').TaskState> = {};
+
+              if (backendState.persistent_tasks && Object.keys(backendState.persistent_tasks).length > 0) {
+                // Use new hybrid overlay architecture
+                const persistentTasks = backendState.persistent_tasks;
+                const runtimeTasks = backendState.runtime_tasks || {};
+
+                // Start with persistent tasks (base layer from beads)
+                for (const [id, task] of Object.entries(persistentTasks)) {
+                  mergedTasks[id] = {
+                    id: task.id,
+                    title: task.title,
+                    status: task.status,
+                    agent_id: task.agent_id || '',
+                    priority: task.priority,
+                    dependencies: task.dependencies || [],
+                    archived: task.archived || false,
+                    ...(task.type && { type: task.type }),
+                    ...(task.updated_at !== undefined && { updated_at: task.updated_at }),
+                  };
+                }
+
+                // Overlay runtime state (in_progress, agent assignments)
+                for (const [id, rt] of Object.entries(runtimeTasks)) {
+                  if (mergedTasks[id]) {
+                    // Merge runtime onto persistent
+                    if (rt.status) mergedTasks[id].status = rt.status;
+                    if (rt.agent_id) mergedTasks[id].agent_id = rt.agent_id;
+                  } else {
+                    // Runtime-only task (shouldn't happen often, but handle gracefully)
+                    mergedTasks[id] = {
+                      id: rt.id,
+                      title: rt.title || '',
+                      status: rt.status || 'unknown',
+                      agent_id: rt.agent_id || '',
+                      priority: rt.priority || 0,
+                      dependencies: rt.dependencies || [],
+                      archived: rt.archived || false,
+                    };
+                  }
+                }
+                console.log('[WebSocket] Merged dual-source tasks:', Object.keys(persistentTasks).length, 'persistent,', Object.keys(runtimeTasks).length, 'runtime');
+              } else {
+                // Fall back to legacy tasks field for backwards compatibility
+                mergedTasks = (backendState.tasks || {}) as Record<string, import('../stores/stateStore').TaskState>;
+              }
+
               syncState({
                 agents: transformedAgents,
-                tasks: backendState.tasks || {},
+                tasks: mergedTasks,
                 stats: backendState.stats ? {
                   ...backendState.stats,
                   all_git_commits: backendState.stats.all_git_commits || [],
