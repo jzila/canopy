@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-const currentSchemaVersion = 13
+const currentSchemaVersion = 14
 
 // migrate runs all pending database migrations
 func (s *Store) migrate() error {
@@ -95,6 +95,10 @@ func (s *Store) runMigration(version int) error {
 		}
 	case 13:
 		if err := s.migrateV13(tx); err != nil {
+			return err
+		}
+	case 14:
+		if err := s.migrateV14(tx); err != nil {
 			return err
 		}
 	default:
@@ -406,4 +410,28 @@ func (s *Store) migrateV13(tx *sql.Tx) error {
 	}
 
 	return nil
+}
+
+// migrateV14 creates the active_overlays table for tracking overlay filesystems
+func (s *Store) migrateV14(tx *sql.Tx) error {
+	schema := `
+		CREATE TABLE IF NOT EXISTS active_overlays (
+			agent_id TEXT PRIMARY KEY,
+			task_id TEXT NOT NULL,
+			run_id TEXT NOT NULL,
+			session_id TEXT,
+			upper_dir TEXT NOT NULL,
+			merged_dir TEXT NOT NULL,
+			lower_dir TEXT NOT NULL,
+			work_dir TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			status TEXT DEFAULT 'active',
+			FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_active_overlays_status ON active_overlays(status);
+		CREATE INDEX IF NOT EXISTS idx_active_overlays_run_id ON active_overlays(run_id);
+	`
+	_, err := tx.Exec(schema)
+	return err
 }

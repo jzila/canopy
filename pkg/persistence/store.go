@@ -96,6 +96,20 @@ type Task struct {
 	UpdatedAt int64  `json:"updated_at"`
 }
 
+// ActiveOverlay represents an overlay filesystem being tracked for agent resumability
+type ActiveOverlay struct {
+	AgentID   string `json:"agent_id"`
+	TaskID    string `json:"task_id"`
+	RunID     string `json:"run_id"`
+	SessionID string `json:"session_id,omitempty"`
+	UpperDir  string `json:"upper_dir"`
+	MergedDir string `json:"merged_dir"`
+	LowerDir  string `json:"lower_dir"`
+	WorkDir   string `json:"work_dir"`
+	CreatedAt int64  `json:"created_at"`
+	Status    string `json:"status"` // active, completed, orphaned
+}
+
 // Agent represents a single agent execution within a run
 type Agent struct {
 	ID              string      `json:"id"`
@@ -1905,4 +1919,152 @@ func (s *Store) scanTaskFromRows(rows *sql.Rows) (*Task, error) {
 	task.UpdatedAt = updatedAt.Int64
 
 	return &task, nil
+}
+
+// TrackOverlay records an active overlay filesystem for potential recovery
+func (s *Store) TrackOverlay(overlay *ActiveOverlay) error {
+	query := `
+		INSERT INTO active_overlays (agent_id, task_id, run_id, session_id, upper_dir, merged_dir, lower_dir, work_dir, created_at, status)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(agent_id) DO UPDATE SET
+			task_id = excluded.task_id,
+			run_id = excluded.run_id,
+			session_id = excluded.session_id,
+			upper_dir = excluded.upper_dir,
+			merged_dir = excluded.merged_dir,
+			lower_dir = excluded.lower_dir,
+			work_dir = excluded.work_dir,
+			created_at = excluded.created_at,
+			status = excluded.status
+	`
+	_, err := s.db.Exec(query,
+		overlay.AgentID,
+		overlay.TaskID,
+		overlay.RunID,
+		nullString(overlay.SessionID),
+		overlay.UpperDir,
+		overlay.MergedDir,
+		overlay.LowerDir,
+		overlay.WorkDir,
+		overlay.CreatedAt,
+		overlay.Status,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to track overlay: %w", err)
+	}
+	return nil
+}
+
+// UpdateOverlaySessionID updates the session_id for an active overlay
+func (s *Store) UpdateOverlaySessionID(agentID, sessionID string) error {
+	query := `UPDATE active_overlays SET session_id = ? WHERE agent_id = ?`
+	_, err := s.db.Exec(query, nullString(sessionID), agentID)
+	if err != nil {
+		return fmt.Errorf("failed to update overlay session_id: %w", err)
+	}
+	return nil
+}
+
+// MarkOverlayCompleted marks an overlay as completed (ready for cleanup)
+func (s *Store) MarkOverlayCompleted(agentID string) error {
+	query := `UPDATE active_overlays SET status = 'completed' WHERE agent_id = ?`
+	_, err := s.db.Exec(query, agentID)
+	if err != nil {
+		return fmt.Errorf("failed to mark overlay completed: %w", err)
+	}
+	return nil
+}
+
+// GetActiveOverlays retrieves all overlays with status 'active'
+func (s *Store) GetActiveOverlays() ([]*ActiveOverlay, error) {
+	query := `SELECT agent_id, task_id, run_id, session_id, upper_dir, merged_dir, lower_dir, work_dir, created_at, status FROM active_overlays WHERE status = 'active'`
+	rows, err := s.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query active overlays: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var overlays []*ActiveOverlay
+	for rows.Next() {
+		overlay, err := s.scanOverlayFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		overlays = append(overlays, overlay)
+	}
+	return overlays, nil
+}
+
+// GetOrphanedOverlays retrieves all overlays with status 'orphaned'
+func (s *Store) GetOrphanedOverlays() ([]*ActiveOverlay, error) {
+	query := `SELECT agent_id, task_id, run_id, session_id, upper_dir, merged_dir, lower_dir, work_dir, created_at, status FROM active_overlays WHERE status = 'orphaned'`
+	rows, err := s.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query orphaned overlays: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var overlays []*ActiveOverlay
+	for rows.Next() {
+		overlay, err := s.scanOverlayFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		overlays = append(overlays, overlay)
+	}
+	return overlays, nil
+}
+
+// MarkOverlaysOrphaned marks all active overlays as orphaned (for daemon restart recovery)
+func (s *Store) MarkOverlaysOrphaned() (int64, error) {
+	query := `UPDATE active_overlays SET status = 'orphaned' WHERE status = 'active'`
+	result, err := s.db.Exec(query)
+	if err != nil {
+		return 0, fmt.Errorf("failed to mark overlays orphaned: %w", err)
+	}
+	return result.RowsAffected()
+}
+
+// DeleteOverlay removes an overlay record from the database
+func (s *Store) DeleteOverlay(agentID string) error {
+	query := `DELETE FROM active_overlays WHERE agent_id = ?`
+	_, err := s.db.Exec(query, agentID)
+	if err != nil {
+		return fmt.Errorf("failed to delete overlay: %w", err)
+	}
+	return nil
+}
+
+// DeleteCompletedOverlays removes all overlay records with status 'completed'
+func (s *Store) DeleteCompletedOverlays() (int64, error) {
+	query := `DELETE FROM active_overlays WHERE status = 'completed'`
+	result, err := s.db.Exec(query)
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete completed overlays: %w", err)
+	}
+	return result.RowsAffected()
+}
+
+func (s *Store) scanOverlayFromRows(rows *sql.Rows) (*ActiveOverlay, error) {
+	var overlay ActiveOverlay
+	var sessionID sql.NullString
+
+	err := rows.Scan(
+		&overlay.AgentID,
+		&overlay.TaskID,
+		&overlay.RunID,
+		&sessionID,
+		&overlay.UpperDir,
+		&overlay.MergedDir,
+		&overlay.LowerDir,
+		&overlay.WorkDir,
+		&overlay.CreatedAt,
+		&overlay.Status,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan overlay: %w", err)
+	}
+
+	overlay.SessionID = sessionID.String
+	return &overlay, nil
 }

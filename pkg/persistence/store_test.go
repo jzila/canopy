@@ -2201,3 +2201,346 @@ func createTestStore(t *testing.T) *Store {
 
 	return store
 }
+
+func TestOverlayTracking(t *testing.T) {
+	store := createTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	now := time.Now()
+
+	// First create a run and agent (foreign key constraint)
+	run := &Run{ID: "run-overlay-test", StartedAt: now, Status: RunStatusRunning}
+	if err := store.CreateRun(run); err != nil {
+		t.Fatalf("failed to create run: %v", err)
+	}
+	agent := &Agent{
+		ID:        "agent-overlay-test",
+		RunID:     "run-overlay-test",
+		TaskID:    "task-overlay-test",
+		TaskTitle: "Test Task",
+		Status:    AgentStatusRunning,
+		StartedAt: now,
+	}
+	if err := store.CreateAgent(agent); err != nil {
+		t.Fatalf("failed to create agent: %v", err)
+	}
+
+	// Track an overlay
+	overlay := &ActiveOverlay{
+		AgentID:   "agent-overlay-test",
+		TaskID:    "task-overlay-test",
+		RunID:     "run-overlay-test",
+		SessionID: "",
+		UpperDir:  "/tmp/canopy/abc123/upper",
+		MergedDir: "/tmp/canopy/abc123/merged",
+		LowerDir:  "/path/to/repo",
+		WorkDir:   "/tmp/canopy/abc123/work",
+		CreatedAt: now.Unix(),
+		Status:    "active",
+	}
+
+	if err := store.TrackOverlay(overlay); err != nil {
+		t.Fatalf("failed to track overlay: %v", err)
+	}
+
+	// Get active overlays
+	overlays, err := store.GetActiveOverlays()
+	if err != nil {
+		t.Fatalf("failed to get active overlays: %v", err)
+	}
+
+	if len(overlays) != 1 {
+		t.Errorf("expected 1 active overlay, got %d", len(overlays))
+	}
+
+	if overlays[0].AgentID != "agent-overlay-test" {
+		t.Errorf("expected AgentID 'agent-overlay-test', got '%s'", overlays[0].AgentID)
+	}
+	if overlays[0].UpperDir != "/tmp/canopy/abc123/upper" {
+		t.Errorf("expected UpperDir '/tmp/canopy/abc123/upper', got '%s'", overlays[0].UpperDir)
+	}
+}
+
+func TestOverlaySessionIDUpdate(t *testing.T) {
+	store := createTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	now := time.Now()
+
+	// Create run and agent first
+	run := &Run{ID: "run-session-test", StartedAt: now, Status: RunStatusRunning}
+	if err := store.CreateRun(run); err != nil {
+		t.Fatalf("failed to create run: %v", err)
+	}
+	agent := &Agent{
+		ID:        "agent-session-test",
+		RunID:     "run-session-test",
+		TaskID:    "task-session-test",
+		TaskTitle: "Test Task",
+		Status:    AgentStatusRunning,
+		StartedAt: now,
+	}
+	if err := store.CreateAgent(agent); err != nil {
+		t.Fatalf("failed to create agent: %v", err)
+	}
+
+	// Track overlay without session_id
+	overlay := &ActiveOverlay{
+		AgentID:   "agent-session-test",
+		TaskID:    "task-session-test",
+		RunID:     "run-session-test",
+		UpperDir:  "/tmp/upper",
+		MergedDir: "/tmp/merged",
+		LowerDir:  "/tmp/lower",
+		WorkDir:   "/tmp/work",
+		CreatedAt: now.Unix(),
+		Status:    "active",
+	}
+	if err := store.TrackOverlay(overlay); err != nil {
+		t.Fatalf("failed to track overlay: %v", err)
+	}
+
+	// Update session_id
+	if err := store.UpdateOverlaySessionID("agent-session-test", "session-abc123"); err != nil {
+		t.Fatalf("failed to update session_id: %v", err)
+	}
+
+	// Verify update
+	overlays, err := store.GetActiveOverlays()
+	if err != nil {
+		t.Fatalf("failed to get overlays: %v", err)
+	}
+
+	if len(overlays) != 1 {
+		t.Fatalf("expected 1 overlay, got %d", len(overlays))
+	}
+
+	if overlays[0].SessionID != "session-abc123" {
+		t.Errorf("expected SessionID 'session-abc123', got '%s'", overlays[0].SessionID)
+	}
+}
+
+func TestOverlayStatusTransitions(t *testing.T) {
+	store := createTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	now := time.Now()
+
+	// Create run and agents
+	run := &Run{ID: "run-status-test", StartedAt: now, Status: RunStatusRunning}
+	if err := store.CreateRun(run); err != nil {
+		t.Fatalf("failed to create run: %v", err)
+	}
+
+	agentIDs := []string{"agent-1", "agent-2", "agent-3"}
+	for _, id := range agentIDs {
+		agent := &Agent{
+			ID:        id,
+			RunID:     "run-status-test",
+			TaskID:    "task-" + id,
+			TaskTitle: "Task " + id,
+			Status:    AgentStatusRunning,
+			StartedAt: now,
+		}
+		if err := store.CreateAgent(agent); err != nil {
+			t.Fatalf("failed to create agent: %v", err)
+		}
+
+		overlay := &ActiveOverlay{
+			AgentID:   id,
+			TaskID:    "task-" + id,
+			RunID:     "run-status-test",
+			UpperDir:  "/tmp/" + id + "/upper",
+			MergedDir: "/tmp/" + id + "/merged",
+			LowerDir:  "/tmp/lower",
+			WorkDir:   "/tmp/" + id + "/work",
+			CreatedAt: now.Unix(),
+			Status:    "active",
+		}
+		if err := store.TrackOverlay(overlay); err != nil {
+			t.Fatalf("failed to track overlay: %v", err)
+		}
+	}
+
+	// Verify all active
+	overlays, err := store.GetActiveOverlays()
+	if err != nil {
+		t.Fatalf("failed to get active overlays: %v", err)
+	}
+	if len(overlays) != 3 {
+		t.Errorf("expected 3 active overlays, got %d", len(overlays))
+	}
+
+	// Mark one as completed
+	if err := store.MarkOverlayCompleted("agent-1"); err != nil {
+		t.Fatalf("failed to mark overlay completed: %v", err)
+	}
+
+	// Verify now 2 active
+	overlays, err = store.GetActiveOverlays()
+	if err != nil {
+		t.Fatalf("failed to get active overlays: %v", err)
+	}
+	if len(overlays) != 2 {
+		t.Errorf("expected 2 active overlays, got %d", len(overlays))
+	}
+
+	// Mark remaining as orphaned (simulates daemon restart)
+	count, err := store.MarkOverlaysOrphaned()
+	if err != nil {
+		t.Fatalf("failed to mark overlays orphaned: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected 2 overlays marked orphaned, got %d", count)
+	}
+
+	// Verify no active
+	overlays, err = store.GetActiveOverlays()
+	if err != nil {
+		t.Fatalf("failed to get active overlays: %v", err)
+	}
+	if len(overlays) != 0 {
+		t.Errorf("expected 0 active overlays, got %d", len(overlays))
+	}
+
+	// Verify orphaned
+	orphaned, err := store.GetOrphanedOverlays()
+	if err != nil {
+		t.Fatalf("failed to get orphaned overlays: %v", err)
+	}
+	if len(orphaned) != 2 {
+		t.Errorf("expected 2 orphaned overlays, got %d", len(orphaned))
+	}
+}
+
+func TestDeleteOverlay(t *testing.T) {
+	store := createTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	now := time.Now()
+
+	// Create run and agent
+	run := &Run{ID: "run-delete-test", StartedAt: now, Status: RunStatusRunning}
+	if err := store.CreateRun(run); err != nil {
+		t.Fatalf("failed to create run: %v", err)
+	}
+	agent := &Agent{
+		ID:        "agent-delete-test",
+		RunID:     "run-delete-test",
+		TaskID:    "task-delete-test",
+		TaskTitle: "Test Task",
+		Status:    AgentStatusRunning,
+		StartedAt: now,
+	}
+	if err := store.CreateAgent(agent); err != nil {
+		t.Fatalf("failed to create agent: %v", err)
+	}
+
+	overlay := &ActiveOverlay{
+		AgentID:   "agent-delete-test",
+		TaskID:    "task-delete-test",
+		RunID:     "run-delete-test",
+		UpperDir:  "/tmp/upper",
+		MergedDir: "/tmp/merged",
+		LowerDir:  "/tmp/lower",
+		WorkDir:   "/tmp/work",
+		CreatedAt: now.Unix(),
+		Status:    "active",
+	}
+	if err := store.TrackOverlay(overlay); err != nil {
+		t.Fatalf("failed to track overlay: %v", err)
+	}
+
+	// Delete overlay
+	if err := store.DeleteOverlay("agent-delete-test"); err != nil {
+		t.Fatalf("failed to delete overlay: %v", err)
+	}
+
+	// Verify deleted
+	overlays, err := store.GetActiveOverlays()
+	if err != nil {
+		t.Fatalf("failed to get overlays: %v", err)
+	}
+	if len(overlays) != 0 {
+		t.Errorf("expected 0 overlays after delete, got %d", len(overlays))
+	}
+}
+
+func TestDeleteCompletedOverlays(t *testing.T) {
+	store := createTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	now := time.Now()
+
+	// Create run
+	run := &Run{ID: "run-cleanup-test", StartedAt: now, Status: RunStatusRunning}
+	if err := store.CreateRun(run); err != nil {
+		t.Fatalf("failed to create run: %v", err)
+	}
+
+	// Create agents and overlays with different statuses
+	testCases := []struct {
+		id     string
+		status string
+	}{
+		{"agent-active", "active"},
+		{"agent-completed-1", "completed"},
+		{"agent-completed-2", "completed"},
+		{"agent-orphaned", "orphaned"},
+	}
+
+	for _, tc := range testCases {
+		agent := &Agent{
+			ID:        tc.id,
+			RunID:     "run-cleanup-test",
+			TaskID:    "task-" + tc.id,
+			TaskTitle: "Task " + tc.id,
+			Status:    AgentStatusRunning,
+			StartedAt: now,
+		}
+		if err := store.CreateAgent(agent); err != nil {
+			t.Fatalf("failed to create agent: %v", err)
+		}
+
+		overlay := &ActiveOverlay{
+			AgentID:   tc.id,
+			TaskID:    "task-" + tc.id,
+			RunID:     "run-cleanup-test",
+			UpperDir:  "/tmp/" + tc.id + "/upper",
+			MergedDir: "/tmp/" + tc.id + "/merged",
+			LowerDir:  "/tmp/lower",
+			WorkDir:   "/tmp/" + tc.id + "/work",
+			CreatedAt: now.Unix(),
+			Status:    tc.status,
+		}
+		if err := store.TrackOverlay(overlay); err != nil {
+			t.Fatalf("failed to track overlay: %v", err)
+		}
+	}
+
+	// Delete completed overlays
+	count, err := store.DeleteCompletedOverlays()
+	if err != nil {
+		t.Fatalf("failed to delete completed overlays: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected 2 completed overlays deleted, got %d", count)
+	}
+
+	// Verify active and orphaned remain
+	active, err := store.GetActiveOverlays()
+	if err != nil {
+		t.Fatalf("failed to get active overlays: %v", err)
+	}
+	if len(active) != 1 {
+		t.Errorf("expected 1 active overlay, got %d", len(active))
+	}
+
+	orphaned, err := store.GetOrphanedOverlays()
+	if err != nil {
+		t.Fatalf("failed to get orphaned overlays: %v", err)
+	}
+	if len(orphaned) != 1 {
+		t.Errorf("expected 1 orphaned overlay, got %d", len(orphaned))
+	}
+}
