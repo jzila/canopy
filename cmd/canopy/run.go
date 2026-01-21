@@ -28,9 +28,7 @@ var (
 	dryRun          bool
 	useSandbox      bool
 	maxRetries      int
-	prompt          string
 	maxPriority     int
-	stopAtGate      bool
 	resolverTimeout time.Duration
 )
 
@@ -109,26 +107,12 @@ func init() {
 	runCmd.Flags().IntVar(&maxPriority, "max-priority", -1, "Hard filter: only run tasks with priority <= this value (0-4, -1=no filter)")
 	runCmd.Flags().DurationVar(&resolverTimeout, "resolver-timeout", 0, "Timeout for resolver agents when resolving merge conflicts (e.g., 10m, 15m, 1h). Default: 10m. Set from CANOPY_RESOLVER_TIMEOUT env var if not specified.")
 
-	// Deprecated flags - kept for backwards compatibility but no longer functional
-	runCmd.Flags().StringVar(&prompt, "prompt", "", "DEPRECATED: Use explicit filters like --max-priority instead")
-	runCmd.Flags().BoolVar(&stopAtGate, "stop-at-gate", false, "DEPRECATED: Use rules.exclude_labels in config instead")
-	_ = runCmd.Flags().MarkDeprecated("prompt", "use explicit filters like --max-priority instead")
-	_ = runCmd.Flags().MarkDeprecated("stop-at-gate", "use rules.exclude_labels in config instead")
-
 	rootCmd.AddCommand(runCmd)
 }
 
 func runOrchestrator(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
-	// Emit deprecation warnings for deprecated flags
-	if prompt != "" {
-		fmt.Fprintln(os.Stderr, "Warning: --prompt is deprecated and will be ignored. Use explicit filters like --max-priority instead.")
-	}
-	if stopAtGate {
-		fmt.Fprintln(os.Stderr, "Warning: --stop-at-gate is deprecated and will be ignored. Use rules.exclude_labels in config instead.")
-	}
 
 	// Clean up any stale mounts from previous crashes before starting
 	// This prevents "permission denied" errors from orphaned FUSE mounts
@@ -239,7 +223,6 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create and run orchestrator
-	// Note: Prompt and StopAtGate are deprecated and no longer passed to orchestrator
 	orch, err = orchestrator.New(&orchestrator.Config{
 		WorkDir:         absWorkdir,
 		OutputDir:       outputDir,
