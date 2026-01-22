@@ -288,9 +288,8 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Build rules settings from config and CLI flags
-	// CLI flags override config file settings
-	rules := buildRulesSettings(absWorkdir, cmd, verbose)
+	// Build CLI rules overrides (orchestrator loads config.toml and merges these)
+	rules, rulesOverrides := buildCLIRulesOverrides(cmd)
 
 	// Create and run orchestrator
 	orch, err = orchestrator.New(&orchestrator.Config{
@@ -304,6 +303,7 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		MaxPriority:     maxPriority,
 		ResolverTimeout: effectiveResolverTimeout,
 		Rules:           rules,
+		RulesOverrides:  rulesOverrides,
 		Watch:           watchMode,
 		PollInterval:    pollInterval,
 	})
@@ -667,59 +667,55 @@ func resumeInterruptedAgents(ctx context.Context, workDir string, useBwrap, verb
 	return resumed, errors
 }
 
-// buildRulesSettings builds task selection rules from config file and CLI flags.
-// CLI flags take precedence over config file settings.
-func buildRulesSettings(workDir string, cmd *cobra.Command, verbose bool) *config.RulesSettings {
-	// Start with rules from config file
-	cfg, err := config.LoadConfig(workDir)
-	var rules config.RulesSettings
-	if err != nil {
-		if verbose {
-			fmt.Fprintf(os.Stderr, "warning: failed to load config for rules: %v\n", err)
-		}
-		rules = config.DefaultRulesSettings()
-	} else {
-		rules = cfg.Rules
+// buildCLIRulesOverrides builds rules settings and override tracking from CLI flags.
+// Returns (nil, nil) if no CLI flags were set (use config.toml as-is).
+func buildCLIRulesOverrides(cmd *cobra.Command) (*config.RulesSettings, *orchestrator.RulesOverrides) {
+	// Check if any CLI flags were set
+	hasOverrides := cmd.Flags().Changed("max-priority") ||
+		cmd.Flags().Changed("type") ||
+		cmd.Flags().Changed("exclude-type") ||
+		cmd.Flags().Changed("label") ||
+		cmd.Flags().Changed("exclude-label") ||
+		cmd.Flags().Changed("assignee")
+
+	if !hasOverrides {
+		return nil, nil // No CLI overrides, orchestrator uses config.toml as-is
 	}
 
-	// CLI flags override config settings
+	// Build overrides from CLI flags only
+	rules := config.DefaultRulesSettings()
+	overrides := &orchestrator.RulesOverrides{}
 
-	// maxPriority flag overrides config priority_max
 	if cmd.Flags().Changed("max-priority") {
 		rules.PriorityMax = maxPriority
+		overrides.PriorityMax = true
 	}
 
-	// --type flag overrides config types
 	if cmd.Flags().Changed("type") {
 		rules.Types = filterTypes
+		overrides.Types = true
 	}
 
-	// --exclude-type flag overrides config exclude_types
 	if cmd.Flags().Changed("exclude-type") {
 		rules.ExcludeTypes = excludeTypes
+		overrides.ExcludeTypes = true
 	}
 
-	// --label flag overrides config labels
 	if cmd.Flags().Changed("label") {
 		rules.Labels = filterLabels
+		overrides.Labels = true
 	}
 
-	// --exclude-label flag overrides config exclude_labels
 	if cmd.Flags().Changed("exclude-label") {
 		rules.ExcludeLabels = excludeLabels
+		overrides.ExcludeLabels = true
 	}
 
-	// --assignee flag overrides config assignee
 	if cmd.Flags().Changed("assignee") {
 		rules.Assignee = filterAssignee
+		overrides.Assignee = true
 	}
 
-	// Validate the built rules
-	if errs := rules.Validate(); len(errs) > 0 {
-		fmt.Fprintf(os.Stderr, "warning: invalid rules configuration: %v\n", errs)
-		// Continue with potentially invalid rules - let the filter handle it gracefully
-	}
-
-	return &rules
+	return &rules, overrides
 }
 

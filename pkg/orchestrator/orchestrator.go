@@ -85,14 +85,27 @@ type Config struct {
 	MaxRetries      int           // Maximum number of times to retry failed tasks (0 = no retries, -1 = infinite)
 	MaxPriority     int           // Hard filter: only run tasks with priority <= this value (-1 = no filter)
 	ResolverTimeout time.Duration // Timeout for resolver agents (0 = use default 10m)
-	Rules           *cfgpkg.RulesSettings // Task selection rules from config (nil = use MaxPriority only)
+	Rules           *cfgpkg.RulesSettings // CLI overrides for rules (nil = use config.toml only)
+	RulesOverrides  *RulesOverrides       // Tracks which rules fields were explicitly set via CLI
 	Watch           bool          // Watch mode: keep running and poll for new tasks instead of exiting when queue is empty
 	PollInterval    time.Duration // Interval between polling for new tasks in watch mode (default: 5s)
+}
+
+// RulesOverrides tracks which rules fields were explicitly set via CLI flags.
+// This allows merging with config.toml while preserving explicit CLI values.
+type RulesOverrides struct {
+	PriorityMax   bool
+	Types         bool
+	ExcludeTypes  bool
+	Labels        bool
+	ExcludeLabels bool
+	Assignee      bool
 }
 
 // Orchestrator coordinates the execution of tasks from beads
 type Orchestrator struct {
 	config           *Config
+	repoConfig       *cfgpkg.Config // Loaded from .canopy/config.toml
 	beadsClient      beads.BeadsClient
 	scheduler        *scheduler.Scheduler
 	mergeCoordinator *mergecoordinator.MergeCoordinator
@@ -121,6 +134,18 @@ func New(config *Config) (*Orchestrator, error) {
 	beadsClient, err := beads.NewClient(config.WorkDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create beads client: %w", err)
+	}
+
+	// Load config.toml - this is the source of truth for rules
+	repoConfig, err := cfgpkg.LoadConfig(config.WorkDir)
+	if err != nil {
+		// Log warning but continue with defaults - config loading should not fail orchestration
+		if config.Verbose {
+			fmt.Fprintf(os.Stderr, "warning: failed to load config.toml: %v\n", err)
+		}
+		repoConfig = cfgpkg.DefaultConfig()
+	} else if config.Verbose {
+		fmt.Printf("Loaded config from %s/.canopy/config.toml\n", config.WorkDir)
 	}
 
 	// Set up overlay directory per persistence invariant (XDG_CACHE_HOME/canopy/overlays)
@@ -185,14 +210,22 @@ func New(config *Config) (*Orchestrator, error) {
 		return nil, fmt.Errorf("failed to create merge coordinator: %w", err)
 	}
 
-	// Create task filter from rules settings
-	var taskFilter *cfgpkg.TaskFilter
+	// Build effective rules settings: start from config.toml, apply CLI overrides
+	effectiveRules := repoConfig.Rules
 	if config.Rules != nil {
-		taskFilter = cfgpkg.NewTaskFilter(config.Rules)
+		// CLI overrides take precedence - merge them in
+		effectiveRules = mergeRulesSettings(&repoConfig.Rules, config.Rules, config.RulesOverrides)
 	}
+
+	// Create task filter from effective rules settings (legacy compatibility)
+	taskFilter := cfgpkg.NewTaskFilter(&effectiveRules)
+
+	// Create rules engine from effective rules (preferred path)
+	rulesEngine := rules.NewEngine(&effectiveRules)
 
 	o := &Orchestrator{
 		config:           config,
+		repoConfig:       repoConfig,
 		beadsClient:      beadsClient,
 		scheduler:        sched,
 		mergeCoordinator: mc,
@@ -201,6 +234,7 @@ func New(config *Config) (*Orchestrator, error) {
 		failureCounts:    make(map[string]int),
 		sandboxConfig:    sandboxConfig,
 		taskFilter:       taskFilter,
+		rulesEngine:      rulesEngine,
 		inFlight:         make(map[string]bool),
 		inFlightTask:     make(map[string]*beads.Task),
 	}
@@ -309,6 +343,11 @@ func (o *Orchestrator) SetRulesEngine(engine *rules.Engine) {
 // GetRulesEngine returns the rules engine for this orchestrator instance.
 func (o *Orchestrator) GetRulesEngine() *rules.Engine {
 	return o.rulesEngine
+}
+
+// GetRepoConfig returns the loaded repository config (.canopy/config.toml).
+func (o *Orchestrator) GetRepoConfig() *cfgpkg.Config {
+	return o.repoConfig
 }
 
 // SetAgentID records the agentID for a taskID, enabling parent-child tracking for resolvers.
@@ -804,4 +843,60 @@ func (o *Orchestrator) getNextTask(ctx context.Context) (*beads.Task, bool, erro
 	// No available tasks (either no ready tasks, or all are in-flight)
 	// Return nil but don't signal stop - there may be in-flight tasks that will complete
 	return nil, false, nil
+}
+
+// mergeRulesSettings merges CLI override settings into base config settings.
+// The overrides parameter tracks which fields were explicitly set via CLI.
+func mergeRulesSettings(base, cliRules *cfgpkg.RulesSettings, overrides *RulesOverrides) cfgpkg.RulesSettings {
+	result := *base
+
+	// If no CLI rules provided, return base as-is
+	if cliRules == nil {
+		return result
+	}
+
+	if overrides == nil {
+		// No overrides tracking - use simple heuristics (legacy behavior)
+		if cliRules.PriorityMax != -1 {
+			result.PriorityMax = cliRules.PriorityMax
+		}
+		if len(cliRules.Types) > 0 {
+			result.Types = cliRules.Types
+		}
+		if len(cliRules.ExcludeTypes) > 0 {
+			result.ExcludeTypes = cliRules.ExcludeTypes
+		}
+		if len(cliRules.Labels) > 0 {
+			result.Labels = cliRules.Labels
+		}
+		if len(cliRules.ExcludeLabels) > 0 {
+			result.ExcludeLabels = cliRules.ExcludeLabels
+		}
+		if cliRules.Assignee != "*" {
+			result.Assignee = cliRules.Assignee
+		}
+		return result
+	}
+
+	// Apply only fields that were explicitly set via CLI flags
+	if overrides.PriorityMax {
+		result.PriorityMax = cliRules.PriorityMax
+	}
+	if overrides.Types {
+		result.Types = cliRules.Types
+	}
+	if overrides.ExcludeTypes {
+		result.ExcludeTypes = cliRules.ExcludeTypes
+	}
+	if overrides.Labels {
+		result.Labels = cliRules.Labels
+	}
+	if overrides.ExcludeLabels {
+		result.ExcludeLabels = cliRules.ExcludeLabels
+	}
+	if overrides.Assignee {
+		result.Assignee = cliRules.Assignee
+	}
+
+	return result
 }
