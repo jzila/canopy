@@ -9,7 +9,7 @@ Before starting, ensure you have:
 1. **Linux or macOS** - Canopy uses filesystem overlays (OverlayFS on Linux, APFS clones on macOS). On macOS, your working directory must be on an APFS volume (the default for modern Macs).
 2. **Go 1.24+** - For building from source
 3. **Claude Code CLI** - Installed and authenticated
-4. **beads** - Task tracking system
+4. **Beads-compatible CLI** - Any `bd` implementation conforming to the [Beads Classic Protocol](https://github.com/jzila/beads-protocol)
 
 ### Install Claude Code
 
@@ -21,16 +21,28 @@ curl -fsSL https://claude.ai/install | bash
 claude auth
 ```
 
-### Install beads
+### Install a Beads Implementation
 
+Canopy requires a `bd` CLI that implements the [Beads Classic Protocol](https://github.com/jzila/beads-protocol). Choose any compatible implementation:
+
+**Option A: beads (Go)**
 ```bash
-# Clone and build beads
 git clone https://github.com/steveyegge/beads
 cd beads
 go build -o bd ./cmd/bd
 sudo mv bd /usr/local/bin/
+```
 
-# Verify
+**Option B: beads_rust**
+```bash
+git clone https://github.com/Dicklesworthstone/beads_rust
+cd beads_rust
+cargo build --release
+sudo mv target/release/bd /usr/local/bin/
+```
+
+Verify your installation:
+```bash
 bd version
 ```
 

@@ -81,7 +81,7 @@ bd dep add <a> <b>          # a depends on b
 bd sync                     # Git sync
 ```
 
-Reference: https://github.com/Dicklesworthstone/beads_rust
+Reference: https://github.com/jzila/beads-protocol
 
 ## Git Hooks
 
