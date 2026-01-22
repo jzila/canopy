@@ -50,7 +50,7 @@ Without Canopy, Claude Code processes tasks sequentially. A 10-task project take
 - **Linux or macOS** (Linux uses OverlayFS; macOS uses APFS clones)
 - **Go 1.24+** for building
 - **Claude Code CLI** (`claude`) installed and authenticated
-- **beads** (`bd`) for task tracking ([github.com/steveyegge/beads](https://github.com/steveyegge/beads))
+- **Beads-compatible CLI** (`bd`) for task tracking - any implementation conforming to the [Beads Classic Protocol](https://github.com/jzila/beads-protocol)
 - **bubblewrap** (`bwrap`) optional, for full sandbox isolation
 
 ## Installation
@@ -387,7 +387,13 @@ All state lives in `~/.cache/canopy/` (or `$XDG_CACHE_HOME/canopy/`):
 
 ## Integration with Beads
 
-Canopy integrates with [beads](https://github.com/steveyegge/beads) for task tracking:
+Canopy requires a CLI tool (`bd`) that implements the [Beads Classic Protocol](https://github.com/jzila/beads-protocol)—a minimal git-backed task tracking interface. The protocol defines the commands Canopy uses for task discovery, status updates, and dependency management.
+
+**Known implementations:**
+- [beads](https://github.com/steveyegge/beads) - Original Go implementation
+- [beads_rust](https://github.com/Dicklesworthstone/beads_rust) - Rust implementation
+
+Any implementation conforming to the protocol will work with Canopy.
 
 ```bash
 # Create tasks with dependencies
