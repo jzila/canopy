@@ -262,6 +262,28 @@ func (e *Engine) PersistAllRules() ([]string, error) {
 	return persisted, nil
 }
 
+// SaveRules replaces the config snapshot with the current rules list.
+// This handles additions, deletions, and reorders - making the current
+// in-memory state the new source of truth.
+// Returns the count of rules saved.
+func (e *Engine) SaveRules() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Replace config snapshot with current rules list
+	e.configSnapshot = make([]config.CustomRule, len(e.rules))
+	copy(e.configSnapshot, e.rules)
+
+	// Update settings.Custom for persistence to disk
+	if e.settings == nil {
+		e.settings = &config.RulesSettings{}
+	}
+	e.settings.Custom = make([]config.CustomRule, len(e.rules))
+	copy(e.settings.Custom, e.rules)
+
+	return len(e.rules)
+}
+
 // GetConfigForPersistence returns a copy of the current config settings
 // suitable for saving to disk. This includes any recently persisted rules.
 func (e *Engine) GetConfigForPersistence() *config.RulesSettings {

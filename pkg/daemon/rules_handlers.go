@@ -97,6 +97,15 @@ type UpdateConfigResponse struct {
 	Error       string                `json:"error,omitempty"`
 }
 
+// SaveRulesResponse is the response for POST /api/rules/save
+type SaveRulesResponse struct {
+	Success    bool     `json:"success"`
+	SavedCount int      `json:"saved_count"`
+	Rules      []string `json:"rules,omitempty"`
+	ConfigPath string   `json:"config_path,omitempty"`
+	Error      string   `json:"error,omitempty"`
+}
+
 // RouteRules routes rules-related requests to the appropriate handler
 func (h *RulesHandler) RouteRules(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
@@ -117,6 +126,12 @@ func (h *RulesHandler) RouteRules(w http.ResponseWriter, r *http.Request) {
 	// PATCH /api/rules/config - update config settings
 	if path == "/api/rules/config" && r.Method == http.MethodPatch {
 		h.HandleUpdateConfig(w, r)
+		return
+	}
+
+	// POST /api/rules/save - save all rules to config file
+	if path == "/api/rules/save" && r.Method == http.MethodPost {
+		h.HandleSaveRules(w, r)
 		return
 	}
 
@@ -566,6 +581,63 @@ func (h *RulesHandler) HandlePersistAllRules(w http.ResponseWriter, r *http.Requ
 	h.writeJSON(w, http.StatusOK, PersistAllRulesResponse{
 		Success:    true,
 		Persisted:  persisted,
+		ConfigPath: configPath,
+	})
+}
+
+// HandleSaveRules handles POST /api/rules/save
+// Writes current in-memory rules list to .canopy/config.toml.
+// Sets all rules to persisted=true and list-level persisted=true.
+// This is the canonical way to persist changes - config file is source of truth.
+func (h *RulesHandler) HandleSaveRules(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	engine, errMsg := h.getEngine(r)
+	if engine == nil {
+		http.Error(w, errMsg, http.StatusBadRequest)
+		return
+	}
+
+	// Get workDir from query parameters (repo_path is required for save operations)
+	workDir := r.URL.Query().Get("repo_path")
+	if workDir == "" {
+		h.writeJSON(w, http.StatusBadRequest, SaveRulesResponse{
+			Success: false,
+			Error:   "repo_path query parameter is required for save operations",
+		})
+		return
+	}
+
+	// Save all rules - this replaces the config snapshot with current rules list
+	savedCount := engine.SaveRules()
+
+	// Get the rule names for the response
+	snapshot := engine.GetSnapshot()
+	ruleNames := make([]string, 0, len(snapshot.Rules))
+	for _, rule := range snapshot.Rules {
+		ruleNames = append(ruleNames, rule.Name)
+	}
+
+	// Save the config to disk
+	configPath, err := h.saveConfig(workDir, engine)
+	if err != nil {
+		h.writeJSON(w, http.StatusInternalServerError, SaveRulesResponse{
+			Success: false,
+			Error:   fmt.Sprintf("Rules saved in memory but failed to save config: %v", err),
+		})
+		return
+	}
+
+	// Broadcast rules:changed event
+	h.broadcastRulesChanged("saved", nil)
+
+	h.writeJSON(w, http.StatusOK, SaveRulesResponse{
+		Success:    true,
+		SavedCount: savedCount,
+		Rules:      ruleNames,
 		ConfigPath: configPath,
 	})
 }

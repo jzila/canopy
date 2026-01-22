@@ -991,3 +991,178 @@ func TestEngineGetSnapshot_PerRulePersisted(t *testing.T) {
 		t.Error("Expected list-level Persisted to be false with runtime rule")
 	}
 }
+
+func TestEngineSaveRules(t *testing.T) {
+	// Start with config rules
+	cfg := &config.RulesSettings{
+		PriorityMax: -1,
+		Assignee:    "*",
+		Custom: []config.CustomRule{
+			{Name: "config-rule", Condition: "priority > 1", Action: "deny"},
+		},
+	}
+
+	engine := NewEngine(cfg)
+
+	// Add runtime rules
+	engine.AddRule(config.CustomRule{Name: "runtime-rule1", Condition: "type == bug", Action: "allow"})
+	engine.AddRule(config.CustomRule{Name: "runtime-rule2", Condition: "type == chore", Action: "deny"})
+
+	// Verify list is NOT persisted (have runtime rules)
+	snapshot := engine.GetSnapshot()
+	if snapshot.Persisted {
+		t.Error("Expected list-level Persisted to be false before SaveRules")
+	}
+	if len(snapshot.Rules) != 3 {
+		t.Fatalf("Expected 3 rules, got %d", len(snapshot.Rules))
+	}
+
+	// Save all rules
+	savedCount := engine.SaveRules()
+	if savedCount != 3 {
+		t.Errorf("SaveRules returned %d, expected 3", savedCount)
+	}
+
+	// Verify list IS now persisted
+	snapshot = engine.GetSnapshot()
+	if !snapshot.Persisted {
+		t.Error("Expected list-level Persisted to be true after SaveRules")
+	}
+
+	// Verify all rules are now marked as persisted
+	for _, rule := range snapshot.Rules {
+		if !rule.Persisted {
+			t.Errorf("Rule %q should be persisted after SaveRules", rule.Name)
+		}
+	}
+
+	// Verify GetRuntimeRules returns empty (all persisted)
+	runtimeRules := engine.GetRuntimeRules()
+	if len(runtimeRules) != 0 {
+		t.Errorf("Expected 0 runtime rules after SaveRules, got %d", len(runtimeRules))
+	}
+
+	// Verify GetConfigForPersistence includes all rules
+	persistConfig := engine.GetConfigForPersistence()
+	if len(persistConfig.Custom) != 3 {
+		t.Errorf("Expected 3 custom rules in persist config, got %d", len(persistConfig.Custom))
+	}
+}
+
+func TestEngineSaveRules_HandlesDelete(t *testing.T) {
+	// Start with config rules
+	cfg := &config.RulesSettings{
+		PriorityMax: -1,
+		Assignee:    "*",
+		Custom: []config.CustomRule{
+			{Name: "rule1", Condition: "priority > 1", Action: "deny"},
+			{Name: "rule2", Condition: "type == bug", Action: "allow"},
+		},
+	}
+
+	engine := NewEngine(cfg)
+
+	// Delete a config rule
+	engine.RemoveRule("rule2")
+
+	// Verify list is NOT persisted (rule deleted)
+	snapshot := engine.GetSnapshot()
+	if snapshot.Persisted {
+		t.Error("Expected list-level Persisted to be false after delete")
+	}
+
+	// Save all rules
+	savedCount := engine.SaveRules()
+	if savedCount != 1 {
+		t.Errorf("SaveRules returned %d, expected 1", savedCount)
+	}
+
+	// Verify list IS now persisted with only 1 rule
+	snapshot = engine.GetSnapshot()
+	if !snapshot.Persisted {
+		t.Error("Expected list-level Persisted to be true after SaveRules")
+	}
+	if len(snapshot.Rules) != 1 {
+		t.Errorf("Expected 1 rule after SaveRules, got %d", len(snapshot.Rules))
+	}
+
+	// Verify config has only 1 rule
+	persistConfig := engine.GetConfigForPersistence()
+	if len(persistConfig.Custom) != 1 {
+		t.Errorf("Expected 1 custom rule in persist config, got %d", len(persistConfig.Custom))
+	}
+	if persistConfig.Custom[0].Name != "rule1" {
+		t.Errorf("Expected rule1 in config, got %q", persistConfig.Custom[0].Name)
+	}
+}
+
+func TestEngineSaveRules_HandlesReorder(t *testing.T) {
+	// Start with config rules
+	cfg := &config.RulesSettings{
+		PriorityMax: -1,
+		Assignee:    "*",
+		Custom: []config.CustomRule{
+			{Name: "rule1", Condition: "priority > 1", Action: "deny"},
+			{Name: "rule2", Condition: "type == bug", Action: "allow"},
+		},
+	}
+
+	engine := NewEngine(cfg)
+
+	// Reorder by removing and adding in different order
+	engine.RemoveRule("rule1")
+	engine.RemoveRule("rule2")
+	engine.AddRule(config.CustomRule{Name: "rule2", Condition: "type == bug", Action: "allow"})
+	engine.AddRule(config.CustomRule{Name: "rule1", Condition: "priority > 1", Action: "deny"})
+
+	// Verify list is NOT persisted (reordered)
+	snapshot := engine.GetSnapshot()
+	if snapshot.Persisted {
+		t.Error("Expected list-level Persisted to be false after reorder")
+	}
+
+	// Save all rules
+	savedCount := engine.SaveRules()
+	if savedCount != 2 {
+		t.Errorf("SaveRules returned %d, expected 2", savedCount)
+	}
+
+	// Verify list IS now persisted
+	snapshot = engine.GetSnapshot()
+	if !snapshot.Persisted {
+		t.Error("Expected list-level Persisted to be true after SaveRules")
+	}
+
+	// Verify new order in config (rule2, rule1)
+	persistConfig := engine.GetConfigForPersistence()
+	if len(persistConfig.Custom) != 2 {
+		t.Fatalf("Expected 2 custom rules, got %d", len(persistConfig.Custom))
+	}
+	if persistConfig.Custom[0].Name != "rule2" {
+		t.Errorf("Expected first rule to be rule2, got %q", persistConfig.Custom[0].Name)
+	}
+	if persistConfig.Custom[1].Name != "rule1" {
+		t.Errorf("Expected second rule to be rule1, got %q", persistConfig.Custom[1].Name)
+	}
+}
+
+func TestEngineSaveRules_Empty(t *testing.T) {
+	cfg := &config.RulesSettings{
+		PriorityMax: -1,
+		Assignee:    "*",
+	}
+
+	engine := NewEngine(cfg)
+
+	// Save (nothing to save)
+	savedCount := engine.SaveRules()
+	if savedCount != 0 {
+		t.Errorf("SaveRules returned %d, expected 0", savedCount)
+	}
+
+	// Verify list is persisted (empty is valid)
+	snapshot := engine.GetSnapshot()
+	if !snapshot.Persisted {
+		t.Error("Expected list-level Persisted to be true for empty list")
+	}
+}
