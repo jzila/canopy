@@ -8,8 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/sync/semaphore"
-
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
 	cfgpkg "github.com/jzila/canopy/pkg/config"
@@ -115,6 +113,9 @@ type Orchestrator struct {
 	sandboxConfig    *sandbox.SandboxConfig
 	taskFilter       *cfgpkg.TaskFilter // Task filter from rules settings (legacy)
 	rulesEngine      *rules.Engine      // Rules engine for per-repo task selection
+
+	// Dynamic concurrency control - supports runtime adjustment via API
+	slotManager *scheduler.SlotManager
 
 	// In-flight task tracking for dynamic task assignment
 	inFlightMu   sync.RWMutex
@@ -235,6 +236,7 @@ func New(config *Config) (*Orchestrator, error) {
 		sandboxConfig:    sandboxConfig,
 		taskFilter:       taskFilter,
 		rulesEngine:      rulesEngine,
+		slotManager:      scheduler.NewSlotManager(config.Concurrency),
 		inFlight:         make(map[string]bool),
 		inFlightTask:     make(map[string]*beads.Task),
 	}
@@ -327,11 +329,14 @@ func (o *Orchestrator) SetRunID(runID string) {
 	o.mergeCoordinator.SetRunID(runID)
 }
 
-// SetConcurrency updates the concurrency setting.
-// Note: This updates the config for future reference but doesn't affect
-// currently running tasks as the scheduler's semaphore is fixed at creation.
+// SetConcurrency dynamically updates the concurrency setting.
+// This takes effect immediately for the running orchestrator - new slots
+// become available if increasing, or existing work drains naturally if decreasing.
 func (o *Orchestrator) SetConcurrency(concurrency int) {
 	o.config.Concurrency = concurrency
+	if o.slotManager != nil {
+		o.slotManager.SetConcurrency(concurrency)
+	}
 }
 
 // SetRulesEngine sets the rules engine for this orchestrator instance.
@@ -395,8 +400,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		}
 	}
 
-	// Create semaphore for bounded concurrency
-	sem := semaphore.NewWeighted(int64(o.config.Concurrency))
+	// Use the slotManager for bounded concurrency (supports dynamic resizing)
 
 	// Track active workers and results
 	var wg sync.WaitGroup
@@ -489,14 +493,14 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			o.watchStatsMu.Unlock()
 		}
 
-		// Acquire semaphore before spawning worker
-		if err := sem.Acquire(ctx, 1); err != nil {
+		// Acquire slot before spawning worker
+		if err := o.slotManager.Acquire(ctx); err != nil {
 			return err
 		}
 		wg.Add(1)
 		go func(t *beads.Task) {
 			defer wg.Done()
-			defer sem.Release(1)
+			defer o.slotManager.Release()
 
 			o.scheduler.ExecuteTask(ctx, t, completionCallback)
 		}(task)
@@ -517,7 +521,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			// A task completed, try to get more work
 
 		default:
-			// Try to acquire a semaphore slot (non-blocking check first)
+			// Try to acquire a slot (non-blocking check first)
 		}
 
 		// Check if we have an error that should stop us (only in non-watch mode)
@@ -532,8 +536,8 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			runErrorMu.Unlock()
 		}
 
-		// Try to acquire a semaphore slot
-		if err := sem.Acquire(ctx, 1); err != nil {
+		// Try to acquire a slot
+		if err := o.slotManager.Acquire(ctx); err != nil {
 			// Context cancelled
 			wg.Wait()
 			if o.config.Watch && o.config.Verbose {
@@ -545,14 +549,14 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		// Got a slot, get the next task
 		task, shouldStop, err := o.getNextTask(ctx)
 		if err != nil {
-			sem.Release(1)
+			o.slotManager.Release()
 			wg.Wait()
 			return err
 		}
 
 		if shouldStop {
 			// Stop condition met - release slot and wait for in-flight tasks
-			sem.Release(1)
+			o.slotManager.Release()
 			wg.Wait()
 			if o.config.Verbose {
 				fmt.Println("Stop condition met, orchestration complete")
@@ -565,7 +569,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 
 		if task == nil {
 			// No task available right now
-			sem.Release(1)
+			o.slotManager.Release()
 
 			// Check if there are any in-flight tasks
 			o.inFlightMu.RLock()
@@ -634,7 +638,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		wg.Add(1)
 		go func(t *beads.Task) {
 			defer wg.Done()
-			defer sem.Release(1)
+			defer o.slotManager.Release()
 
 			o.scheduler.ExecuteTask(ctx, t, completionCallback)
 		}(task)

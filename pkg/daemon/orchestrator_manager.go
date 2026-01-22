@@ -369,10 +369,10 @@ func (m *OrchestratorManager) UpdateRunConfig(runID string, concurrency *int, ma
 	// Update concurrency if specified
 	if concurrency != nil && *concurrency > 0 {
 		runState.Config.Concurrency = *concurrency
-		// Note: Runtime concurrency changes are recorded in config but cannot
-		// be applied to active scheduler (semaphore doesn't support resizing).
-		// The new concurrency will take effect on the next run.
-		// TODO: Implement SetConcurrency on scheduler if dynamic resizing is needed.
+		// Apply to running orchestrator - takes effect immediately
+		if runState.orch != nil {
+			runState.orch.SetConcurrency(*concurrency)
+		}
 		logging.Info("updated run concurrency", "run_id", runID, "concurrency", *concurrency)
 	}
 
