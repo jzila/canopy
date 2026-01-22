@@ -229,8 +229,7 @@ func (h *RulesHandler) HandleAddRule(w http.ResponseWriter, r *http.Request) {
 		// Should not happen, but handle gracefully
 		runtimeRule = &rules.RuntimeRule{
 			CustomRule: rule,
-			Source:     "runtime",
-			CreatedAt:  time.Now(),
+			Persisted:  false,
 		}
 	}
 
@@ -304,7 +303,7 @@ func (h *RulesHandler) HandleDeleteRule(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// Check if the rule exists and is a runtime rule
+	// Check if the rule exists
 	rule := engine.GetRule(ruleName)
 	if rule == nil {
 		h.writeJSON(w, http.StatusNotFound, DeleteRuleResponse{
@@ -314,11 +313,11 @@ func (h *RulesHandler) HandleDeleteRule(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// Cannot delete config-sourced rules
-	if rule.Source == "config" {
+	// Cannot delete persisted rules
+	if rule.Persisted {
 		h.writeJSON(w, http.StatusBadRequest, DeleteRuleResponse{
 			Success: false,
-			Error:   fmt.Sprintf("cannot delete config-sourced rule %q; use PATCH to disable instead", ruleName),
+			Error:   fmt.Sprintf("cannot delete persisted rule %q; use PATCH to disable instead", ruleName),
 		})
 		return
 	}
@@ -493,7 +492,7 @@ func (h *RulesHandler) HandlePersistRule(w http.ResponseWriter, r *http.Request,
 	// Create RuntimeRule for response
 	runtimeRule := rules.RuntimeRule{
 		CustomRule: *persistedRule,
-		Source:     "config",
+		Persisted:  true,
 	}
 
 	// Broadcast rules:changed event

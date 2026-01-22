@@ -146,8 +146,8 @@ func TestHandleAddRule_Success(t *testing.T) {
 		t.Errorf("expected rule name 'test-rule', got %s", response.Rule.Name)
 	}
 
-	if response.Rule.Source != "runtime" {
-		t.Errorf("expected rule source 'runtime', got %s", response.Rule.Source)
+	if response.Rule.Persisted {
+		t.Errorf("expected rule to not be persisted, got persisted=true")
 	}
 }
 

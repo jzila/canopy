@@ -655,10 +655,10 @@ func TestEnginePersistRule(t *testing.T) {
 		t.Errorf("Expected rule name 'test-persist', got %q", runtimeRules[0].Name)
 	}
 
-	// Verify it's marked as runtime source in GetRule
+	// Verify it's marked as not persisted in GetRule
 	rule := engine.GetRule("test-persist")
-	if rule.Source != "runtime" {
-		t.Errorf("Expected source 'runtime', got %q", rule.Source)
+	if rule.Persisted {
+		t.Error("Expected rule to not be persisted")
 	}
 
 	// Persist the rule
@@ -676,13 +676,13 @@ func TestEnginePersistRule(t *testing.T) {
 		t.Errorf("Expected 0 runtime rules after persist, got %d", len(runtimeRules))
 	}
 
-	// Verify it's now in config rules
+	// Verify it's now persisted
 	rule = engine.GetRule("test-persist")
 	if rule == nil {
 		t.Fatal("Expected to find rule after persist")
 	}
-	if rule.Source != "config" {
-		t.Errorf("Expected source 'config' after persist, got %q", rule.Source)
+	if !rule.Persisted {
+		t.Error("Expected rule to be persisted after persist")
 	}
 
 	// Verify it still works (task should be skipped)
@@ -708,7 +708,7 @@ func TestEnginePersistRule_NotFound(t *testing.T) {
 	}
 }
 
-func TestEnginePersistRule_AlreadyConfig(t *testing.T) {
+func TestEnginePersistRule_AlreadyPersisted(t *testing.T) {
 	cfg := &config.RulesSettings{
 		PriorityMax: -1,
 		Assignee:    "*",
@@ -719,10 +719,10 @@ func TestEnginePersistRule_AlreadyConfig(t *testing.T) {
 
 	engine := NewEngine(cfg)
 
-	// Try to persist a config rule
+	// Try to persist an already persisted rule
 	_, err := engine.PersistRule("existing-config")
 	if err == nil {
-		t.Error("Expected error for config rule")
+		t.Error("Expected error for already persisted rule")
 	}
 }
 
@@ -760,15 +760,15 @@ func TestEnginePersistAllRules(t *testing.T) {
 		t.Errorf("Expected 0 runtime rules after persist all, got %d", len(runtimeRules))
 	}
 
-	// Verify all rules are now in config
+	// Verify all rules are now persisted
 	for _, name := range persisted {
 		rule := engine.GetRule(name)
 		if rule == nil {
 			t.Errorf("Rule %q not found after persist", name)
 			continue
 		}
-		if rule.Source != "config" {
-			t.Errorf("Rule %q has source %q, expected 'config'", name, rule.Source)
+		if !rule.Persisted {
+			t.Errorf("Rule %q is not persisted, expected persisted", name)
 		}
 	}
 }

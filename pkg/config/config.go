@@ -17,8 +17,9 @@ type Config struct {
 	Rules    RulesSettings    `toml:"rules"`
 }
 
-// RulesSettings contains task selection rules for filtering which tasks to run.
+// RulesSettings contains task selection filter settings.
 // All filtering uses explicit criteria - no fuzzy/natural language parsing.
+// Custom rules are stored separately in the rules engine.
 type RulesSettings struct {
 	// Priority filter (inclusive range, 0-4)
 	// PriorityMin is the minimum priority to include (default: 0)
@@ -54,7 +55,7 @@ type RulesSettings struct {
 	// MaxConcurrentPerLabel limits concurrent tasks by label (e.g., {"frontend": 1})
 	MaxConcurrentPerLabel map[string]int `toml:"max_concurrent_per_label"`
 
-	// Custom rules for complex conditions
+	// Custom rules for complex conditions (loaded from config file)
 	Custom []CustomRule `toml:"custom"`
 }
 
@@ -62,16 +63,17 @@ type RulesSettings struct {
 // This allows for more complex filtering logic beyond simple whitelists/blacklists.
 type CustomRule struct {
 	// Name is a human-readable identifier for the rule
-	Name string `toml:"name"`
+	Name string `toml:"name" json:"name"`
 	// Enabled controls whether the rule is active (default: true if not specified)
-	Enabled *bool `toml:"enabled"`
+	Enabled *bool `toml:"enabled" json:"enabled,omitempty"`
 	// Condition is a simple expression like "priority > 1"
 	// Supported: priority, type, assignee with operators: ==, !=, <, >, <=, >=
-	Condition string `toml:"condition"`
-	// Action is what to do when condition matches: "skip" or "include"
-	Action string `toml:"action"`
+	Condition string `toml:"condition" json:"condition"`
+	// Action is what to do when condition matches: "deny" or "allow"
+	// For backwards compatibility, "skip" is treated as "deny" and "include" as "allow"
+	Action string `toml:"action" json:"action"`
 	// Reason is shown when the rule causes a task to be skipped
-	Reason string `toml:"reason"`
+	Reason string `toml:"reason" json:"reason,omitempty"`
 }
 
 // ResolverSettings contains resolver agent configuration
@@ -193,9 +195,12 @@ var validTaskTypes = map[string]bool{
 }
 
 // validCustomRuleActions are the allowed actions for custom rules
+// Primary actions are "deny" and "allow"; "skip" and "include" are accepted for backwards compatibility
 var validCustomRuleActions = map[string]bool{
-	"skip":    true,
-	"include": true,
+	"deny":    true,
+	"allow":   true,
+	"skip":    true, // backwards compat: treated as "deny"
+	"include": true, // backwards compat: treated as "allow"
 }
 
 // Validate checks the rules settings for errors
@@ -324,7 +329,7 @@ func (r *RulesSettings) Validate() ValidationErrors {
 		} else if !validCustomRuleActions[rule.Action] {
 			errs = append(errs, ValidationError{
 				Field:   fmt.Sprintf("rules.custom[%d].action", i),
-				Message: fmt.Sprintf("invalid action %q (allowed: skip, include)", rule.Action),
+				Message: fmt.Sprintf("invalid action %q (allowed: deny, allow)", rule.Action),
 			})
 		}
 	}
