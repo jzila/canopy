@@ -37,7 +37,8 @@ func (m *MockBeadsClientForDynamic) CloseTask(id string) {
 
 func TestInFlightTracking_MarkAndUnmark(t *testing.T) {
 	o := &Orchestrator{
-		inFlight: make(map[string]bool),
+		inFlight:     make(map[string]bool),
+		inFlightTask: make(map[string]*beads.Task),
 	}
 
 	// Initially not in-flight
@@ -65,7 +66,8 @@ func TestInFlightTracking_MarkAndUnmark(t *testing.T) {
 
 func TestInFlightTracking_ConcurrentAccess(t *testing.T) {
 	o := &Orchestrator{
-		inFlight: make(map[string]bool),
+		inFlight:     make(map[string]bool),
+		inFlightTask: make(map[string]*beads.Task),
 	}
 
 	var wg sync.WaitGroup
@@ -96,9 +98,10 @@ func TestGetNextTask_FiltersInFlight(t *testing.T) {
 	}
 
 	o := &Orchestrator{
-		config:      &Config{MaxPriority: -1},
-		beadsClient: mockClient,
-		inFlight:    make(map[string]bool),
+		config:       &Config{MaxPriority: -1},
+		beadsClient:  mockClient,
+		inFlight:     make(map[string]bool),
+		inFlightTask: make(map[string]*beads.Task),
 	}
 
 	ctx := context.Background()
@@ -161,9 +164,10 @@ func TestGetNextTask_ReturnsNewlyUnblockedTasks(t *testing.T) {
 	}
 
 	o := &Orchestrator{
-		config:      &Config{MaxPriority: -1},
-		beadsClient: mockClient,
-		inFlight:    make(map[string]bool),
+		config:       &Config{MaxPriority: -1},
+		beadsClient:  mockClient,
+		inFlight:     make(map[string]bool),
+		inFlightTask: make(map[string]*beads.Task),
 	}
 
 	ctx := context.Background()
@@ -204,9 +208,10 @@ func TestGetNextTask_AppliesMaxPriorityFilter(t *testing.T) {
 	}
 
 	o := &Orchestrator{
-		config:      &Config{MaxPriority: 1}, // Only P0 and P1
-		beadsClient: mockClient,
-		inFlight:    make(map[string]bool),
+		config:       &Config{MaxPriority: 1}, // Only P0 and P1
+		beadsClient:  mockClient,
+		inFlight:     make(map[string]bool),
+		inFlightTask: make(map[string]*beads.Task),
 	}
 
 	ctx := context.Background()

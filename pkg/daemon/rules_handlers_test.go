@@ -8,20 +8,61 @@ import (
 	"testing"
 
 	"github.com/jzila/canopy/pkg/config"
+	"github.com/jzila/canopy/pkg/orchestrator"
 	"github.com/jzila/canopy/pkg/rules"
 )
 
-func setupTestDaemonWithRules() *Daemon {
+const testRepoPath = "/tmp/test-repo"
+const testRunID = "test-run-123"
+
+func setupTestDaemonWithRules() (*Daemon, *rules.Engine) {
 	daemon := newDaemonForTest(Config{}, nil, nil)
-	daemon.Init() // This initializes orchManager with rulesEngine
-	return daemon
+	daemon.Init() // This initializes orchManager
+
+	// Create a rules engine
+	defaultRules := config.DefaultRulesSettings()
+	rulesEngine := rules.NewEngine(&defaultRules)
+
+	// Create a minimal orchestrator config and orchestrator for testing
+	orchConfig := &orchestrator.Config{
+		WorkDir:     testRepoPath,
+		Concurrency: 1,
+		MaxPriority: -1,
+	}
+
+	// Create a mock orchestrator (we only need the rules engine accessor)
+	orch, _ := orchestrator.New(orchConfig)
+	if orch != nil {
+		orch.SetRulesEngine(rulesEngine)
+	}
+
+	// Store a run state with the rules engine
+	runState := &RunState{
+		ID:       testRunID,
+		RepoPath: testRepoPath,
+		orch:     orch,
+	}
+	// Store the run by ID and repo path
+	daemon.orchManager.runs.Store(testRunID, runState)
+	daemon.orchManager.runsByRepo.Store(testRepoPath, testRunID)
+
+	return daemon, rulesEngine
+}
+
+// Helper to add query parameters to request URL
+func addRepoQueryParam(url string) string {
+	return url + "?repo_path=" + testRepoPath
+}
+
+func addRunIDQueryParam(url string) string {
+	return url + "?run_id=" + testRunID
 }
 
 func TestHandleListRules_Success(t *testing.T) {
-	daemon := setupTestDaemonWithRules()
+	daemon, _ := setupTestDaemonWithRules()
 	handler := NewRulesHandler(daemon)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/rules", nil)
+	req := httptest.NewRequest(http.MethodGet, addRepoQueryParam("/api/rules"), nil)
 	w := httptest.NewRecorder()
 
 	handler.HandleListRules(w, req)
@@ -41,11 +82,26 @@ func TestHandleListRules_Success(t *testing.T) {
 	}
 }
 
-func TestHandleListRules_MethodNotAllowed(t *testing.T) {
-	daemon := setupTestDaemonWithRules()
+func TestHandleListRules_MissingQueryParam(t *testing.T) {
+	daemon, _ := setupTestDaemonWithRules()
 	handler := NewRulesHandler(daemon)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/rules", nil)
+	// No query params - should fail
+	req := httptest.NewRequest(http.MethodGet, "/api/rules", nil)
+	w := httptest.NewRecorder()
+
+	handler.HandleListRules(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400 for missing query param, got %d", w.Code)
+	}
+}
+
+func TestHandleListRules_MethodNotAllowed(t *testing.T) {
+	daemon, _ := setupTestDaemonWithRules()
+	handler := NewRulesHandler(daemon)
+
+	req := httptest.NewRequest(http.MethodPost, addRepoQueryParam("/api/rules"), nil)
 	w := httptest.NewRecorder()
 
 	handler.HandleListRules(w, req)
@@ -56,7 +112,7 @@ func TestHandleListRules_MethodNotAllowed(t *testing.T) {
 }
 
 func TestHandleAddRule_Success(t *testing.T) {
-	daemon := setupTestDaemonWithRules()
+	daemon, _ := setupTestDaemonWithRules()
 	handler := NewRulesHandler(daemon)
 
 	reqBody := AddRuleRequest{
@@ -67,7 +123,7 @@ func TestHandleAddRule_Success(t *testing.T) {
 	}
 	body, _ := json.Marshal(reqBody)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/rules", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, addRepoQueryParam("/api/rules"), bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -96,7 +152,7 @@ func TestHandleAddRule_Success(t *testing.T) {
 }
 
 func TestHandleAddRule_MissingName(t *testing.T) {
-	daemon := setupTestDaemonWithRules()
+	daemon, _ := setupTestDaemonWithRules()
 	handler := NewRulesHandler(daemon)
 
 	reqBody := AddRuleRequest{
@@ -105,7 +161,7 @@ func TestHandleAddRule_MissingName(t *testing.T) {
 	}
 	body, _ := json.Marshal(reqBody)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/rules", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, addRepoQueryParam("/api/rules"), bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -126,7 +182,7 @@ func TestHandleAddRule_MissingName(t *testing.T) {
 }
 
 func TestHandleAddRule_DuplicateName(t *testing.T) {
-	daemon := setupTestDaemonWithRules()
+	daemon, _ := setupTestDaemonWithRules()
 	handler := NewRulesHandler(daemon)
 
 	// Add first rule
@@ -137,7 +193,7 @@ func TestHandleAddRule_DuplicateName(t *testing.T) {
 	}
 	body, _ := json.Marshal(reqBody)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/rules", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, addRepoQueryParam("/api/rules"), bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	handler.HandleAddRule(w, req)
@@ -148,7 +204,7 @@ func TestHandleAddRule_DuplicateName(t *testing.T) {
 
 	// Try to add duplicate
 	body, _ = json.Marshal(reqBody)
-	req = httptest.NewRequest(http.MethodPost, "/api/rules", bytes.NewReader(body))
+	req = httptest.NewRequest(http.MethodPost, addRepoQueryParam("/api/rules"), bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
 	handler.HandleAddRule(w, req)
@@ -159,11 +215,10 @@ func TestHandleAddRule_DuplicateName(t *testing.T) {
 }
 
 func TestHandleUpdateRule_Enable(t *testing.T) {
-	daemon := setupTestDaemonWithRules()
+	daemon, engine := setupTestDaemonWithRules()
 	handler := NewRulesHandler(daemon)
 
 	// First add a rule
-	engine := daemon.orchManager.GetRulesEngine()
 	_ = engine.AddRuleWithValidation(config.CustomRule{
 		Name:      "test-rule",
 		Condition: "priority > 2",
@@ -174,7 +229,7 @@ func TestHandleUpdateRule_Enable(t *testing.T) {
 	reqBody := UpdateRuleRequest{Enabled: ptrBool(false)}
 	body, _ := json.Marshal(reqBody)
 
-	req := httptest.NewRequest(http.MethodPatch, "/api/rules/test-rule", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPatch, addRepoQueryParam("/api/rules/test-rule"), bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -199,13 +254,13 @@ func TestHandleUpdateRule_Enable(t *testing.T) {
 }
 
 func TestHandleUpdateRule_NotFound(t *testing.T) {
-	daemon := setupTestDaemonWithRules()
+	daemon, _ := setupTestDaemonWithRules()
 	handler := NewRulesHandler(daemon)
 
 	reqBody := UpdateRuleRequest{Enabled: ptrBool(true)}
 	body, _ := json.Marshal(reqBody)
 
-	req := httptest.NewRequest(http.MethodPatch, "/api/rules/nonexistent", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPatch, addRepoQueryParam("/api/rules/nonexistent"), bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -217,18 +272,17 @@ func TestHandleUpdateRule_NotFound(t *testing.T) {
 }
 
 func TestHandleDeleteRule_Success(t *testing.T) {
-	daemon := setupTestDaemonWithRules()
+	daemon, engine := setupTestDaemonWithRules()
 	handler := NewRulesHandler(daemon)
 
 	// First add a runtime rule
-	engine := daemon.orchManager.GetRulesEngine()
 	_ = engine.AddRuleWithValidation(config.CustomRule{
 		Name:      "to-delete",
 		Condition: "priority > 2",
 		Action:    "skip",
 	})
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/rules/to-delete", nil)
+	req := httptest.NewRequest(http.MethodDelete, addRepoQueryParam("/api/rules/to-delete"), nil)
 	w := httptest.NewRecorder()
 
 	handler.HandleDeleteRule(w, req, "to-delete")
@@ -254,10 +308,10 @@ func TestHandleDeleteRule_Success(t *testing.T) {
 }
 
 func TestHandleDeleteRule_NotFound(t *testing.T) {
-	daemon := setupTestDaemonWithRules()
+	daemon, _ := setupTestDaemonWithRules()
 	handler := NewRulesHandler(daemon)
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/rules/nonexistent", nil)
+	req := httptest.NewRequest(http.MethodDelete, addRepoQueryParam("/api/rules/nonexistent"), nil)
 	w := httptest.NewRecorder()
 
 	handler.HandleDeleteRule(w, req, "nonexistent")
@@ -268,7 +322,7 @@ func TestHandleDeleteRule_NotFound(t *testing.T) {
 }
 
 func TestHandleUpdateConfig_Success(t *testing.T) {
-	daemon := setupTestDaemonWithRules()
+	daemon, _ := setupTestDaemonWithRules()
 	handler := NewRulesHandler(daemon)
 
 	update := rules.ConfigSettingsUpdate{
@@ -277,7 +331,7 @@ func TestHandleUpdateConfig_Success(t *testing.T) {
 	}
 	body, _ := json.Marshal(update)
 
-	req := httptest.NewRequest(http.MethodPatch, "/api/rules/config", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPatch, addRepoQueryParam("/api/rules/config"), bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -306,7 +360,7 @@ func TestHandleUpdateConfig_Success(t *testing.T) {
 }
 
 func TestHandleUpdateConfig_InvalidPriority(t *testing.T) {
-	daemon := setupTestDaemonWithRules()
+	daemon, _ := setupTestDaemonWithRules()
 	handler := NewRulesHandler(daemon)
 
 	update := rules.ConfigSettingsUpdate{
@@ -314,7 +368,7 @@ func TestHandleUpdateConfig_InvalidPriority(t *testing.T) {
 	}
 	body, _ := json.Marshal(update)
 
-	req := httptest.NewRequest(http.MethodPatch, "/api/rules/config", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPatch, addRepoQueryParam("/api/rules/config"), bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -326,10 +380,10 @@ func TestHandleUpdateConfig_InvalidPriority(t *testing.T) {
 }
 
 func TestRouteRules_ListRules(t *testing.T) {
-	daemon := setupTestDaemonWithRules()
+	daemon, _ := setupTestDaemonWithRules()
 	handler := NewRulesHandler(daemon)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/rules", nil)
+	req := httptest.NewRequest(http.MethodGet, addRepoQueryParam("/api/rules"), nil)
 	w := httptest.NewRecorder()
 
 	handler.RouteRules(w, req)
@@ -340,7 +394,7 @@ func TestRouteRules_ListRules(t *testing.T) {
 }
 
 func TestRouteRules_AddRule(t *testing.T) {
-	daemon := setupTestDaemonWithRules()
+	daemon, _ := setupTestDaemonWithRules()
 	handler := NewRulesHandler(daemon)
 
 	reqBody := AddRuleRequest{
@@ -350,7 +404,7 @@ func TestRouteRules_AddRule(t *testing.T) {
 	}
 	body, _ := json.Marshal(reqBody)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/rules", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, addRepoQueryParam("/api/rules"), bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -362,11 +416,10 @@ func TestRouteRules_AddRule(t *testing.T) {
 }
 
 func TestRouteRules_UpdateRule(t *testing.T) {
-	daemon := setupTestDaemonWithRules()
+	daemon, engine := setupTestDaemonWithRules()
 	handler := NewRulesHandler(daemon)
 
 	// First add a rule
-	engine := daemon.orchManager.GetRulesEngine()
 	_ = engine.AddRuleWithValidation(config.CustomRule{
 		Name:      "routed-update",
 		Condition: "priority > 2",
@@ -376,7 +429,7 @@ func TestRouteRules_UpdateRule(t *testing.T) {
 	reqBody := UpdateRuleRequest{Enabled: ptrBool(false)}
 	body, _ := json.Marshal(reqBody)
 
-	req := httptest.NewRequest(http.MethodPatch, "/api/rules/routed-update", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPatch, addRepoQueryParam("/api/rules/routed-update"), bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -388,18 +441,17 @@ func TestRouteRules_UpdateRule(t *testing.T) {
 }
 
 func TestRouteRules_DeleteRule(t *testing.T) {
-	daemon := setupTestDaemonWithRules()
+	daemon, engine := setupTestDaemonWithRules()
 	handler := NewRulesHandler(daemon)
 
 	// First add a rule
-	engine := daemon.orchManager.GetRulesEngine()
 	_ = engine.AddRuleWithValidation(config.CustomRule{
 		Name:      "routed-delete",
 		Condition: "priority > 2",
 		Action:    "skip",
 	})
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/rules/routed-delete", nil)
+	req := httptest.NewRequest(http.MethodDelete, addRepoQueryParam("/api/rules/routed-delete"), nil)
 	w := httptest.NewRecorder()
 
 	handler.RouteRules(w, req)
@@ -410,7 +462,7 @@ func TestRouteRules_DeleteRule(t *testing.T) {
 }
 
 func TestRouteRules_ConfigUpdate(t *testing.T) {
-	daemon := setupTestDaemonWithRules()
+	daemon, _ := setupTestDaemonWithRules()
 	handler := NewRulesHandler(daemon)
 
 	update := rules.ConfigSettingsUpdate{
@@ -418,7 +470,7 @@ func TestRouteRules_ConfigUpdate(t *testing.T) {
 	}
 	body, _ := json.Marshal(update)
 
-	req := httptest.NewRequest(http.MethodPatch, "/api/rules/config", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPatch, addRepoQueryParam("/api/rules/config"), bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -430,7 +482,7 @@ func TestRouteRules_ConfigUpdate(t *testing.T) {
 }
 
 func TestRulesHandler_BroadcastsEvent(t *testing.T) {
-	daemon := setupTestDaemonWithRules()
+	daemon, _ := setupTestDaemonWithRules()
 	handler := NewRulesHandler(daemon)
 
 	// Subscribe to events
@@ -452,7 +504,7 @@ func TestRulesHandler_BroadcastsEvent(t *testing.T) {
 	}
 	body, _ := json.Marshal(reqBody)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/rules", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, addRepoQueryParam("/api/rules"), bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 

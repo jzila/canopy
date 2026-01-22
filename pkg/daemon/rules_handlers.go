@@ -164,9 +164,9 @@ func (h *RulesHandler) HandleListRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	engine := h.getEngine()
+	engine, errMsg := h.getEngine(r)
 	if engine == nil {
-		http.Error(w, "Rules engine not available", http.StatusServiceUnavailable)
+		http.Error(w, errMsg, http.StatusBadRequest)
 		return
 	}
 
@@ -191,9 +191,9 @@ func (h *RulesHandler) HandleAddRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	engine := h.getEngine()
+	engine, errMsg := h.getEngine(r)
 	if engine == nil {
-		http.Error(w, "Rules engine not available", http.StatusServiceUnavailable)
+		http.Error(w, errMsg, http.StatusBadRequest)
 		return
 	}
 
@@ -245,9 +245,9 @@ func (h *RulesHandler) HandleAddRule(w http.ResponseWriter, r *http.Request) {
 
 // HandleUpdateRule handles PATCH /api/rules/:name
 func (h *RulesHandler) HandleUpdateRule(w http.ResponseWriter, r *http.Request, ruleName string) {
-	engine := h.getEngine()
+	engine, errMsg := h.getEngine(r)
 	if engine == nil {
-		http.Error(w, "Rules engine not available", http.StatusServiceUnavailable)
+		http.Error(w, errMsg, http.StatusBadRequest)
 		return
 	}
 
@@ -298,9 +298,9 @@ func (h *RulesHandler) HandleUpdateRule(w http.ResponseWriter, r *http.Request, 
 
 // HandleDeleteRule handles DELETE /api/rules/:name
 func (h *RulesHandler) HandleDeleteRule(w http.ResponseWriter, r *http.Request, ruleName string) {
-	engine := h.getEngine()
+	engine, errMsg := h.getEngine(r)
 	if engine == nil {
-		http.Error(w, "Rules engine not available", http.StatusServiceUnavailable)
+		http.Error(w, errMsg, http.StatusBadRequest)
 		return
 	}
 
@@ -347,9 +347,9 @@ func (h *RulesHandler) HandleUpdateConfig(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	engine := h.getEngine()
+	engine, errMsg := h.getEngine(r)
 	if engine == nil {
-		http.Error(w, "Rules engine not available", http.StatusServiceUnavailable)
+		http.Error(w, errMsg, http.StatusBadRequest)
 		return
 	}
 
@@ -383,18 +383,40 @@ func (h *RulesHandler) HandleUpdateConfig(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// getEngine returns the rules engine from the daemon's orchestrator manager
-func (h *RulesHandler) getEngine() *rules.Engine {
+// getEngine returns the rules engine for the specified repo or run.
+// It extracts repo_path or run_id from the query parameters.
+// If neither is specified, it returns nil with an error message.
+func (h *RulesHandler) getEngine(r *http.Request) (*rules.Engine, string) {
 	if h.daemon == nil {
-		return nil
+		return nil, "daemon not available"
 	}
 
 	orchManager := h.daemon.GetOrchestratorManager()
 	if orchManager == nil {
-		return nil
+		return nil, "orchestrator manager not available"
 	}
 
-	return orchManager.GetRulesEngine()
+	// Try to get the engine by run_id first (more specific)
+	runID := r.URL.Query().Get("run_id")
+	if runID != "" {
+		engine := orchManager.GetRulesEngineForRun(runID)
+		if engine == nil {
+			return nil, fmt.Sprintf("no active run found for run_id %q", runID)
+		}
+		return engine, ""
+	}
+
+	// Try to get the engine by repo_path
+	repoPath := r.URL.Query().Get("repo_path")
+	if repoPath != "" {
+		engine := orchManager.GetRulesEngineForRepo(repoPath)
+		if engine == nil {
+			return nil, fmt.Sprintf("no active run found for repo %q", repoPath)
+		}
+		return engine, ""
+	}
+
+	return nil, "either repo_path or run_id query parameter is required"
 }
 
 // writeJSON writes a JSON response with the given status code
@@ -430,25 +452,18 @@ func (h *RulesHandler) broadcastRulesChanged(action string, rule *rules.RuntimeR
 // HandlePersistRule handles POST /api/rules/:name/persist
 // Persists a single runtime rule to the config file
 func (h *RulesHandler) HandlePersistRule(w http.ResponseWriter, r *http.Request, ruleName string) {
-	engine := h.getEngine()
+	engine, errMsg := h.getEngine(r)
 	if engine == nil {
-		http.Error(w, "Rules engine not available", http.StatusServiceUnavailable)
+		http.Error(w, errMsg, http.StatusBadRequest)
 		return
 	}
 
-	if h.daemon == nil {
-		h.writeJSON(w, http.StatusServiceUnavailable, PersistRuleResponse{
-			Success: false,
-			Error:   "Daemon not available",
-		})
-		return
-	}
-
-	workDir := h.daemon.GetWorkDir()
+	// Get workDir from query parameters (repo_path is required for persist operations)
+	workDir := r.URL.Query().Get("repo_path")
 	if workDir == "" {
-		h.writeJSON(w, http.StatusServiceUnavailable, PersistRuleResponse{
+		h.writeJSON(w, http.StatusBadRequest, PersistRuleResponse{
 			Success: false,
-			Error:   "Work directory not set",
+			Error:   "repo_path query parameter is required for persist operations",
 		})
 		return
 	}
@@ -494,25 +509,18 @@ func (h *RulesHandler) HandlePersistRule(w http.ResponseWriter, r *http.Request,
 // HandlePersistAllRules handles POST /api/rules/persist-all
 // Persists all runtime rules to the config file
 func (h *RulesHandler) HandlePersistAllRules(w http.ResponseWriter, r *http.Request) {
-	engine := h.getEngine()
+	engine, errMsg := h.getEngine(r)
 	if engine == nil {
-		http.Error(w, "Rules engine not available", http.StatusServiceUnavailable)
+		http.Error(w, errMsg, http.StatusBadRequest)
 		return
 	}
 
-	if h.daemon == nil {
-		h.writeJSON(w, http.StatusServiceUnavailable, PersistAllRulesResponse{
-			Success: false,
-			Error:   "Daemon not available",
-		})
-		return
-	}
-
-	workDir := h.daemon.GetWorkDir()
+	// Get workDir from query parameters (repo_path is required for persist operations)
+	workDir := r.URL.Query().Get("repo_path")
 	if workDir == "" {
-		h.writeJSON(w, http.StatusServiceUnavailable, PersistAllRulesResponse{
+		h.writeJSON(w, http.StatusBadRequest, PersistAllRulesResponse{
 			Success: false,
-			Error:   "Work directory not set",
+			Error:   "repo_path query parameter is required for persist operations",
 		})
 		return
 	}

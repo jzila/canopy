@@ -78,30 +78,51 @@ type OrchestratorManager struct {
 
 	// Runtime state for direct state updates (no IPC needed)
 	state *RuntimeState
-
-	// Rules engine for task selection rules (shared across all runs)
-	rulesEngine *rules.Engine
 }
 
 // NewOrchestratorManager creates a new OrchestratorManager instance.
 func NewOrchestratorManager(eventBus *events.EventBus, state *RuntimeState) *OrchestratorManager {
-	// Initialize with default rules settings
-	defaultRules := config.DefaultRulesSettings()
 	return &OrchestratorManager{
-		eventBus:    eventBus,
-		state:       state,
-		rulesEngine: rules.NewEngine(&defaultRules),
+		eventBus: eventBus,
+		state:    state,
 	}
 }
 
-// GetRulesEngine returns the rules engine for runtime rule management.
-func (m *OrchestratorManager) GetRulesEngine() *rules.Engine {
-	return m.rulesEngine
+// GetRulesEngineForRepo returns the rules engine for a repository's active run, if any.
+// Returns nil if no active run exists for the repository.
+func (m *OrchestratorManager) GetRulesEngineForRepo(repoPath string) *rules.Engine {
+	runIDI, ok := m.runsByRepo.Load(repoPath)
+	if !ok {
+		return nil
+	}
+
+	runStateI, ok := m.runs.Load(runIDI.(string))
+	if !ok {
+		return nil
+	}
+
+	runState := runStateI.(*RunState)
+	if runState.orch == nil {
+		return nil
+	}
+
+	return runState.orch.GetRulesEngine()
 }
 
-// SetRulesEngine sets the rules engine (for initialization with config-loaded rules).
-func (m *OrchestratorManager) SetRulesEngine(engine *rules.Engine) {
-	m.rulesEngine = engine
+// GetRulesEngineForRun returns the rules engine for a specific run.
+// Returns nil if the run doesn't exist or has no orchestrator.
+func (m *OrchestratorManager) GetRulesEngineForRun(runID string) *rules.Engine {
+	runStateI, ok := m.runs.Load(runID)
+	if !ok {
+		return nil
+	}
+
+	runState := runStateI.(*RunState)
+	if runState.orch == nil {
+		return nil
+	}
+
+	return runState.orch.GetRulesEngine()
 }
 
 // StartRun creates and starts a new orchestration run.
@@ -131,10 +152,13 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 		}
 	}
 
-	// We've claimed the repo. The claim is irrevocable - we don't clean up
-	// runsByRepo on orchestrator creation failure. Only runOrchestrator completion
-	// releases the claim. This prevents TOCTOU races where cleanup could allow
-	// another goroutine to claim the slot.
+	// We've claimed the repo. Clean up if we fail before completing setup.
+	cleanupOnError := true
+	defer func() {
+		if cleanupOnError {
+			m.runsByRepo.Delete(config.WorkDir)
+		}
+	}()
 
 	// Apply defaults
 	if config.Concurrency <= 0 {
@@ -168,6 +192,15 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 	if err != nil {
 		return "", fmt.Errorf("failed to create orchestrator: %w", err)
 	}
+
+	// Create per-repo rules engine from config
+	rulesConfig, err := loadRulesConfig(config.WorkDir)
+	if err != nil {
+		logging.Warn("failed to load rules config, using defaults", "error", err)
+		rulesConfig = nil
+	}
+	rulesEngine := rules.NewEngine(rulesConfig)
+	orch.SetRulesEngine(rulesEngine)
 
 	// Create cancellable context for this run
 	runCtx, cancel := context.WithCancel(ctx)
@@ -220,6 +253,8 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 		"concurrency", config.Concurrency,
 		"tasks", runState.TasksTotal)
 
+	// Success - don't clean up the repo mapping
+	cleanupOnError = false
 	return runID, nil
 }
 
@@ -640,4 +675,18 @@ func makeAgentID(runID, taskID string) string {
 		prefix = prefix[:8]
 	}
 	return fmt.Sprintf("agent-%s-%s", prefix, taskID)
+}
+
+// loadRulesConfig loads the rules configuration from the repository's config file.
+// Returns nil (no rules) if no config exists or if rules are not configured.
+func loadRulesConfig(workDir string) (*config.RulesSettings, error) {
+	cfg, err := config.LoadConfig(workDir)
+	if err != nil {
+		// No config file is OK - just use no rules
+		return nil, nil
+	}
+
+	// Return a copy of the rules settings
+	rules := cfg.Rules
+	return &rules, nil
 }

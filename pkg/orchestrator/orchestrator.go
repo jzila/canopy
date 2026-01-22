@@ -15,6 +15,7 @@ import (
 	cfgpkg "github.com/jzila/canopy/pkg/config"
 	"github.com/jzila/canopy/pkg/ipc"
 	"github.com/jzila/canopy/pkg/mergecoordinator"
+	"github.com/jzila/canopy/pkg/rules"
 	"github.com/jzila/canopy/pkg/sandbox"
 	"github.com/jzila/canopy/pkg/scheduler"
 )
@@ -99,11 +100,13 @@ type Orchestrator struct {
 	callbackManager  *CallbackManager
 	failureCounts    map[string]int // Tracks how many times each task has failed
 	sandboxConfig    *sandbox.SandboxConfig
-	taskFilter       *cfgpkg.TaskFilter // Task filter from rules settings
+	taskFilter       *cfgpkg.TaskFilter // Task filter from rules settings (legacy)
+	rulesEngine      *rules.Engine      // Rules engine for per-repo task selection
 
 	// In-flight task tracking for dynamic task assignment
-	inFlightMu sync.RWMutex
-	inFlight   map[string]bool // Tasks currently being executed
+	inFlightMu   sync.RWMutex
+	inFlight     map[string]bool   // Tasks currently being executed
+	inFlightTask map[string]*beads.Task // Task objects for in-flight tasks (for concurrency limiting)
 
 	// Watch mode statistics
 	watchStatsMu    sync.RWMutex
@@ -199,6 +202,7 @@ func New(config *Config) (*Orchestrator, error) {
 		sandboxConfig:    sandboxConfig,
 		taskFilter:       taskFilter,
 		inFlight:         make(map[string]bool),
+		inFlightTask:     make(map[string]*beads.Task),
 	}
 
 	// Set cleanup callback for merge coordinator
@@ -294,6 +298,17 @@ func (o *Orchestrator) SetRunID(runID string) {
 // currently running tasks as the scheduler's semaphore is fixed at creation.
 func (o *Orchestrator) SetConcurrency(concurrency int) {
 	o.config.Concurrency = concurrency
+}
+
+// SetRulesEngine sets the rules engine for this orchestrator instance.
+// This enables per-repo rules isolation.
+func (o *Orchestrator) SetRulesEngine(engine *rules.Engine) {
+	o.rulesEngine = engine
+}
+
+// GetRulesEngine returns the rules engine for this orchestrator instance.
+func (o *Orchestrator) GetRulesEngine() *rules.Engine {
+	return o.rulesEngine
 }
 
 // SetAgentID records the agentID for a taskID, enabling parent-child tracking for resolvers.
@@ -687,15 +702,46 @@ func filterTasksByMaxPriority(tasks []beads.Task, maxPriority int) []beads.Task 
 }
 
 // filterTasks applies configured rules to filter tasks.
-// If task filter is configured, uses full rules; otherwise falls back to maxPriority.
+// Priority: rulesEngine > taskFilter > maxPriority fallback
 func (o *Orchestrator) filterTasks(tasks []beads.Task) []beads.Task {
-	// If we have a task filter, use it
+	// If we have a rules engine, use it (preferred for per-repo isolation)
+	if o.rulesEngine != nil {
+		return o.filterTasksWithEngine(tasks)
+	}
+
+	// If we have a task filter (legacy), use it
 	if o.taskFilter != nil {
 		return o.taskFilter.FilterTasks(tasks)
 	}
 
 	// Fall back to simple maxPriority filter for backward compatibility
 	return filterTasksByMaxPriority(tasks, o.config.MaxPriority)
+}
+
+// filterTasksWithEngine applies the rules engine to filter tasks.
+// This considers in-flight tasks for concurrency limit rules.
+func (o *Orchestrator) filterTasksWithEngine(tasks []beads.Task) []beads.Task {
+	o.inFlightMu.RLock()
+	// Make copies of in-flight state for the rules engine
+	inFlight := make(map[string]bool, len(o.inFlight))
+	for k, v := range o.inFlight {
+		inFlight[k] = v
+	}
+	inFlightTasks := make(map[string]*beads.Task, len(o.inFlightTask))
+	for k, v := range o.inFlightTask {
+		inFlightTasks[k] = v
+	}
+	o.inFlightMu.RUnlock()
+
+	filtered := make([]beads.Task, 0, len(tasks))
+	for i := range tasks {
+		task := &tasks[i]
+		result := o.rulesEngine.Evaluate(task, inFlight, inFlightTasks)
+		if result.Allow && !result.Skip {
+			filtered = append(filtered, tasks[i])
+		}
+	}
+	return filtered
 }
 
 // markInFlight marks a task as currently in-flight
@@ -705,11 +751,21 @@ func (o *Orchestrator) markInFlight(taskID string) {
 	o.inFlight[taskID] = true
 }
 
+// markInFlightWithTask marks a task as currently in-flight and stores the task object
+// for use in concurrency limit calculations.
+func (o *Orchestrator) markInFlightWithTask(task *beads.Task) {
+	o.inFlightMu.Lock()
+	defer o.inFlightMu.Unlock()
+	o.inFlight[task.ID] = true
+	o.inFlightTask[task.ID] = task
+}
+
 // unmarkInFlight removes a task from the in-flight set
 func (o *Orchestrator) unmarkInFlight(taskID string) {
 	o.inFlightMu.Lock()
 	defer o.inFlightMu.Unlock()
 	delete(o.inFlight, taskID)
+	delete(o.inFlightTask, taskID)
 }
 
 // isInFlight returns whether a task is currently in-flight
@@ -738,8 +794,9 @@ func (o *Orchestrator) getNextTask(ctx context.Context) (*beads.Task, bool, erro
 
 	for i := range tasks {
 		if !o.inFlight[tasks[i].ID] {
-			// Mark this task as in-flight and return it
+			// Mark this task as in-flight (store task object for concurrency limiting)
 			o.inFlight[tasks[i].ID] = true
+			o.inFlightTask[tasks[i].ID] = &tasks[i]
 			return &tasks[i], false, nil
 		}
 	}
