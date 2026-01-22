@@ -11,6 +11,7 @@ import (
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
 	"github.com/jzila/canopy/pkg/config"
+	canopyerrors "github.com/jzila/canopy/pkg/errors"
 	"github.com/jzila/canopy/pkg/events"
 	"github.com/jzila/canopy/pkg/logging"
 	"github.com/jzila/canopy/pkg/orchestrator"
@@ -80,8 +81,6 @@ type OrchestratorManager struct {
 
 	// Rules engine for task selection rules (shared across all runs)
 	rulesEngine *rules.Engine
-
-	mu sync.RWMutex
 }
 
 // NewOrchestratorManager creates a new OrchestratorManager instance.
@@ -114,10 +113,31 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 		return "", fmt.Errorf("work_dir is required")
 	}
 
-	// Check if there's already a run for this repo
-	if existingRunID, loaded := m.runsByRepo.Load(config.WorkDir); loaded {
-		return "", fmt.Errorf("run already active for repository %s (run ID: %s)", config.WorkDir, existingRunID)
+	// Generate run ID first so we can do an atomic check-and-set
+	runID := uuid.New().String()
+
+	// Atomically try to claim this repo for our run.
+	// If another run already claimed it, we fail immediately.
+	if existingRunID, loaded := m.runsByRepo.LoadOrStore(config.WorkDir, runID); loaded {
+		existingID := existingRunID.(string)
+		var startedAt time.Time
+		if runStateI, ok := m.runs.Load(existingID); ok {
+			startedAt = runStateI.(*RunState).StartTime
+		}
+		return "", &canopyerrors.RunActiveError{
+			RepoPath:  config.WorkDir,
+			RunID:     existingID,
+			StartedAt: startedAt,
+		}
 	}
+
+	// We've claimed the repo. Clean up if we fail before completing setup.
+	cleanupOnError := true
+	defer func() {
+		if cleanupOnError {
+			m.runsByRepo.Delete(config.WorkDir)
+		}
+	}()
 
 	// Apply defaults
 	if config.Concurrency <= 0 {
@@ -132,9 +152,6 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 	if config.MaxPriority == 0 {
 		config.MaxPriority = -1 // No filter by default
 	}
-
-	// Generate run ID
-	runID := uuid.New().String()
 
 	// Create orchestrator config
 	orchConfig := &orchestrator.Config{
@@ -182,7 +199,6 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 
 	// Store run state
 	m.runs.Store(runID, runState)
-	m.runsByRepo.Store(config.WorkDir, runID)
 
 	// Get initial ready tasks count
 	beadsClient, err := beads.NewClient(config.WorkDir)
@@ -207,6 +223,8 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 		"concurrency", config.Concurrency,
 		"tasks", runState.TasksTotal)
 
+	// Success - don't clean up the repo mapping
+	cleanupOnError = false
 	return runID, nil
 }
 

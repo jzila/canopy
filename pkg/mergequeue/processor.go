@@ -1626,7 +1626,7 @@ func (p *Processor) validateOverlayAccessible(overlay *sandbox.Overlay) error {
 		if err != nil {
 			return fmt.Errorf("cannot access file %s in upper directory: %w", filePath, err)
 		}
-		f.Close()
+		_ = f.Close()
 		break // One successful file access is enough
 	}
 

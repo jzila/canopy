@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Repository, MergeQueueState, Run, ActiveRunStatus, StartRunRequest, ConfigRulesSettings, RuntimeRule } from '../api/client';
+import type { Repository, MergeQueueState, Run, ActiveRunStatus, ConfigRulesSettings, RuntimeRule } from '../api/client';
 
 // Types based on Go backend structures
 

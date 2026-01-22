@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Settings, ChevronDown, ChevronUp, Save, X } from 'lucide-react';
+import { Settings, Save, X } from 'lucide-react';
 import type { ConfigRulesSettings, UpdateConfigRequest } from '../../api/client';
 
 interface ConfigSettingsCardProps {

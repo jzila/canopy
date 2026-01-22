@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Filter, Plus, RefreshCw, ChevronDown, ChevronRight, AlertTriangle } from 'lucide-react';
+import { Filter, Plus, RefreshCw, ChevronDown, AlertTriangle } from 'lucide-react';
 import { useStateStore } from '../../stores/stateStore';
 import {
   getRules,

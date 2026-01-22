@@ -82,7 +82,7 @@ function getPauseButtonTooltip(
  */
 export const RunControlBar: React.FC<RunControlBarProps> = ({
   hasActiveRun,
-  currentRunId,
+  currentRunId: _currentRunId,
   connected,
   isPaused,
   isPausedByAgent,

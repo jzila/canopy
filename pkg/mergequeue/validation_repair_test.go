@@ -1057,7 +1057,7 @@ func TestValidateOverlayAccessible_UnreadableFile(t *testing.T) {
 	if err := os.WriteFile(unreadableFile, []byte("content"), 0000); err != nil {
 		t.Fatalf("failed to create unreadable file: %v", err)
 	}
-	defer os.Chmod(unreadableFile, 0644) // Restore for cleanup
+	defer func() { _ = os.Chmod(unreadableFile, 0644) }() // Restore for cleanup
 
 	overlay := &sandbox.Overlay{
 		UpperDir: upperDir,

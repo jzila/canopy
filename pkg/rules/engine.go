@@ -669,13 +669,13 @@ func parseAction(action string) parsedAction {
 	// Check for parameterized actions
 	if len(action) > 6 && action[:6] == "boost:" {
 		var amount int
-		fmt.Sscanf(action, "boost:%d", &amount)
+		_, _ = fmt.Sscanf(action, "boost:%d", &amount)
 		return parsedAction{actionType: actionBoost, boostAmount: amount}
 	}
 
 	if len(action) > 6 && action[:6] == "limit:" {
 		var limit int
-		fmt.Sscanf(action, "limit:%d", &limit)
+		_, _ = fmt.Sscanf(action, "limit:%d", &limit)
 		return parsedAction{actionType: actionLimit, limitMax: limit}
 	}
 
