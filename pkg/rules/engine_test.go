@@ -836,3 +836,158 @@ func TestEngineGetConfigForPersistence(t *testing.T) {
 		t.Error("GetConfigForPersistence didn't return a copy")
 	}
 }
+
+func TestEngineGetSnapshot_ListPersisted(t *testing.T) {
+	tests := []struct {
+		name           string
+		configRules    []config.CustomRule
+		runtimeOps     func(*Engine) // operations to perform after engine creation
+		wantPersisted  bool
+		wantRulesCount int
+	}{
+		{
+			name:           "empty config - list is persisted",
+			configRules:    nil,
+			runtimeOps:     nil,
+			wantPersisted:  true,
+			wantRulesCount: 0,
+		},
+		{
+			name: "config rules only - list is persisted",
+			configRules: []config.CustomRule{
+				{Name: "rule1", Condition: "priority > 1", Action: "deny"},
+				{Name: "rule2", Condition: "type == bug", Action: "allow"},
+			},
+			runtimeOps:     nil,
+			wantPersisted:  true,
+			wantRulesCount: 2,
+		},
+		{
+			name: "runtime rule added - list is NOT persisted",
+			configRules: []config.CustomRule{
+				{Name: "rule1", Condition: "priority > 1", Action: "deny"},
+			},
+			runtimeOps: func(e *Engine) {
+				e.AddRule(config.CustomRule{Name: "runtime-rule", Condition: "type == bug", Action: "allow"})
+			},
+			wantPersisted:  false,
+			wantRulesCount: 2,
+		},
+		{
+			name: "config rule removed - list is NOT persisted",
+			configRules: []config.CustomRule{
+				{Name: "rule1", Condition: "priority > 1", Action: "deny"},
+				{Name: "rule2", Condition: "type == bug", Action: "allow"},
+			},
+			runtimeOps: func(e *Engine) {
+				e.RemoveRule("rule2")
+			},
+			wantPersisted:  false,
+			wantRulesCount: 1,
+		},
+		{
+			name: "rules reordered - list is NOT persisted",
+			configRules: []config.CustomRule{
+				{Name: "rule1", Condition: "priority > 1", Action: "deny"},
+				{Name: "rule2", Condition: "type == bug", Action: "allow"},
+			},
+			runtimeOps: func(e *Engine) {
+				// Remove both and add in different order
+				e.RemoveRule("rule1")
+				e.RemoveRule("rule2")
+				e.AddRule(config.CustomRule{Name: "rule2", Condition: "type == bug", Action: "allow"})
+				e.AddRule(config.CustomRule{Name: "rule1", Condition: "priority > 1", Action: "deny"})
+			},
+			wantPersisted:  false,
+			wantRulesCount: 2,
+		},
+		{
+			name: "runtime rule added then persisted - list is persisted",
+			configRules: []config.CustomRule{
+				{Name: "rule1", Condition: "priority > 1", Action: "deny"},
+			},
+			runtimeOps: func(e *Engine) {
+				e.AddRule(config.CustomRule{Name: "runtime-rule", Condition: "type == bug", Action: "allow"})
+				_, _ = e.PersistRule("runtime-rule")
+			},
+			wantPersisted:  true,
+			wantRulesCount: 2,
+		},
+		{
+			name:        "multiple runtime rules added then all persisted - list is persisted",
+			configRules: nil,
+			runtimeOps: func(e *Engine) {
+				e.AddRule(config.CustomRule{Name: "rule1", Condition: "priority > 1", Action: "deny"})
+				e.AddRule(config.CustomRule{Name: "rule2", Condition: "type == bug", Action: "allow"})
+				_, _ = e.PersistAllRules()
+			},
+			wantPersisted:  true,
+			wantRulesCount: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.RulesSettings{
+				PriorityMax: -1,
+				Assignee:    "*",
+				Custom:      tt.configRules,
+			}
+
+			engine := NewEngine(cfg)
+			if tt.runtimeOps != nil {
+				tt.runtimeOps(engine)
+			}
+
+			snapshot := engine.GetSnapshot()
+
+			if snapshot.Persisted != tt.wantPersisted {
+				t.Errorf("snapshot.Persisted = %v, want %v", snapshot.Persisted, tt.wantPersisted)
+			}
+			if len(snapshot.Rules) != tt.wantRulesCount {
+				t.Errorf("len(snapshot.Rules) = %d, want %d", len(snapshot.Rules), tt.wantRulesCount)
+			}
+		})
+	}
+}
+
+func TestEngineGetSnapshot_PerRulePersisted(t *testing.T) {
+	cfg := &config.RulesSettings{
+		PriorityMax: -1,
+		Assignee:    "*",
+		Custom: []config.CustomRule{
+			{Name: "config-rule", Condition: "priority > 1", Action: "deny"},
+		},
+	}
+
+	engine := NewEngine(cfg)
+	engine.AddRule(config.CustomRule{Name: "runtime-rule", Condition: "type == bug", Action: "allow"})
+
+	snapshot := engine.GetSnapshot()
+
+	// Should have 2 rules total
+	if len(snapshot.Rules) != 2 {
+		t.Fatalf("Expected 2 rules, got %d", len(snapshot.Rules))
+	}
+
+	// First rule (from config) should be persisted
+	if snapshot.Rules[0].Name != "config-rule" {
+		t.Errorf("Expected first rule to be 'config-rule', got %q", snapshot.Rules[0].Name)
+	}
+	if !snapshot.Rules[0].Persisted {
+		t.Error("Expected config-rule to be persisted")
+	}
+
+	// Second rule (runtime) should NOT be persisted
+	if snapshot.Rules[1].Name != "runtime-rule" {
+		t.Errorf("Expected second rule to be 'runtime-rule', got %q", snapshot.Rules[1].Name)
+	}
+	if snapshot.Rules[1].Persisted {
+		t.Error("Expected runtime-rule to NOT be persisted")
+	}
+
+	// List-level persisted should be false (since we have a runtime rule)
+	if snapshot.Persisted {
+		t.Error("Expected list-level Persisted to be false with runtime rule")
+	}
+}

@@ -106,8 +106,9 @@ type RuntimeRule struct {
 
 // RulesSnapshot contains all rules and settings for API responses.
 type RulesSnapshot struct {
-	Settings *config.RulesSettings `json:"settings"`      // Filter settings
-	Rules    []RuntimeRule         `json:"rules"`         // Unified rules list with persistence status
+	Settings  *config.RulesSettings `json:"settings"`  // Filter settings
+	Rules     []RuntimeRule         `json:"rules"`     // Unified rules list with persistence status
+	Persisted bool                  `json:"persisted"` // true if entire list matches config snapshot (no additions, deletions, or reorders)
 	// Deprecated: use Rules instead. Kept for API backwards compatibility.
 	ConfigRules  *config.RulesSettings `json:"config_rules,omitempty"`
 	CustomRules  []RuntimeRule         `json:"custom_rules,omitempty"`
@@ -120,8 +121,9 @@ func (e *Engine) GetSnapshot() RulesSnapshot {
 	defer e.mu.RUnlock()
 
 	snapshot := RulesSnapshot{
-		Settings:     e.settings,
-		Rules:        make([]RuntimeRule, 0, len(e.rules)),
+		Settings:  e.settings,
+		Rules:     make([]RuntimeRule, 0, len(e.rules)),
+		Persisted: e.isListPersisted(),
 		// Deprecated fields for backwards compatibility
 		ConfigRules:  e.settings,
 		CustomRules:  make([]RuntimeRule, 0),
@@ -157,6 +159,28 @@ func (e *Engine) isRulePersisted(name string) bool {
 		}
 	}
 	return false
+}
+
+// isListPersisted checks if the entire rules list matches the config snapshot.
+// Returns true only if:
+// - The lists have the same length (no additions or deletions)
+// - Rules appear in the same order
+// - Each rule in the current list matches the corresponding rule in the snapshot
+// Must be called with mu held (at least read lock).
+func (e *Engine) isListPersisted() bool {
+	// Different lengths means additions or deletions occurred
+	if len(e.rules) != len(e.configSnapshot) {
+		return false
+	}
+
+	// Compare each rule in order
+	for i, rule := range e.rules {
+		if rule.Name != e.configSnapshot[i].Name {
+			return false
+		}
+	}
+
+	return true
 }
 
 // GetRuntimeRules returns a copy of all non-persisted rules.

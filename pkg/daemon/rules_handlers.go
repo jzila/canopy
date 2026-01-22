@@ -31,9 +31,13 @@ func NewRulesHandler(daemon *Daemon) *RulesHandler {
 
 // RulesResponse is the response for GET /api/rules
 type RulesResponse struct {
-	ConfigRules  *config.RulesSettings `json:"config_rules"`
-	CustomRules  []rules.RuntimeRule   `json:"custom_rules"`
-	RuntimeRules []rules.RuntimeRule   `json:"runtime_rules"`
+	Settings  *config.RulesSettings `json:"settings"`  // Filter settings
+	Rules     []rules.RuntimeRule   `json:"rules"`     // Unified rules list with per-rule persistence status
+	Persisted bool                  `json:"persisted"` // true if entire list matches config (no additions, deletions, or reorders)
+	// Deprecated: use Settings/Rules instead. Kept for API backwards compatibility.
+	ConfigRules  *config.RulesSettings `json:"config_rules,omitempty"`
+	CustomRules  []rules.RuntimeRule   `json:"custom_rules,omitempty"`
+	RuntimeRules []rules.RuntimeRule   `json:"runtime_rules,omitempty"`
 }
 
 // AddRuleRequest is the request body for POST /api/rules
@@ -172,6 +176,10 @@ func (h *RulesHandler) HandleListRules(w http.ResponseWriter, r *http.Request) {
 
 	snapshot := engine.GetSnapshot()
 	response := RulesResponse{
+		Settings:  snapshot.Settings,
+		Rules:     snapshot.Rules,
+		Persisted: snapshot.Persisted,
+		// Deprecated fields for backwards compatibility
 		ConfigRules:  snapshot.ConfigRules,
 		CustomRules:  snapshot.CustomRules,
 		RuntimeRules: snapshot.RuntimeRules,
