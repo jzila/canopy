@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { X, Plus, AlertCircle } from 'lucide-react';
 import type { AddRuleRequest } from '../../api/client';
+import { RuleSyntaxHelp } from './RuleSyntaxHelp';
 
 interface AddRuleDialogProps {
   isOpen: boolean;
@@ -179,6 +180,9 @@ export const AddRuleDialog: React.FC<AddRuleDialogProps> = ({
               ))}
             </div>
           </div>
+
+          {/* Syntax Help */}
+          <RuleSyntaxHelp />
 
           {/* Action */}
           <div>
