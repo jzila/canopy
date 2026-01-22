@@ -1,5 +1,7 @@
 import React from 'react';
-import { Power, Trash2, Settings, Terminal } from 'lucide-react';
+import { Power, Trash2, Settings, Terminal, GripVertical } from 'lucide-react';
+import { useSortable } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import type { Rule } from '../../api/client';
 
 interface RuleItemProps {
@@ -15,14 +17,34 @@ export const RuleItem: React.FC<RuleItemProps> = ({
   onDelete,
   isUpdating = false,
 }) => {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: rule.name });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
   const isEnabled = rule.enabled;
   const isPersisted = rule.persisted;
   const canDelete = !isPersisted;
 
   return (
     <div
+      ref={setNodeRef}
+      style={style}
       className={`
         p-4 rounded-lg border transition-all
+        ${isDragging
+          ? 'opacity-50 shadow-lg z-50'
+          : ''
+        }
         ${isEnabled
           ? 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700'
           : 'bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-700 opacity-60'
@@ -30,6 +52,16 @@ export const RuleItem: React.FC<RuleItemProps> = ({
       `}
     >
       <div className="flex items-start justify-between gap-3">
+        {/* Drag handle */}
+        <button
+          {...attributes}
+          {...listeners}
+          className="p-1 -ml-1 cursor-grab text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 active:cursor-grabbing"
+          title="Drag to reorder"
+        >
+          <GripVertical className="w-4 h-4" />
+        </button>
+
         <div className="flex-1 min-w-0">
           {/* Name and badges */}
           <div className="flex items-center gap-2 flex-wrap">

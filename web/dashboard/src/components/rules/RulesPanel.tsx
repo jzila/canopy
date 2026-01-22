@@ -1,11 +1,26 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Filter, Plus, RefreshCw, ChevronDown, AlertTriangle } from 'lucide-react';
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
 import { useStateStore } from '../../stores/stateStore';
 import {
   getRules,
   addRule,
   updateRule,
   deleteRule,
+  reorderRule,
 } from '../../api/client';
 import type { AddRuleRequest } from '../../api/client';
 import { RuleItem } from './RuleItem';
@@ -39,6 +54,19 @@ export const RulesPanel: React.FC<RulesPanelProps> = ({
   const storeAddRule = useStateStore((state) => state.addRule);
   const storeUpdateRule = useStateStore((state) => state.updateRule);
   const storeRemoveRule = useStateStore((state) => state.removeRule);
+  const storeReorderRules = useStateStore((state) => state.reorderRules);
+
+  // DnD sensors
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8, // Require 8px of movement before starting drag
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
 
   // Load rules on mount
   const loadRules = useCallback(async () => {
@@ -109,6 +137,42 @@ export const RulesPanel: React.FC<RulesPanelProps> = ({
       console.error('Failed to delete rule:', error);
     } finally {
       setIsUpdating(null);
+    }
+  };
+
+  // Handle drag end for reordering
+  const handleDragEnd = async (event: DragEndEvent) => {
+    const { active, over } = event;
+
+    if (!over || active.id === over.id) {
+      return;
+    }
+
+    const oldIndex = rules.findIndex((r) => r.name === active.id);
+    const newIndex = rules.findIndex((r) => r.name === over.id);
+
+    if (oldIndex === -1 || newIndex === -1) {
+      return;
+    }
+
+    // Optimistically update the UI
+    storeReorderRules(oldIndex, newIndex);
+
+    // Call the API to persist the reorder
+    try {
+      const response = await reorderRule(active.id as string, newIndex);
+      if (response.success && response.rules) {
+        // Update state with server response
+        setRulesState(response.rules, response.persisted ?? false);
+      } else if (!response.success) {
+        // Revert on failure by reloading
+        console.error('Failed to reorder rule:', response.error);
+        await loadRules();
+      }
+    } catch (error) {
+      // Revert on error by reloading
+      console.error('Failed to reorder rule:', error);
+      await loadRules();
     }
   };
 
@@ -203,22 +267,33 @@ export const RulesPanel: React.FC<RulesPanelProps> = ({
               <h3 className="text-xs font-mono text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
                 Rules ({rules.length})
               </h3>
-              <div className="space-y-2">
-                {rules.map((rule) => {
-                  const baseProps = {
-                    key: rule.name,
-                    rule,
-                    onToggle: handleToggleRule,
-                    isUpdating: isUpdating === rule.name,
-                  };
-                  // Only pass onDelete for non-persisted rules
-                  return !rule.persisted ? (
-                    <RuleItem {...baseProps} onDelete={handleDeleteRule} />
-                  ) : (
-                    <RuleItem {...baseProps} />
-                  );
-                })}
-              </div>
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleDragEnd}
+              >
+                <SortableContext
+                  items={rules.map((r) => r.name)}
+                  strategy={verticalListSortingStrategy}
+                >
+                  <div className="space-y-2">
+                    {rules.map((rule) => {
+                      const baseProps = {
+                        key: rule.name,
+                        rule,
+                        onToggle: handleToggleRule,
+                        isUpdating: isUpdating === rule.name,
+                      };
+                      // Only pass onDelete for non-persisted rules
+                      return !rule.persisted ? (
+                        <RuleItem {...baseProps} onDelete={handleDeleteRule} />
+                      ) : (
+                        <RuleItem {...baseProps} />
+                      );
+                    })}
+                  </div>
+                </SortableContext>
+              </DndContext>
             </div>
           )}
 

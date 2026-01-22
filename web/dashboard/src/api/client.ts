@@ -340,6 +340,27 @@ export async function getRunStatus(runId?: string): Promise<RunStatusResponse> {
 
 // Rules types - matches Go backend (pkg/config/config.go and pkg/rules/engine.go)
 
+// ConfigRulesSettings for config-based rule settings
+export interface ConfigRulesSettings {
+  priority_min: number;
+  priority_max: number;
+  types?: string[];
+  exclude_types?: string[];
+  exclude_labels?: string[];
+  assignee?: string;
+  max_concurrent: number;
+}
+
+// UpdateConfigRequest for updating config settings
+export interface UpdateConfigRequest {
+  priority_min?: number;
+  priority_max?: number;
+  types?: string[];
+  exclude_types?: string[];
+  exclude_labels?: string[];
+  assignee?: string;
+}
+
 // Unified Rule interface - single format for all rules
 export interface Rule {
   name: string;
@@ -430,6 +451,25 @@ export async function saveRules(request: SaveRulesRequest): Promise<SaveRulesRes
   return fetchJson<SaveRulesResponse>('/api/rules/save', {
     method: 'POST',
     body: JSON.stringify(request),
+  });
+}
+
+// ReorderRuleRequest for POST /api/rules/:name/reorder
+export interface ReorderRuleRequest {
+  position: number;
+}
+
+export interface ReorderRuleResponse {
+  success: boolean;
+  rules?: Rule[];
+  persisted?: boolean;
+  error?: string;
+}
+
+export async function reorderRule(name: string, position: number): Promise<ReorderRuleResponse> {
+  return fetchJson<ReorderRuleResponse>(`/api/rules/${encodeURIComponent(name)}/reorder`, {
+    method: 'POST',
+    body: JSON.stringify({ position }),
   });
 }
 

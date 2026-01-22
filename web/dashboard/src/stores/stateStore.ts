@@ -252,6 +252,7 @@ interface StateStore {
   addRule: (rule: Rule) => void;
   updateRule: (name: string, update: Partial<Rule>) => void;
   removeRule: (name: string) => void;
+  reorderRules: (fromIndex: number, toIndex: number) => void;
 }
 
 // Initial stats
@@ -657,4 +658,18 @@ export const useStateStore = create<StateStore>((set) => ({
     set((state) => ({
       rules: state.rules.filter((r) => r.name !== name),
     })),
+
+  reorderRules: (fromIndex, toIndex) =>
+    set((state) => {
+      if (fromIndex === toIndex) return state;
+      const newRules = [...state.rules];
+      const [removed] = newRules.splice(fromIndex, 1);
+      if (removed) {
+        newRules.splice(toIndex, 0, removed);
+      }
+      return {
+        rules: newRules,
+        rulesPersistedState: false, // Reordering changes persisted state
+      };
+    }),
 }));

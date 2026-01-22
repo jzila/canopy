@@ -28,14 +28,17 @@ export const ConfigSettingsCard: React.FC<ConfigSettingsCardProps> = ({
   }
 
   const handleStartEdit = () => {
-    setEditState({
+    const state: UpdateConfigRequest = {
       priority_min: config.priority_min,
       priority_max: config.priority_max,
       types: [...(config.types ?? [])],
       exclude_types: [...(config.exclude_types ?? [])],
       exclude_labels: [...(config.exclude_labels ?? [])],
-      assignee: config.assignee,
-    });
+    };
+    if (config.assignee !== undefined) {
+      state.assignee = config.assignee;
+    }
+    setEditState(state);
     setIsEditing(true);
   };
 
@@ -103,17 +106,17 @@ export const ConfigSettingsCard: React.FC<ConfigSettingsCardProps> = ({
             </span>
             {(config.types?.length ?? 0) > 0 && (
               <span className="px-2 py-1 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 rounded font-mono text-xs">
-                Types: {config.types.join(', ')}
+                Types: {(config.types ?? []).join(', ')}
               </span>
             )}
             {(config.exclude_types?.length ?? 0) > 0 && (
               <span className="px-2 py-1 bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded font-mono text-xs">
-                Exclude: {config.exclude_types.join(', ')}
+                Exclude: {(config.exclude_types ?? []).join(', ')}
               </span>
             )}
             {(config.exclude_labels?.length ?? 0) > 0 && (
               <span className="px-2 py-1 bg-yellow-50 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 rounded font-mono text-xs">
-                Exclude labels: {config.exclude_labels.join(', ')}
+                Exclude labels: {(config.exclude_labels ?? []).join(', ')}
               </span>
             )}
             {config.assignee && config.assignee !== '*' && (
@@ -140,7 +143,7 @@ export const ConfigSettingsCard: React.FC<ConfigSettingsCardProps> = ({
               max={4}
               value={editState.priority_min ?? config.priority_min}
               onChange={(e) =>
-                setEditState((s) => ({ ...s, priority_min: parseInt(e.target.value) || 0 }))
+                setEditState((s: UpdateConfigRequest) => ({ ...s, priority_min: parseInt(e.target.value) || 0 }))
               }
               className="w-14 px-2 py-1 text-xs font-mono border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
             />
@@ -151,7 +154,7 @@ export const ConfigSettingsCard: React.FC<ConfigSettingsCardProps> = ({
               max={4}
               value={editState.priority_max ?? config.priority_max}
               onChange={(e) =>
-                setEditState((s) => ({ ...s, priority_max: parseInt(e.target.value) }))
+                setEditState((s: UpdateConfigRequest) => ({ ...s, priority_max: parseInt(e.target.value) }))
               }
               className="w-14 px-2 py-1 text-xs font-mono border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
             />
@@ -167,7 +170,7 @@ export const ConfigSettingsCard: React.FC<ConfigSettingsCardProps> = ({
               type="text"
               value={(editState.exclude_labels ?? config.exclude_labels ?? []).join(', ')}
               onChange={(e) =>
-                setEditState((s) => ({
+                setEditState((s: UpdateConfigRequest) => ({
                   ...s,
                   exclude_labels: e.target.value
                     .split(',')
@@ -186,7 +189,7 @@ export const ConfigSettingsCard: React.FC<ConfigSettingsCardProps> = ({
             <input
               type="text"
               value={editState.assignee ?? config.assignee}
-              onChange={(e) => setEditState((s) => ({ ...s, assignee: e.target.value }))}
+              onChange={(e) => setEditState((s: UpdateConfigRequest) => ({ ...s, assignee: e.target.value }))}
               placeholder="* for any, empty for unassigned"
               className="flex-1 px-2 py-1 text-xs font-mono border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
             />
