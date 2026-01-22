@@ -33,5 +33,5 @@ func Execute() {
 
 func init() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output")
-	rootCmd.PersistentFlags().StringVarP(&workdir, "workdir", "w", ".", "Working directory for agents")
+	rootCmd.PersistentFlags().StringVarP(&workdir, "workdir", "W", ".", "Working directory for agents")
 }
