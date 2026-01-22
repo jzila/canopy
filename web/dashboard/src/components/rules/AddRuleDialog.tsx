@@ -16,9 +16,9 @@ const CONDITION_EXAMPLES = [
   { label: 'Assignee filter', value: 'assignee == ""' },
 ];
 
-const ACTION_OPTIONS = [
-  { value: 'skip', label: 'Skip', description: 'Skip matching tasks' },
-  { value: 'include', label: 'Include', description: 'Force include matching tasks' },
+const ACTION_OPTIONS: Array<{ value: 'deny' | 'allow'; label: string; description: string }> = [
+  { value: 'deny', label: 'Deny', description: 'Deny matching tasks' },
+  { value: 'allow', label: 'Allow', description: 'Allow matching tasks' },
 ];
 
 export const AddRuleDialog: React.FC<AddRuleDialogProps> = ({
@@ -30,8 +30,7 @@ export const AddRuleDialog: React.FC<AddRuleDialogProps> = ({
   const dialogRef = useRef<HTMLDivElement>(null);
   const [name, setName] = useState('');
   const [condition, setCondition] = useState('');
-  const [action, setAction] = useState('skip');
-  const [reason, setReason] = useState('');
+  const [action, setAction] = useState<'deny' | 'allow'>('deny');
   const [error, setError] = useState<string | null>(null);
 
   // Reset form when dialog opens
@@ -39,8 +38,7 @@ export const AddRuleDialog: React.FC<AddRuleDialogProps> = ({
     if (isOpen) {
       setName('');
       setCondition('');
-      setAction('skip');
-      setReason('');
+      setAction('deny');
       setError(null);
     }
   }, [isOpen]);
@@ -78,18 +76,21 @@ export const AddRuleDialog: React.FC<AddRuleDialogProps> = ({
       return;
     }
     if (!condition.trim()) {
-      setError('Condition is required');
+      setError('At least one condition is required');
       return;
     }
 
+    // Parse conditions - support comma or newline separated
+    const conditions = condition
+      .split(/[,\n]/)
+      .map((c) => c.trim())
+      .filter((c) => c.length > 0);
+
     const request: AddRuleRequest = {
       name: name.trim(),
-      condition: condition.trim(),
+      conditions,
       action,
     };
-    if (reason.trim()) {
-      request.reason = reason.trim();
-    }
     const result = await onAdd(request);
 
     if (!result.success) {
@@ -150,17 +151,17 @@ export const AddRuleDialog: React.FC<AddRuleDialogProps> = ({
             />
           </div>
 
-          {/* Condition */}
+          {/* Conditions */}
           <div>
             <label className="block text-xs font-mono text-gray-600 dark:text-gray-400 mb-1">
-              Condition
+              Conditions (comma or newline separated)
             </label>
-            <input
-              type="text"
+            <textarea
               value={condition}
               onChange={(e) => setCondition(e.target.value)}
-              placeholder="priority > 2"
-              className="w-full px-3 py-2 text-sm font-mono border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="priority > 2, type == &quot;bug&quot;"
+              rows={2}
+              className="w-full px-3 py-2 text-sm font-mono border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
               disabled={isAdding}
             />
             {/* Examples */}
@@ -205,21 +206,6 @@ export const AddRuleDialog: React.FC<AddRuleDialogProps> = ({
                 </button>
               ))}
             </div>
-          </div>
-
-          {/* Reason */}
-          <div>
-            <label className="block text-xs font-mono text-gray-600 dark:text-gray-400 mb-1">
-              Reason (optional)
-            </label>
-            <input
-              type="text"
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              placeholder="Incident mode - P0/P1 only"
-              className="w-full px-3 py-2 text-sm font-mono border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              disabled={isAdding}
-            />
           </div>
 
           {/* Actions */}

@@ -1,12 +1,11 @@
 import React from 'react';
-import { Power, Trash2, Settings, Terminal, Save } from 'lucide-react';
-import type { RuntimeRule } from '../../api/client';
+import { Power, Trash2, Settings, Terminal } from 'lucide-react';
+import type { Rule } from '../../api/client';
 
 interface RuleItemProps {
-  rule: RuntimeRule;
+  rule: Rule;
   onToggle: (name: string, enabled: boolean) => void | Promise<void>;
   onDelete?: (name: string) => void | Promise<void>;
-  onPersist?: (name: string) => void | Promise<void>;
   isUpdating?: boolean;
 }
 
@@ -14,13 +13,11 @@ export const RuleItem: React.FC<RuleItemProps> = ({
   rule,
   onToggle,
   onDelete,
-  onPersist,
   isUpdating = false,
 }) => {
-  const isEnabled = rule.enabled !== false;
-  const isConfigRule = rule.source === 'config';
-  const canDelete = !isConfigRule;
-  const canPersist = !isConfigRule;
+  const isEnabled = rule.enabled;
+  const isPersisted = rule.persisted;
+  const canDelete = !isPersisted;
 
   return (
     <div
@@ -42,14 +39,19 @@ export const RuleItem: React.FC<RuleItemProps> = ({
             <span
               className={`
                 px-2 py-0.5 rounded text-xs font-mono
-                ${isConfigRule
-                  ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400'
-                  : 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400'
+                ${rule.action === 'deny'
+                  ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'
+                  : 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
                 }
               `}
             >
-              {rule.source}
+              {rule.action}
             </span>
+            {isPersisted && (
+              <span className="px-2 py-0.5 rounded text-xs font-mono bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400">
+                persisted
+              </span>
+            )}
             <span
               className={`
                 px-2 py-0.5 rounded text-xs font-mono
@@ -63,20 +65,13 @@ export const RuleItem: React.FC<RuleItemProps> = ({
             </span>
           </div>
 
-          {/* Condition */}
+          {/* Conditions */}
           <div className="mt-2 flex items-start gap-2">
             <Terminal className="w-3.5 h-3.5 text-gray-400 dark:text-gray-500 mt-0.5 flex-shrink-0" />
             <code className="text-xs font-mono text-gray-600 dark:text-gray-400 break-all">
-              {rule.action} where {rule.condition}
+              {rule.conditions.length > 0 ? rule.conditions.join(' && ') : '(always)'}
             </code>
           </div>
-
-          {/* Reason */}
-          {rule.reason && (
-            <p className="mt-1.5 text-xs text-gray-500 dark:text-gray-400 italic">
-              "{rule.reason}"
-            </p>
-          )}
         </div>
 
         {/* Actions */}
@@ -98,23 +93,6 @@ export const RuleItem: React.FC<RuleItemProps> = ({
             <Power className="w-4 h-4" />
           </button>
 
-          {canPersist && onPersist && (
-            <button
-              onClick={() => onPersist(rule.name)}
-              disabled={isUpdating}
-              className={`
-                p-1.5 rounded transition-colors
-                ${isUpdating
-                  ? 'opacity-50 cursor-not-allowed'
-                  : 'text-gray-400 dark:text-gray-500 hover:text-blue-500 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20'
-                }
-              `}
-              title="Save to config"
-            >
-              <Save className="w-4 h-4" />
-            </button>
-          )}
-
           {canDelete && onDelete && (
             <button
               onClick={() => onDelete(rule.name)}
@@ -132,10 +110,10 @@ export const RuleItem: React.FC<RuleItemProps> = ({
             </button>
           )}
 
-          {isConfigRule && (
+          {isPersisted && (
             <span
               className="p-1.5 text-gray-300 dark:text-gray-600"
-              title="Config rules cannot be deleted, only disabled"
+              title="Persisted rules cannot be deleted from the UI"
             >
               <Settings className="w-4 h-4" />
             </span>

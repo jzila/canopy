@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Repository, MergeQueueState, Run, ActiveRunStatus, ConfigRulesSettings, RuntimeRule } from '../api/client';
+import type { Repository, MergeQueueState, Run, ActiveRunStatus, Rule } from '../api/client';
 
 // Types based on Go backend structures
 
@@ -190,10 +190,9 @@ interface StateStore {
   runConfig: RunConfig;
   showRunConfigDialog: boolean;
   activeOrchestratorRun: ActiveRunStatus | null; // Currently running orchestrator run
-  // Rules state
-  configRules: ConfigRulesSettings | null;
-  customRules: RuntimeRule[];
-  runtimeRules: RuntimeRule[];
+  // Rules state - unified format
+  rules: Rule[];
+  rulesPersistedState: boolean; // list-level persisted flag
   isRulesLoading: boolean;
   showAddRuleDialog: boolean;
 
@@ -246,15 +245,13 @@ interface StateStore {
   setShowRunConfigDialog: (show: boolean) => void;
   setActiveOrchestratorRun: (run: ActiveRunStatus | null) => void;
   updateActiveOrchestratorRun: (update: Partial<ActiveRunStatus>) => void;
-  // Rules actions
-  setRulesState: (configRules: ConfigRulesSettings | null, customRules: RuntimeRule[], runtimeRules: RuntimeRule[]) => void;
+  // Rules actions - unified format
+  setRulesState: (rules: Rule[], persisted: boolean) => void;
   setRulesLoading: (loading: boolean) => void;
   setShowAddRuleDialog: (show: boolean) => void;
-  addRuntimeRule: (rule: RuntimeRule) => void;
-  updateRuntimeRule: (name: string, enabled: boolean) => void;
-  removeRuntimeRule: (name: string) => void;
-  persistRuntimeRule: (name: string, persistedRule: RuntimeRule) => void;
-  updateConfigRules: (configRules: ConfigRulesSettings) => void;
+  addRule: (rule: Rule) => void;
+  updateRule: (name: string, update: Partial<Rule>) => void;
+  removeRule: (name: string) => void;
 }
 
 // Initial stats
@@ -343,10 +340,9 @@ export const useStateStore = create<StateStore>((set) => ({
   runConfig: DEFAULT_RUN_CONFIG,
   showRunConfigDialog: false,
   activeOrchestratorRun: null,
-  // Rules state
-  configRules: null,
-  customRules: [],
-  runtimeRules: [],
+  // Rules state - unified format
+  rules: [],
+  rulesPersistedState: false,
   isRulesLoading: false,
   showAddRuleDialog: false,
 
@@ -635,50 +631,30 @@ export const useStateStore = create<StateStore>((set) => ({
       };
     }),
 
-  // Rules actions
-  setRulesState: (configRules, customRules, runtimeRules) =>
-    set({ configRules, customRules, runtimeRules }),
+  // Rules actions - unified format
+  setRulesState: (rules, persisted) =>
+    set({ rules, rulesPersistedState: persisted }),
 
   setRulesLoading: (isRulesLoading) => set({ isRulesLoading }),
 
   setShowAddRuleDialog: (showAddRuleDialog) => set({ showAddRuleDialog }),
 
-  addRuntimeRule: (rule) =>
+  addRule: (rule) =>
     set((state) => ({
-      runtimeRules: [...state.runtimeRules, rule],
+      rules: [...state.rules, rule],
     })),
 
-  updateRuntimeRule: (name, enabled) =>
+  updateRule: (name, update) =>
     set((state) => {
-      // Check if it's a runtime rule
-      const runtimeIndex = state.runtimeRules.findIndex((r) => r.name === name);
-      if (runtimeIndex !== -1) {
-        const newRules = [...state.runtimeRules];
-        newRules[runtimeIndex] = { ...newRules[runtimeIndex]!, enabled };
-        return { runtimeRules: newRules };
-      }
-      // Check if it's a custom (config) rule
-      const customIndex = state.customRules.findIndex((r) => r.name === name);
-      if (customIndex !== -1) {
-        const newRules = [...state.customRules];
-        newRules[customIndex] = { ...newRules[customIndex]!, enabled };
-        return { customRules: newRules };
-      }
-      return state;
+      const index = state.rules.findIndex((r) => r.name === name);
+      if (index === -1) return state;
+      const newRules = [...state.rules];
+      newRules[index] = { ...newRules[index]!, ...update };
+      return { rules: newRules };
     }),
 
-  removeRuntimeRule: (name) =>
+  removeRule: (name) =>
     set((state) => ({
-      runtimeRules: state.runtimeRules.filter((r) => r.name !== name),
+      rules: state.rules.filter((r) => r.name !== name),
     })),
-
-  persistRuntimeRule: (name, persistedRule) =>
-    set((state) => ({
-      // Remove from runtime rules
-      runtimeRules: state.runtimeRules.filter((r) => r.name !== name),
-      // Add to custom rules (config-sourced)
-      customRules: [...state.customRules, persistedRule],
-    })),
-
-  updateConfigRules: (configRules) => set({ configRules }),
 }));

@@ -339,66 +339,50 @@ export async function getRunStatus(runId?: string): Promise<RunStatusResponse> {
 }
 
 // Rules types - matches Go backend (pkg/config/config.go and pkg/rules/engine.go)
-export interface ConfigRulesSettings {
-  priority_min: number;
-  priority_max: number;
-  types: string[];
-  exclude_types: string[];
-  labels: string[];
-  exclude_labels: string[];
-  assignee: string;
-  stop_when_empty: boolean;
-  max_concurrent: number;
-  max_concurrent_per_type: Record<string, number>;
-  max_concurrent_per_label: Record<string, number>;
-  custom: CustomRule[];
-}
 
-export interface CustomRule {
+// Unified Rule interface - single format for all rules
+export interface Rule {
   name: string;
-  enabled?: boolean;
-  condition: string;
-  action: string;
-  reason?: string;
+  conditions: string[];
+  action: 'deny' | 'allow';
+  enabled: boolean;
+  persisted: boolean;
 }
 
-export interface RuntimeRule {
-  name: string;
-  enabled?: boolean;
-  condition: string;
-  action: string;
-  reason?: string;
-  source: 'config' | 'runtime';
-  created_at?: string;
+// RulesState contains the unified rules list with list-level persisted flag
+export interface RulesState {
+  rules: Rule[];
+  persisted: boolean;
 }
 
+// RulesResponse from GET /api/rules
 export interface RulesResponse {
-  config_rules: ConfigRulesSettings | null;
-  custom_rules: RuntimeRule[];
-  runtime_rules: RuntimeRule[];
+  rules: Rule[];
+  persisted: boolean;
 }
 
 export interface AddRuleRequest {
   name: string;
-  description?: string;
-  condition: string;
-  action: string;
-  reason?: string;
+  conditions: string[];
+  action: 'deny' | 'allow';
+  enabled?: boolean;
 }
 
 export interface AddRuleResponse {
   success: boolean;
-  rule?: RuntimeRule;
+  rule?: Rule;
   error?: string;
 }
 
 export interface UpdateRuleRequest {
-  enabled: boolean;
+  enabled?: boolean;
+  conditions?: string[];
+  action?: 'deny' | 'allow';
 }
 
 export interface UpdateRuleResponse {
   success: boolean;
-  rule?: RuntimeRule;
+  rule?: Rule;
   error?: string;
 }
 
@@ -407,34 +391,13 @@ export interface DeleteRuleResponse {
   error?: string;
 }
 
-export interface PersistRuleResponse {
-  success: boolean;
-  rule?: RuntimeRule;
-  config_path?: string;
-  error?: string;
+// SaveRulesRequest for POST /api/rules/save
+export interface SaveRulesRequest {
+  rules: Rule[];
 }
 
-export interface PersistAllRulesResponse {
+export interface SaveRulesResponse {
   success: boolean;
-  persisted?: string[];
-  config_path?: string;
-  error?: string;
-}
-
-export interface UpdateConfigRequest {
-  priority_min?: number;
-  priority_max?: number;
-  types?: string[];
-  exclude_types?: string[];
-  labels?: string[];
-  exclude_labels?: string[];
-  assignee?: string;
-  max_concurrent?: number;
-}
-
-export interface UpdateConfigResponse {
-  success: boolean;
-  config_rules?: ConfigRulesSettings;
   error?: string;
 }
 
@@ -463,22 +426,10 @@ export async function deleteRule(name: string): Promise<DeleteRuleResponse> {
   });
 }
 
-export async function updateRulesConfig(request: UpdateConfigRequest): Promise<UpdateConfigResponse> {
-  return fetchJson<UpdateConfigResponse>('/api/rules/config', {
-    method: 'PATCH',
+export async function saveRules(request: SaveRulesRequest): Promise<SaveRulesResponse> {
+  return fetchJson<SaveRulesResponse>('/api/rules/save', {
+    method: 'POST',
     body: JSON.stringify(request),
-  });
-}
-
-export async function persistRule(name: string): Promise<PersistRuleResponse> {
-  return fetchJson<PersistRuleResponse>(`/api/rules/${encodeURIComponent(name)}/persist`, {
-    method: 'POST',
-  });
-}
-
-export async function persistAllRules(): Promise<PersistAllRulesResponse> {
-  return fetchJson<PersistAllRulesResponse>('/api/rules/persist-all', {
-    method: 'POST',
   });
 }
 
