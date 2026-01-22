@@ -10,7 +10,6 @@ import (
 
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
-	"github.com/jzila/canopy/pkg/config"
 	canopyerrors "github.com/jzila/canopy/pkg/errors"
 	"github.com/jzila/canopy/pkg/events"
 	"github.com/jzila/canopy/pkg/logging"
@@ -188,19 +187,12 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 	}
 
 	// Create orchestrator
+	// Note: The orchestrator loads config.toml and creates its own rules engine in New().
+	// We no longer create a separate rules engine here - the orchestrator manages its own.
 	orch, err := orchestrator.New(orchConfig)
 	if err != nil {
 		return "", fmt.Errorf("failed to create orchestrator: %w", err)
 	}
-
-	// Create per-repo rules engine from config
-	rulesConfig, err := loadRulesConfig(config.WorkDir)
-	if err != nil {
-		logging.Warn("failed to load rules config, using defaults", "error", err)
-		rulesConfig = nil
-	}
-	rulesEngine := rules.NewEngine(rulesConfig)
-	orch.SetRulesEngine(rulesEngine)
 
 	// Create cancellable context for this run
 	runCtx, cancel := context.WithCancel(ctx)
@@ -675,18 +667,4 @@ func makeAgentID(runID, taskID string) string {
 		prefix = prefix[:8]
 	}
 	return fmt.Sprintf("agent-%s-%s", prefix, taskID)
-}
-
-// loadRulesConfig loads the rules configuration from the repository's config file.
-// Returns nil (no rules) if no config exists or if rules are not configured.
-func loadRulesConfig(workDir string) (*config.RulesSettings, error) {
-	cfg, err := config.LoadConfig(workDir)
-	if err != nil {
-		// No config file is OK - just use no rules
-		return nil, nil
-	}
-
-	// Return a copy of the rules settings
-	rules := cfg.Rules
-	return &rules, nil
 }
