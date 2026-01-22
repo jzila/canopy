@@ -423,32 +423,32 @@ export interface SaveRulesResponse {
 }
 
 // Rules API functions
-export async function getRules(): Promise<RulesResponse> {
-  return fetchJson<RulesResponse>('/api/rules');
+export async function getRules(repoPath: string): Promise<RulesResponse> {
+  return fetchJson<RulesResponse>(`/api/rules?repo_path=${encodeURIComponent(repoPath)}`);
 }
 
-export async function addRule(request: AddRuleRequest): Promise<AddRuleResponse> {
-  return fetchJson<AddRuleResponse>('/api/rules', {
+export async function addRule(repoPath: string, request: AddRuleRequest): Promise<AddRuleResponse> {
+  return fetchJson<AddRuleResponse>(`/api/rules?repo_path=${encodeURIComponent(repoPath)}`, {
     method: 'POST',
     body: JSON.stringify(request),
   });
 }
 
-export async function updateRule(name: string, request: UpdateRuleRequest): Promise<UpdateRuleResponse> {
-  return fetchJson<UpdateRuleResponse>(`/api/rules/${encodeURIComponent(name)}`, {
+export async function updateRule(repoPath: string, name: string, request: UpdateRuleRequest): Promise<UpdateRuleResponse> {
+  return fetchJson<UpdateRuleResponse>(`/api/rules/${encodeURIComponent(name)}?repo_path=${encodeURIComponent(repoPath)}`, {
     method: 'PATCH',
     body: JSON.stringify(request),
   });
 }
 
-export async function deleteRule(name: string): Promise<DeleteRuleResponse> {
-  return fetchJson<DeleteRuleResponse>(`/api/rules/${encodeURIComponent(name)}`, {
+export async function deleteRule(repoPath: string, name: string): Promise<DeleteRuleResponse> {
+  return fetchJson<DeleteRuleResponse>(`/api/rules/${encodeURIComponent(name)}?repo_path=${encodeURIComponent(repoPath)}`, {
     method: 'DELETE',
   });
 }
 
-export async function saveRules(request: SaveRulesRequest): Promise<SaveRulesResponse> {
-  return fetchJson<SaveRulesResponse>('/api/rules/save', {
+export async function saveRules(repoPath: string, request: SaveRulesRequest): Promise<SaveRulesResponse> {
+  return fetchJson<SaveRulesResponse>(`/api/rules/save?repo_path=${encodeURIComponent(repoPath)}`, {
     method: 'POST',
     body: JSON.stringify(request),
   });
@@ -466,8 +466,8 @@ export interface ReorderRuleResponse {
   error?: string;
 }
 
-export async function reorderRule(name: string, position: number): Promise<ReorderRuleResponse> {
-  return fetchJson<ReorderRuleResponse>(`/api/rules/${encodeURIComponent(name)}/reorder`, {
+export async function reorderRule(repoPath: string, name: string, position: number): Promise<ReorderRuleResponse> {
+  return fetchJson<ReorderRuleResponse>(`/api/rules/${encodeURIComponent(name)}/reorder?repo_path=${encodeURIComponent(repoPath)}`, {
     method: 'POST',
     body: JSON.stringify({ position }),
   });

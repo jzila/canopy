@@ -60,6 +60,12 @@ export const RulesPanel: React.FC<RulesPanelProps> = ({
   const storeUpdateRule = useStateStore((state) => state.updateRule);
   const storeRemoveRule = useStateStore((state) => state.removeRule);
   const storeReorderRules = useStateStore((state) => state.reorderRules);
+  const repositories = useStateStore((state) => state.repositories);
+  const activeRepoId = useStateStore((state) => state.activeRepoId);
+
+  // Get the active repository path
+  const activeRepo = repositories.find((r) => r.id === activeRepoId);
+  const repoPath = activeRepo?.path ?? '';
 
   // DnD sensors
   const sensors = useSensors(
@@ -75,10 +81,14 @@ export const RulesPanel: React.FC<RulesPanelProps> = ({
 
   // Load rules on mount
   const loadRules = useCallback(async () => {
+    if (!repoPath) {
+      setLoadError('No active repository selected');
+      return;
+    }
     try {
       setRulesLoading(true);
       setLoadError(null);
-      const response = await getRules();
+      const response = await getRules(repoPath);
       setRulesState(response.rules, response.persisted);
     } catch (error) {
       console.error('Failed to load rules:', error);
@@ -86,7 +96,7 @@ export const RulesPanel: React.FC<RulesPanelProps> = ({
     } finally {
       setRulesLoading(false);
     }
-  }, [setRulesState, setRulesLoading]);
+  }, [repoPath, setRulesState, setRulesLoading]);
 
   useEffect(() => {
     if (isExpanded) {
@@ -96,8 +106,11 @@ export const RulesPanel: React.FC<RulesPanelProps> = ({
 
   // Handle adding a new rule
   const handleAddRule = async (request: AddRuleRequest): Promise<{ success: boolean; error?: string }> => {
+    if (!repoPath) {
+      return { success: false, error: 'No active repository selected' };
+    }
     try {
-      const response = await addRule(request);
+      const response = await addRule(repoPath, request);
       if (response.success && response.rule) {
         storeAddRule(response.rule);
         return { success: true };
@@ -117,9 +130,10 @@ export const RulesPanel: React.FC<RulesPanelProps> = ({
 
   // Handle toggling a rule
   const handleToggleRule = async (name: string, enabled: boolean) => {
+    if (!repoPath) return;
     try {
       setIsUpdating(name);
-      const response = await updateRule(name, { enabled });
+      const response = await updateRule(repoPath, name, { enabled });
       if (response.success) {
         storeUpdateRule(name, { enabled });
       }
@@ -132,9 +146,10 @@ export const RulesPanel: React.FC<RulesPanelProps> = ({
 
   // Handle deleting a rule
   const handleDeleteRule = async (name: string) => {
+    if (!repoPath) return;
     try {
       setIsUpdating(name);
-      const response = await deleteRule(name);
+      const response = await deleteRule(repoPath, name);
       if (response.success) {
         storeRemoveRule(name);
       }
@@ -149,7 +164,7 @@ export const RulesPanel: React.FC<RulesPanelProps> = ({
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
 
-    if (!over || active.id === over.id) {
+    if (!over || active.id === over.id || !repoPath) {
       return;
     }
 
@@ -165,7 +180,7 @@ export const RulesPanel: React.FC<RulesPanelProps> = ({
 
     // Call the API to persist the reorder
     try {
-      const response = await reorderRule(active.id as string, newIndex);
+      const response = await reorderRule(repoPath, active.id as string, newIndex);
       if (response.success && response.rules) {
         // Update state with server response
         setRulesState(response.rules, response.persisted ?? false);
@@ -198,9 +213,10 @@ export const RulesPanel: React.FC<RulesPanelProps> = ({
 
   // Handle saving all rules to file
   const handleSaveRules = async () => {
+    if (!repoPath) return;
     try {
       setIsSaving(true);
-      const response = await saveRules({ rules });
+      const response = await saveRules(repoPath, { rules });
       if (response.success) {
         // Reload to get persisted state from server
         await loadRules();
