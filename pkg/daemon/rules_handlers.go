@@ -97,13 +97,17 @@ type UpdateConfigResponse struct {
 	Error       string                `json:"error,omitempty"`
 }
 
-// SaveRulesResponse is the response for POST /api/rules/save
-type SaveRulesResponse struct {
-	Success    bool     `json:"success"`
-	SavedCount int      `json:"saved_count"`
-	Rules      []string `json:"rules,omitempty"`
-	ConfigPath string   `json:"config_path,omitempty"`
-	Error      string   `json:"error,omitempty"`
+// ReorderRuleRequest is the request body for POST /api/rules/:name/reorder
+type ReorderRuleRequest struct {
+	Position int `json:"position"` // New 0-indexed position
+}
+
+// ReorderRuleResponse is the response for POST /api/rules/:name/reorder
+type ReorderRuleResponse struct {
+	Success   bool                `json:"success"`
+	Rules     []rules.RuntimeRule `json:"rules,omitempty"`     // Updated rules list
+	Persisted bool                `json:"persisted,omitempty"` // List-level persistence status
+	Error     string              `json:"error,omitempty"`
 }
 
 // RouteRules routes rules-related requests to the appropriate handler
@@ -129,12 +133,6 @@ func (h *RulesHandler) RouteRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// POST /api/rules/save - save all rules to config file
-	if path == "/api/rules/save" && r.Method == http.MethodPost {
-		h.HandleSaveRules(w, r)
-		return
-	}
-
 	// POST /api/rules/persist-all - persist all runtime rules
 	if path == "/api/rules/persist-all" && r.Method == http.MethodPost {
 		h.HandlePersistAllRules(w, r)
@@ -151,6 +149,16 @@ func (h *RulesHandler) RouteRules(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.HandlePersistRule(w, r, parts[2])
+		return
+	}
+
+	// Handle /api/rules/:name/reorder
+	if len(parts) == 4 && parts[0] == "api" && parts[1] == "rules" && parts[3] == "reorder" {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.HandleReorderRule(w, r, parts[2])
 		return
 	}
 
@@ -585,60 +593,49 @@ func (h *RulesHandler) HandlePersistAllRules(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-// HandleSaveRules handles POST /api/rules/save
-// Writes current in-memory rules list to .canopy/config.toml.
-// Sets all rules to persisted=true and list-level persisted=true.
-// This is the canonical way to persist changes - config file is source of truth.
-func (h *RulesHandler) HandleSaveRules(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
+// HandleReorderRule handles POST /api/rules/:name/reorder
+// Moves a rule to a new position in the rules list.
+// Reordering causes list-level persisted to become false since order changed.
+func (h *RulesHandler) HandleReorderRule(w http.ResponseWriter, r *http.Request, ruleName string) {
 	engine, errMsg := h.getEngine(r)
 	if engine == nil {
 		http.Error(w, errMsg, http.StatusBadRequest)
 		return
 	}
 
-	// Get workDir from query parameters (repo_path is required for save operations)
-	workDir := r.URL.Query().Get("repo_path")
-	if workDir == "" {
-		h.writeJSON(w, http.StatusBadRequest, SaveRulesResponse{
+	var req ReorderRuleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeJSON(w, http.StatusBadRequest, ReorderRuleResponse{
 			Success: false,
-			Error:   "repo_path query parameter is required for save operations",
+			Error:   fmt.Sprintf("Invalid JSON: %v", err),
 		})
 		return
 	}
 
-	// Save all rules - this replaces the config snapshot with current rules list
-	savedCount := engine.SaveRules()
+	// Reorder the rule
+	if err := engine.ReorderRule(ruleName, req.Position); err != nil {
+		// Determine status code based on error type
+		statusCode := http.StatusBadRequest
+		if strings.Contains(err.Error(), "not found") {
+			statusCode = http.StatusNotFound
+		}
+		h.writeJSON(w, statusCode, ReorderRuleResponse{
+			Success: false,
+			Error:   err.Error(),
+		})
+		return
+	}
 
-	// Get the rule names for the response
+	// Get updated snapshot
 	snapshot := engine.GetSnapshot()
-	ruleNames := make([]string, 0, len(snapshot.Rules))
-	for _, rule := range snapshot.Rules {
-		ruleNames = append(ruleNames, rule.Name)
-	}
-
-	// Save the config to disk
-	configPath, err := h.saveConfig(workDir, engine)
-	if err != nil {
-		h.writeJSON(w, http.StatusInternalServerError, SaveRulesResponse{
-			Success: false,
-			Error:   fmt.Sprintf("Rules saved in memory but failed to save config: %v", err),
-		})
-		return
-	}
 
 	// Broadcast rules:changed event
-	h.broadcastRulesChanged("saved", nil)
+	h.broadcastRulesChanged("reordered", nil)
 
-	h.writeJSON(w, http.StatusOK, SaveRulesResponse{
-		Success:    true,
-		SavedCount: savedCount,
-		Rules:      ruleNames,
-		ConfigPath: configPath,
+	h.writeJSON(w, http.StatusOK, ReorderRuleResponse{
+		Success:   true,
+		Rules:     snapshot.Rules,
+		Persisted: snapshot.Persisted,
 	})
 }
 

@@ -262,28 +262,6 @@ func (e *Engine) PersistAllRules() ([]string, error) {
 	return persisted, nil
 }
 
-// SaveRules replaces the config snapshot with the current rules list.
-// This handles additions, deletions, and reorders - making the current
-// in-memory state the new source of truth.
-// Returns the count of rules saved.
-func (e *Engine) SaveRules() int {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	// Replace config snapshot with current rules list
-	e.configSnapshot = make([]config.CustomRule, len(e.rules))
-	copy(e.configSnapshot, e.rules)
-
-	// Update settings.Custom for persistence to disk
-	if e.settings == nil {
-		e.settings = &config.RulesSettings{}
-	}
-	e.settings.Custom = make([]config.CustomRule, len(e.rules))
-	copy(e.settings.Custom, e.rules)
-
-	return len(e.rules)
-}
-
 // GetConfigForPersistence returns a copy of the current config settings
 // suitable for saving to disk. This includes any recently persisted rules.
 func (e *Engine) GetConfigForPersistence() *config.RulesSettings {
@@ -355,6 +333,46 @@ func (e *Engine) UpdateRule(name string, enabled bool) error {
 	}
 
 	return fmt.Errorf("rule %q not found", name)
+}
+
+// ReorderRule moves a rule to a new position in the rules slice.
+// Position is 0-indexed. Returns an error if the rule is not found or
+// the position is out of range.
+func (e *Engine) ReorderRule(name string, newPosition int) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Find the rule first
+	currentIndex := -1
+	for i, r := range e.rules {
+		if r.Name == name {
+			currentIndex = i
+			break
+		}
+	}
+
+	if currentIndex == -1 {
+		return fmt.Errorf("rule %q not found", name)
+	}
+
+	// Validate position
+	if newPosition < 0 || newPosition >= len(e.rules) {
+		return fmt.Errorf("position %d out of range (0-%d)", newPosition, len(e.rules)-1)
+	}
+
+	// If already at target position, no-op
+	if currentIndex == newPosition {
+		return nil
+	}
+
+	// Remove rule from current position
+	rule := e.rules[currentIndex]
+	e.rules = append(e.rules[:currentIndex], e.rules[currentIndex+1:]...)
+
+	// Insert at new position
+	e.rules = append(e.rules[:newPosition], append([]config.CustomRule{rule}, e.rules[newPosition:]...)...)
+
+	return nil
 }
 
 // AddRuleWithValidation adds a rule after validating it.

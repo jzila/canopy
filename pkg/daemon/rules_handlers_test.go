@@ -519,6 +519,250 @@ func TestRulesHandler_BroadcastsEvent(t *testing.T) {
 	}
 }
 
+func TestHandleReorderRule_Success(t *testing.T) {
+	daemon, engine := setupTestDaemonWithRules()
+	handler := NewRulesHandler(daemon)
+
+	// Add three rules
+	_ = engine.AddRuleWithValidation(config.CustomRule{
+		Name:      "rule1",
+		Condition: "priority > 1",
+		Action:    "deny",
+	})
+	_ = engine.AddRuleWithValidation(config.CustomRule{
+		Name:      "rule2",
+		Condition: "type == bug",
+		Action:    "allow",
+	})
+	_ = engine.AddRuleWithValidation(config.CustomRule{
+		Name:      "rule3",
+		Condition: "type == feature",
+		Action:    "allow",
+	})
+
+	// Move rule1 to position 2 (last)
+	reqBody := ReorderRuleRequest{Position: 2}
+	body, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, addRepoQueryParam("/api/rules/rule1/reorder"), bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.HandleReorderRule(w, req, "rule1")
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var response ReorderRuleResponse
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if !response.Success {
+		t.Errorf("expected success=true, got %v (error: %s)", response.Success, response.Error)
+	}
+
+	// Verify the order changed
+	if len(response.Rules) != 3 {
+		t.Fatalf("expected 3 rules, got %d", len(response.Rules))
+	}
+	if response.Rules[0].Name != "rule2" {
+		t.Errorf("expected first rule to be 'rule2', got %q", response.Rules[0].Name)
+	}
+	if response.Rules[1].Name != "rule3" {
+		t.Errorf("expected second rule to be 'rule3', got %q", response.Rules[1].Name)
+	}
+	if response.Rules[2].Name != "rule1" {
+		t.Errorf("expected third rule to be 'rule1', got %q", response.Rules[2].Name)
+	}
+
+	// Persisted should be false (rules are runtime rules, not from config)
+	if response.Persisted {
+		t.Error("expected persisted=false for runtime rules")
+	}
+}
+
+func TestHandleReorderRule_NotFound(t *testing.T) {
+	daemon, _ := setupTestDaemonWithRules()
+	handler := NewRulesHandler(daemon)
+
+	reqBody := ReorderRuleRequest{Position: 0}
+	body, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, addRepoQueryParam("/api/rules/nonexistent/reorder"), bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.HandleReorderRule(w, req, "nonexistent")
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected status 404, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var response ReorderRuleResponse
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if response.Success {
+		t.Error("expected success=false")
+	}
+}
+
+func TestHandleReorderRule_InvalidPosition(t *testing.T) {
+	daemon, engine := setupTestDaemonWithRules()
+	handler := NewRulesHandler(daemon)
+
+	// Add a rule
+	_ = engine.AddRuleWithValidation(config.CustomRule{
+		Name:      "rule1",
+		Condition: "priority > 1",
+		Action:    "deny",
+	})
+
+	reqBody := ReorderRuleRequest{Position: 5} // Invalid position
+	body, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, addRepoQueryParam("/api/rules/rule1/reorder"), bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.HandleReorderRule(w, req, "rule1")
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var response ReorderRuleResponse
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if response.Success {
+		t.Error("expected success=false")
+	}
+}
+
+func TestHandleReorderRule_InvalidJSON(t *testing.T) {
+	daemon, engine := setupTestDaemonWithRules()
+	handler := NewRulesHandler(daemon)
+
+	// Add a rule
+	_ = engine.AddRuleWithValidation(config.CustomRule{
+		Name:      "rule1",
+		Condition: "priority > 1",
+		Action:    "deny",
+	})
+
+	req := httptest.NewRequest(http.MethodPost, addRepoQueryParam("/api/rules/rule1/reorder"), bytes.NewReader([]byte("not json")))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.HandleReorderRule(w, req, "rule1")
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestRouteRules_ReorderRule(t *testing.T) {
+	daemon, engine := setupTestDaemonWithRules()
+	handler := NewRulesHandler(daemon)
+
+	// Add rules
+	_ = engine.AddRuleWithValidation(config.CustomRule{
+		Name:      "routed-reorder1",
+		Condition: "priority > 1",
+		Action:    "deny",
+	})
+	_ = engine.AddRuleWithValidation(config.CustomRule{
+		Name:      "routed-reorder2",
+		Condition: "type == bug",
+		Action:    "allow",
+	})
+
+	reqBody := ReorderRuleRequest{Position: 0}
+	body, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, addRepoQueryParam("/api/rules/routed-reorder2/reorder"), bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.RouteRules(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestRouteRules_ReorderRule_MethodNotAllowed(t *testing.T) {
+	daemon, engine := setupTestDaemonWithRules()
+	handler := NewRulesHandler(daemon)
+
+	// Add a rule
+	_ = engine.AddRuleWithValidation(config.CustomRule{
+		Name:      "method-test",
+		Condition: "priority > 1",
+		Action:    "deny",
+	})
+
+	// Try GET instead of POST
+	req := httptest.NewRequest(http.MethodGet, addRepoQueryParam("/api/rules/method-test/reorder"), nil)
+	w := httptest.NewRecorder()
+
+	handler.RouteRules(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected status 405, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleReorderRule_BroadcastsEvent(t *testing.T) {
+	daemon, engine := setupTestDaemonWithRules()
+	handler := NewRulesHandler(daemon)
+
+	// Add rules
+	_ = engine.AddRuleWithValidation(config.CustomRule{
+		Name:      "event-rule1",
+		Condition: "priority > 1",
+		Action:    "deny",
+	})
+	_ = engine.AddRuleWithValidation(config.CustomRule{
+		Name:      "event-rule2",
+		Condition: "type == bug",
+		Action:    "allow",
+	})
+
+	// Subscribe to events
+	eventReceived := false
+	var receivedAction string
+	daemon.eventBus.Subscribe(func(e Event) {
+		if e.Type == EventRulesChanged {
+			eventReceived = true
+			payload := e.Payload.(map[string]interface{})
+			receivedAction = payload["action"].(string)
+		}
+	})
+
+	reqBody := ReorderRuleRequest{Position: 0}
+	body, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, addRepoQueryParam("/api/rules/event-rule2/reorder"), bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.HandleReorderRule(w, req, "event-rule2")
+
+	if !eventReceived {
+		t.Error("expected rules:changed event to be broadcast")
+	}
+
+	if receivedAction != "reordered" {
+		t.Errorf("expected action 'reordered', got '%s'", receivedAction)
+	}
+}
+
 // Helper functions
 func ptrBool(b bool) *bool {
 	return &b
