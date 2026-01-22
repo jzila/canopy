@@ -211,9 +211,9 @@ export const WorkerChainTimeline: React.FC<WorkerChainTimelineProps> = ({
     });
   }
 
-  // 4. Repair agents (if any)
+  // 4. Repair agents (if any) - only match agents with 'repair' in task_id
   const repairAgents = childAgents.filter(child =>
-    child.task_id.includes('repair') || child.parent_agent_id === agent.id
+    child.task_id.includes('repair')
   ).sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
 
   let repairAttempt = 0;
@@ -239,16 +239,9 @@ export const WorkerChainTimeline: React.FC<WorkerChainTimelineProps> = ({
     }
   }
 
-  // If no explicit repair agents but repair_attempts > 0, show repair info
-  if (repairAgents.length === 0 && agent.repair_attempts && agent.repair_attempts > 0) {
-    items.push({
-      type: 'repair',
-      title: `Repair Agent`,
-      status: agent.validation_status === 'passed' ? 'fixed' : 'repairing',
-      output: agent.last_repair_output,
-      attempt: agent.repair_attempts,
-    });
-  }
+  // Note: We only show repair agents when they actually exist in childAgents.
+  // The repair_attempts field on the parent agent is for tracking purposes,
+  // but we don't create phantom repair items from it.
 
   // Don't render if there's just the worker agent with no special status
   if (items.length === 1 && !agent.merge_status && !agent.validation_status) {

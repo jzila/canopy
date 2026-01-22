@@ -62,6 +62,19 @@ type Result struct {
 	// Use this instead of GitState.NewCommits from agent results, as those are overlay
 	// commits with different hashes that may no longer exist after merge.
 	MergedCommits []*sandbox.CommitInfo
+
+	// PreCommitHookFailed indicates that git commit failed due to a pre-commit hook.
+	// When true, the staged changes are kept (not reset) so a repair agent can fix
+	// the issue and retry the commit.
+	PreCommitHookFailed bool
+
+	// PreCommitHookOutput contains the output from the failed pre-commit hook.
+	// This provides context for the repair agent about what needs to be fixed.
+	PreCommitHookOutput string
+
+	// StagedPaths contains the paths that were staged for commit when the pre-commit
+	// hook failed. These are needed by the repair agent to retry the commit.
+	StagedPaths []string
 }
 
 // SequentialMerger applies changes in order, later overwrites earlier
@@ -325,12 +338,26 @@ type MergeOptions struct {
 	TaskTitle string
 }
 
+// commitResult holds the outcome of a commit attempt
+type commitResult struct {
+	// Committed is true if a commit was successfully created
+	Committed bool
+	// PreCommitHookFailed is true if the commit failed due to a pre-commit hook
+	PreCommitHookFailed bool
+	// HookOutput contains the output from the failed pre-commit hook
+	HookOutput string
+	// Error contains any error that occurred (nil if pre-commit hook failed, as that's handled specially)
+	Error error
+}
+
 // MergeSingle merges and commits a single agent result atomically.
 // This should be called immediately when each agent completes.
 // The overlay must still be mounted when this is called.
 //
 // Always uses file-based merge to create a single commit per agent containing ALL changes.
 // On failure, the working directory is reset to HEAD state to prevent partial changes.
+// Exception: if a pre-commit hook fails, staged changes are kept so a repair agent can fix
+// the issue (PreCommitHookFailed will be true in the result).
 func (m *SequentialMerger) MergeSingle(result *agent.Result, opts *MergeOptions) (*Result, error) {
 	if opts == nil {
 		opts = &MergeOptions{}
@@ -388,16 +415,27 @@ func (m *SequentialMerger) MergeSingle(result *agent.Result, opts *MergeOptions)
 		if len(paths) > 0 {
 			// Build commit message including agent's original commit messages if any
 			commitMsg := m.buildMergeCommitMessage(result, opts)
-			committed, err := m.commitFileChanges(result, paths, commitMsg)
-			if err != nil {
-				// Commit failed - reset working directory to clean HEAD state
+			cr := m.commitFileChanges(result, paths, commitMsg)
+
+			if cr.PreCommitHookFailed {
+				// Pre-commit hook failed - DON'T reset staged changes
+				// Signal this to the caller so they can spawn a repair agent
+				mergeResult.PreCommitHookFailed = true
+				mergeResult.PreCommitHookOutput = cr.HookOutput
+				mergeResult.StagedPaths = paths
+				// Don't add to Errors - this is a special case that should be handled differently
+				if m.verbose {
+					fmt.Printf("Pre-commit hook failed for task %s, staged changes preserved for repair agent\n", result.TaskID)
+				}
+			} else if cr.Error != nil {
+				// Some other commit error - reset working directory to clean HEAD state
 				// This prevents partial changes from affecting subsequent operations
 				if resetErr := m.resetToHead(headCommit, paths); resetErr != nil && m.verbose {
 					fmt.Fprintf(os.Stderr, "warning: failed to reset working directory after merge failure: %v\n", resetErr)
 				}
 				mergeResult.Errors = append(mergeResult.Errors,
-					fmt.Sprintf("failed to commit changes from %s: %v", result.TaskID, err))
-			} else if committed {
+					fmt.Sprintf("failed to commit changes from %s: %v", result.TaskID, cr.Error))
+			} else if cr.Committed {
 				mergeResult.CommitsApplied++
 
 				// Capture the new HEAD commit info for the dashboard
@@ -580,6 +618,13 @@ func getFirstLine(s string) string {
 	return s
 }
 
+// BuildCommitMessageForTask is a public wrapper around buildMergeCommitMessage.
+// It allows the processor to get the commit message that would be used for a task
+// without having to duplicate the message generation logic.
+func (m *SequentialMerger) BuildCommitMessageForTask(result *agent.Result, opts *MergeOptions) string {
+	return m.buildMergeCommitMessage(result, opts)
+}
+
 // filterGitignored filters out paths that are gitignored.
 // Uses git check-ignore to respect .gitignore, .git/info/exclude, and global gitignore.
 func (m *SequentialMerger) filterGitignored(paths []string) ([]string, error) {
@@ -642,25 +687,28 @@ func (m *SequentialMerger) filterGitignored(paths []string) ([]string, error) {
 }
 
 // commitFileChanges stages and commits file changes for a single task.
-// Returns (true, nil) if a commit was made, (false, nil) if no changes to commit,
-// or (false, error) if an error occurred.
-func (m *SequentialMerger) commitFileChanges(result *agent.Result, paths []string, commitMsg string) (bool, error) {
+// Returns a commitResult indicating:
+//   - Committed=true: commit was successful
+//   - Committed=false, PreCommitHookFailed=true: pre-commit hook rejected the commit
+//   - Committed=false, Error!=nil: some other error occurred
+//   - Committed=false, Error==nil, PreCommitHookFailed=false: no changes to commit
+func (m *SequentialMerger) commitFileChanges(result *agent.Result, paths []string, commitMsg string) *commitResult {
 	if len(paths) == 0 {
-		return false, nil
+		return &commitResult{}
 	}
 
 	// Filter out gitignored files before staging
 	// This is necessary because git add with explicit paths bypasses .gitignore
 	filteredPaths, err := m.filterGitignored(paths)
 	if err != nil {
-		return false, fmt.Errorf("failed to filter gitignored files: %w", err)
+		return &commitResult{Error: fmt.Errorf("failed to filter gitignored files: %w", err)}
 	}
 
 	if len(filteredPaths) == 0 {
 		if m.verbose {
 			fmt.Printf("No changes to commit for task %s (all files gitignored)\n", result.TaskID)
 		}
-		return false, nil
+		return &commitResult{}
 	}
 
 	// Stage the files
@@ -670,7 +718,7 @@ func (m *SequentialMerger) commitFileChanges(result *agent.Result, paths []strin
 	var addStderr bytes.Buffer
 	addCmd.Stderr = &addStderr
 	if err := addCmd.Run(); err != nil {
-		return false, fmt.Errorf("git add failed: %w: %s", err, addStderr.String())
+		return &commitResult{Error: fmt.Errorf("git add failed: %w: %s", err, addStderr.String())}
 	}
 
 	// Check if there are staged changes
@@ -681,27 +729,154 @@ func (m *SequentialMerger) commitFileChanges(result *agent.Result, paths []strin
 		if m.verbose {
 			fmt.Printf("No changes to commit for task %s (all changes already committed)\n", result.TaskID)
 		}
-		return false, nil
+		return &commitResult{}
 	}
 
+	// Capture both stdout and stderr for the commit command
+	// Pre-commit hooks write to both, and we need the full context
 	commitCmd := exec.Command("git", "commit", "-m", commitMsg)
 	commitCmd.Dir = m.outputDir
-	var commitStderr bytes.Buffer
-	commitCmd.Stderr = &commitStderr
+	var commitOutput bytes.Buffer
+	commitCmd.Stdout = &commitOutput
+	commitCmd.Stderr = &commitOutput
+
 	if err := commitCmd.Run(); err != nil {
-		// Commit failed - reset staged files to prevent leaving dirty state
+		output := commitOutput.String()
+
+		// Detect if this was a pre-commit hook failure
+		// Pre-commit hook failures are characterized by:
+		// 1. Exit code 1 (hooks can only return 0 or non-zero)
+		// 2. Output that doesn't start with typical git errors
+		// 3. Often contains build/test output
+		if isPreCommitHookFailure(output) {
+			if m.verbose {
+				fmt.Printf("Pre-commit hook failed for task %s, keeping staged changes for repair\n", result.TaskID)
+			}
+			// DON'T reset staged changes - keep them for the repair agent
+			return &commitResult{
+				PreCommitHookFailed: true,
+				HookOutput:          output,
+			}
+		}
+
+		// Not a pre-commit hook failure - reset staged files and return error
 		resetCmd := exec.Command("git", "reset", "HEAD", "--")
 		resetCmd.Args = append(resetCmd.Args, paths...)
 		resetCmd.Dir = m.outputDir
 		if resetErr := resetCmd.Run(); resetErr != nil && m.verbose {
 			fmt.Fprintf(os.Stderr, "warning: failed to reset staged files after commit failure: %v\n", resetErr)
 		}
-		return false, fmt.Errorf("git commit failed: %w: %s", err, commitStderr.String())
+		return &commitResult{Error: fmt.Errorf("git commit failed: %w: %s", err, output)}
 	}
 
 	if m.verbose {
 		fmt.Printf("Created commit for changes from task %s\n", result.TaskID)
 	}
 
-	return true, nil
+	return &commitResult{Committed: true}
+}
+
+// isPreCommitHookFailure determines if a git commit failure was caused by a pre-commit hook.
+// Pre-commit hooks reject commits by exiting with a non-zero status, causing git commit
+// to fail. We detect this by looking for patterns in the output that indicate a hook failure
+// rather than a git-internal error.
+func isPreCommitHookFailure(output string) bool {
+	// Common indicators that a pre-commit hook ran and failed:
+	// 1. Build failures (go build, npm build, etc.)
+	// 2. Test failures (go test, npm test, etc.)
+	// 3. Linter failures (golint, eslint, etc.)
+	// 4. Explicit "pre-commit" mentions
+
+	hookIndicators := []string{
+		// Build commands
+		"go build",
+		"npm run build",
+		"make build",
+		"cargo build",
+
+		// Test commands
+		"go test",
+		"npm test",
+		"pytest",
+		"cargo test",
+
+		// Linters
+		"golint",
+		"eslint",
+		"prettier",
+		"rustfmt",
+
+		// Common error patterns from builds
+		"undefined:",
+		"cannot find",
+		"syntax error",
+		"compilation failed",
+		"build failed",
+
+		// Explicit hook mentions
+		"pre-commit",
+		"hook failed",
+	}
+
+	lowerOutput := strings.ToLower(output)
+	for _, indicator := range hookIndicators {
+		if strings.Contains(lowerOutput, strings.ToLower(indicator)) {
+			return true
+		}
+	}
+
+	// Git's own errors typically start with specific patterns
+	// If the output doesn't look like a git error, assume it's from a hook
+	gitErrorPrefixes := []string{
+		"error: pathspec",
+		"error: src refspec",
+		"fatal: not a git repository",
+		"fatal: unable to access",
+		"fatal: refusing to merge",
+		"hint:",
+	}
+
+	for _, prefix := range gitErrorPrefixes {
+		if strings.HasPrefix(strings.ToLower(output), strings.ToLower(prefix)) {
+			return false // This is a git error, not a hook failure
+		}
+	}
+
+	// If output is non-empty and doesn't look like a git error, likely a hook failure
+	return len(strings.TrimSpace(output)) > 0
+}
+
+// isWorkingDirectoryClean checks if the specified paths have any uncommitted changes
+// (staged or unstaged). Returns true if all paths are clean, false otherwise.
+func (m *SequentialMerger) isWorkingDirectoryClean(paths []string) (bool, error) {
+	if len(paths) == 0 {
+		return true, nil
+	}
+
+	// Use git status --porcelain to check for changes
+	// This shows both staged and unstaged changes
+	cmd := exec.Command("git", "status", "--porcelain", "--")
+	cmd.Args = append(cmd.Args, paths...)
+	cmd.Dir = m.outputDir
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		return false, fmt.Errorf("git status failed: %w", err)
+	}
+
+	// If output is empty, all paths are clean
+	return len(strings.TrimSpace(stdout.String())) == 0, nil
+}
+
+// hardResetToHead performs a hard reset to the specified commit.
+// This discards all changes in the working directory and index.
+func (m *SequentialMerger) hardResetToHead(headCommit string) error {
+	cmd := exec.Command("git", "reset", "--hard", headCommit)
+	cmd.Dir = m.outputDir
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("git reset --hard failed: %w: %s", err, stderr.String())
+	}
+	return nil
 }

@@ -268,6 +268,9 @@ func ConvertPersistenceAgentToState(pAgent *persistence.Agent) *AgentState {
 		}
 	}
 
+	// Restore session ID for claude --resume support
+	agent.SessionID = pAgent.SessionID
+
 	return agent
 }
 

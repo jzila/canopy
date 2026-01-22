@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
@@ -315,20 +316,26 @@ func TestOnDoneFn_BlocksUntilMergeComplete(t *testing.T) {
 	// Wait for callback to start
 	<-callbackStarted
 
-	// Give time for the callback to reach the blocking point
+	// Give time for the callback to enqueue and reach the blocking point
+	// Poll for the request to appear in the queue
+	var req *mergequeue.MergeRequest
+	for i := 0; i < 100; i++ {
+		req = queue.TryDequeue()
+		if req != nil {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if req == nil {
+		t.Fatal("expected request in queue after waiting")
+	}
+
+	// Verify callback hasn't completed yet (it should be blocking on response)
 	select {
 	case <-callbackComplete:
 		t.Fatal("callback completed before response was sent - should have blocked")
-	case <-make(chan struct{}):
-		// This won't fire, just checking callbackComplete hasn't closed
 	default:
 		// Expected: callback is blocking
-	}
-
-	// Now send the response from "processor"
-	req := queue.TryDequeue()
-	if req == nil {
-		t.Fatal("expected request in queue")
 	}
 	req.Response <- &mergequeue.MergeResponse{Success: true}
 

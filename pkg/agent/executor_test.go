@@ -310,7 +310,7 @@ func TestTimeoutConfiguration(t *testing.T) {
 }
 
 func TestBuildPrompt(t *testing.T) {
-	t.Run("basic task without user prompt", func(t *testing.T) {
+	t.Run("basic task", func(t *testing.T) {
 		executor := &Executor{
 			config: &Config{},
 		}
@@ -329,60 +329,11 @@ func TestBuildPrompt(t *testing.T) {
 		if !strings.Contains(prompt, "Add support for feature X with tests") {
 			t.Error("Expected prompt to contain task description")
 		}
-		// Should NOT contain user instructions section
-		if strings.Contains(prompt, "User Instructions") {
-			t.Error("Expected prompt to NOT contain user instructions when UserPrompt is empty")
-		}
 	})
 
-	t.Run("task with user prompt takes precedence", func(t *testing.T) {
+	t.Run("task with dependencies", func(t *testing.T) {
 		executor := &Executor{
-			config: &Config{
-				UserPrompt: "Stop after implementing the core logic, do not run tests",
-			},
-		}
-		task := &beads.Task{
-			ID:          "task-123",
-			Title:       "Implement feature X",
-			Description: "Add support for feature X and run all tests",
-		}
-
-		prompt := executor.buildPrompt(task, nil)
-
-		// User instructions should appear at the top
-		userInstructionsIdx := strings.Index(prompt, "User Instructions")
-		taskTitleIdx := strings.Index(prompt, "## Task:")
-		if userInstructionsIdx == -1 {
-			t.Error("Expected prompt to contain User Instructions section")
-		}
-		if taskTitleIdx == -1 {
-			t.Error("Expected prompt to contain Task section")
-		}
-		if userInstructionsIdx > taskTitleIdx {
-			t.Error("Expected User Instructions to appear before Task section")
-		}
-
-		// Should contain the actual user instructions
-		if !strings.Contains(prompt, "Stop after implementing the core logic") {
-			t.Error("Expected prompt to contain user's stop instructions")
-		}
-
-		// Should contain PRIORITY marker
-		if !strings.Contains(prompt, "PRIORITY") {
-			t.Error("Expected prompt to contain PRIORITY marker for user instructions")
-		}
-
-		// Should contain reminder at end
-		if !strings.Contains(prompt, "IMPORTANT") {
-			t.Error("Expected prompt to contain IMPORTANT reminder about user instructions")
-		}
-	})
-
-	t.Run("task with dependencies and user prompt", func(t *testing.T) {
-		executor := &Executor{
-			config: &Config{
-				UserPrompt: "Focus only on bug fixes",
-			},
+			config: &Config{},
 		}
 		task := &beads.Task{
 			ID:          "task-456",
@@ -398,25 +349,16 @@ func TestBuildPrompt(t *testing.T) {
 
 		prompt := executor.buildPrompt(task, deps)
 
-		// Check ordering: User Instructions -> Dependencies -> Task -> Reminder
-		userInstructionsIdx := strings.Index(prompt, "User Instructions")
+		// Check ordering: Dependencies -> Task
 		depsIdx := strings.Index(prompt, "Context from upstream tasks")
 		taskIdx := strings.Index(prompt, "## Task:")
-		importantIdx := strings.LastIndex(prompt, "IMPORTANT")
 
-		if userInstructionsIdx == -1 || depsIdx == -1 || taskIdx == -1 || importantIdx == -1 {
-			t.Errorf("Missing expected sections. UserInstructions: %d, Deps: %d, Task: %d, Important: %d",
-				userInstructionsIdx, depsIdx, taskIdx, importantIdx)
+		if depsIdx == -1 || taskIdx == -1 {
+			t.Errorf("Missing expected sections. Deps: %d, Task: %d", depsIdx, taskIdx)
 		}
 
-		if userInstructionsIdx > depsIdx {
-			t.Error("Expected User Instructions before dependency context")
-		}
 		if depsIdx > taskIdx {
 			t.Error("Expected dependency context before task")
-		}
-		if taskIdx > importantIdx {
-			t.Error("Expected task before final important reminder")
 		}
 
 		// Dependencies should be included
@@ -425,29 +367,6 @@ func TestBuildPrompt(t *testing.T) {
 		}
 		if !strings.Contains(prompt, "Implemented the base parser") {
 			t.Error("Expected prompt to contain dependency summary")
-		}
-	})
-
-	t.Run("user prompt boundary instructions are emphasized", func(t *testing.T) {
-		executor := &Executor{
-			config: &Config{
-				UserPrompt: "Implement but DO NOT run tests",
-			},
-		}
-		task := &beads.Task{
-			ID:          "task-789",
-			Title:       "Add feature",
-			Description: "Add the feature and ensure all tests pass",
-		}
-
-		prompt := executor.buildPrompt(task, nil)
-
-		// Both the user instruction and the reminder should be present
-		if !strings.Contains(prompt, "Implement but DO NOT run tests") {
-			t.Error("Expected user's boundary instruction in prompt")
-		}
-		if !strings.Contains(prompt, "Stop when you reach the boundaries specified by the user") {
-			t.Error("Expected boundary reminder in prompt")
 		}
 	})
 }

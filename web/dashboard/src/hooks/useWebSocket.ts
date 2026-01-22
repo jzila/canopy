@@ -1,6 +1,5 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useStateStore } from '../stores/stateStore';
-
 // Event types that match the Go backend (wire_events.go)
 // Backend sends: { type, timestamp, payload }
 interface WebSocketEvent {
@@ -8,7 +7,6 @@ interface WebSocketEvent {
   timestamp: string;
   payload: unknown;
 }
-
 interface AgentStartedEvent {
   type: 'agent:started';
   timestamp: string;
@@ -21,7 +19,6 @@ interface AgentStartedEvent {
     parent_agent_id?: string;
   };
 }
-
 interface AgentOutputEvent {
   type: 'agent:output';
   timestamp: string;
@@ -31,7 +28,13 @@ interface AgentOutputEvent {
     is_error: boolean;
   };
 }
-
+interface AgentOutputClearEvent {
+  type: 'agent:output_clear';
+  timestamp: string;
+  payload: {
+    agent_id: string;
+  };
+}
 interface AgentLiveFeedEvent {
   type: 'agent:live_feed';
   timestamp: string;
@@ -41,7 +44,6 @@ interface AgentLiveFeedEvent {
     data: Record<string, unknown>;
   };
 }
-
 interface AgentCommitEvent {
   type: 'agent:commit';
   timestamp: string;
@@ -56,7 +58,6 @@ interface AgentCommitEvent {
     files_changed: string[];
   };
 }
-
 interface AgentCompletedEvent {
   type: 'agent:completed';
   timestamp: string;
@@ -74,7 +75,6 @@ interface AgentCompletedEvent {
     commits_created: number;
   };
 }
-
 interface TaskUpdatedEvent {
   type: 'task:updated';
   timestamp: string;
@@ -88,13 +88,10 @@ interface TaskUpdatedEvent {
     updated_at?: number;  // Unix timestamp of last update
   };
 }
-
 // Merge status types matching Go backend (ipc/protocol.go)
 type MergeStatus = 'pending' | 'acquiring' | 'merging' | 'resolving' | 'merged' | 'failed' | 'skipped' | 'merged_needs_repair';
-
 // Validation status types matching Go backend (validation/executor.go)
 type ValidationStatus = 'pending' | 'running' | 'passed' | 'failed' | 'skipped' | 'repairing';
-
 // Validation step result matching Go backend (ipc/protocol.go)
 interface ValidationStep {
   name: string;
@@ -102,7 +99,6 @@ interface ValidationStep {
   duration_ms: number;
   output?: string;
 }
-
 interface AgentMergeStatusEvent {
   type: 'agent:merge_status';
   timestamp: string;
@@ -121,13 +117,11 @@ interface AgentMergeStatusEvent {
     last_repair_output?: string;
   };
 }
-
 interface StatsUpdatedEvent {
   type: 'stats:updated';
   timestamp: string;
   payload: unknown;
 }
-
 interface RunStartedEvent {
   type: 'run:started';
   timestamp: string;
@@ -139,7 +133,6 @@ interface RunStartedEvent {
     repo_name?: string;
   };
 }
-
 interface RunCompletedEvent {
   type: 'run:completed';
   timestamp: string;
@@ -160,7 +153,24 @@ interface RunCompletedEvent {
     conflicts_resolved: number;
   };
 }
-
+// Rules configuration types
+interface RuntimeRule {
+  name: string;
+  enabled?: boolean;
+  condition: string;
+  action: string;
+  reason?: string;
+  source: 'config' | 'runtime';
+  created_at?: string;
+}
+interface RulesChangedEvent {
+  type: 'rules:changed';
+  timestamp: string;
+  payload: {
+    action: 'added' | 'updated' | 'deleted' | 'config_updated';
+    rule?: RuntimeRule;
+  };
+}
 // Backend git commit format
 interface BackendGitCommit {
   hash: string;
@@ -171,7 +181,6 @@ interface BackendGitCommit {
   timestamp: string;
   files_changed: string[];
 }
-
 // Backend RuntimeState format (snake_case)
 interface BackendAgentState {
   id: string;
@@ -220,20 +229,25 @@ interface BackendAgentState {
   repair_attempts?: number;
   last_repair_output?: string;
 }
-
+// Backend task state format
+interface BackendTaskState {
+  id: string;
+  title: string;
+  status: string;
+  type?: string;     // Task type (task, bug, feature, etc.)
+  agent_id: string;
+  priority: number;
+  dependencies: string[];
+  archived: boolean;
+  repo_id?: string;
+  updated_at?: number;  // Unix timestamp of last update
+}
 interface BackendRuntimeState {
   agents: Record<string, BackendAgentState>;
-  tasks: Record<string, {
-    id: string;
-    title: string;
-    status: string;
-    type?: string;     // Task type (task, bug, feature, etc.)
-    agent_id: string;
-    priority: number;
-    dependencies: string[];
-    archived: boolean;
-    updated_at?: number;  // Unix timestamp of last update
-  }>;
+  tasks: Record<string, BackendTaskState>;  // Legacy: merged view for backwards compat
+  // Hybrid overlay architecture: dual-source task state
+  persistent_tasks?: Record<string, BackendTaskState>;  // From beads (source of truth)
+  runtime_tasks?: Record<string, BackendTaskState>;     // Ephemeral overlay (in_progress, agent assignments)
   stats: {
     total_tasks: number;
     completed_tasks: number;
@@ -254,36 +268,30 @@ interface BackendRuntimeState {
   start_time: string;
   current_run_id: string;
 }
-
 // Pause state enum matching Go backend (ipc/protocol.go)
 type PauseState = 'running' | 'paused_user' | 'paused_agent' | 'paused_both';
-
 interface StateSyncEvent {
   type: 'state:sync';
   timestamp: string;
   payload: BackendRuntimeState | RepoSyncPayload;
 }
-
 // Payload when switching repos (partial sync)
 interface RepoSyncPayload {
   active_repo_id: string;
   active_repo_name: string;
   active_repo_path: string;
 }
-
 interface OrchPauseStatusPayload {
   is_paused: boolean;
   is_paused_by_user: boolean;
   is_paused_by_agent: boolean;
   pause_state: PauseState;
 }
-
 interface OrchPausedEvent {
   type: 'orch:paused';
   timestamp: string;
   payload: OrchPauseStatusPayload;
 }
-
 interface OrchResumedEvent {
   type: 'orch:resumed';
   timestamp: string;
@@ -293,6 +301,7 @@ type EventType =
   | StateSyncEvent
   | AgentStartedEvent
   | AgentOutputEvent
+  | AgentOutputClearEvent
   | AgentLiveFeedEvent
   | AgentCommitEvent
   | AgentCompletedEvent
@@ -302,34 +311,30 @@ type EventType =
   | OrchPausedEvent
   | OrchResumedEvent
   | RunStartedEvent
-  | RunCompletedEvent;
-
+  | RunCompletedEvent
+  | RulesChangedEvent;
 const MAX_BACKOFF = 30000; // 30 seconds
 const INITIAL_BACKOFF = 1000; // 1 second
-
 function getWebSocketURL(): string {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-
   // In development, use the Vite proxy which forwards to the backend
   if (import.meta.env.DEV) {
     return `${protocol}//${window.location.host}/ws`;
   }
-
   // In production, connect to the same host
   return `${protocol}//${window.location.host}/ws`;
 }
-
 export function useWebSocket() {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
   const backoffTimeRef = useRef<number>(INITIAL_BACKOFF);
   const isManuallyClosedRef = useRef<boolean>(false);
-
   const {
     setConnected,
     updateAgent,
     updateTask,
     appendOutput,
+    clearOutput,
     appendLiveFeedEvent,
     appendGitCommit,
     syncState,
@@ -338,38 +343,32 @@ export function useWebSocket() {
     updateAgentMergeStatus,
     addRun,
     updateRun,
+    setCurrentRunId,
   } = useStateStore();
-
   const connect = useCallback(() => {
     // Don't reconnect if manually closed
     if (isManuallyClosedRef.current) {
       return;
     }
-
     // Clean up existing connection
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;
     }
-
     const wsURL = getWebSocketURL();
     console.log('[WebSocket] Connecting to', wsURL);
-
     try {
       const ws = new WebSocket(wsURL);
       wsRef.current = ws;
-
       ws.onopen = () => {
         console.log('[WebSocket] Connected');
         setConnected(true);
         backoffTimeRef.current = INITIAL_BACKOFF; // Reset backoff on successful connection
       };
-
       ws.onmessage = (event) => {
         try {
           const message: EventType = JSON.parse(event.data);
           console.log('[WebSocket] Received:', message.type, message);
-
           switch (message.type) {
             case 'state:sync': {
               // Check if this is a repo switch event (partial sync)
@@ -381,11 +380,9 @@ export function useWebSocket() {
                 setActiveRepo(repoPayload.active_repo_id);
                 break;
               }
-
               // Transform backend state to frontend format (full sync)
               const backendState = message.payload as unknown as BackendRuntimeState;
               const transformedAgents: Record<string, import('../stores/stateStore').AgentState> = {};
-
               for (const [id, agent] of Object.entries(backendState.agents)) {
                 // Transform live_feed_events to liveFeed with generated IDs
                 const liveFeed = (agent.live_feed_events || []).map((event, index) => ({
@@ -394,7 +391,6 @@ export function useWebSocket() {
                   event_type: event.event_type as 'tool_use' | 'file_change' | 'text' | 'tool_result' | 'error',
                   data: event.data || {},
                 }));
-
                 transformedAgents[id] = {
                   id: agent.id,
                   task_id: agent.task_id,
@@ -434,10 +430,54 @@ export function useWebSocket() {
                   ...(agent.last_repair_output && { last_repair_output: agent.last_repair_output }),
                 };
               }
-
+              // Merge dual-source tasks: runtime overlays persistent for display
+              // If new dual-source fields exist, merge them; otherwise fall back to legacy tasks
+              let mergedTasks: Record<string, import('../stores/stateStore').TaskState> = {};
+              if (backendState.persistent_tasks && Object.keys(backendState.persistent_tasks).length > 0) {
+                // Use new hybrid overlay architecture
+                const persistentTasks = backendState.persistent_tasks;
+                const runtimeTasks = backendState.runtime_tasks || {};
+                // Start with persistent tasks (base layer from beads)
+                for (const [id, task] of Object.entries(persistentTasks)) {
+                  mergedTasks[id] = {
+                    id: task.id,
+                    title: task.title,
+                    status: task.status,
+                    agent_id: task.agent_id || '',
+                    priority: task.priority,
+                    dependencies: task.dependencies || [],
+                    archived: task.archived || false,
+                    ...(task.type && { type: task.type }),
+                    ...(task.updated_at !== undefined && { updated_at: task.updated_at }),
+                  };
+                }
+                // Overlay runtime state (in_progress, agent assignments)
+                for (const [id, rt] of Object.entries(runtimeTasks)) {
+                  if (mergedTasks[id]) {
+                    // Merge runtime onto persistent
+                    if (rt.status) mergedTasks[id].status = rt.status;
+                    if (rt.agent_id) mergedTasks[id].agent_id = rt.agent_id;
+                  } else {
+                    // Runtime-only task (shouldn't happen often, but handle gracefully)
+                    mergedTasks[id] = {
+                      id: rt.id,
+                      title: rt.title || '',
+                      status: rt.status || 'unknown',
+                      agent_id: rt.agent_id || '',
+                      priority: rt.priority || 0,
+                      dependencies: rt.dependencies || [],
+                      archived: rt.archived || false,
+                    };
+                  }
+                }
+                console.log('[WebSocket] Merged dual-source tasks:', Object.keys(persistentTasks).length, 'persistent,', Object.keys(runtimeTasks).length, 'runtime');
+              } else {
+                // Fall back to legacy tasks field for backwards compatibility
+                mergedTasks = (backendState.tasks || {}) as Record<string, import('../stores/stateStore').TaskState>;
+              }
               syncState({
                 agents: transformedAgents,
-                tasks: backendState.tasks || {},
+                tasks: mergedTasks,
                 stats: backendState.stats ? {
                   ...backendState.stats,
                   all_git_commits: backendState.stats.all_git_commits || [],
@@ -464,7 +504,6 @@ export function useWebSocket() {
               console.log('[WebSocket] State synced with', Object.keys(transformedAgents).length, 'agents');
               break;
             }
-
             case 'agent:started': {
               const { agent_id, run_id, task_id, task_title, task_description, parent_agent_id } = message.payload;
               // Create new agent entry
@@ -496,13 +535,16 @@ export function useWebSocket() {
               });
               break;
             }
-
             case 'agent:output': {
               const { agent_id, output, is_error } = message.payload;
               appendOutput(agent_id, output, is_error);
               break;
             }
-
+            case 'agent:output_clear': {
+              const { agent_id } = message.payload;
+              clearOutput(agent_id);
+              break;
+            }
             case 'agent:live_feed': {
               const { agent_id, event_type, data } = message.payload;
               // Generate unique ID for the event
@@ -515,7 +557,6 @@ export function useWebSocket() {
               });
               break;
             }
-
             case 'agent:commit': {
               const { agent_id, hash, short_hash, message: commitMessage, author, author_email, timestamp, files_changed } = message.payload;
               console.log('[WebSocket] Agent commit:', agent_id, short_hash, commitMessage);
@@ -530,7 +571,6 @@ export function useWebSocket() {
               });
               break;
             }
-
             case 'agent:completed': {
               const { agent_id, error, exit_code, duration, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, commits_created } = message.payload;
               updateAgent(agent_id, {
@@ -553,7 +593,6 @@ export function useWebSocket() {
               });
               break;
             }
-
             case 'agent:merge_status': {
               const {
                 agent_id,
@@ -582,7 +621,6 @@ export function useWebSocket() {
               );
               break;
             }
-
             case 'task:updated': {
               const { id, title, status, type: taskType, priority, agent_id, updated_at } = message.payload;
               console.log('[WebSocket] Task updated:', id, status);
@@ -596,29 +634,27 @@ export function useWebSocket() {
               });
               break;
             }
-
             case 'stats:updated': {
               console.log('[WebSocket] Stats updated:', message.payload);
               break;
             }
-
             case 'orch:paused': {
               const { is_paused, is_paused_by_user, is_paused_by_agent, pause_state } = message.payload;
               console.log('[WebSocket] Orchestrator paused:', pause_state);
               setPauseState(is_paused, is_paused_by_user, is_paused_by_agent, pause_state);
               break;
             }
-
             case 'orch:resumed': {
               const { is_paused, is_paused_by_user, is_paused_by_agent, pause_state } = message.payload;
               console.log('[WebSocket] Orchestrator resumed:', pause_state);
               setPauseState(is_paused, is_paused_by_user, is_paused_by_agent, pause_state);
               break;
             }
-
             case 'run:started': {
               const { run_id, task_count, repo_id, repo_path, repo_name } = message.payload;
               console.log('[WebSocket] Run started:', run_id, 'tasks:', task_count);
+              // Set the current run ID for the orchestrator
+              setCurrentRunId(run_id);
               addRun({
                 id: run_id,
                 started_at: message.timestamp,
@@ -635,7 +671,6 @@ export function useWebSocket() {
               });
               break;
             }
-
             case 'run:completed': {
               const {
                 run_id,
@@ -646,6 +681,8 @@ export function useWebSocket() {
                 total_cost_usd,
               } = message.payload;
               console.log('[WebSocket] Run completed:', run_id, 'succeeded:', succeeded_tasks, 'failed:', failed_tasks);
+              // Clear the current run ID as the run has completed
+              setCurrentRunId('');
               // Determine status based on results
               const status = failed_tasks > 0 ? 'partial' : 'completed';
               updateRun(run_id, {
@@ -659,7 +696,12 @@ export function useWebSocket() {
               });
               break;
             }
-
+            case 'rules:changed': {
+              const { action, rule } = message.payload;
+              console.log('[WebSocket] Rules changed:', action, rule?.name);
+              // Rules changes are informational for now - UI can fetch updated rules if needed
+              break;
+            }
             default:
               console.warn('[WebSocket] Unknown event type:', (message as WebSocketEvent).type);
           }
@@ -667,21 +709,17 @@ export function useWebSocket() {
           console.error('[WebSocket] Failed to parse message:', err, event.data);
         }
       };
-
       ws.onerror = (error) => {
         console.error('[WebSocket] Error:', error);
       };
-
       ws.onclose = (event) => {
         console.log('[WebSocket] Disconnected', event.code, event.reason);
         setConnected(false);
         wsRef.current = null;
-
         // Attempt reconnect with exponential backoff
         if (!isManuallyClosedRef.current) {
           const backoffTime = backoffTimeRef.current;
           console.log(`[WebSocket] Reconnecting in ${backoffTime}ms...`);
-
           reconnectTimeoutRef.current = window.setTimeout(() => {
             // Increase backoff time for next attempt, up to max
             backoffTimeRef.current = Math.min(backoffTime * 2, MAX_BACKOFF);
@@ -692,7 +730,6 @@ export function useWebSocket() {
     } catch (err) {
       console.error('[WebSocket] Failed to create WebSocket:', err);
       setConnected(false);
-
       // Retry connection
       if (!isManuallyClosedRef.current) {
         const backoffTime = backoffTimeRef.current;
@@ -702,63 +739,44 @@ export function useWebSocket() {
         }, backoffTime);
       }
     }
-  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, appendGitCommit, syncState, setPauseState, setActiveRepo, updateAgentMergeStatus, addRun, updateRun]);
-
+  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, appendGitCommit, syncState, setPauseState, setActiveRepo, updateAgentMergeStatus, addRun, updateRun, clearOutput, setCurrentRunId]);
   const disconnect = useCallback(() => {
     isManuallyClosedRef.current = true;
-
     if (reconnectTimeoutRef.current !== null) {
       clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
     }
-
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;
     }
-
     setConnected(false);
   }, [setConnected]);
-
   const reconnect = useCallback(() => {
     isManuallyClosedRef.current = false;
     backoffTimeRef.current = INITIAL_BACKOFF;
-
     if (reconnectTimeoutRef.current !== null) {
       clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
     }
-
     connect();
   }, [connect]);
-
   // Auto-connect on mount
   useEffect(() => {
     isManuallyClosedRef.current = false;
     connect();
-
     // Cleanup on unmount
     return () => {
       isManuallyClosedRef.current = true;
-
       if (reconnectTimeoutRef.current !== null) {
         clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = null;
       }
-
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;
       }
     };
   }, [connect]);
-
-  // Get connected state from store
-  const connected = useStateStore((state) => state.connected);
-
-  return {
-    connected,
-    reconnect,
-    disconnect,
-  };
+  return { connect, disconnect, reconnect };
 }

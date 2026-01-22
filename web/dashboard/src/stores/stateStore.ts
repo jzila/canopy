@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Repository, MergeQueueState, Run } from '../api/client';
+import type { Repository, MergeQueueState, Run, ActiveRunStatus, ConfigRulesSettings, RuntimeRule } from '../api/client';
 
 // Types based on Go backend structures
 
@@ -133,6 +133,22 @@ export interface Stats {
 // Pause state enum matching Go backend (ipc/protocol.go)
 export type PauseState = 'running' | 'paused_user' | 'paused_agent' | 'paused_both';
 
+// Run configuration for starting new runs
+export interface RunConfig {
+  concurrency: number;
+  max_priority: number;
+  use_bwrap: boolean;
+  max_retries: number;
+}
+
+// Default run configuration
+export const DEFAULT_RUN_CONFIG: RunConfig = {
+  concurrency: 4,
+  max_priority: 4,
+  use_bwrap: true,
+  max_retries: 3,
+};
+
 export interface RuntimeState {
   agents: Record<string, AgentState>;
   tasks: Record<string, TaskState>;
@@ -168,6 +184,18 @@ interface StateStore {
   runs: Run[];
   activeRunId: string; // empty string means "All runs" / current run
   isRunsLoading: boolean;
+  // Run control state
+  isStartingRun: boolean;
+  isStoppingRun: boolean;
+  runConfig: RunConfig;
+  showRunConfigDialog: boolean;
+  activeOrchestratorRun: ActiveRunStatus | null; // Currently running orchestrator run
+  // Rules state
+  configRules: ConfigRulesSettings | null;
+  customRules: RuntimeRule[];
+  runtimeRules: RuntimeRule[];
+  isRulesLoading: boolean;
+  showAddRuleDialog: boolean;
 
   // Actions
   setConnected: (connected: boolean) => void;
@@ -175,6 +203,7 @@ interface StateStore {
   updateTask: (id: string, update: Partial<TaskState>) => void;
   syncState: (state: RuntimeState) => void;
   appendOutput: (agentId: string, output: string, isError?: boolean) => void;
+  clearOutput: (agentId: string) => void;
   appendLiveFeedEvent: (agentId: string, event: LiveFeedEvent) => void;
   appendGitCommit: (agentId: string, commit: GitCommit) => void;
   setSelectedAgent: (id: string | null) => void;
@@ -210,6 +239,22 @@ interface StateStore {
   setRunsLoading: (loading: boolean) => void;
   addRun: (run: Run) => void;
   updateRun: (runId: string, update: Partial<Run>) => void;
+  // Run control actions
+  setStartingRun: (starting: boolean) => void;
+  setStoppingRun: (stopping: boolean) => void;
+  setRunConfig: (config: Partial<RunConfig>) => void;
+  setShowRunConfigDialog: (show: boolean) => void;
+  setActiveOrchestratorRun: (run: ActiveRunStatus | null) => void;
+  updateActiveOrchestratorRun: (update: Partial<ActiveRunStatus>) => void;
+  // Rules actions
+  setRulesState: (configRules: ConfigRulesSettings | null, customRules: RuntimeRule[], runtimeRules: RuntimeRule[]) => void;
+  setRulesLoading: (loading: boolean) => void;
+  setShowAddRuleDialog: (show: boolean) => void;
+  addRuntimeRule: (rule: RuntimeRule) => void;
+  updateRuntimeRule: (name: string, enabled: boolean) => void;
+  removeRuntimeRule: (name: string) => void;
+  persistRuntimeRule: (name: string, persistedRule: RuntimeRule) => void;
+  updateConfigRules: (configRules: ConfigRulesSettings) => void;
 }
 
 // Initial stats
@@ -292,6 +337,18 @@ export const useStateStore = create<StateStore>((set) => ({
   runs: [],
   activeRunId: '', // empty means "All runs"
   isRunsLoading: false,
+  // Run control state
+  isStartingRun: false,
+  isStoppingRun: false,
+  runConfig: DEFAULT_RUN_CONFIG,
+  showRunConfigDialog: false,
+  activeOrchestratorRun: null,
+  // Rules state
+  configRules: null,
+  customRules: [],
+  runtimeRules: [],
+  isRulesLoading: false,
+  showAddRuleDialog: false,
 
   // Actions
   setConnected: (connected) => set({ connected }),
@@ -381,6 +438,25 @@ export const useStateStore = create<StateStore>((set) => ({
             output: {
               stdout: isError ? agent.output.stdout : agent.output.stdout + output,
               stderr: isError ? agent.output.stderr + output : agent.output.stderr,
+            },
+          },
+        },
+      };
+    }),
+
+  clearOutput: (agentId) =>
+    set((state) => {
+      const agent = state.agents[agentId];
+      if (!agent) return state;
+
+      return {
+        agents: {
+          ...state.agents,
+          [agentId]: {
+            ...agent,
+            output: {
+              stdout: '',
+              stderr: '',
             },
           },
         },
@@ -536,4 +612,73 @@ export const useStateStore = create<StateStore>((set) => ({
       );
       return { runs };
     }),
+
+  // Run control actions
+  setStartingRun: (isStartingRun) => set({ isStartingRun }),
+
+  setStoppingRun: (isStoppingRun) => set({ isStoppingRun }),
+
+  setRunConfig: (config) =>
+    set((state) => ({
+      runConfig: { ...state.runConfig, ...config },
+    })),
+
+  setShowRunConfigDialog: (showRunConfigDialog) => set({ showRunConfigDialog }),
+
+  setActiveOrchestratorRun: (activeOrchestratorRun) => set({ activeOrchestratorRun }),
+
+  updateActiveOrchestratorRun: (update) =>
+    set((state) => {
+      if (!state.activeOrchestratorRun) return state;
+      return {
+        activeOrchestratorRun: { ...state.activeOrchestratorRun, ...update },
+      };
+    }),
+
+  // Rules actions
+  setRulesState: (configRules, customRules, runtimeRules) =>
+    set({ configRules, customRules, runtimeRules }),
+
+  setRulesLoading: (isRulesLoading) => set({ isRulesLoading }),
+
+  setShowAddRuleDialog: (showAddRuleDialog) => set({ showAddRuleDialog }),
+
+  addRuntimeRule: (rule) =>
+    set((state) => ({
+      runtimeRules: [...state.runtimeRules, rule],
+    })),
+
+  updateRuntimeRule: (name, enabled) =>
+    set((state) => {
+      // Check if it's a runtime rule
+      const runtimeIndex = state.runtimeRules.findIndex((r) => r.name === name);
+      if (runtimeIndex !== -1) {
+        const newRules = [...state.runtimeRules];
+        newRules[runtimeIndex] = { ...newRules[runtimeIndex]!, enabled };
+        return { runtimeRules: newRules };
+      }
+      // Check if it's a custom (config) rule
+      const customIndex = state.customRules.findIndex((r) => r.name === name);
+      if (customIndex !== -1) {
+        const newRules = [...state.customRules];
+        newRules[customIndex] = { ...newRules[customIndex]!, enabled };
+        return { customRules: newRules };
+      }
+      return state;
+    }),
+
+  removeRuntimeRule: (name) =>
+    set((state) => ({
+      runtimeRules: state.runtimeRules.filter((r) => r.name !== name),
+    })),
+
+  persistRuntimeRule: (name, persistedRule) =>
+    set((state) => ({
+      // Remove from runtime rules
+      runtimeRules: state.runtimeRules.filter((r) => r.name !== name),
+      // Add to custom rules (config-sourced)
+      customRules: [...state.customRules, persistedRule],
+    })),
+
+  updateConfigRules: (configRules) => set({ configRules }),
 }));

@@ -1,6 +1,7 @@
 import React from 'react';
-import { Activity, X, Filter, ListTodo, CheckCircle, XCircle, Archive, Play, Pause } from 'lucide-react';
+import { Activity, X, Filter, ListTodo, CheckCircle, XCircle, Archive } from 'lucide-react';
 import { AgentCardGroup } from './AgentCardGroup';
+import { RunControlBar } from '../runs/RunControlBar';
 import type { AgentGroup } from '../../hooks/useAgentFiltering';
 import type { StatusFilter } from '../../hooks/useAgentFiltering';
 import type { Stats, PauseState } from '../../stores/stateStore';
@@ -52,55 +53,14 @@ export interface AgentGridProps {
   onPause: () => void;
   /** Called when resume is clicked */
   onResume: () => void;
-}
-
-/**
- * Get the display text for the pause button based on pause state
- */
-function getPauseButtonText(
-  pauseState: PauseState,
-  isPauseLoading: boolean,
-  isResumeLoading: boolean
-): string {
-  if (isPauseLoading) return 'Pausing...';
-  if (isResumeLoading) return 'Resuming...';
-
-  switch (pauseState) {
-    case 'paused_user':
-      return 'Paused';
-    case 'paused_agent':
-      return 'Agent Active...';
-    case 'paused_both':
-      return 'Paused (agent active)';
-    default:
-      return 'Pause';
-  }
-}
-
-/**
- * Get the tooltip text for the pause/resume button
- */
-function getPauseButtonTooltip(
-  pauseState: PauseState,
-  isPaused: boolean,
-  hasActiveRun: boolean
-): string {
-  if (!hasActiveRun) {
-    return 'No active run';
-  }
-  if (isPaused) {
-    switch (pauseState) {
-      case 'paused_user':
-        return 'Orchestrator paused by user. Click to resume spawning new agents.';
-      case 'paused_agent':
-        return 'Orchestrator paused while agent is active (resolving conflicts or repairing). Will auto-resume when complete.';
-      case 'paused_both':
-        return 'Orchestrator paused by user while agent is active. Click to allow new agents after agent completes.';
-      default:
-        return 'Click to resume spawning new agents';
-    }
-  }
-  return 'Pause spawning of new agents. Running agents will continue until completion.';
+  /** Whether a start run request is in progress */
+  isStartingRun: boolean;
+  /** Whether a stop run request is in progress */
+  isStoppingRun: boolean;
+  /** Called when start run is clicked (opens config dialog) */
+  onStartRun: () => void;
+  /** Called when stop run is clicked */
+  onStopRun: () => void;
 }
 
 /**
@@ -137,6 +97,10 @@ export const AgentGrid: React.FC<AgentGridProps> = ({
   connected,
   onPause,
   onResume,
+  isStartingRun,
+  isStoppingRun,
+  onStartRun,
+  onStopRun,
 }) => {
   const toggleFilter = (filter: StatusFilter) => {
     onStatusFilterChange(statusFilter === filter ? 'all' : filter);
@@ -266,58 +230,23 @@ export const AgentGrid: React.FC<AgentGridProps> = ({
         </span>
       </button>
 
-      {/* Pause/Resume Button */}
-      {(() => {
-        const hasActiveRun = currentRunId !== '';
-        const buttonText = getPauseButtonText(pauseState, isPauseLoading, isResumeLoading);
-        const buttonTooltip = getPauseButtonTooltip(pauseState, isPaused, hasActiveRun);
-        const isDisabled = !hasActiveRun || !connected;
-
-        if (isPaused) {
-          return (
-            <button
-              onClick={onResume}
-              disabled={isDisabled || isResumeLoading || isPausedByAgent}
-              title={buttonTooltip}
-              className={`
-                flex items-center gap-2 px-4 h-12 text-white rounded-lg
-                font-medium transition-colors
-                ${pauseState === 'paused_agent' ? 'bg-blue-500' : 'bg-green-500'}
-                ${
-                  isDisabled || isResumeLoading || (isPausedByAgent && pauseState === 'paused_agent')
-                    ? 'opacity-50 cursor-not-allowed'
-                    : pauseState === 'paused_agent'
-                      ? 'hover:bg-blue-600'
-                      : 'hover:bg-green-600'
-                }
-              `}
-            >
-              <Play className="w-4 h-4" />
-              <span className="text-sm">{buttonText}</span>
-            </button>
-          );
-        }
-
-        return (
-          <button
-            onClick={onPause}
-            disabled={isDisabled || isPauseLoading}
-            title={buttonTooltip}
-            className={`
-              flex items-center gap-2 px-4 h-12 bg-orange-500 text-white rounded-lg
-              font-medium transition-colors
-              ${
-                isDisabled || isPauseLoading
-                  ? 'opacity-50 cursor-not-allowed'
-                  : 'hover:bg-orange-600'
-              }
-            `}
-          >
-            <Pause className="w-4 h-4" />
-            <span className="text-sm">{buttonText}</span>
-          </button>
-        );
-      })()}
+      {/* Run Control Bar (Start/Stop/Pause/Resume) */}
+      <RunControlBar
+        hasActiveRun={currentRunId !== ''}
+        currentRunId={currentRunId}
+        connected={connected}
+        isPaused={isPaused}
+        isPausedByAgent={isPausedByAgent}
+        pauseState={pauseState}
+        isPauseLoading={isPauseLoading}
+        isResumeLoading={isResumeLoading}
+        isStartingRun={isStartingRun}
+        isStoppingRun={isStoppingRun}
+        onPause={onPause}
+        onResume={onResume}
+        onStartRun={onStartRun}
+        onStopRun={onStopRun}
+      />
     </div>
   );
 

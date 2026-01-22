@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ChevronDown, Clock, Loader2, Check, List } from 'lucide-react';
+import { ChevronDown, Clock, Loader2, Check, List, Eye } from 'lucide-react';
 import type { Run } from '../../api/client';
 
 interface RunSelectorProps {
@@ -215,9 +215,16 @@ export const RunSelector: React.FC<RunSelectorProps> = ({
                         Running
                       </span>
                     )}
+                    {run.watch_mode && (
+                      <span className="px-1.5 py-0.5 text-xs font-medium bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 rounded flex items-center gap-1" title="Watch mode: continuously polling for new tasks">
+                        <Eye className="w-3 h-3" />
+                        Watch
+                      </span>
+                    )}
                   </div>
                   <span className="text-xs text-gray-500 dark:text-gray-400">
                     {formatDate(run.started_at)} · {run.completed_tasks}/{run.total_tasks} tasks
+                    {run.watch_mode && run.watch_iterations !== undefined && ` · ${run.watch_iterations} polls`}
                   </span>
                 </div>
                 {run.id === activeRunId && (

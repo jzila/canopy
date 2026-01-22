@@ -6,10 +6,10 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1768761380,
+        "lastModified": 1768979737,
         "owner": "steveyegge",
         "repo": "beads",
-        "rev": "356ab92b78613799f8bbdb2a887d604899a8e94d",
+        "rev": "4a0f4abc709f66a0c392f90c251f0176b04ec545",
         "type": "github"
       },
       "original": {
@@ -21,10 +21,10 @@
     "devenv": {
       "locked": {
         "dir": "src/modules",
-        "lastModified": 1768738650,
+        "lastModified": 1768954892,
         "owner": "cachix",
         "repo": "devenv",
-        "rev": "43328b8bc4096055622390ee4fc21b5977aab2e3",
+        "rev": "c6267b9343bbc96c88038765d02e2a2ad2a3b8a0",
         "type": "github"
       },
       "original": {
@@ -75,10 +75,10 @@
         ]
       },
       "locked": {
-        "lastModified": 1767281941,
+        "lastModified": 1768935149,
         "owner": "cachix",
         "repo": "git-hooks.nix",
-        "rev": "f0927703b7b1c8d97511c4116eb9b4ec6645a0fa",
+        "rev": "18cbede9ff6da05b911c5c4802a397c2686ac8fa",
         "type": "github"
       },
       "original": {
@@ -109,10 +109,10 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1768564909,
+        "lastModified": 1768886240,
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "e4bae1bd10c9c57b2cf517953ab70060a828ee6f",
+        "rev": "80e4adbcf8992d3fd27ad4964fbb84907f9478b0",
         "type": "github"
       },
       "original": {
@@ -124,16 +124,16 @@
     },
     "nixpkgs_2": {
       "locked": {
-        "lastModified": 1767052823,
-        "owner": "cachix",
-        "repo": "devenv-nixpkgs",
-        "rev": "538a5124359f0b3d466e1160378c87887e3b51a4",
+        "lastModified": 1768886240,
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "80e4adbcf8992d3fd27ad4964fbb84907f9478b0",
         "type": "github"
       },
       "original": {
-        "owner": "cachix",
-        "ref": "rolling",
-        "repo": "devenv-nixpkgs",
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
         "type": "github"
       }
     },

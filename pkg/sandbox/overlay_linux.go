@@ -317,6 +317,55 @@ func CleanupStaleMounts(baseDir string) (int, []error) {
 	return cleaned, errors
 }
 
+// RemountOverlay recreates an Overlay struct from persisted paths and remounts it.
+// This is used for resuming interrupted agents after daemon restart.
+// The overlay directories must still exist on disk.
+func RemountOverlay(lowerDir, upperDir, workDir, mergedDir string) (*Overlay, error) {
+	// Verify all directories exist
+	for name, dir := range map[string]string{
+		"lower":  lowerDir,
+		"upper":  upperDir,
+		"work":   workDir,
+		"merged": mergedDir,
+	} {
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			return nil, fmt.Errorf("%s directory does not exist: %s", name, dir)
+		}
+	}
+
+	// Extract ID from the directory structure (baseDir/ID/upper)
+	// upperDir is like /path/to/base/abc123/upper
+	id := filepath.Base(filepath.Dir(upperDir))
+
+	overlay := &Overlay{
+		ID:        id,
+		LowerDir:  lowerDir,
+		UpperDir:  upperDir,
+		WorkDir:   workDir,
+		MergedDir: mergedDir,
+	}
+
+	// Check if already mounted (from before crash)
+	if IsMountPoint(mergedDir) {
+		overlay.mounted = true
+		// Check if it's a FUSE mount
+		cmd := exec.Command("findmnt", "-n", "-o", "FSTYPE", mergedDir)
+		output, err := cmd.Output()
+		if err == nil {
+			fsType := strings.TrimSpace(string(output))
+			overlay.useFuse = fsType == "fuse.fuse-overlayfs"
+		}
+		return overlay, nil
+	}
+
+	// Mount the overlay
+	if err := overlay.Mount(); err != nil {
+		return nil, fmt.Errorf("failed to mount overlay: %w", err)
+	}
+
+	return overlay, nil
+}
+
 // RecoverFromCrash performs cleanup operations needed after a crash.
 // It detects stale mounts, cleans them up, and returns a summary.
 func RecoverFromCrash(baseDir string) (cleaned int, stale int, errors []error) {

@@ -15,19 +15,24 @@ type EventType string
 
 // Event type constants
 const (
-	EventStateSync        EventType = "state:sync"
-	EventRunStarted       EventType = "run:started"
-	EventRunCompleted     EventType = "run:completed"
-	EventAgentStarted     EventType = "agent:started"
-	EventAgentOutput      EventType = "agent:output"
-	EventAgentLiveFeed    EventType = "agent:live_feed"
-	EventAgentCommit      EventType = "agent:commit"
-	EventAgentMergeStatus EventType = "agent:merge_status"
-	EventAgentCompleted   EventType = "agent:completed"
-	EventTaskUpdated      EventType = "task:updated"
-	EventOrchPaused       EventType = "orch:paused"
-	EventOrchResumed      EventType = "orch:resumed"
-	EventStatsUpdated     EventType = "stats:updated"
+	EventStateSync          EventType = "state:sync"
+	EventRunStarted         EventType = "run:started"
+	EventRunCompleted       EventType = "run:completed"
+	EventAgentStarted       EventType = "agent:started"
+	EventAgentResumed       EventType = "agent:resumed" // Agent resumed after daemon restart
+	EventAgentOutput        EventType = "agent:output"
+	EventAgentOutputClear   EventType = "agent:output_clear"
+	EventAgentLiveFeed      EventType = "agent:live_feed"
+	EventAgentCommit        EventType = "agent:commit"
+	EventAgentMergeStatus   EventType = "agent:merge_status"
+	EventAgentCompleted     EventType = "agent:completed"
+	EventAgentDone          EventType = "agent:done"   // Alias for completed (used in recovery)
+	EventAgentFailed        EventType = "agent:failed" // Agent failed (used in recovery)
+	EventTaskUpdated        EventType = "task:updated"
+	EventOrchPaused         EventType = "orch:paused"
+	EventOrchResumed        EventType = "orch:resumed"
+	EventStatsUpdated       EventType = "stats:updated"
+	EventRulesChanged       EventType = "rules:changed" // Rules configuration changed at runtime
 )
 
 // IsCritical returns true if this event type must never be dropped.
@@ -36,7 +41,8 @@ const (
 func (et EventType) IsCritical() bool {
 	switch et {
 	case EventRunStarted, EventRunCompleted,
-		EventAgentStarted, EventAgentCompleted,
+		EventAgentStarted, EventAgentResumed, EventAgentCompleted,
+		EventAgentDone, EventAgentFailed,
 		EventAgentMergeStatus,
 		EventOrchPaused, EventOrchResumed,
 		EventTaskUpdated:

@@ -291,6 +291,7 @@ func (h *PersistenceHandler) handleAgentCompleted(event Event) {
 	resultMessage, _ := payload["result_message"].(string)
 	stdout, _ := payload["stdout"].(string)
 	stderr, _ := payload["stderr"].(string)
+	sessionID, _ := payload["session_id"].(string)
 
 	finishedAt := event.Timestamp
 	agent := &persistence.Agent{
@@ -313,15 +314,18 @@ func (h *PersistenceHandler) handleAgentCompleted(event Event) {
 		GitCommitsCreated:   commitsCreated,
 		NumTurns:            numTurns,
 		ResultMessage:       resultMessage,
+		SessionID:           sessionID,
 	}
 
-	if err := h.store.UpdateAgent(agent); err != nil {
-		logging.Error("failed to update agent",
+	// Use UpdateAgentCompletion to preserve merge/validation/repair fields
+	// that may have been persisted earlier by handleAgentMergeStatus
+	if err := h.store.UpdateAgentCompletion(agent); err != nil {
+		logging.Error("failed to update agent completion",
 			"agent_id", agentID,
 			"error", err,
 			"component", "persistence")
 	} else {
-		logging.Debug("updated agent",
+		logging.Debug("updated agent completion",
 			"agent_id", agentID,
 			"status", status,
 			"component", "persistence")

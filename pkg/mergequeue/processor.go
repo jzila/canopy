@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -241,6 +242,84 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 	// These are the actual commits in the repo (not overlay commits which no longer exist)
 	p.sendMergedCommits(taskID, mergeResult)
 
+	// Handle pre-commit hook failures before checking for resolver needs
+	// Pre-commit hook failures are NOT merge conflicts - they're validation failures at commit time
+	if mergeResult.PreCommitHookFailed {
+		preCommitResult := p.runPreCommitRepairLoop(ctx, taskID, req, mergeResult, mergeOpts)
+		if preCommitResult.Success {
+			// Pre-commit repair succeeded - commit was successful
+			resp.CommitsApplied = preCommitResult.CommitsApplied
+
+			// Continue to validation if enabled
+			mergedDiff := p.getMergedDiff(resp.CommitsApplied)
+			validationResult := p.runValidationAndRepair(ctx, taskID, req.Task.Title, mergedDiff, p.makeAgentID(taskID), false, false, resp.CommitsApplied)
+
+			if !validationResult.ValidationPassed {
+				// Validation failed even after repair attempts
+				errMsg := validationResult.Error
+				if errMsg == "" {
+					errMsg = "validation failed"
+				}
+				resp.Error = errMsg
+
+				// Check if strict validation mode is enabled
+				isStrict := p.validationConfig != nil && p.validationConfig.IsStrict()
+
+				if isStrict {
+					// Strict mode: revert the merge and fail the task completely
+					if preMergeCommit != "" {
+						if err := p.revertMerge(preMergeCommit); err != nil {
+							fmt.Fprintf(os.Stderr, "warning: failed to revert merge for %s: %v\n", taskID, err)
+						} else {
+							resp.CommitsApplied = 0 // Reset since we reverted
+						}
+					}
+					p.markTaskFailed(ctx, taskID, errMsg)
+					p.sendTaskUpdated(taskID, req.Task.Title, "failed")
+					p.sendMergeStatusFull(taskID, ipc.MergeStatusFailed, errMsg, resp.CommitsApplied, false, false)
+					return resp
+				}
+
+				// Lenient mode: file bead and use merged_needs_repair status
+				if validationResult.RepairExhausted {
+					repairCtx := &repairExhaustedContext{
+						TaskID:           taskID,
+						TaskTitle:        req.Task.Title,
+						ValidationResult: validationResult.FinalValidationResult,
+						RepairSummaries:  validationResult.RepairAttemptSummaries,
+						MergedDiff:       mergedDiff,
+						MaxAttempts:      validationResult.AttemptsUsed,
+					}
+					if _, err := p.fileRepairExhaustedBead(ctx, repairCtx); err != nil {
+						fmt.Fprintf(os.Stderr, "warning: failed to file repair exhaustion bead for %s: %v\n", taskID, err)
+					}
+				} else {
+					p.fileValidationFailureBead(ctx, taskID, req.Task.Title, validationResult.FinalValidationResult)
+				}
+
+				p.markTaskFailed(ctx, taskID, errMsg)
+				p.sendTaskUpdated(taskID, req.Task.Title, "merged_needs_repair")
+				p.sendMergeStatusFull(taskID, ipc.MergeStatusMergedNeedsRepair, errMsg, resp.CommitsApplied, false, false)
+				return resp
+			}
+
+			// Mark task as done after successful merge and validation
+			p.markTaskDone(ctx, taskID)
+			p.sendTaskUpdated(taskID, req.Task.Title, "completed")
+			p.sendMergeStatusFull(taskID, ipc.MergeStatusMerged, "", resp.CommitsApplied, false, false)
+
+			resp.Success = true
+			return resp
+		}
+
+		// Pre-commit repair failed - report failure
+		resp.Error = preCommitResult.Error
+		p.markTaskFailed(ctx, taskID, resp.Error)
+		p.sendTaskUpdated(taskID, req.Task.Title, "failed")
+		p.sendMergeStatusFull(taskID, ipc.MergeStatusFailed, resp.Error, resp.CommitsApplied, false, false)
+		return resp
+	}
+
 	// Determine if we need to spawn a resolver agent
 	needsResolver := false
 	resolverReason := ""
@@ -391,6 +470,24 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 
 			// Merge the resolver's result
 			if resolverResult.AgentResult != nil && resolverResult.AgentResult.Overlay != nil {
+				// Validate resolver overlay is accessible before attempting merge
+				// This prevents infinite retry loops when overlays become inaccessible (e.g., permission denied)
+				if err := p.validateOverlayAccessible(resolverResult.AgentResult.Overlay); err != nil {
+					errMsg := fmt.Sprintf("resolver overlay inaccessible for %s: %v (cannot retry - overlay is stale)", taskID, err)
+					fmt.Fprintf(os.Stderr, "ERROR: %s\n", errMsg)
+					resp.Error = errMsg
+					// Clean up the inaccessible overlay
+					if cleanupErr := resolverResult.AgentResult.Overlay.Cleanup(); cleanupErr != nil && p.verbose {
+						fmt.Fprintf(os.Stderr, "warning: failed to cleanup stale resolver overlay for %s: %v\n", taskID, cleanupErr)
+					}
+					// Mark task as permanently failed - retrying won't help with a stale overlay
+					// The task will need manual intervention or the user needs to re-run canopy
+					p.markTaskFailed(ctx, taskID, errMsg)
+					p.sendTaskUpdated(taskID, req.Task.Title, "failed")
+					p.sendMergeStatusFull(taskID, ipc.MergeStatusFailed, errMsg, resp.CommitsApplied, resp.HadConflict, resp.ResolverSpawned)
+					return resp
+				}
+
 				resolverMergeResult, mergeErr := p.merger.MergeSingle(resolverResult.AgentResult, nil)
 
 				// Clean up resolver overlay regardless of merge outcome
@@ -1269,4 +1366,269 @@ func (p *Processor) fileValidationFailureBead(ctx context.Context, taskID, taskT
 	if p.verbose {
 		fmt.Printf("[%s] Filed validation failure bead: %s\n", taskID, beadID)
 	}
+}
+
+// preCommitRepairResult holds the outcome of the pre-commit repair loop.
+type preCommitRepairResult struct {
+	// Success indicates whether the repair was successful and commit succeeded
+	Success bool
+	// CommitsApplied is the number of commits applied after repair
+	CommitsApplied int
+	// Error contains the error message if repair failed
+	Error string
+}
+
+// runPreCommitRepairLoop runs a repair loop for pre-commit hook failures.
+// It spawns repair agents to fix the issue and retries the commit until
+// it succeeds or max attempts are exhausted.
+//
+// The loop follows this pattern:
+//  1. Pre-commit hook failed, staged changes are preserved
+//  2. Spawn repair agent to fix the issue
+//  3. Repair agent makes fixes
+//  4. Re-stage any new changes and retry commit
+//  5. If commit succeeds -> return success
+//  6. If commit fails again -> go to step 2 (if attempts remain)
+//  7. If attempts exhausted -> return failure
+func (p *Processor) runPreCommitRepairLoop(ctx context.Context, taskID string, req *MergeRequest, mergeResult *merge.Result, mergeOpts *merge.MergeOptions) *preCommitRepairResult {
+	result := &preCommitRepairResult{}
+
+	// Ensure repair agent is initialized
+	if p.repairAgent == nil {
+		// Try to initialize it now
+		p.InitializeRepairAgent()
+	}
+
+	if p.repairAgent == nil {
+		result.Error = "pre-commit hook failed and no repair agent configured"
+		return result
+	}
+
+	maxAttempts := 3 // Default max attempts for pre-commit repair
+	if p.validationConfig != nil {
+		maxAttempts = p.validationConfig.GetMaxRepairAttempts()
+	}
+
+	var previousAttempts []string
+	parentAgentID := p.makeAgentID(taskID)
+
+	// Get the staged diff for repair context
+	stagedDiff := p.getStagedDiff()
+
+	// Build the commit message that was being used
+	commitMsg := p.merger.BuildCommitMessageForTask(req.Result, mergeOpts)
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		// Check context before each iteration
+		if err := ctx.Err(); err != nil {
+			result.Error = fmt.Sprintf("cancelled: %v", err)
+			return result
+		}
+
+		if p.verbose {
+			fmt.Printf("[%s] Pre-commit hook failed, spawning repair agent (attempt %d/%d)...\n",
+				taskID, attempt, maxAttempts)
+		}
+
+		// Pause queue during pre-commit repair
+		p.queue.AgentPause()
+		p.sendMergeStatus(taskID, ipc.MergeStatusResolving, 0, "")
+
+		// Build repair context
+		repairCtx := &repairagent.PreCommitRepairContext{
+			TaskID:            taskID,
+			TaskTitle:         req.Task.Title,
+			TaskDescription:   req.Task.Description,
+			HookOutput:        mergeResult.PreCommitHookOutput,
+			StagedDiff:        stagedDiff,
+			StagedPaths:       mergeResult.StagedPaths,
+			CommitMessage:     commitMsg,
+			PreviousAttempts:  previousAttempts,
+			RepairAttempt:     attempt,
+			MaxRepairAttempts: maxAttempts,
+		}
+
+		// Execute repair agent
+		repairResult, err := p.repairAgent.RepairPreCommit(ctx, repairCtx, parentAgentID)
+
+		// Resume queue after repair
+		p.queue.AgentResume()
+
+		if err != nil {
+			result.Error = fmt.Sprintf("pre-commit repair agent error: %v", err)
+			return result
+		}
+
+		// Record this attempt summary for future attempts
+		attemptSummary := buildPreCommitRepairAttemptSummary(attempt, repairResult)
+		previousAttempts = append(previousAttempts, attemptSummary)
+
+		// Clean up repair context files
+		_ = repairagent.CleanupRepairContext(p.outputDir)
+
+		if p.verbose {
+			if repairResult.Success {
+				fmt.Printf("[%s] Pre-commit repair agent completed successfully (%.1fs), retrying commit...\n",
+					taskID, repairResult.Duration.Seconds())
+			} else {
+				fmt.Printf("[%s] Pre-commit repair agent failed: %s\n", taskID, repairResult.Error)
+			}
+		}
+
+		// Even if repair agent "failed", we still retry the commit
+		// because the agent might have made partial fixes
+
+		// Re-stage any modified files and retry the commit
+		// The repair agent may have modified files that need to be staged
+		if err := p.restageAndRetryCommit(mergeResult.StagedPaths, commitMsg); err != nil {
+			// Commit still failed - update the hook output for next attempt
+			mergeResult.PreCommitHookOutput = err.Error()
+			stagedDiff = p.getStagedDiff() // Refresh staged diff after repair changes
+			continue
+		}
+
+		// Commit succeeded!
+		result.Success = true
+		result.CommitsApplied = 1
+		return result
+	}
+
+	// Exhausted all attempts
+	result.Error = fmt.Sprintf("pre-commit hook repair failed after %d attempts", maxAttempts)
+	return result
+}
+
+// getStagedDiff returns the git diff of staged changes.
+func (p *Processor) getStagedDiff() string {
+	cmd := exec.Command("git", "-C", p.outputDir, "diff", "--cached")
+	output, err := cmd.Output()
+	if err != nil {
+		if p.verbose {
+			fmt.Fprintf(os.Stderr, "warning: failed to get staged diff: %v\n", err)
+		}
+		return ""
+	}
+	return string(output)
+}
+
+// restageAndRetryCommit re-stages any modified files and attempts to commit.
+// Returns nil on success, or an error containing the commit failure output.
+func (p *Processor) restageAndRetryCommit(originalPaths []string, commitMsg string) error {
+	// First, add any changes the repair agent made to already-staged files
+	// This ensures modifications to previously staged files are included
+	if len(originalPaths) > 0 {
+		addCmd := exec.Command("git", "-C", p.outputDir, "add", "--")
+		addCmd.Args = append(addCmd.Args, originalPaths...)
+		var addStderr bytes.Buffer
+		addCmd.Stderr = &addStderr
+		if err := addCmd.Run(); err != nil {
+			// Non-fatal - some paths may have been deleted by repair
+			if p.verbose {
+				fmt.Fprintf(os.Stderr, "warning: re-staging files: %v: %s\n", err, addStderr.String())
+			}
+		}
+	}
+
+	// Check if there are staged changes
+	diffCmd := exec.Command("git", "-C", p.outputDir, "diff", "--cached", "--quiet")
+	if err := diffCmd.Run(); err == nil {
+		// No staged changes - nothing to commit
+		// This means the repair agent unstaged everything (shouldn't happen)
+		return fmt.Errorf("no staged changes after repair - repair agent may have unstaged files")
+	}
+
+	// Attempt the commit
+	commitCmd := exec.Command("git", "-C", p.outputDir, "commit", "-m", commitMsg)
+	var commitOutput bytes.Buffer
+	commitCmd.Stdout = &commitOutput
+	commitCmd.Stderr = &commitOutput
+
+	if err := commitCmd.Run(); err != nil {
+		// Commit still failed - return the output so we can try again
+		return fmt.Errorf("%s", commitOutput.String())
+	}
+
+	return nil
+}
+
+// buildPreCommitRepairAttemptSummary constructs a summary of a pre-commit repair attempt.
+func buildPreCommitRepairAttemptSummary(attempt int, repairResult *repairagent.Result) string {
+	var sb strings.Builder
+
+	status := "failed"
+	if repairResult.Success {
+		status = "completed"
+	}
+
+	sb.WriteString(fmt.Sprintf("Attempt %d: %s\n", attempt, status))
+
+	if repairResult.Error != "" {
+		sb.WriteString(fmt.Sprintf("Error: %s\n", repairResult.Error))
+	}
+
+	sb.WriteString(fmt.Sprintf("Duration: %.1fs\n", repairResult.Duration.Seconds()))
+
+	// Include files modified by repair agent
+	if repairResult.AgentResult != nil && len(repairResult.AgentResult.Changes) > 0 {
+		sb.WriteString(fmt.Sprintf("Files modified: %d\n", len(repairResult.AgentResult.Changes)))
+		for i, change := range repairResult.AgentResult.Changes {
+			if i >= 5 {
+				sb.WriteString(fmt.Sprintf("  ... and %d more files\n", len(repairResult.AgentResult.Changes)-5))
+				break
+			}
+			sb.WriteString(fmt.Sprintf("  - %s\n", change.Path))
+		}
+	}
+
+	return sb.String()
+}
+
+// validateOverlayAccessible checks if an overlay's upper directory is accessible.
+// This prevents infinite retry loops when overlays become inaccessible (e.g., permission denied,
+// FUSE mount issues, or stale mounts after crashes).
+//
+// The check reads the upper directory to verify files can be accessed. If this fails,
+// the overlay is considered stale and should not be used for merge operations.
+func (p *Processor) validateOverlayAccessible(overlay *sandbox.Overlay) error {
+	if overlay == nil {
+		return fmt.Errorf("overlay is nil")
+	}
+
+	// Check that the upper directory exists and is accessible
+	upperDir := overlay.UpperDir
+	if upperDir == "" {
+		// Direct overlay (no UpperDir) - these write directly to the repo
+		return nil
+	}
+
+	// Try to read the upper directory
+	entries, err := os.ReadDir(upperDir)
+	if err != nil {
+		return fmt.Errorf("cannot read upper directory %s: %w", upperDir, err)
+	}
+
+	// Try to access at least one file in the upper directory to verify permissions
+	// This catches cases where the directory is listable but files aren't readable
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		// Skip whiteout files and hidden files (these are overlayfs markers)
+		name := entry.Name()
+		if strings.HasPrefix(name, ".wh.") || strings.HasPrefix(name, ".") {
+			continue
+		}
+
+		// Try to open the file
+		filePath := filepath.Join(upperDir, name)
+		f, err := os.Open(filePath)
+		if err != nil {
+			return fmt.Errorf("cannot access file %s in upper directory: %w", filePath, err)
+		}
+		_ = f.Close()
+		break // One successful file access is enough
+	}
+
+	return nil
 }

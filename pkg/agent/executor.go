@@ -82,7 +82,6 @@ type Config struct {
 	Verbose       bool
 	UseBwrap      bool                   // Use bubblewrap sandbox for isolation (auto-detected if not set)
 	SandboxConfig *sandbox.SandboxConfig // Sandbox configuration from .canopy/sandbox.toml
-	UserPrompt    string                 // User-provided prompt instructions (takes precedence over bead description)
 }
 
 // NewConfig creates a default agent config
@@ -440,17 +439,271 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 	return result
 }
 
-// buildPrompt constructs the prompt with task info, dependency context, and user instructions.
-// User instructions take precedence over bead/task description.
+// ExecuteResume continues an interrupted agent using claude --resume.
+// This is used to resume agents after daemon restart when a valid session ID exists.
+// The overlay should already be remounted before calling this method.
+func (e *Executor) ExecuteResume(ctx context.Context, task *beads.Task, overlay *sandbox.Overlay, sessionID string, liveFeedCallback LiveFeedCallback) *Result {
+	start := time.Now()
+
+	result := &Result{
+		TaskID: task.ID,
+	}
+
+	// Pass verbose flag to overlay for debug logging
+	overlay.Verbose = e.config.Verbose
+
+	// Record base commit if this is a git repo
+	var baseCommit string
+	hasGitRepo := overlay.HasGitRepo()
+	if e.config.Verbose {
+		fmt.Fprintf(os.Stderr, "[executor] Resume: HasGitRepo=%v, MergedDir=%s, SessionID=%s\n", hasGitRepo, overlay.MergedDir, sessionID)
+	}
+	if hasGitRepo {
+		var err error
+		baseCommit, err = overlay.GetBaseCommit()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to get base commit (commits won't be tracked): %v\n", err)
+		} else if e.config.Verbose {
+			fmt.Fprintf(os.Stderr, "[executor] baseCommit=%s\n", baseCommit)
+		}
+	}
+
+	// Build command arguments for resume - no prompt, just --resume
+	args := []string{
+		"--resume", sessionID,
+		"--print",
+		"--output-format", "stream-json",
+		"--verbose",
+		"--dangerously-skip-permissions",
+	}
+
+	// Determine timeout
+	timeout := task.GetTimeout()
+	if timeout <= 0 && e.config.SandboxConfig != nil {
+		timeout = e.config.SandboxConfig.GetTimeout()
+	}
+	if timeout <= 0 {
+		timeout = e.config.Timeout
+	}
+	if timeout <= 0 {
+		timeout = DefaultTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	// Set up filtered environment
+	env := filterEnvironment(os.Environ())
+	env = append(env, "HOME="+overlay.MergedDir)
+	env = append(env, "GIT_SSH_COMMAND=false")
+
+	// Set Go cache environment variables if sandbox has cache mounts
+	env = addGoCacheEnv(env, e.config.SandboxConfig)
+
+	// Build command - use bwrap sandbox if available and enabled
+	var cmd *exec.Cmd
+	useBwrap := e.config.UseBwrap && sandbox.BwrapAvailable()
+
+	if useBwrap {
+		bwrapCfg := &sandbox.BwrapConfig{
+			MergedDir:      overlay.MergedDir,
+			Command:        e.config.ClaudePath,
+			Args:           args,
+			Env:            env,
+			MaxMemoryBytes: 4 << 30,
+			MaxProcesses:   100,
+			MaxOpenFiles:   1024,
+			SandboxConfig:  e.config.SandboxConfig,
+		}
+		bwrapCmd, err := sandbox.BuildBwrapCommand(bwrapCfg)
+		if err != nil {
+			result.Error = fmt.Sprintf("failed to build bwrap command: %v", err)
+			return result
+		}
+		cmd = exec.Command(bwrapCmd.Path, bwrapCmd.Args[1:]...)
+		cmd.Dir = bwrapCmd.Dir
+		cmd.Env = bwrapCmd.Env
+	} else {
+		cmd = exec.Command(e.config.ClaudePath, args...)
+		cmd.Dir = overlay.MergedDir
+		cmd.Env = env
+	}
+
+	// Apply resource limits on non-bwrap execution
+	if !useBwrap {
+		setResourceLimits(cmd)
+	}
+
+	// Set up streaming stdout/stderr capture
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	// Create stdout pipe for streaming
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		result.Error = fmt.Sprintf("failed to create stdout pipe: %v", err)
+		return result
+	}
+
+	// Start the command
+	if err := cmd.Start(); err != nil {
+		result.Error = fmt.Sprintf("failed to start command: %v", err)
+		result.ExitCode = -1
+		return result
+	}
+
+	// Watch for context cancellation
+	processDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			if cmd.Process != nil {
+				pid := cmd.Process.Pid
+				if pid > 0 {
+					_ = killProcessGroup(pid, processGroupGracePeriod)
+				}
+			}
+		case <-processDone:
+		}
+	}()
+
+	// Parse streaming output
+	var finalResult *ClaudeStreamResult
+	parser := NewStreamParser(stdoutPipe)
+	for parser.scanner.Scan() {
+		line := parser.scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+
+		var eventType struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(line, &eventType); err != nil {
+			continue
+		}
+
+		if eventType.Type == "result" {
+			var result ClaudeStreamResult
+			if err := json.Unmarshal(line, &result); err != nil {
+				if e.config.Verbose {
+					fmt.Fprintf(os.Stderr, "warning: failed to parse result event: %v\n", err)
+				}
+			} else {
+				finalResult = &result
+			}
+			continue
+		}
+
+		var event StreamEvent
+		if err := json.Unmarshal(line, &event); err != nil {
+			continue
+		}
+
+		if liveFeedCallback != nil {
+			if liveEvent := FilterForLiveFeed(&event); liveEvent != nil {
+				liveFeedCallback(task.ID, liveEvent)
+			}
+		}
+	}
+
+	if scanErr := parser.Err(); scanErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: stream scanner error (token/cost metrics may be incomplete): %v\n", scanErr)
+	}
+
+	_ = cmd.Wait()
+	close(processDone)
+
+	result.Duration = time.Since(start)
+	result.Stderr = stderr.String()
+
+	if cmd.ProcessState != nil {
+		result.ExitCode = cmd.ProcessState.ExitCode()
+	}
+
+	// Convert stream result to ClaudeOutput
+	if finalResult == nil && e.config.Verbose {
+		fmt.Fprintf(os.Stderr, "warning: no result event received from claude CLI, token/cost metrics will be zero\n")
+	}
+	if finalResult != nil {
+		result.Output = &ClaudeOutput{
+			SessionID:                finalResult.SessionID,
+			CostUSD:                  finalResult.TotalCostUSD,
+			TotalInputTokens:         finalResult.Usage.InputTokens,
+			TotalOutputTokens:        finalResult.Usage.OutputTokens,
+			CacheCreationInputTokens: finalResult.Usage.CacheCreationInputToken,
+			CacheReadInputTokens:     finalResult.Usage.CacheReadInputTokens,
+			DurationMS:               finalResult.DurationMS,
+			DurationAPIMS:            finalResult.DurationAPIMS,
+			NumTurns:                 finalResult.NumTurns,
+			ResultMessage:            finalResult.Result,
+		}
+
+		if finalResult.ModelUsage != nil {
+			result.Output.ModelUsage = make(map[string]ModelUsageData)
+			for model, usage := range finalResult.ModelUsage {
+				result.Output.ModelUsage[model] = ModelUsageData{
+					InputTokens:              usage.InputTokens,
+					OutputTokens:             usage.OutputTokens,
+					CacheReadInputTokens:     usage.CacheReadInputTokens,
+					CacheCreationInputTokens: usage.CacheCreationInputTokens,
+					CostUSD:                  usage.CostUSD,
+				}
+			}
+		}
+
+		result.Stdout = finalResult.Result
+	}
+
+	// Get file changes from overlay
+	changes, err := overlay.GetChanges()
+	if err != nil && e.config.Verbose {
+		fmt.Fprintf(os.Stderr, "warning: failed to get overlay changes: %v\n", err)
+	}
+	result.Changes = changes
+
+	// Extract git commits
+	if baseCommit != "" {
+		gitState, err := overlay.ExtractNewCommits(baseCommit)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to extract git commits: %v\n", err)
+		}
+		result.GitState = gitState
+		if e.config.Verbose && gitState != nil {
+			fmt.Fprintf(os.Stderr, "[executor] extracted %d commits\n", len(gitState.NewCommits))
+		}
+	}
+
+	// Set overlay for merge processing
+	result.Overlay = overlay
+
+	// Determine success
+	if err != nil {
+		result.Success = false
+		if ctx.Err() == context.DeadlineExceeded {
+			result.Error = "execution timed out"
+		} else {
+			result.Error = err.Error()
+		}
+	} else {
+		result.Success = result.ExitCode == 0
+		if !result.Success {
+			result.Error = fmt.Sprintf("exit code %d", result.ExitCode)
+		}
+	}
+
+	// Record task duration metric
+	status := "success"
+	if !result.Success {
+		status = "failure"
+	}
+	metrics.RecordTaskDuration(result.Duration.Seconds(), status)
+
+	return result
+}
+
+// buildPrompt constructs the prompt with task info and dependency context.
 func (e *Executor) buildPrompt(task *beads.Task, deps []DependencyContext) string {
 	var parts []string
-
-	// Add user instructions at the top if present - these take precedence
-	if e.config.UserPrompt != "" {
-		parts = append(parts, "## User Instructions (PRIORITY - follow these over task description)\n")
-		parts = append(parts, e.config.UserPrompt)
-		parts = append(parts, "\n---\n")
-	}
 
 	// Add dependency context if present
 	if len(deps) > 0 {
@@ -470,12 +723,6 @@ func (e *Executor) buildPrompt(task *beads.Task, deps []DependencyContext) strin
 	// Add description if present
 	if task.Description != "" {
 		parts = append(parts, task.Description)
-	}
-
-	// Add reminder about user instructions if they were provided
-	if e.config.UserPrompt != "" {
-		parts = append(parts, "\n---\n")
-		parts = append(parts, "**IMPORTANT**: Follow the User Instructions above. Stop when you reach the boundaries specified by the user, even if the task description suggests doing more.")
 	}
 
 	return strings.Join(parts, "\n")

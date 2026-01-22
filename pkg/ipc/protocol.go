@@ -82,7 +82,9 @@ type MessageType string
 const (
 	// Agent lifecycle events
 	MessageTypeAgentStart       MessageType = "agent_start"
+	MessageTypeAgentResumed     MessageType = "agent_resumed" // Agent resumed after daemon restart
 	MessageTypeAgentOutput      MessageType = "agent_output"
+	MessageTypeAgentOutputClear MessageType = "agent_output_clear"
 	MessageTypeAgentLiveFeed    MessageType = "agent_live_feed"
 	MessageTypeAgentCommit      MessageType = "agent_commit"
 	MessageTypeAgentMergeStatus MessageType = "agent_merge_status"
@@ -98,6 +100,14 @@ const (
 
 	// Orchestrator status events
 	MessageTypeOrchPauseStatus MessageType = "orch_pause_status"
+
+	// Run control events (daemon-owned orchestration)
+	MessageTypeExecuteRunRequest  MessageType = "execute_run_request"
+	MessageTypeExecuteRunResponse MessageType = "execute_run_response"
+	MessageTypeStopRunRequest     MessageType = "stop_run_request"
+	MessageTypeStopRunResponse    MessageType = "stop_run_response"
+	MessageTypeRunStatusRequest   MessageType = "run_status_request"
+	MessageTypeRunStatusResponse  MessageType = "run_status_response"
 )
 
 // Message is the top-level IPC message envelope
@@ -127,6 +137,21 @@ type AgentStartPayload struct {
 	TaskDescription string `json:"task_description,omitempty"` // Task description for display
 	ParentAgentID   string `json:"parent_agent_id,omitempty"`   // ID of parent agent if spawned by another agent
 	RepoID          string `json:"repo_id,omitempty"`           // Repository ID for tracking
+	IsResume        bool   `json:"is_resume,omitempty"`         // True if this agent is being resumed after daemon restart
+	ResumeCount     int    `json:"resume_count,omitempty"`      // Number of times this agent has been resumed
+	SessionID       string `json:"session_id,omitempty"`        // Claude CLI session ID being resumed
+}
+
+// AgentResumedPayload is sent when an agent is resumed after daemon restart
+type AgentResumedPayload struct {
+	AgentID       string `json:"agent_id"`
+	RunID         string `json:"run_id,omitempty"`         // Run ID this agent belongs to
+	TaskID        string `json:"task_id"`
+	TaskTitle     string `json:"task_title"`
+	SessionID     string `json:"session_id"`               // Claude CLI session ID being resumed
+	ResumeCount   int    `json:"resume_count"`             // Number of times this agent has been resumed (including this time)
+	InterruptedAt int64  `json:"interrupted_at"`           // Unix timestamp of when the agent was interrupted
+	ResumedAt     int64  `json:"resumed_at"`               // Unix timestamp of when the agent was resumed
 }
 
 // AgentOutputPayload is sent when an agent produces output
@@ -134,6 +159,12 @@ type AgentOutputPayload struct {
 	AgentID string `json:"agent_id"`
 	Output  string `json:"output"`
 	IsError bool   `json:"is_error"`
+}
+
+// AgentOutputClearPayload is sent to clear an agent's accumulated output buffer.
+// This is used when an agent is resumed after a resolver/repair completes.
+type AgentOutputClearPayload struct {
+	AgentID string `json:"agent_id"`
 }
 
 // AgentLiveFeedPayload is sent for real-time streaming events from agents
@@ -267,4 +298,94 @@ type OrchPauseStatusPayload struct {
 	IsPausedByUser  bool   `json:"is_paused_by_user"`   // Whether paused by user request
 	IsPausedByAgent bool   `json:"is_paused_by_agent"`  // Whether paused by an agent (resolver, repair, etc.)
 	PauseState      string `json:"pause_state"`         // Detailed state: "running", "paused_user", "paused_agent", "paused_both"
+}
+
+// TasksPayload represents tasks with dual-source architecture.
+// Persistent tasks come from beads (source of truth), while runtime
+// tasks are ephemeral overlay state (in_progress, agent assignments).
+// The frontend merges these: runtime overlays persistent for display.
+type TasksPayload struct {
+	// Persistent contains tasks from beads (source of truth).
+	// These are the canonical task states that persist across daemon restarts.
+	Persistent map[string]*TaskState `json:"persistent"`
+
+	// Runtime contains ephemeral overlay state (in_progress status, agent assignments).
+	// These are rebuilt from agent events on startup and do not persist to beads.
+	// Frontend merges runtime onto persistent for display.
+	Runtime map[string]*TaskState `json:"runtime"`
+}
+
+// TaskState represents a task for the TasksPayload.
+// This is a wire format type for state:sync events.
+type TaskState struct {
+	ID           string   `json:"id"`
+	Title        string   `json:"title"`
+	Status       string   `json:"status"`               // ready, in_progress, completed, failed
+	Type         string   `json:"type,omitempty"`       // Task type (task, bug, feature, etc.)
+	AgentID      string   `json:"agent_id,omitempty"`   // ID of agent executing this task
+	Priority     int      `json:"priority"`
+	Dependencies []string `json:"dependencies"`         // Task IDs this task depends on
+	Archived     bool     `json:"archived"`             // Whether the task is archived
+	RepoID       string   `json:"repo_id,omitempty"`    // Repository this task belongs to
+	UpdatedAt    int64    `json:"updated_at,omitempty"` // Unix timestamp of last update
+}
+
+// ExecuteRunRequestPayload is sent by the CLI to request a new orchestration run.
+// The daemon owns the orchestrator lifecycle and responds with run status.
+type ExecuteRunRequestPayload struct {
+	WorkDir         string `json:"work_dir"`                    // Repository root directory
+	OutputDir       string `json:"output_dir,omitempty"`        // Output directory for merged results
+	Concurrency     int    `json:"concurrency,omitempty"`       // Max concurrent agents (default: 4)
+	Verbose         bool   `json:"verbose,omitempty"`           // Enable verbose logging
+	DryRun          bool   `json:"dry_run,omitempty"`           // Show plan without executing
+	UseBwrap        bool   `json:"use_bwrap,omitempty"`         // Use bubblewrap sandbox
+	MaxRetries      int    `json:"max_retries,omitempty"`       // Max retry attempts (default: 3)
+	MaxPriority     int    `json:"max_priority,omitempty"`      // Max priority filter (-1 = no filter)
+	ResolverTimeout int64  `json:"resolver_timeout_ms,omitempty"` // Resolver timeout in milliseconds
+	RepoID          string `json:"repo_id,omitempty"`           // Repository ID for tracking
+}
+
+// ExecuteRunResponsePayload is sent by the daemon in response to execute_run_request.
+type ExecuteRunResponsePayload struct {
+	Success bool   `json:"success"`            // Whether the run was started
+	RunID   string `json:"run_id,omitempty"`   // Assigned run ID (if success)
+	Error   string `json:"error,omitempty"`    // Error message (if !success)
+}
+
+// StopRunRequestPayload is sent by the CLI to stop an active orchestration run.
+type StopRunRequestPayload struct {
+	RunID string `json:"run_id"` // Run ID to stop
+}
+
+// StopRunResponsePayload is sent by the daemon in response to stop_run_request.
+type StopRunResponsePayload struct {
+	Success bool   `json:"success"`         // Whether the run was stopped
+	Error   string `json:"error,omitempty"` // Error message (if !success)
+}
+
+// RunStatusRequestPayload is sent by the CLI to query run status.
+type RunStatusRequestPayload struct {
+	RunID string `json:"run_id"` // Run ID to query (empty = list all)
+}
+
+// RunStatusResponsePayload is sent by the daemon in response to run_status_request.
+type RunStatusResponsePayload struct {
+	Success bool        `json:"success"`          // Whether the query succeeded
+	Run     *RunStatus  `json:"run,omitempty"`    // Single run status (if run_id specified)
+	Runs    []RunStatus `json:"runs,omitempty"`   // All runs (if no run_id specified)
+	Error   string      `json:"error,omitempty"`  // Error message (if !success)
+}
+
+// RunStatus represents the status of an orchestration run.
+type RunStatus struct {
+	ID          string  `json:"id"`
+	RepoPath    string  `json:"repo_path"`
+	RepoID      string  `json:"repo_id,omitempty"`
+	Status      string  `json:"status"` // pending, running, completed, failed, cancelled
+	StartTime   int64   `json:"start_time"`
+	EndTime     int64   `json:"end_time,omitempty"`
+	Error       string  `json:"error,omitempty"`
+	TasksTotal  int     `json:"tasks_total"`
+	TasksDone   int     `json:"tasks_done"`
+	TasksFailed int     `json:"tasks_failed"`
 }

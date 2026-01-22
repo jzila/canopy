@@ -24,6 +24,8 @@ type Server struct {
 	runsHandler  *RunsHandler
 	repoHandler  *RepoHandler
 	beadsHandler *BeadsHandler
+	orchHandler  *OrchestrationHandler
+	rulesHandler *RulesHandler
 	state        *RuntimeState
 	eventBus     *EventBus
 	upgrader     websocket.Upgrader
@@ -84,6 +86,18 @@ func NewServerWithDaemon(port int, state *RuntimeState, eventBus *EventBus, sche
 		beadsHandler = NewBeadsHandler(daemon)
 	}
 
+	// Create orchestration handler for run control (requires daemon reference)
+	var orchHandler *OrchestrationHandler
+	if daemon != nil {
+		orchHandler = NewOrchestrationHandler(daemon.GetOrchestratorManager())
+	}
+
+	// Create rules handler for runtime rule management (requires daemon reference)
+	var rulesHandler *RulesHandler
+	if daemon != nil {
+		rulesHandler = NewRulesHandler(daemon)
+	}
+
 	// Configure WebSocket upgrader
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:  1024,
@@ -101,6 +115,8 @@ func NewServerWithDaemon(port int, state *RuntimeState, eventBus *EventBus, sche
 		runsHandler:  runsHandler,
 		repoHandler:  repoHandler,
 		beadsHandler: beadsHandler,
+		orchHandler:  orchHandler,
+		rulesHandler: rulesHandler,
 		state:        state,
 		eventBus:     eventBus,
 		upgrader:     upgrader,
@@ -188,6 +204,13 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// REST API routes - beads operations
 	mux.HandleFunc("/api/beads/sync", s.handleBeadsSyncRoute) // Handles POST /api/beads/sync
 
+	// REST API routes - orchestration control (daemon-owned runs)
+	mux.HandleFunc("/api/orchestrator/", s.handleOrchestratorRoutes) // Handles all /api/orchestrator/* routes
+
+	// REST API routes - rules management
+	mux.HandleFunc("/api/rules", s.handleRulesRoutes)  // Handles GET/POST /api/rules
+	mux.HandleFunc("/api/rules/", s.handleRulesRoutes) // Handles /api/rules/:name and /api/rules/config
+
 	// Prometheus metrics endpoint
 	mux.Handle("/metrics", promhttp.Handler())
 
@@ -210,6 +233,12 @@ func (s *Server) handleAgentsRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if this is a resumable agents request: /api/agents/resumable
+	if strings.HasSuffix(path, "/resumable") {
+		s.handleGetResumableAgents(w, r)
+		return
+	}
+
 	// Handle method-based routing for /api/agents
 	switch r.Method {
 	case http.MethodGet:
@@ -218,6 +247,64 @@ func (s *Server) handleAgentsRoutes(w http.ResponseWriter, r *http.Request) {
 		s.handler.HandleUpdateAgent(w, r)
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// ResumableAgentInfo contains the information needed to resume an agent
+type ResumableAgentInfo struct {
+	AgentID       string `json:"agent_id"`
+	TaskID        string `json:"task_id"`
+	TaskTitle     string `json:"task_title,omitempty"`
+	RunID         string `json:"run_id"`
+	SessionID     string `json:"session_id"`
+	UpperDir      string `json:"upper_dir"`
+	LowerDir      string `json:"lower_dir"`
+	WorkDir       string `json:"work_dir"`
+	MergedDir     string `json:"merged_dir"`
+	InterruptedAt int64  `json:"interrupted_at"`
+}
+
+// handleGetResumableAgents returns agents that can be resumed after daemon restart
+func (s *Server) handleGetResumableAgents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if s.daemon == nil {
+		http.Error(w, "Daemon not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Get resumable overlays from daemon
+	overlays, err := s.daemon.GetResumableOverlays(r.Context())
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to get resumable agents: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Convert to wire format
+	agents := make([]ResumableAgentInfo, 0, len(overlays))
+	for _, o := range overlays {
+		info := ResumableAgentInfo{
+			AgentID:       o.Agent.ID,
+			TaskID:        o.Agent.TaskID,
+			TaskTitle:     o.Agent.TaskTitle,
+			RunID:         o.Agent.RunID,
+			SessionID:     o.Overlay.SessionID,
+			UpperDir:      o.Overlay.UpperDir,
+			LowerDir:      o.Overlay.LowerDir,
+			WorkDir:       o.Overlay.WorkDir,
+			MergedDir:     o.Overlay.MergedDir,
+			InterruptedAt: o.InterruptedAt.Unix(),
+		}
+		agents = append(agents, info)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(agents); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to encode resumable agents: %v", err), http.StatusInternalServerError)
+		return
 	}
 }
 
@@ -294,6 +381,24 @@ func (s *Server) handleBeadsSyncRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.beadsHandler.HandleSyncBeads(w, r)
+}
+
+// handleOrchestratorRoutes routes orchestration control requests
+func (s *Server) handleOrchestratorRoutes(w http.ResponseWriter, r *http.Request) {
+	if s.orchHandler == nil {
+		http.Error(w, "Orchestration not available", http.StatusServiceUnavailable)
+		return
+	}
+	s.orchHandler.RouteOrchestrator(w, r)
+}
+
+// handleRulesRoutes routes rules management requests
+func (s *Server) handleRulesRoutes(w http.ResponseWriter, r *http.Request) {
+	if s.rulesHandler == nil {
+		http.Error(w, "Rules management not available", http.StatusServiceUnavailable)
+		return
+	}
+	s.rulesHandler.RouteRules(w, r)
 }
 
 // handleRepositoriesRoutes routes repository management requests

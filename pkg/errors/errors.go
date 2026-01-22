@@ -21,6 +21,7 @@ package errors
 import (
 	"errors"
 	"fmt"
+	"time"
 )
 
 // Sentinel errors for common conditions.
@@ -52,7 +53,65 @@ var (
 
 	// ErrSandboxNotSupported indicates sandboxing is not supported on this platform.
 	ErrSandboxNotSupported = errors.New("sandbox not supported on this platform")
+
+	// ErrDirtyWorkingDirectory indicates the working directory has uncommitted changes
+	// when it should be clean. This is a critical error that indicates merge cleanup failed.
+	ErrDirtyWorkingDirectory = errors.New("dirty working directory")
+
+	// ErrRunAlreadyActive indicates a canopy run is already active for the repository.
+	ErrRunAlreadyActive = errors.New("run already active for repository")
 )
+
+// RunActiveError provides detailed information when a run is rejected because
+// another run is already active for the same repository.
+type RunActiveError struct {
+	RepoPath    string    // Absolute path to the repository
+	RunID       string    // Run ID of the existing active run
+	StartedAt   time.Time // When the existing run started
+}
+
+func (e *RunActiveError) Error() string {
+	duration := time.Since(e.StartedAt).Truncate(time.Second)
+	return fmt.Sprintf(`a canopy run is already active for this repository
+
+  Run ID:    %s
+  Started:   %s ago
+  Repo:      %s
+
+Use "canopy run --status" to check progress, or "canopy run --stop" to terminate.`,
+		e.RunID, formatDuration(duration), e.RepoPath)
+}
+
+// Unwrap returns the underlying error for error chain support.
+func (e *RunActiveError) Unwrap() error {
+	return ErrRunAlreadyActive
+}
+
+// formatDuration formats a duration as a human-readable string
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%d seconds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		mins := int(d.Minutes())
+		if mins == 1 {
+			return "1 minute"
+		}
+		return fmt.Sprintf("%d minutes", mins)
+	}
+	hours := int(d.Hours())
+	mins := int(d.Minutes()) % 60
+	if hours == 1 {
+		if mins == 0 {
+			return "1 hour"
+		}
+		return fmt.Sprintf("1 hour %d minutes", mins)
+	}
+	if mins == 0 {
+		return fmt.Sprintf("%d hours", hours)
+	}
+	return fmt.Sprintf("%d hours %d minutes", hours, mins)
+}
 
 // MergeError provides detailed information about merge failures.
 type MergeError struct {

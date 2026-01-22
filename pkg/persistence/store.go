@@ -96,6 +96,20 @@ type Task struct {
 	UpdatedAt int64  `json:"updated_at"`
 }
 
+// ActiveOverlay represents an overlay filesystem being tracked for agent resumability
+type ActiveOverlay struct {
+	AgentID   string `json:"agent_id"`
+	TaskID    string `json:"task_id"`
+	RunID     string `json:"run_id"`
+	SessionID string `json:"session_id,omitempty"`
+	UpperDir  string `json:"upper_dir"`
+	MergedDir string `json:"merged_dir"`
+	LowerDir  string `json:"lower_dir"`
+	WorkDir   string `json:"work_dir"`
+	CreatedAt int64  `json:"created_at"`
+	Status    string `json:"status"` // active, completed, orphaned
+}
+
 // Agent represents a single agent execution within a run
 type Agent struct {
 	ID              string      `json:"id"`
@@ -138,6 +152,8 @@ type Agent struct {
 	// Repair agent tracking fields
 	RepairAttempts   int    `json:"repair_attempts"`              // Number of repair attempts made (0 = no repairs attempted)
 	LastRepairOutput string `json:"last_repair_output,omitempty"` // Output/error from the last repair attempt
+	// Session tracking for claude --resume support
+	SessionID string `json:"session_id,omitempty"` // Claude CLI session ID for resumability
 }
 
 // RunFilter specifies criteria for querying runs
@@ -338,8 +354,8 @@ func (t *Tx) CreateRun(run *Run) error {
 // the existing record is updated with the new values.
 func (t *Tx) CreateAgent(agent *Agent) error {
 	query := `
-		INSERT INTO agents (id, run_id, task_id, task_title, task_description, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived, parent_agent_id, merge_status, merge_commits_applied, merge_had_conflict, merge_resolver_spawned, merge_error, validation_status, validation_duration_ms, validation_error, validation_steps)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO agents (id, run_id, task_id, task_title, task_description, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived, parent_agent_id, merge_status, merge_commits_applied, merge_had_conflict, merge_resolver_spawned, merge_error, validation_status, validation_duration_ms, validation_error, validation_steps, session_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			run_id = excluded.run_id,
 			task_description = excluded.task_description,
@@ -370,7 +386,8 @@ func (t *Tx) CreateAgent(agent *Agent) error {
 			validation_status = excluded.validation_status,
 			validation_duration_ms = excluded.validation_duration_ms,
 			validation_error = excluded.validation_error,
-			validation_steps = excluded.validation_steps
+			validation_steps = excluded.validation_steps,
+			session_id = excluded.session_id
 	`
 	var finishedAt *int64
 	if agent.FinishedAt != nil {
@@ -413,6 +430,7 @@ func (t *Tx) CreateAgent(agent *Agent) error {
 		agent.ValidationDuration,
 		nullString(agent.ValidationError),
 		nullString(agent.ValidationSteps),
+		nullString(agent.SessionID),
 	)
 	return err
 }
@@ -649,8 +667,8 @@ func (s *Store) ListRuns(filter RunFilter) (*RunListResult, error) {
 // the existing record is updated with the new values.
 func (s *Store) CreateAgent(agent *Agent) error {
 	query := `
-		INSERT INTO agents (id, run_id, task_id, task_title, task_description, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived, parent_agent_id, merge_status, merge_commits_applied, merge_had_conflict, merge_resolver_spawned, merge_error, validation_status, validation_duration_ms, validation_error, validation_steps)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO agents (id, run_id, task_id, task_title, task_description, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived, parent_agent_id, merge_status, merge_commits_applied, merge_had_conflict, merge_resolver_spawned, merge_error, validation_status, validation_duration_ms, validation_error, validation_steps, session_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			run_id = excluded.run_id,
 			task_description = excluded.task_description,
@@ -681,7 +699,8 @@ func (s *Store) CreateAgent(agent *Agent) error {
 			validation_status = excluded.validation_status,
 			validation_duration_ms = excluded.validation_duration_ms,
 			validation_error = excluded.validation_error,
-			validation_steps = excluded.validation_steps
+			validation_steps = excluded.validation_steps,
+			session_id = excluded.session_id
 	`
 	var finishedAt *int64
 	if agent.FinishedAt != nil {
@@ -724,6 +743,7 @@ func (s *Store) CreateAgent(agent *Agent) error {
 		agent.ValidationDuration,
 		nullString(agent.ValidationError),
 		nullString(agent.ValidationSteps),
+		nullString(agent.SessionID),
 	)
 	return err
 }
@@ -768,7 +788,8 @@ func (s *Store) UpdateAgent(agent *Agent) error {
 			validation_error = ?,
 			validation_steps = ?,
 			repair_attempts = ?,
-			last_repair_output = ?
+			last_repair_output = ?,
+			session_id = ?
 		WHERE id = ?
 	`
 	var finishedAt *int64
@@ -806,6 +827,7 @@ func (s *Store) UpdateAgent(agent *Agent) error {
 		nullString(agent.ValidationSteps),
 		agent.RepairAttempts,
 		nullString(agent.LastRepairOutput),
+		nullString(agent.SessionID),
 		agent.ID,
 	)
 	return err
@@ -815,6 +837,61 @@ func (s *Store) UpdateAgent(agent *Agent) error {
 func (s *Store) SetAgentArchived(agentID string, archived bool) error {
 	query := `UPDATE agents SET archived = ? WHERE id = ?`
 	_, err := s.db.Exec(query, boolToInt(archived), agentID)
+	return err
+}
+
+// UpdateAgentCompletion updates only the completion-related fields of an agent.
+// This does NOT update merge/validation/repair fields, preserving any previously
+// persisted merge status. Use this when handling agent completion events.
+func (s *Store) UpdateAgentCompletion(agent *Agent) error {
+	query := `
+		UPDATE agents SET
+			status = ?,
+			finished_at = ?,
+			duration_seconds = ?,
+			exit_code = ?,
+			error_message = ?,
+			stdout = ?,
+			stderr = ?,
+			input_tokens = ?,
+			output_tokens = ?,
+			total_tokens = ?,
+			cache_creation_tokens = ?,
+			cache_read_tokens = ?,
+			cost_usd = ?,
+			files_changed = ?,
+			git_commits_created = ?,
+			num_turns = ?,
+			result_message = ?,
+			session_id = ?
+		WHERE id = ?
+	`
+	var finishedAt *int64
+	if agent.FinishedAt != nil {
+		ts := agent.FinishedAt.Unix()
+		finishedAt = &ts
+	}
+	_, err := s.db.Exec(query,
+		string(agent.Status),
+		finishedAt,
+		agent.DurationSeconds,
+		agent.ExitCode,
+		agent.ErrorMessage,
+		agent.Stdout,
+		agent.Stderr,
+		agent.InputTokens,
+		agent.OutputTokens,
+		agent.TotalTokens,
+		agent.CacheCreationTokens,
+		agent.CacheReadTokens,
+		agent.CostUSD,
+		agent.FilesChanged,
+		agent.GitCommitsCreated,
+		agent.NumTurns,
+		agent.ResultMessage,
+		nullString(agent.SessionID),
+		agent.ID,
+	)
 	return err
 }
 
@@ -879,7 +956,7 @@ func (s *Store) UpdateAgentRepairState(agentID string, repairAttempts int, lastR
 }
 
 // agentColumns lists all columns for agent queries
-const agentColumns = `id, run_id, task_id, task_title, task_description, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived, parent_agent_id, merge_status, merge_commits_applied, merge_had_conflict, merge_resolver_spawned, merge_error, validation_status, validation_duration_ms, validation_error, validation_steps, repair_attempts, last_repair_output`
+const agentColumns = `id, run_id, task_id, task_title, task_description, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived, parent_agent_id, merge_status, merge_commits_applied, merge_had_conflict, merge_resolver_spawned, merge_error, validation_status, validation_duration_ms, validation_error, validation_steps, repair_attempts, last_repair_output, session_id`
 
 // agentColumnsWithPrefix returns the agent columns with a table alias prefix.
 // This is used for queries with JOINs to disambiguate column names.
@@ -893,7 +970,7 @@ func agentColumnsWithPrefix(prefix string) string {
 		"merge_status", "merge_commits_applied", "merge_had_conflict",
 		"merge_resolver_spawned", "merge_error",
 		"validation_status", "validation_duration_ms", "validation_error", "validation_steps",
-		"repair_attempts", "last_repair_output",
+		"repair_attempts", "last_repair_output", "session_id",
 	}
 	result := make([]string, len(cols))
 	for i, col := range cols {
@@ -1493,6 +1570,7 @@ func (s *Store) scanAgent(row *sql.Row) (*Agent, error) {
 	var validationDuration sql.NullInt64
 	var repairAttempts sql.NullInt64
 	var lastRepairOutput sql.NullString
+	var sessionID sql.NullString
 
 	err := row.Scan(
 		&agent.ID,
@@ -1532,6 +1610,7 @@ func (s *Store) scanAgent(row *sql.Row) (*Agent, error) {
 		&validationSteps,
 		&repairAttempts,
 		&lastRepairOutput,
+		&sessionID,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -1569,6 +1648,7 @@ func (s *Store) scanAgent(row *sql.Row) (*Agent, error) {
 	agent.ValidationSteps = validationSteps.String
 	agent.RepairAttempts = int(repairAttempts.Int64)
 	agent.LastRepairOutput = lastRepairOutput.String
+	agent.SessionID = sessionID.String
 
 	return &agent, nil
 }
@@ -1587,6 +1667,7 @@ func (s *Store) scanAgentFromRows(rows *sql.Rows) (*Agent, error) {
 	var validationDuration sql.NullInt64
 	var repairAttempts sql.NullInt64
 	var lastRepairOutput sql.NullString
+	var sessionID sql.NullString
 
 	err := rows.Scan(
 		&agent.ID,
@@ -1626,6 +1707,7 @@ func (s *Store) scanAgentFromRows(rows *sql.Rows) (*Agent, error) {
 		&validationSteps,
 		&repairAttempts,
 		&lastRepairOutput,
+		&sessionID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan agent: %w", err)
@@ -1660,6 +1742,7 @@ func (s *Store) scanAgentFromRows(rows *sql.Rows) (*Agent, error) {
 	agent.ValidationSteps = validationSteps.String
 	agent.RepairAttempts = int(repairAttempts.Int64)
 	agent.LastRepairOutput = lastRepairOutput.String
+	agent.SessionID = sessionID.String
 
 	return &agent, nil
 }
@@ -1836,4 +1919,162 @@ func (s *Store) scanTaskFromRows(rows *sql.Rows) (*Task, error) {
 	task.UpdatedAt = updatedAt.Int64
 
 	return &task, nil
+}
+
+// TrackOverlay records an active overlay filesystem for potential recovery
+func (s *Store) TrackOverlay(overlay *ActiveOverlay) error {
+	query := `
+		INSERT INTO active_overlays (agent_id, task_id, run_id, session_id, upper_dir, merged_dir, lower_dir, work_dir, created_at, status)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(agent_id) DO UPDATE SET
+			task_id = excluded.task_id,
+			run_id = excluded.run_id,
+			session_id = excluded.session_id,
+			upper_dir = excluded.upper_dir,
+			merged_dir = excluded.merged_dir,
+			lower_dir = excluded.lower_dir,
+			work_dir = excluded.work_dir,
+			created_at = excluded.created_at,
+			status = excluded.status
+	`
+	_, err := s.db.Exec(query,
+		overlay.AgentID,
+		overlay.TaskID,
+		overlay.RunID,
+		nullString(overlay.SessionID),
+		overlay.UpperDir,
+		overlay.MergedDir,
+		overlay.LowerDir,
+		overlay.WorkDir,
+		overlay.CreatedAt,
+		overlay.Status,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to track overlay: %w", err)
+	}
+	return nil
+}
+
+// UpdateOverlaySessionID updates the session_id for an active overlay
+func (s *Store) UpdateOverlaySessionID(agentID, sessionID string) error {
+	query := `UPDATE active_overlays SET session_id = ? WHERE agent_id = ?`
+	_, err := s.db.Exec(query, nullString(sessionID), agentID)
+	if err != nil {
+		return fmt.Errorf("failed to update overlay session_id: %w", err)
+	}
+	return nil
+}
+
+// MarkOverlayCompleted marks an overlay as completed (ready for cleanup)
+func (s *Store) MarkOverlayCompleted(agentID string) error {
+	query := `UPDATE active_overlays SET status = 'completed' WHERE agent_id = ?`
+	_, err := s.db.Exec(query, agentID)
+	if err != nil {
+		return fmt.Errorf("failed to mark overlay completed: %w", err)
+	}
+	return nil
+}
+
+// UpdateOverlayStatus updates the status of an overlay (active, completed, orphaned)
+func (s *Store) UpdateOverlayStatus(agentID, status string) error {
+	query := `UPDATE active_overlays SET status = ? WHERE agent_id = ?`
+	_, err := s.db.Exec(query, status, agentID)
+	if err != nil {
+		return fmt.Errorf("failed to update overlay status: %w", err)
+	}
+	return nil
+}
+
+// GetActiveOverlays retrieves all overlays with status 'active'
+func (s *Store) GetActiveOverlays() ([]*ActiveOverlay, error) {
+	query := `SELECT agent_id, task_id, run_id, session_id, upper_dir, merged_dir, lower_dir, work_dir, created_at, status FROM active_overlays WHERE status = 'active'`
+	rows, err := s.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query active overlays: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var overlays []*ActiveOverlay
+	for rows.Next() {
+		overlay, err := s.scanOverlayFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		overlays = append(overlays, overlay)
+	}
+	return overlays, nil
+}
+
+// GetOrphanedOverlays retrieves all overlays with status 'orphaned'
+func (s *Store) GetOrphanedOverlays() ([]*ActiveOverlay, error) {
+	query := `SELECT agent_id, task_id, run_id, session_id, upper_dir, merged_dir, lower_dir, work_dir, created_at, status FROM active_overlays WHERE status = 'orphaned'`
+	rows, err := s.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query orphaned overlays: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var overlays []*ActiveOverlay
+	for rows.Next() {
+		overlay, err := s.scanOverlayFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		overlays = append(overlays, overlay)
+	}
+	return overlays, nil
+}
+
+// MarkOverlaysOrphaned marks all active overlays as orphaned (for daemon restart recovery)
+func (s *Store) MarkOverlaysOrphaned() (int64, error) {
+	query := `UPDATE active_overlays SET status = 'orphaned' WHERE status = 'active'`
+	result, err := s.db.Exec(query)
+	if err != nil {
+		return 0, fmt.Errorf("failed to mark overlays orphaned: %w", err)
+	}
+	return result.RowsAffected()
+}
+
+// DeleteOverlay removes an overlay record from the database
+func (s *Store) DeleteOverlay(agentID string) error {
+	query := `DELETE FROM active_overlays WHERE agent_id = ?`
+	_, err := s.db.Exec(query, agentID)
+	if err != nil {
+		return fmt.Errorf("failed to delete overlay: %w", err)
+	}
+	return nil
+}
+
+// DeleteCompletedOverlays removes all overlay records with status 'completed'
+func (s *Store) DeleteCompletedOverlays() (int64, error) {
+	query := `DELETE FROM active_overlays WHERE status = 'completed'`
+	result, err := s.db.Exec(query)
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete completed overlays: %w", err)
+	}
+	return result.RowsAffected()
+}
+
+func (s *Store) scanOverlayFromRows(rows *sql.Rows) (*ActiveOverlay, error) {
+	var overlay ActiveOverlay
+	var sessionID sql.NullString
+
+	err := rows.Scan(
+		&overlay.AgentID,
+		&overlay.TaskID,
+		&overlay.RunID,
+		&sessionID,
+		&overlay.UpperDir,
+		&overlay.MergedDir,
+		&overlay.LowerDir,
+		&overlay.WorkDir,
+		&overlay.CreatedAt,
+		&overlay.Status,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan overlay: %w", err)
+	}
+
+	overlay.SessionID = sessionID.String
+	return &overlay, nil
 }

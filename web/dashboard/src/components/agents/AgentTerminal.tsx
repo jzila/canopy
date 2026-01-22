@@ -125,6 +125,24 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({ agentId }) => {
     }
   }, [isDark]);
 
+  // Clear terminal when agentId changes
+  useEffect(() => {
+    if (!xtermRef.current) return;
+
+    // Clear the terminal content
+    xtermRef.current.clear();
+    lastOutputRef.current = '';
+
+    // Write the full output for the new agent
+    if (agent) {
+      const fullOutput = agent.output.stdout + agent.output.stderr;
+      if (fullOutput) {
+        xtermRef.current.write(fullOutput);
+        lastOutputRef.current = fullOutput;
+      }
+    }
+  }, [agentId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Handle terminal resize
   useEffect(() => {
     const handleResize = () => {
@@ -143,13 +161,30 @@ export const AgentTerminal: React.FC<AgentTerminalProps> = ({ agentId }) => {
 
     const currentOutput = agent.output.stdout + agent.output.stderr;
 
+    // Handle output being cleared (e.g., when agent:output_clear event is received)
+    if (currentOutput === '' && lastOutputRef.current !== '') {
+      xtermRef.current.clear();
+      lastOutputRef.current = '';
+      return;
+    }
+
     // Only write new content (diff from last known output)
     if (currentOutput !== lastOutputRef.current) {
-      const newContent = currentOutput.slice(lastOutputRef.current.length);
-      if (newContent) {
-        xtermRef.current.write(newContent);
+      // If the new output is shorter than what we had, it means the buffer was reset
+      // Clear and re-write the new content
+      if (currentOutput.length < lastOutputRef.current.length) {
+        xtermRef.current.clear();
+        if (currentOutput) {
+          xtermRef.current.write(currentOutput);
+        }
+        lastOutputRef.current = currentOutput;
+      } else {
+        const newContent = currentOutput.slice(lastOutputRef.current.length);
+        if (newContent) {
+          xtermRef.current.write(newContent);
+        }
+        lastOutputRef.current = currentOutput;
       }
-      lastOutputRef.current = currentOutput;
     }
   }, [agent?.output.stdout, agent?.output.stderr, agent]);
 

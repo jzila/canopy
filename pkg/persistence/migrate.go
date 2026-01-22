@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-const currentSchemaVersion = 12
+const currentSchemaVersion = 14
 
 // migrate runs all pending database migrations
 func (s *Store) migrate() error {
@@ -91,6 +91,14 @@ func (s *Store) runMigration(version int) error {
 		}
 	case 12:
 		if err := s.migrateV12(tx); err != nil {
+			return err
+		}
+	case 13:
+		if err := s.migrateV13(tx); err != nil {
+			return err
+		}
+	case 14:
+		if err := s.migrateV14(tx); err != nil {
 			return err
 		}
 	default:
@@ -384,4 +392,46 @@ func (s *Store) migrateV12(tx *sql.Tx) error {
 	}
 
 	return nil
+}
+
+// migrateV13 adds session_id column to agents table for claude --resume support
+func (s *Store) migrateV13(tx *sql.Tx) error {
+	migrations := []string{
+		// Add session_id to store Claude CLI session ID for resumability
+		`ALTER TABLE agents ADD COLUMN session_id TEXT`,
+		// Index for efficient session lookups (used for claude --resume)
+		`CREATE INDEX IF NOT EXISTS idx_agents_session_id ON agents(session_id)`,
+	}
+
+	for _, m := range migrations {
+		if _, err := tx.Exec(m); err != nil {
+			return fmt.Errorf("failed to execute migration: %s: %w", m, err)
+		}
+	}
+
+	return nil
+}
+
+// migrateV14 creates the active_overlays table for tracking overlay filesystems
+func (s *Store) migrateV14(tx *sql.Tx) error {
+	schema := `
+		CREATE TABLE IF NOT EXISTS active_overlays (
+			agent_id TEXT PRIMARY KEY,
+			task_id TEXT NOT NULL,
+			run_id TEXT NOT NULL,
+			session_id TEXT,
+			upper_dir TEXT NOT NULL,
+			merged_dir TEXT NOT NULL,
+			lower_dir TEXT NOT NULL,
+			work_dir TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			status TEXT DEFAULT 'active',
+			FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_active_overlays_status ON active_overlays(status);
+		CREATE INDEX IF NOT EXISTS idx_active_overlays_run_id ON active_overlays(run_id);
+	`
+	_, err := tx.Exec(schema)
+	return err
 }

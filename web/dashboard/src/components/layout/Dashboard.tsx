@@ -1,18 +1,23 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useStateStore } from '../../stores/stateStore';
+import type { RunConfig } from '../../stores/stateStore';
 import { useWebSocket, useAgentFiltering, useResizablePane, useResizableWidth } from '../../hooks';
 import type { StatusFilter } from '../../hooks';
-import { pauseOrch, resumeOrch, getState, getRepositories, activateRepository, getRuns } from '../../api/client';
+import { pauseOrch, resumeOrch, getState, getRepositories, activateRepository, getRuns, startRun, stopRun } from '../../api/client';
 import { BeadsPane } from '../beads/BeadsPane';
 import { DashboardHeader } from './DashboardHeader';
 import { TerminalPanel } from './TerminalPanel';
 import { AgentGrid } from '../agents/AgentGrid';
+import { RunConfigDialog } from '../runs/RunConfigDialog';
+import { RulesPanel } from '../rules/RulesPanel';
 
 const SHOW_ARCHIVED_AGENTS_KEY = 'canopy-show-archived-agents';
 const SHOW_COMPLETED_BEADS_KEY = 'canopy-show-completed-beads';
 
 export const Dashboard: React.FC = () => {
-  const { connected } = useWebSocket();
+  // Initialize WebSocket connection
+  useWebSocket();
+  const connected = useStateStore((state) => state.connected);
 
   // Orchestrator control state
   const [isPauseLoading, setIsPauseLoading] = useState(false);
@@ -58,10 +63,29 @@ export const Dashboard: React.FC = () => {
     maxWidthRatio: 0.5,
   });
 
+  // Rules pane state
+  const [rulesPaneExpanded, setRulesPaneExpanded] = useState(() => {
+    const saved = localStorage.getItem('rulesPaneExpanded');
+    return saved !== null ? saved === 'true' : false;
+  });
+
+  // Resizable rules pane width
+  const { width: rulesPaneWidth, isResizing: isRulesResizing, handleResizeStart: handleRulesResizeStart } = useResizableWidth({
+    storageKey: 'rulesPaneWidth',
+    defaultWidth: 280,
+    minWidth: 200,
+    maxWidthRatio: 0.4,
+  });
+
   // Persist beads pane state
   useEffect(() => {
     localStorage.setItem('beadsPaneExpanded', String(beadsPaneExpanded));
   }, [beadsPaneExpanded]);
+
+  // Persist rules pane state
+  useEffect(() => {
+    localStorage.setItem('rulesPaneExpanded', String(rulesPaneExpanded));
+  }, [rulesPaneExpanded]);
 
   // Persist show completed beads state
   useEffect(() => {
@@ -115,6 +139,15 @@ export const Dashboard: React.FC = () => {
   const selectedBeadId = useStateStore((state) => state.selectedBeadId);
   const setSelectedBead = useStateStore((state) => state.setSelectedBead);
   const tasks = useStateStore((state) => state.tasks);
+  // Run control state
+  const isStartingRun = useStateStore((state) => state.isStartingRun);
+  const isStoppingRun = useStateStore((state) => state.isStoppingRun);
+  const runConfig = useStateStore((state) => state.runConfig);
+  const showRunConfigDialog = useStateStore((state) => state.showRunConfigDialog);
+  const setStartingRun = useStateStore((state) => state.setStartingRun);
+  const setStoppingRun = useStateStore((state) => state.setStoppingRun);
+  const setShowRunConfigDialog = useStateStore((state) => state.setShowRunConfigDialog);
+  const setCurrentRunId = useStateStore((state) => state.setCurrentRunId);
 
   // Use the agent filtering hook
   const { groupedAgents, archivedCount } = useAgentFiltering({
@@ -251,6 +284,75 @@ export const Dashboard: React.FC = () => {
     }
   }, [agents, handleSelectAgent]);
 
+  // Run control handlers
+  const handleOpenRunConfig = useCallback(() => {
+    setShowRunConfigDialog(true);
+  }, [setShowRunConfigDialog]);
+
+  const handleCloseRunConfig = useCallback(() => {
+    setShowRunConfigDialog(false);
+  }, [setShowRunConfigDialog]);
+
+  const handleStartRun = useCallback(async (config: RunConfig) => {
+    const activeRepo = repositories.find((repo) => repo.id === activeRepoId);
+    if (!activeRepo) {
+      console.error('No active repository selected');
+      return;
+    }
+
+    try {
+      setStartingRun(true);
+      const response = await startRun({
+        work_dir: activeRepo.path,
+        repo_id: activeRepo.id,
+        concurrency: config.concurrency,
+        max_priority: config.max_priority,
+        use_bwrap: config.use_bwrap,
+        max_retries: config.max_retries,
+      });
+
+      if (response.success && response.run_id) {
+        setCurrentRunId(response.run_id);
+        setShowRunConfigDialog(false);
+        // Refresh state after starting run
+        const state = await getState();
+        syncState(state);
+      } else {
+        console.error('Failed to start run:', response.error);
+      }
+    } catch (error) {
+      console.error('Failed to start run:', error);
+    } finally {
+      setStartingRun(false);
+    }
+  }, [activeRepoId, repositories, setStartingRun, setCurrentRunId, setShowRunConfigDialog, syncState]);
+
+  const handleStopRun = useCallback(async () => {
+    const runId = useStateStore.getState().currentRunId;
+    if (!runId) {
+      console.error('No active run to stop');
+      return;
+    }
+
+    try {
+      setStoppingRun(true);
+      const response = await stopRun(runId);
+
+      if (response.success) {
+        // The currentRunId will be cleared by run:completed WebSocket event
+        // Refresh state after stopping run
+        const state = await getState();
+        syncState(state);
+      } else {
+        console.error('Failed to stop run:', response.error);
+      }
+    } catch (error) {
+      console.error('Failed to stop run:', error);
+    } finally {
+      setStoppingRun(false);
+    }
+  }, [setStoppingRun, syncState]);
+
   const selectedAgent = selectedAgentId ? agents[selectedAgentId] : null;
   const totalAgentCount = Object.keys(agents).length;
   const currentRunId = useStateStore((state) => state.currentRunId);
@@ -290,32 +392,47 @@ export const Dashboard: React.FC = () => {
 
         {/* Main Content */}
         <main className="flex-1 flex flex-col overflow-hidden">
-          {/* Agent Grid */}
-          <div className="flex-1 overflow-y-auto p-8">
-            <AgentGrid
-              groupedAgents={groupedAgents}
-              totalAgentCount={totalAgentCount}
-              statusFilter={statusFilter}
-              onStatusFilterChange={setStatusFilter}
-              stats={stats}
-              showArchivedAgents={showArchivedAgents}
-              archivedAgentCount={archivedCount}
-              onToggleShowArchived={() => setShowArchivedAgents(!showArchivedAgents)}
-              selectedAgentId={selectedAgentId}
-              onSelectAgent={handleSelectAgent}
-              onArchiveToggle={handleAgentArchiveToggle}
-              selectedBeadId={selectedBeadId}
-              selectedBeadTitle={selectedBeadId ? tasks[selectedBeadId]?.title : undefined}
-              onClearBeadFilter={() => setSelectedBead(null)}
-              isPaused={isPaused}
-              isPausedByAgent={isPausedByAgent}
-              pauseState={pauseState}
-              isPauseLoading={isPauseLoading}
-              isResumeLoading={isResumeLoading}
-              currentRunId={currentRunId}
-              connected={connected}
-              onPause={handlePause}
-              onResume={handleResume}
+          <div className="flex-1 flex overflow-hidden">
+            {/* Agent Grid */}
+            <div className="flex-1 overflow-y-auto p-8">
+              <AgentGrid
+                groupedAgents={groupedAgents}
+                totalAgentCount={totalAgentCount}
+                statusFilter={statusFilter}
+                onStatusFilterChange={setStatusFilter}
+                stats={stats}
+                showArchivedAgents={showArchivedAgents}
+                archivedAgentCount={archivedCount}
+                onToggleShowArchived={() => setShowArchivedAgents(!showArchivedAgents)}
+                selectedAgentId={selectedAgentId}
+                onSelectAgent={handleSelectAgent}
+                onArchiveToggle={handleAgentArchiveToggle}
+                selectedBeadId={selectedBeadId}
+                selectedBeadTitle={selectedBeadId ? tasks[selectedBeadId]?.title : undefined}
+                onClearBeadFilter={() => setSelectedBead(null)}
+                isPaused={isPaused}
+                isPausedByAgent={isPausedByAgent}
+                pauseState={pauseState}
+                isPauseLoading={isPauseLoading}
+                isResumeLoading={isResumeLoading}
+                currentRunId={currentRunId}
+                connected={connected}
+                onPause={handlePause}
+                onResume={handleResume}
+                isStartingRun={isStartingRun}
+                isStoppingRun={isStoppingRun}
+                onStartRun={handleOpenRunConfig}
+                onStopRun={handleStopRun}
+              />
+            </div>
+
+            {/* Rules Panel (Right Side) */}
+            <RulesPanel
+              isExpanded={rulesPaneExpanded}
+              onToggle={() => setRulesPaneExpanded(!rulesPaneExpanded)}
+              width={rulesPaneWidth}
+              isResizing={isRulesResizing}
+              onResizeStart={handleRulesResizeStart}
             />
           </div>
 
@@ -331,6 +448,16 @@ export const Dashboard: React.FC = () => {
           )}
         </main>
       </div>
+
+      {/* Run Configuration Dialog */}
+      <RunConfigDialog
+        isOpen={showRunConfigDialog}
+        onClose={handleCloseRunConfig}
+        onStart={handleStartRun}
+        isStarting={isStartingRun}
+        initialConfig={runConfig}
+        repoName={repositories.find((r) => r.id === activeRepoId)?.name}
+      />
     </div>
   );
 };

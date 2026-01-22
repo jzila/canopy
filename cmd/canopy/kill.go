@@ -77,12 +77,6 @@ func runKill(cmd *cobra.Command, args []string) error {
 			agentInfo = &agent
 			break
 		}
-		// Also match partial agent IDs (prefix match)
-		if strings.HasPrefix(agent.ID, targetID) {
-			agentID = agent.ID
-			agentInfo = &agent
-			break
-		}
 	}
 
 	if agentID == "" {

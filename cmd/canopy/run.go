@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -19,19 +22,26 @@ import (
 	"github.com/jzila/canopy/pkg/ipc"
 	"github.com/jzila/canopy/pkg/orchestrator"
 	"github.com/jzila/canopy/pkg/repository"
+	"github.com/jzila/canopy/pkg/runtime"
 	"github.com/jzila/canopy/pkg/sandbox"
 )
 
 var (
-	concurrency     int
-	outputDir       string
-	dryRun          bool
-	useSandbox      bool
-	maxRetries      int
-	prompt          string
-	maxPriority     int
-	stopAtGate      bool
-	resolverTimeout time.Duration
+	concurrency      int
+	outputDir        string
+	dryRun           bool
+	useSandbox       bool
+	maxRetries       int
+	maxPriority      int
+	resolverTimeout  time.Duration
+	resumeAgents     bool
+	filterTypes      []string
+	excludeTypes     []string
+	filterLabels     []string
+	excludeLabels    []string
+	filterAssignee   string
+	watchMode        bool
+	pollInterval     time.Duration
 )
 
 var runCmd = &cobra.Command{
@@ -70,6 +80,17 @@ SECURITY
   - Read-only system mounts (/nix, /usr, /lib, /bin, /etc/ssl)
   - Only /workspace writable
 
+TASK SELECTION
+  Canopy uses explicit filters for task selection (no natural language parsing).
+
+  CLI flags override settings in .canopy/config.toml [rules] section:
+  - --max-priority: Only run tasks with priority <= this value (0-4)
+  - --type: Only run tasks of these types (comma-separated: bug,task,feature,chore)
+  - --exclude-type: Exclude tasks of these types (comma-separated)
+  - --label: Only run tasks with these labels (comma-separated)
+  - --exclude-label: Exclude tasks with these labels (comma-separated)
+  - --assignee: Filter by assignee ("" = unassigned, "*" = any, name = exact match)
+
 Example:
   # Run with default settings (auto-starts daemon if needed)
   canopy run
@@ -86,21 +107,33 @@ Example:
   # Dry run to see what would execute
   canopy run --dry-run
 
-  # Filter work by prompt (soft filter - agents may ignore)
-  canopy run --prompt "Only work on P0 issues"
-  canopy run --prompt "Focus on tasks only"
-  canopy run --prompt "Stop after completing all P1s"
-
   # Hard filter by maximum priority (P0-P4, only tasks at or below this priority)
   canopy run --max-priority 2   # Only P0, P1, P2 tasks (excludes P3, P4)
   canopy run --max-priority 0   # Only P0 tasks (critical only)
 
-  # Stop at gate tasks (tasks marked with gate=true)
-  canopy run --stop-at-gate     # Stop before executing any gate task
+  # Filter by type
+  canopy run --type bug,task        # Only bugs and tasks
+  canopy run --exclude-type epic    # Exclude epics
+
+  # Filter by labels
+  canopy run --label frontend       # Only tasks with frontend label
+  canopy run --exclude-label wip    # Exclude work-in-progress tasks
+
+  # Filter by assignee
+  canopy run --assignee john        # Only tasks assigned to john
+  canopy run --assignee ""          # Only unassigned tasks
 
   # Set resolver timeout for conflict resolution
   canopy run --resolver-timeout 15m   # 15 minute timeout (default: 10m)
-  canopy run --resolver-timeout 30m   # 30 minute timeout for complex conflicts`,
+  canopy run --resolver-timeout 30m   # 30 minute timeout for complex conflicts
+
+  # Resume interrupted agents after daemon restart
+  canopy run --resume                 # Resume agents that were interrupted
+
+  # Watch mode: keep running and poll for new tasks
+  canopy run --watch                  # Run indefinitely, polling for new tasks
+  canopy run --watch --poll-interval 10s  # Poll every 10 seconds (default: 5s)
+  canopy run -w                       # Short form of --watch`,
 	RunE: runOrchestrator,
 }
 
@@ -110,10 +143,20 @@ func init() {
 	runCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show execution plan without running")
 	runCmd.Flags().BoolVar(&useSandbox, "sandbox", false, "Use bubblewrap (bwrap) for full process/filesystem isolation")
 	runCmd.Flags().IntVar(&maxRetries, "max-retries", 3, "Maximum retry attempts for failed tasks (0=no retries, -1=infinite)")
-	runCmd.Flags().StringVar(&prompt, "prompt", "", "Prompt to filter/direct work selection (e.g., 'Only work on P0 issues', 'Stop after completing all P1s')")
 	runCmd.Flags().IntVar(&maxPriority, "max-priority", -1, "Hard filter: only run tasks with priority <= this value (0-4, -1=no filter)")
-	runCmd.Flags().BoolVar(&stopAtGate, "stop-at-gate", false, "Stop orchestration when encountering a task marked as a gate")
 	runCmd.Flags().DurationVar(&resolverTimeout, "resolver-timeout", 0, "Timeout for resolver agents when resolving merge conflicts (e.g., 10m, 15m, 1h). Default: 10m. Set from CANOPY_RESOLVER_TIMEOUT env var if not specified.")
+	runCmd.Flags().BoolVar(&resumeAgents, "resume", false, "Resume agents that were interrupted by daemon restart")
+
+	// Task selection filters (override config.toml [rules] section)
+	runCmd.Flags().StringSliceVar(&filterTypes, "type", nil, "Only run tasks of these types (comma-separated: bug,task,feature,chore,epic)")
+	runCmd.Flags().StringSliceVar(&excludeTypes, "exclude-type", nil, "Exclude tasks of these types (comma-separated)")
+	runCmd.Flags().StringSliceVar(&filterLabels, "label", nil, "Only run tasks with these labels (comma-separated)")
+	runCmd.Flags().StringSliceVar(&excludeLabels, "exclude-label", nil, "Exclude tasks with these labels (comma-separated)")
+	runCmd.Flags().StringVar(&filterAssignee, "assignee", "", "Filter by assignee (\"\" = unassigned only, \"*\" = any, name = exact match)")
+
+	// Watch mode flags
+	runCmd.Flags().BoolVarP(&watchMode, "watch", "w", false, "Watch mode: keep running and poll for new tasks instead of exiting when queue is empty")
+	runCmd.Flags().DurationVar(&pollInterval, "poll-interval", 5*time.Second, "Interval between polling for new tasks in watch mode")
 
 	rootCmd.AddCommand(runCmd)
 }
@@ -230,6 +273,25 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		fmt.Println("Connected to canopy daemon")
 	}
 
+	// If --resume flag is set, resume interrupted agents first
+	if resumeAgents {
+		resumed, errs := resumeInterruptedAgents(ctx, absWorkdir, useSandbox, verbose, ipcClient)
+		if resumed > 0 {
+			fmt.Printf("Resumed %d interrupted agent(s)\n", resumed)
+		}
+		for _, err := range errs {
+			fmt.Fprintf(os.Stderr, "warning: resume error: %v\n", err)
+		}
+		// Exit after resuming if --resume was the primary operation
+		if dryRun {
+			return nil
+		}
+	}
+
+	// Build rules settings from config and CLI flags
+	// CLI flags override config file settings
+	rules := buildRulesSettings(absWorkdir, cmd, verbose)
+
 	// Create and run orchestrator
 	orch, err = orchestrator.New(&orchestrator.Config{
 		WorkDir:         absWorkdir,
@@ -239,10 +301,11 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		DryRun:          dryRun,
 		UseBwrap:        useSandbox,
 		MaxRetries:      maxRetries,
-		Prompt:          prompt,
 		MaxPriority:     maxPriority,
-		StopAtGate:      stopAtGate,
 		ResolverTimeout: effectiveResolverTimeout,
+		Rules:           rules,
+		Watch:           watchMode,
+		PollInterval:    pollInterval,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create orchestrator: %w", err)
@@ -373,6 +436,7 @@ func convertToIPCResult(result *agent.Result) *ipc.AgentResult {
 		ipcResult.DurationAPIMS = result.Output.DurationAPIMS
 		ipcResult.NumTurns = result.Output.NumTurns
 		ipcResult.ResultMessage = result.Output.ResultMessage
+		ipcResult.SessionID = result.Output.SessionID
 
 		// Convert model usage
 		if result.Output.ModelUsage != nil {
@@ -483,5 +547,179 @@ func (r *runStatsCollector) getStats() *ipc.RunStats {
 		GitCommits:                   r.gitCommits,
 		ConflictsResolved:            r.conflictsRes,
 	}
+}
+
+// resumableAgentInfo is the wire format for resumable agent data from the daemon
+type resumableAgentInfo struct {
+	AgentID       string `json:"agent_id"`
+	TaskID        string `json:"task_id"`
+	TaskTitle     string `json:"task_title,omitempty"`
+	RunID         string `json:"run_id"`
+	SessionID     string `json:"session_id"`
+	UpperDir      string `json:"upper_dir"`
+	LowerDir      string `json:"lower_dir"`
+	WorkDir       string `json:"work_dir"`
+	MergedDir     string `json:"merged_dir"`
+	InterruptedAt int64  `json:"interrupted_at"`
+}
+
+// resumeInterruptedAgents queries the daemon for resumable agents and resumes them.
+// Returns the number of agents successfully resumed and any errors encountered.
+func resumeInterruptedAgents(ctx context.Context, workDir string, useBwrap, verbose bool, ipcClient *ipc.Client) (int, []error) {
+	// Get daemon HTTP endpoint (use default port - could be made configurable)
+	url := fmt.Sprintf("http://localhost:%d/api/agents/resumable", runtime.DefaultDaemonPort)
+
+	// Query daemon for resumable agents
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0, []error{fmt.Errorf("failed to create request: %w", err)}
+	}
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, []error{fmt.Errorf("failed to query daemon: %w", err)}
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return 0, []error{fmt.Errorf("daemon returned %d: %s", resp.StatusCode, string(body))}
+	}
+
+	// Parse response
+	var agents []resumableAgentInfo
+	if err := json.NewDecoder(resp.Body).Decode(&agents); err != nil {
+		return 0, []error{fmt.Errorf("failed to decode response: %w", err)}
+	}
+
+	if len(agents) == 0 {
+		if verbose {
+			fmt.Println("No interrupted agents to resume")
+		}
+		return 0, nil
+	}
+
+	if verbose {
+		fmt.Printf("Found %d interrupted agent(s) to resume\n", len(agents))
+	}
+
+	// Create executor for resuming agents
+	executor := agent.NewExecutor(&agent.Config{
+		UseBwrap: useBwrap,
+		Verbose:  verbose,
+	})
+
+	var resumed int
+	var errors []error
+
+	// Resume each agent
+	for _, a := range agents {
+		if verbose {
+			fmt.Printf("Resuming agent %s (task: %s, session: %s)\n", a.AgentID, a.TaskID, a.SessionID)
+		}
+
+		// Remount the overlay
+		overlay, err := sandbox.RemountOverlay(a.LowerDir, a.UpperDir, a.WorkDir, a.MergedDir)
+		if err != nil {
+			errors = append(errors, fmt.Errorf("failed to remount overlay for %s: %w", a.AgentID, err))
+			continue
+		}
+
+		// Create task object for executor
+		task := &beads.Task{
+			ID:    a.TaskID,
+			Title: a.TaskTitle,
+		}
+
+		// Create live feed callback to send events to daemon
+		liveFeedCallback := func(taskID string, event *agent.LiveFeedEvent) {
+			if ipcClient != nil {
+				_ = ipcClient.SendAgentLiveFeed(a.AgentID, string(event.EventType), event.RawData)
+			}
+		}
+
+		// Resume the agent using claude --resume
+		result := executor.ExecuteResume(ctx, task, overlay, a.SessionID, liveFeedCallback)
+
+		// Send result to daemon via IPC
+		if result != nil && ipcClient != nil {
+			ipcResult := convertToIPCResult(result)
+			if result.ExitCode == 0 && result.Error == "" {
+				_ = ipcClient.SendAgentDone(a.AgentID, "", ipcResult)
+			} else {
+				execErr := fmt.Errorf("%s", result.Error)
+				if result.Error == "" {
+					execErr = fmt.Errorf("agent exited with code %d", result.ExitCode)
+				}
+				_ = ipcClient.SendAgentFail(a.AgentID, "", execErr, ipcResult)
+			}
+		}
+
+		// Cleanup overlay after execution
+		if err := overlay.Cleanup(); err != nil {
+			errors = append(errors, fmt.Errorf("failed to cleanup overlay for %s: %w", a.AgentID, err))
+		}
+
+		resumed++
+	}
+
+	return resumed, errors
+}
+
+// buildRulesSettings builds task selection rules from config file and CLI flags.
+// CLI flags take precedence over config file settings.
+func buildRulesSettings(workDir string, cmd *cobra.Command, verbose bool) *config.RulesSettings {
+	// Start with rules from config file
+	cfg, err := config.LoadConfig(workDir)
+	var rules config.RulesSettings
+	if err != nil {
+		if verbose {
+			fmt.Fprintf(os.Stderr, "warning: failed to load config for rules: %v\n", err)
+		}
+		rules = config.DefaultRulesSettings()
+	} else {
+		rules = cfg.Rules
+	}
+
+	// CLI flags override config settings
+
+	// maxPriority flag overrides config priority_max
+	if cmd.Flags().Changed("max-priority") {
+		rules.PriorityMax = maxPriority
+	}
+
+	// --type flag overrides config types
+	if cmd.Flags().Changed("type") {
+		rules.Types = filterTypes
+	}
+
+	// --exclude-type flag overrides config exclude_types
+	if cmd.Flags().Changed("exclude-type") {
+		rules.ExcludeTypes = excludeTypes
+	}
+
+	// --label flag overrides config labels
+	if cmd.Flags().Changed("label") {
+		rules.Labels = filterLabels
+	}
+
+	// --exclude-label flag overrides config exclude_labels
+	if cmd.Flags().Changed("exclude-label") {
+		rules.ExcludeLabels = excludeLabels
+	}
+
+	// --assignee flag overrides config assignee
+	if cmd.Flags().Changed("assignee") {
+		rules.Assignee = filterAssignee
+	}
+
+	// Validate the built rules
+	if errs := rules.Validate(); len(errs) > 0 {
+		fmt.Fprintf(os.Stderr, "warning: invalid rules configuration: %v\n", errs)
+		// Continue with potentially invalid rules - let the filter handle it gracefully
+	}
+
+	return &rules
 }
 

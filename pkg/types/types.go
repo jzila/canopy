@@ -78,6 +78,7 @@ type AgentResult struct {
 	ResultMessage            string                `json:"result_message,omitempty"`
 	Stdout                   string                `json:"stdout,omitempty"`
 	Stderr                   string                `json:"stderr,omitempty"`
+	SessionID                string                `json:"session_id,omitempty"` // Claude CLI session ID for claude --resume support
 }
 
 // ToTokenUsage converts an AgentResult to TokenUsage for storage in AgentState.

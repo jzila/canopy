@@ -244,6 +244,10 @@ export interface Run {
   repo_name?: string;
   total_cost_usd: number;
   duration_seconds: number;
+  // Watch mode fields
+  watch_mode?: boolean;
+  watch_iterations?: number;
+  watch_tasks_total?: number;
 }
 
 export interface RunListResponse {
@@ -272,6 +276,210 @@ export async function getRuns(filter?: RunListFilter): Promise<RunListResponse> 
   const queryString = params.toString();
   const endpoint = queryString ? `/api/runs?${queryString}` : '/api/runs';
   return fetchJson<RunListResponse>(endpoint);
+}
+
+// Orchestration types - matches Go backend (pkg/daemon/orchestration_handler.go)
+export interface StartRunRequest {
+  work_dir: string;
+  repo_id?: string;
+  concurrency?: number;
+  max_priority?: number;
+  use_bwrap?: boolean;
+  max_retries?: number;
+}
+
+export interface StartRunResponse {
+  success: boolean;
+  run_id?: string;
+  error?: string;
+}
+
+export interface StopRunResponse {
+  success: boolean;
+  error?: string;
+}
+
+export interface ActiveRunStatus {
+  id: string;
+  repo_path: string;
+  repo_id?: string;
+  status: string;
+  start_time: number;
+  end_time?: number;
+  error?: string;
+  tasks_total: number;
+  tasks_done: number;
+  tasks_failed: number;
+}
+
+export interface RunStatusResponse {
+  success: boolean;
+  run?: ActiveRunStatus;
+  runs?: ActiveRunStatus[];
+  error?: string;
+}
+
+export async function startRun(request: StartRunRequest): Promise<StartRunResponse> {
+  return fetchJson<StartRunResponse>('/api/orchestrator/run', {
+    method: 'POST',
+    body: JSON.stringify(request),
+  });
+}
+
+export async function stopRun(runId: string): Promise<StopRunResponse> {
+  return fetchJson<StopRunResponse>('/api/orchestrator/run/stop', {
+    method: 'POST',
+    body: JSON.stringify({ run_id: runId }),
+  });
+}
+
+export async function getRunStatus(runId?: string): Promise<RunStatusResponse> {
+  const endpoint = runId ? `/api/orchestrator/run?id=${runId}` : '/api/orchestrator/run';
+  return fetchJson<RunStatusResponse>(endpoint);
+}
+
+// Rules types - matches Go backend (pkg/config/config.go and pkg/rules/engine.go)
+export interface ConfigRulesSettings {
+  priority_min: number;
+  priority_max: number;
+  types: string[];
+  exclude_types: string[];
+  labels: string[];
+  exclude_labels: string[];
+  assignee: string;
+  stop_when_empty: boolean;
+  max_concurrent: number;
+  max_concurrent_per_type: Record<string, number>;
+  max_concurrent_per_label: Record<string, number>;
+  custom: CustomRule[];
+}
+
+export interface CustomRule {
+  name: string;
+  enabled?: boolean;
+  condition: string;
+  action: string;
+  reason?: string;
+}
+
+export interface RuntimeRule {
+  name: string;
+  enabled?: boolean;
+  condition: string;
+  action: string;
+  reason?: string;
+  source: 'config' | 'runtime';
+  created_at?: string;
+}
+
+export interface RulesResponse {
+  config_rules: ConfigRulesSettings | null;
+  custom_rules: RuntimeRule[];
+  runtime_rules: RuntimeRule[];
+}
+
+export interface AddRuleRequest {
+  name: string;
+  description?: string;
+  condition: string;
+  action: string;
+  reason?: string;
+}
+
+export interface AddRuleResponse {
+  success: boolean;
+  rule?: RuntimeRule;
+  error?: string;
+}
+
+export interface UpdateRuleRequest {
+  enabled: boolean;
+}
+
+export interface UpdateRuleResponse {
+  success: boolean;
+  rule?: RuntimeRule;
+  error?: string;
+}
+
+export interface DeleteRuleResponse {
+  success: boolean;
+  error?: string;
+}
+
+export interface PersistRuleResponse {
+  success: boolean;
+  rule?: RuntimeRule;
+  config_path?: string;
+  error?: string;
+}
+
+export interface PersistAllRulesResponse {
+  success: boolean;
+  persisted?: string[];
+  config_path?: string;
+  error?: string;
+}
+
+export interface UpdateConfigRequest {
+  priority_min?: number;
+  priority_max?: number;
+  types?: string[];
+  exclude_types?: string[];
+  labels?: string[];
+  exclude_labels?: string[];
+  assignee?: string;
+  max_concurrent?: number;
+}
+
+export interface UpdateConfigResponse {
+  success: boolean;
+  config_rules?: ConfigRulesSettings;
+  error?: string;
+}
+
+// Rules API functions
+export async function getRules(): Promise<RulesResponse> {
+  return fetchJson<RulesResponse>('/api/rules');
+}
+
+export async function addRule(request: AddRuleRequest): Promise<AddRuleResponse> {
+  return fetchJson<AddRuleResponse>('/api/rules', {
+    method: 'POST',
+    body: JSON.stringify(request),
+  });
+}
+
+export async function updateRule(name: string, request: UpdateRuleRequest): Promise<UpdateRuleResponse> {
+  return fetchJson<UpdateRuleResponse>(`/api/rules/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(request),
+  });
+}
+
+export async function deleteRule(name: string): Promise<DeleteRuleResponse> {
+  return fetchJson<DeleteRuleResponse>(`/api/rules/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function updateRulesConfig(request: UpdateConfigRequest): Promise<UpdateConfigResponse> {
+  return fetchJson<UpdateConfigResponse>('/api/rules/config', {
+    method: 'PATCH',
+    body: JSON.stringify(request),
+  });
+}
+
+export async function persistRule(name: string): Promise<PersistRuleResponse> {
+  return fetchJson<PersistRuleResponse>(`/api/rules/${encodeURIComponent(name)}/persist`, {
+    method: 'POST',
+  });
+}
+
+export async function persistAllRules(): Promise<PersistAllRulesResponse> {
+  return fetchJson<PersistAllRulesResponse>('/api/rules/persist-all', {
+    method: 'POST',
+  });
 }
 
 export { ApiError };

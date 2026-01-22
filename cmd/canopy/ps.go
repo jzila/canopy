@@ -335,13 +335,13 @@ func outputPsTable(info ProcessInfo) error {
 		if len(info.Workers) == 0 {
 			fmt.Println("  No active workers")
 		} else {
-			// Print header
-			fmt.Printf("  %-12s  %-16s  %-10s  %-10s  %s\n",
+			// Print header - use full agent IDs since they're needed for canopy kill
+			fmt.Printf("  %-30s  %-16s  %-10s  %-10s  %s\n",
 				"AGENT ID", "TASK ID", "STATUS", "DURATION", "TITLE")
 
 			for _, w := range info.Workers {
-				// Truncate IDs for display
-				agentID := truncateID(w.AgentID, 12)
+				// Show full agent ID (needed for canopy kill)
+				// Truncate task ID for display
 				taskID := truncateID(w.TaskID, 16)
 				title := w.TaskTitle
 				if len(title) > 40 {
@@ -353,8 +353,8 @@ func outputPsTable(info ProcessInfo) error {
 					status = w.MergeStatus
 				}
 
-				fmt.Printf("  %-12s  %-16s  %-10s  %-10s  %s\n",
-					agentID, taskID, status, w.Duration, title)
+				fmt.Printf("  %-30s  %-16s  %-10s  %-10s  %s\n",
+					w.AgentID, taskID, status, w.Duration, title)
 			}
 		}
 		fmt.Println()

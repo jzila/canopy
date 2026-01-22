@@ -222,6 +222,13 @@ func (s *Server) extractIdentifier(msg *Message) string {
 		}
 		return fmt.Sprintf(" agent=%s", payload.AgentID)
 
+	case MessageTypeAgentOutputClear:
+		var payload AgentOutputClearPayload
+		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+			return ""
+		}
+		return fmt.Sprintf(" agent=%s", payload.AgentID)
+
 	case MessageTypeAgentLiveFeed:
 		var payload AgentLiveFeedPayload
 		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
@@ -327,6 +334,19 @@ func (s *Server) convertToEvent(msg *Message) *events.Event {
 				"agent_id": payload.AgentID,
 				"output":   payload.Output,
 				"is_error": payload.IsError,
+			},
+		}
+
+	case MessageTypeAgentOutputClear:
+		var payload AgentOutputClearPayload
+		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+			return nil
+		}
+		return &events.Event{
+			Type:      events.EventAgentOutputClear,
+			Timestamp: msg.Timestamp,
+			Payload: map[string]interface{}{
+				"agent_id": payload.AgentID,
 			},
 		}
 
@@ -440,6 +460,9 @@ func (s *Server) convertToEvent(msg *Message) *events.Event {
 		if payload.ParentAgentID != "" {
 			eventPayload["parent_agent_id"] = payload.ParentAgentID
 		}
+		if payload.Result.SessionID != "" {
+			eventPayload["session_id"] = payload.Result.SessionID
+		}
 		return &events.Event{
 			Type:      events.EventAgentCompleted,
 			Timestamp: msg.Timestamp,
@@ -470,6 +493,9 @@ func (s *Server) convertToEvent(msg *Message) *events.Event {
 		}
 		if payload.ParentAgentID != "" {
 			eventPayload["parent_agent_id"] = payload.ParentAgentID
+		}
+		if payload.Result.SessionID != "" {
+			eventPayload["session_id"] = payload.Result.SessionID
 		}
 		return &events.Event{
 			Type:      events.EventAgentCompleted,

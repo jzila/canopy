@@ -48,6 +48,43 @@ type RepairContext struct {
 	MaxRepairAttempts int
 }
 
+// PreCommitRepairContext holds context needed for a repair agent to fix pre-commit hook failures.
+// Unlike RepairContext which handles post-merge validation failures, this handles failures
+// that occur at commit time when the pre-commit hook rejects the changes.
+type PreCommitRepairContext struct {
+	// TaskID is the original task whose changes failed to commit.
+	TaskID string
+
+	// TaskTitle is the title of the original task.
+	TaskTitle string
+
+	// TaskDescription is the description of the original task.
+	TaskDescription string
+
+	// HookOutput contains the output from the failed pre-commit hook.
+	// This typically includes build errors, test failures, or lint issues.
+	HookOutput string
+
+	// StagedDiff is the git diff of the staged changes that the hook rejected.
+	// This shows exactly what changes need to pass the pre-commit hook.
+	StagedDiff string
+
+	// StagedPaths are the file paths that are staged and need to be committed.
+	StagedPaths []string
+
+	// CommitMessage is the commit message that was intended for the commit.
+	CommitMessage string
+
+	// PreviousAttempts contains summaries of any previous repair attempts.
+	PreviousAttempts []string
+
+	// RepairAttempt is the current repair attempt number (1-indexed).
+	RepairAttempt int
+
+	// MaxRepairAttempts is the maximum number of repair attempts allowed.
+	MaxRepairAttempts int
+}
+
 // BuildRepairPrompt constructs the prompt for a repair agent.
 // The prompt provides full context about what failed and clear instructions
 // for how to fix it without breaking other functionality.
@@ -289,6 +326,228 @@ func WriteRepairContext(sandboxDir string, ctx *RepairContext) error {
 	// Write task context
 	taskContext := fmt.Sprintf("Task ID: %s\nTask Title: %s\nRepair Attempt: %d of %d\n",
 		ctx.TaskID, ctx.TaskTitle, ctx.RepairAttempt, ctx.MaxRepairAttempts)
+	if err := os.WriteFile(filepath.Join(repairDir, "task-context.txt"), []byte(taskContext), 0644); err != nil {
+		return fmt.Errorf("failed to write task context: %w", err)
+	}
+
+	return nil
+}
+
+// BuildPreCommitRepairPrompt constructs the prompt for a pre-commit hook repair agent.
+// The prompt provides context about why the commit was rejected and instructions
+// for how to fix the issue so the commit can succeed.
+func BuildPreCommitRepairPrompt(ctx *PreCommitRepairContext) string {
+	var parts []string
+
+	// Header explaining the agent's role
+	parts = append(parts, `## Pre-Commit Hook Repair Agent
+
+**You are a repair agent. A git commit was rejected by the pre-commit hook and you need to fix it.**
+
+The pre-commit hook runs checks (like build, lint, or tests) before allowing commits.
+Your goal is to fix the issues identified by the hook so the commit can succeed.
+`)
+
+	// What failed section
+	parts = append(parts, buildPreCommitFailedSection(ctx))
+
+	// What was being committed section
+	parts = append(parts, buildStagedChangesSection(ctx))
+
+	// Previous attempts section (if any)
+	if len(ctx.PreviousAttempts) > 0 {
+		parts = append(parts, buildPreCommitPreviousAttemptsSection(ctx))
+	}
+
+	// Instructions section
+	parts = append(parts, buildPreCommitInstructionsSection(ctx))
+
+	return strings.Join(parts, "\n")
+}
+
+// buildPreCommitFailedSection creates the "What Failed" section for pre-commit repair.
+func buildPreCommitFailedSection(ctx *PreCommitRepairContext) string {
+	var sb strings.Builder
+
+	sb.WriteString("### Pre-Commit Hook Output\n\n")
+	sb.WriteString("The pre-commit hook rejected the commit with the following output:\n\n")
+
+	if ctx.HookOutput != "" {
+		truncatedOutput := truncateWithContext(ctx.HookOutput, MaxOutputLength)
+		sb.WriteString("```\n")
+		sb.WriteString(truncatedOutput)
+		sb.WriteString("\n```\n")
+
+		if len(ctx.HookOutput) > MaxOutputLength {
+			sb.WriteString("\n*Note: Output truncated. Full output available in `.canopy/repair/hook-output.txt`*\n")
+		}
+	} else {
+		sb.WriteString("*No output captured from pre-commit hook*\n")
+	}
+
+	sb.WriteString("\n")
+	return sb.String()
+}
+
+// buildStagedChangesSection creates the "Staged Changes" section for pre-commit repair.
+func buildStagedChangesSection(ctx *PreCommitRepairContext) string {
+	var sb strings.Builder
+
+	sb.WriteString("### Staged Changes Being Committed\n\n")
+
+	if ctx.TaskTitle != "" {
+		sb.WriteString(fmt.Sprintf("**Original Task:** %s\n", ctx.TaskTitle))
+	}
+	if ctx.TaskID != "" {
+		sb.WriteString(fmt.Sprintf("**Task ID:** %s\n", ctx.TaskID))
+	}
+	if ctx.CommitMessage != "" {
+		sb.WriteString(fmt.Sprintf("**Commit Message:** %s\n", ctx.CommitMessage))
+	}
+
+	if len(ctx.StagedPaths) > 0 {
+		sb.WriteString("\n**Files being committed:**\n")
+		for i, path := range ctx.StagedPaths {
+			if i >= 20 {
+				sb.WriteString(fmt.Sprintf("  ... and %d more files\n", len(ctx.StagedPaths)-20))
+				break
+			}
+			sb.WriteString(fmt.Sprintf("  - %s\n", path))
+		}
+	}
+
+	if ctx.StagedDiff != "" {
+		truncatedDiff := truncateWithContext(ctx.StagedDiff, MaxDiffLength)
+		sb.WriteString("\n**Staged diff:**\n```diff\n")
+		sb.WriteString(truncatedDiff)
+		sb.WriteString("\n```\n")
+
+		if len(ctx.StagedDiff) > MaxDiffLength {
+			sb.WriteString("\n*Note: Diff truncated. Full diff available in `.canopy/repair/staged.diff`*\n")
+		}
+	}
+
+	sb.WriteString("\n")
+	return sb.String()
+}
+
+// buildPreCommitPreviousAttemptsSection creates the "Previous Attempts" section for pre-commit repair.
+func buildPreCommitPreviousAttemptsSection(ctx *PreCommitRepairContext) string {
+	var sb strings.Builder
+
+	sb.WriteString("### Previous Repair Attempts\n\n")
+	sb.WriteString("The following approaches have already been tried and did not fix the pre-commit hook failure:\n\n")
+
+	for i, attempt := range ctx.PreviousAttempts {
+		truncated := truncateWithContext(attempt, MaxPreviousAttemptLength)
+		sb.WriteString(fmt.Sprintf("**Attempt %d:**\n%s\n\n", i+1, truncated))
+	}
+
+	sb.WriteString("**Do NOT repeat these approaches.** Try a different solution.\n\n")
+	return sb.String()
+}
+
+// buildPreCommitInstructionsSection creates the instructions section for pre-commit repair.
+func buildPreCommitInstructionsSection(ctx *PreCommitRepairContext) string {
+	var sb strings.Builder
+
+	sb.WriteString("### Your Task\n\n")
+	sb.WriteString("Fix the code so that the pre-commit hook passes and the commit can succeed.\n\n")
+
+	sb.WriteString("**IMPORTANT:** The changes are already staged. After you fix the issues:\n")
+	sb.WriteString("1. Your fixes will be automatically staged\n")
+	sb.WriteString("2. The commit will be retried automatically\n")
+	sb.WriteString("3. You do NOT need to run git commit yourself\n\n")
+
+	sb.WriteString("**DO NOT:**\n")
+	sb.WriteString("- Revert or undo the staged changes (the feature must remain)\n")
+	sb.WriteString("- Disable or bypass the pre-commit hook\n")
+	sb.WriteString("- Make unrelated changes\n")
+	sb.WriteString("- Run git commit (the system will retry automatically)\n")
+	if len(ctx.PreviousAttempts) > 0 {
+		sb.WriteString("- Repeat approaches from previous attempts\n")
+	}
+	sb.WriteString("\n")
+
+	sb.WriteString("**DO:**\n")
+	sb.WriteString("- Read the hook output carefully to understand what failed\n")
+	sb.WriteString("- Look at the staged changes to understand what was introduced\n")
+	sb.WriteString("- Make minimal, targeted fixes to resolve the hook failure\n")
+	sb.WriteString("- If it's a build error, fix the compilation issue\n")
+	sb.WriteString("- If it's a lint error, fix the code style issue\n")
+	sb.WriteString("- If it's a test failure, fix the failing test or the code it tests\n")
+	sb.WriteString("\n")
+
+	// Show attempt context
+	if ctx.RepairAttempt > 0 && ctx.MaxRepairAttempts > 0 {
+		sb.WriteString(fmt.Sprintf("**Attempt:** %d of %d\n\n", ctx.RepairAttempt, ctx.MaxRepairAttempts))
+	}
+
+	sb.WriteString("### Context Files\n\n")
+	sb.WriteString("Additional context is available in `.canopy/repair/`:\n")
+	sb.WriteString("- `hook-output.txt` - Full pre-commit hook output\n")
+	sb.WriteString("- `staged.diff` - Full diff of staged changes\n")
+	sb.WriteString("- `staged-files.txt` - List of staged file paths\n")
+	if len(ctx.PreviousAttempts) > 0 {
+		sb.WriteString("- `previous-attempts/` - Full details of previous attempts\n")
+	}
+	sb.WriteString("\n")
+
+	sb.WriteString("### Success Criteria\n\n")
+	sb.WriteString("Your fix is complete when the pre-commit hook passes.\n")
+	sb.WriteString("The system will automatically retry the commit after your fixes.\n")
+
+	return sb.String()
+}
+
+// WritePreCommitRepairContext writes pre-commit repair context files to the working directory.
+// These files provide the repair agent with full context that may be truncated in the prompt.
+func WritePreCommitRepairContext(workDir string, ctx *PreCommitRepairContext) error {
+	repairDir := filepath.Join(workDir, ".canopy", "repair")
+	if err := os.MkdirAll(repairDir, 0755); err != nil {
+		return fmt.Errorf("failed to create repair directory: %w", err)
+	}
+
+	// Write the full hook output
+	if ctx.HookOutput != "" {
+		if err := os.WriteFile(filepath.Join(repairDir, "hook-output.txt"), []byte(ctx.HookOutput), 0644); err != nil {
+			return fmt.Errorf("failed to write hook output: %w", err)
+		}
+	}
+
+	// Write the full staged diff
+	if ctx.StagedDiff != "" {
+		if err := os.WriteFile(filepath.Join(repairDir, "staged.diff"), []byte(ctx.StagedDiff), 0644); err != nil {
+			return fmt.Errorf("failed to write staged diff: %w", err)
+		}
+	}
+
+	// Write list of staged files
+	if len(ctx.StagedPaths) > 0 {
+		fileList := strings.Join(ctx.StagedPaths, "\n")
+		if err := os.WriteFile(filepath.Join(repairDir, "staged-files.txt"), []byte(fileList), 0644); err != nil {
+			return fmt.Errorf("failed to write staged files list: %w", err)
+		}
+	}
+
+	// Write previous attempts
+	if len(ctx.PreviousAttempts) > 0 {
+		attemptsDir := filepath.Join(repairDir, "previous-attempts")
+		if err := os.MkdirAll(attemptsDir, 0755); err != nil {
+			return fmt.Errorf("failed to create previous attempts directory: %w", err)
+		}
+
+		for i, attempt := range ctx.PreviousAttempts {
+			filename := filepath.Join(attemptsDir, fmt.Sprintf("attempt-%d.txt", i+1))
+			if err := os.WriteFile(filename, []byte(attempt), 0644); err != nil {
+				return fmt.Errorf("failed to write attempt %d: %w", i+1, err)
+			}
+		}
+	}
+
+	// Write task context
+	taskContext := fmt.Sprintf("Task ID: %s\nTask Title: %s\nCommit Message: %s\nRepair Attempt: %d of %d\n",
+		ctx.TaskID, ctx.TaskTitle, ctx.CommitMessage, ctx.RepairAttempt, ctx.MaxRepairAttempts)
 	if err := os.WriteFile(filepath.Join(repairDir, "task-context.txt"), []byte(taskContext), 0644); err != nil {
 		return fmt.Errorf("failed to write task context: %w", err)
 	}
