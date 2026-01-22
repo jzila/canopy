@@ -7,7 +7,7 @@ import {
   updateRule,
   deleteRule,
 } from '../../api/client';
-import type { AddRuleRequest, Rule } from '../../api/client';
+import type { AddRuleRequest } from '../../api/client';
 import { RuleItem } from './RuleItem';
 import { AddRuleDialog } from './AddRuleDialog';
 
