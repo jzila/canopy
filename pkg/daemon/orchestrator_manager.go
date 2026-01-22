@@ -131,13 +131,10 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 		}
 	}
 
-	// We've claimed the repo. Clean up if we fail before completing setup.
-	cleanupOnError := true
-	defer func() {
-		if cleanupOnError {
-			m.runsByRepo.Delete(config.WorkDir)
-		}
-	}()
+	// We've claimed the repo. The claim is irrevocable - we don't clean up
+	// runsByRepo on orchestrator creation failure. Only runOrchestrator completion
+	// releases the claim. This prevents TOCTOU races where cleanup could allow
+	// another goroutine to claim the slot.
 
 	// Apply defaults
 	if config.Concurrency <= 0 {
@@ -223,8 +220,6 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 		"concurrency", config.Concurrency,
 		"tasks", runState.TasksTotal)
 
-	// Success - don't clean up the repo mapping
-	cleanupOnError = false
 	return runID, nil
 }
 
