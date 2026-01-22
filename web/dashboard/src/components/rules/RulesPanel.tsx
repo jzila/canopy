@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Filter, Plus, RefreshCw, ChevronDown, AlertTriangle } from 'lucide-react';
+import { Filter, Plus, RefreshCw, ChevronDown, AlertTriangle, Save } from 'lucide-react';
 import {
   DndContext,
   closestCenter,
@@ -21,10 +21,12 @@ import {
   updateRule,
   deleteRule,
   reorderRule,
+  saveRules,
 } from '../../api/client';
-import type { AddRuleRequest } from '../../api/client';
+import type { AddRuleRequest, Rule } from '../../api/client';
 import { RuleItem } from './RuleItem';
 import { AddRuleDialog } from './AddRuleDialog';
+import { EditRuleModal } from './EditRuleModal';
 
 interface RulesPanelProps {
   isExpanded: boolean;
@@ -43,9 +45,12 @@ export const RulesPanel: React.FC<RulesPanelProps> = ({
 }) => {
   const [isUpdating, setIsUpdating] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [editingRule, setEditingRule] = useState<Rule | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   // State from store - unified format
   const rules = useStateStore((state) => state.rules);
+  const rulesPersistedState = useStateStore((state) => state.rulesPersistedState);
   const isRulesLoading = useStateStore((state) => state.isRulesLoading);
   const showAddRuleDialog = useStateStore((state) => state.showAddRuleDialog);
   const setRulesState = useStateStore((state) => state.setRulesState);
@@ -176,8 +181,44 @@ export const RulesPanel: React.FC<RulesPanelProps> = ({
     }
   };
 
+  // Handle editing a rule (opens modal)
+  const handleEditRule = (rule: Rule) => {
+    setEditingRule(rule);
+  };
+
+  // Handle saving edited rule from modal
+  const handleSaveEditedRule = (updatedRule: Rule) => {
+    storeUpdateRule(updatedRule.name, {
+      conditions: updatedRule.conditions,
+      action: updatedRule.action,
+      enabled: updatedRule.enabled,
+      persisted: false, // Mark as modified
+    });
+  };
+
+  // Handle saving all rules to file
+  const handleSaveRules = async () => {
+    try {
+      setIsSaving(true);
+      const response = await saveRules({ rules });
+      if (response.success) {
+        // Reload to get persisted state from server
+        await loadRules();
+      } else {
+        console.error('Failed to save rules:', response.error);
+      }
+    } catch (error) {
+      console.error('Failed to save rules:', error);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   // Count active rules
   const activeRuleCount = rules.filter((r) => r.enabled).length;
+
+  // Check if there are unsaved changes (list-level or any rule with persisted=false)
+  const hasUnsavedChanges = !rulesPersistedState || rules.some((r) => !r.persisted);
 
   // Collapsed view
   if (!isExpanded) {
@@ -225,6 +266,23 @@ export const RulesPanel: React.FC<RulesPanelProps> = ({
             )}
           </button>
           <div className="flex items-center gap-1">
+            {hasUnsavedChanges && (
+              <button
+                onClick={handleSaveRules}
+                disabled={isSaving}
+                className={`
+                  flex items-center gap-1 px-2 py-1 text-xs font-mono rounded transition-colors
+                  ${isSaving
+                    ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-600 dark:text-yellow-400 opacity-50 cursor-not-allowed'
+                    : 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 hover:bg-yellow-200 dark:hover:bg-yellow-900/50'
+                  }
+                `}
+                title="Save rules to file"
+              >
+                <Save className={`w-3.5 h-3.5 ${isSaving ? 'animate-pulse' : ''}`} />
+                <span>Save</span>
+              </button>
+            )}
             <button
               onClick={loadRules}
               disabled={isRulesLoading}
@@ -277,20 +335,17 @@ export const RulesPanel: React.FC<RulesPanelProps> = ({
                   strategy={verticalListSortingStrategy}
                 >
                   <div className="space-y-2">
-                    {rules.map((rule) => {
-                      const baseProps = {
-                        key: rule.name,
-                        rule,
-                        onToggle: handleToggleRule,
-                        isUpdating: isUpdating === rule.name,
-                      };
-                      // Only pass onDelete for non-persisted rules
-                      return !rule.persisted ? (
-                        <RuleItem {...baseProps} onDelete={handleDeleteRule} />
-                      ) : (
-                        <RuleItem {...baseProps} />
-                      );
-                    })}
+                    {rules.map((rule, index) => (
+                      <RuleItem
+                        key={rule.name}
+                        rule={rule}
+                        index={index}
+                        onToggle={handleToggleRule}
+                        onEdit={handleEditRule}
+                        {...(!rule.persisted && { onDelete: handleDeleteRule })}
+                        isUpdating={isUpdating === rule.name}
+                      />
+                    ))}
                   </div>
                 </SortableContext>
               </DndContext>
@@ -329,6 +384,14 @@ export const RulesPanel: React.FC<RulesPanelProps> = ({
         onClose={() => setShowAddRuleDialog(false)}
         onAdd={handleAddRule}
         isAdding={isUpdating === 'add'}
+      />
+
+      {/* Edit Rule Modal */}
+      <EditRuleModal
+        isOpen={editingRule !== null}
+        rule={editingRule}
+        onClose={() => setEditingRule(null)}
+        onSave={handleSaveEditedRule}
       />
     </>
   );

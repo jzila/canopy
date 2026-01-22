@@ -1,19 +1,23 @@
 import React from 'react';
-import { Power, Trash2, Settings, Terminal, GripVertical } from 'lucide-react';
+import { Power, Trash2, Pencil, Terminal, GripVertical } from 'lucide-react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import type { Rule } from '../../api/client';
 
 interface RuleItemProps {
   rule: Rule;
+  index: number;
   onToggle: (name: string, enabled: boolean) => void | Promise<void>;
+  onEdit?: (rule: Rule) => void;
   onDelete?: (name: string) => void | Promise<void>;
   isUpdating?: boolean;
 }
 
 export const RuleItem: React.FC<RuleItemProps> = ({
   rule,
+  index,
   onToggle,
+  onEdit,
   onDelete,
   isUpdating = false,
 }) => {
@@ -65,6 +69,17 @@ export const RuleItem: React.FC<RuleItemProps> = ({
         <div className="flex-1 min-w-0">
           {/* Name and badges */}
           <div className="flex items-center gap-2 flex-wrap">
+            {/* Order number */}
+            <span className="inline-flex items-center justify-center w-5 h-5 text-xs font-mono bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 rounded">
+              {index + 1}
+            </span>
+            {/* Yellow dot for unsaved changes */}
+            {!isPersisted && (
+              <span
+                className="w-2 h-2 rounded-full bg-yellow-400"
+                title="Unsaved changes"
+              />
+            )}
             <span className="font-mono font-normal text-sm text-gray-900 dark:text-gray-100">
               {rule.name}
             </span>
@@ -79,11 +94,6 @@ export const RuleItem: React.FC<RuleItemProps> = ({
             >
               {rule.action}
             </span>
-            {isPersisted && (
-              <span className="px-2 py-0.5 rounded text-xs font-mono bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400">
-                persisted
-              </span>
-            )}
             <span
               className={`
                 px-2 py-0.5 rounded text-xs font-mono
@@ -125,6 +135,23 @@ export const RuleItem: React.FC<RuleItemProps> = ({
             <Power className="w-4 h-4" />
           </button>
 
+          {onEdit && (
+            <button
+              onClick={() => onEdit(rule)}
+              disabled={isUpdating}
+              className={`
+                p-1.5 rounded transition-colors
+                ${isUpdating
+                  ? 'opacity-50 cursor-not-allowed'
+                  : 'text-gray-400 dark:text-gray-500 hover:text-blue-500 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20'
+                }
+              `}
+              title="Edit rule"
+            >
+              <Pencil className="w-4 h-4" />
+            </button>
+          )}
+
           {canDelete && onDelete && (
             <button
               onClick={() => onDelete(rule.name)}
@@ -140,15 +167,6 @@ export const RuleItem: React.FC<RuleItemProps> = ({
             >
               <Trash2 className="w-4 h-4" />
             </button>
-          )}
-
-          {isPersisted && (
-            <span
-              className="p-1.5 text-gray-300 dark:text-gray-600"
-              title="Persisted rules cannot be deleted from the UI"
-            >
-              <Settings className="w-4 h-4" />
-            </span>
           )}
         </div>
       </div>
