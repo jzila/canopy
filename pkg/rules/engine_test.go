@@ -366,13 +366,12 @@ func TestEngineEvaluateCustomRules(t *testing.T) {
 	falseVal := false
 
 	tests := []struct {
-		name        string
-		config      *config.RulesSettings
-		task        *beads.Task
-		wantSkip    bool
-		wantReason  string
-		wantBoost   int
-		wantAllow   bool
+		name       string
+		config     *config.RulesSettings
+		task       *beads.Task
+		wantSkip   bool
+		wantReason string
+		wantAllow  bool
 	}{
 		{
 			name: "skip rule matches",
@@ -398,7 +397,7 @@ func TestEngineEvaluateCustomRules(t *testing.T) {
 			},
 			task:       &beads.Task{ID: "1", Priority: 3},
 			wantSkip:   true,
-			wantReason: "Skipped by rule: no-low-priority",
+			wantReason: "Denied by rule: no-low-priority",
 		},
 		{
 			name: "skip rule does not match",
@@ -437,21 +436,22 @@ func TestEngineEvaluateCustomRules(t *testing.T) {
 			},
 			task:       &beads.Task{ID: "1", Priority: 3},
 			wantSkip:   true,
-			wantReason: "Skipped by rule: enabled",
+			wantReason: "Denied by rule: enabled",
 		},
 		{
-			name: "allow rule short-circuits",
+			name: "allow rule continues to next rule",
 			config: &config.RulesSettings{
 				PriorityMax: -1,
 				Assignee:    "*",
 				Custom: []config.CustomRule{
-					{Name: "always-allow-bugs", Condition: "type == bug", Action: "allow"},
-					{Name: "skip-all", Condition: "priority >= 0", Action: "skip"},
+					{Name: "allow-bugs", Condition: "type == bug", Action: "allow"},
+					{Name: "deny-all", Condition: "priority >= 0", Action: "deny"},
 				},
 			},
-			task:      &beads.Task{ID: "1", Type: "bug", Priority: 3},
-			wantSkip:  false,
-			wantAllow: true,
+			// ALLOW continues evaluation, then DENY rejects the task
+			task:       &beads.Task{ID: "1", Type: "bug", Priority: 3},
+			wantSkip:   true,
+			wantReason: "Denied by rule: deny-all",
 		},
 		{
 			name: "include rule continues",
@@ -465,36 +465,34 @@ func TestEngineEvaluateCustomRules(t *testing.T) {
 			},
 			task:       &beads.Task{ID: "1", Type: "bug", Priority: 3},
 			wantSkip:   true,
-			wantReason: "Skipped by rule: skip-high-priority",
+			wantReason: "Denied by rule: skip-high-priority",
 		},
 		{
-			name: "boost rule adds boost",
+			name: "deny rule with deny action",
 			config: &config.RulesSettings{
 				PriorityMax: -1,
 				Assignee:    "*",
 				Custom: []config.CustomRule{
-					{Name: "boost-bugs", Condition: "type == bug", Action: "boost:3"},
+					{Name: "deny-bugs", Condition: "type == bug", Action: "deny"},
 				},
 			},
-			task:      &beads.Task{ID: "1", Type: "bug", Priority: 2},
-			wantSkip:  false,
-			wantAllow: true,
-			wantBoost: 3,
+			task:       &beads.Task{ID: "1", Type: "bug", Priority: 2},
+			wantSkip:   true,
+			wantReason: "Denied by rule: deny-bugs",
 		},
 		{
-			name: "multiple boost rules accumulate",
+			name: "allow rule continues evaluation",
 			config: &config.RulesSettings{
 				PriorityMax: -1,
 				Assignee:    "*",
 				Custom: []config.CustomRule{
-					{Name: "boost-bugs", Condition: "type == bug", Action: "boost:2"},
-					{Name: "boost-urgent", Condition: "priority <= 1", Action: "boost:3"},
+					{Name: "allow-bugs", Condition: "type == bug", Action: "allow"},
+					{Name: "deny-all", Condition: "priority >= 0", Action: "deny"},
 				},
 			},
-			task:      &beads.Task{ID: "1", Type: "bug", Priority: 1},
-			wantSkip:  false,
-			wantAllow: true,
-			wantBoost: 5,
+			task:       &beads.Task{ID: "1", Type: "bug", Priority: 1},
+			wantSkip:   true,
+			wantReason: "Denied by rule: deny-all",
 		},
 	}
 
@@ -511,9 +509,6 @@ func TestEngineEvaluateCustomRules(t *testing.T) {
 			}
 			if !tt.wantSkip && result.Allow != tt.wantAllow {
 				t.Errorf("Allow = %v, want %v", result.Allow, tt.wantAllow)
-			}
-			if result.BoostAmount != tt.wantBoost {
-				t.Errorf("BoostAmount = %d, want %d", result.BoostAmount, tt.wantBoost)
 			}
 		})
 	}
@@ -611,32 +606,23 @@ func TestEngineNilConfig(t *testing.T) {
 
 func TestParseAction(t *testing.T) {
 	tests := []struct {
-		action      string
-		wantType    actionType
-		wantBoost   int
-		wantLimit   int
+		action     string
+		wantAction Action
 	}{
-		{"skip", actionSkip, 0, 0},
-		{"include", actionInclude, 0, 0},
-		{"allow", actionAllow, 0, 0},
-		{"boost:5", actionBoost, 5, 0},
-		{"boost:10", actionBoost, 10, 0},
-		{"limit:3", actionLimit, 0, 3},
-		{"limit:1", actionLimit, 0, 1},
-		{"unknown", actionInclude, 0, 0},
+		{"deny", ActionDeny},
+		{"skip", ActionDeny},     // backwards compatibility
+		{"allow", ActionAllow},
+		{"include", ActionAllow}, // backwards compatibility
+		{"unknown", ActionAllow}, // unknown defaults to allow
+		{"boost:5", ActionAllow}, // deprecated, defaults to allow
+		{"limit:3", ActionAllow}, // deprecated, defaults to allow
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.action, func(t *testing.T) {
 			result := parseAction(tt.action)
-			if result.actionType != tt.wantType {
-				t.Errorf("actionType = %v, want %v", result.actionType, tt.wantType)
-			}
-			if result.boostAmount != tt.wantBoost {
-				t.Errorf("boostAmount = %d, want %d", result.boostAmount, tt.wantBoost)
-			}
-			if result.limitMax != tt.wantLimit {
-				t.Errorf("limitMax = %d, want %d", result.limitMax, tt.wantLimit)
+			if result != tt.wantAction {
+				t.Errorf("parseAction(%q) = %v, want %v", tt.action, result, tt.wantAction)
 			}
 		})
 	}

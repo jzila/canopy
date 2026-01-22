@@ -70,11 +70,22 @@ func (e *Engine) ClearRuntimeRules() {
 	e.runtime = nil
 }
 
+// Action represents what a rule does when its conditions match.
+type Action string
+
+const (
+	// ActionDeny stops evaluation and rejects the bead.
+	ActionDeny Action = "deny"
+	// ActionAllow continues to the next rule (or accepts if last).
+	ActionAllow Action = "allow"
+)
+
 // RuntimeRule extends CustomRule with runtime-specific metadata.
 type RuntimeRule struct {
 	config.CustomRule
 	Source    string    `json:"source"`     // "config" or "runtime"
 	CreatedAt time.Time `json:"created_at"` // When the rule was added (for runtime rules)
+	Persisted bool      `json:"persisted"`  // Does current state match config?
 }
 
 // RulesSnapshot contains all rules and settings for API responses.
@@ -101,6 +112,7 @@ func (e *Engine) GetSnapshot() RulesSnapshot {
 			snapshot.CustomRules = append(snapshot.CustomRules, RuntimeRule{
 				CustomRule: rule,
 				Source:     "config",
+				Persisted:  true, // Config rules are persisted by definition
 			})
 		}
 	}
@@ -110,6 +122,7 @@ func (e *Engine) GetSnapshot() RulesSnapshot {
 		snapshot.RuntimeRules = append(snapshot.RuntimeRules, RuntimeRule{
 			CustomRule: rule,
 			Source:     "runtime",
+			Persisted:  false, // Runtime rules are not persisted
 		})
 	}
 
@@ -253,6 +266,7 @@ func (e *Engine) GetRule(name string) *RuntimeRule {
 				return &RuntimeRule{
 					CustomRule: rule,
 					Source:     "config",
+					Persisted:  true, // Config rules are persisted by definition
 				}
 			}
 		}
@@ -264,6 +278,7 @@ func (e *Engine) GetRule(name string) *RuntimeRule {
 			return &RuntimeRule{
 				CustomRule: rule,
 				Source:     "runtime",
+				Persisted:  false, // Runtime rules are not persisted
 			}
 		}
 	}
@@ -313,15 +328,13 @@ func (e *Engine) AddRuleWithValidation(rule config.CustomRule) error {
 		return fmt.Errorf("rule action is required")
 	}
 
-	// Validate action format
-	action := parseAction(rule.Action)
-	if action.actionType == actionInclude && rule.Action != "include" && rule.Action != "allow" && rule.Action != "skip" {
-		// Check if it's a valid parameterized action
-		if len(rule.Action) > 6 && (rule.Action[:6] == "boost:" || rule.Action[:6] == "limit:") {
-			// Valid parameterized action
-		} else {
-			return fmt.Errorf("invalid action %q (allowed: skip, include, allow, boost:N, limit:N)", rule.Action)
-		}
+	// Validate action format - only deny and allow are supported
+	// For backwards compatibility, skip and include are also accepted
+	switch rule.Action {
+	case "deny", "allow", "skip", "include":
+		// Valid actions
+	default:
+		return fmt.Errorf("invalid action %q (allowed: deny, allow)", rule.Action)
 	}
 
 	e.mu.Lock()
@@ -536,6 +549,8 @@ func (e *Engine) Evaluate(task *beads.Task, inFlight map[string]bool, inFlightTa
 	}
 
 	// 7. Custom rules (config + runtime)
+	// Rules are evaluated in order. DENY stops evaluation and rejects.
+	// ALLOW continues to the next rule (or accepts if last).
 	for _, rule := range e.allRules() {
 		// Skip disabled rules
 		if rule.Enabled != nil && !*rule.Enabled {
@@ -544,34 +559,16 @@ func (e *Engine) Evaluate(task *beads.Task, inFlight map[string]bool, inFlightTa
 
 		if matches := EvaluateCondition(rule.Condition, task); matches {
 			action := parseAction(rule.Action)
-			switch action.actionType {
-			case actionSkip:
+			switch action {
+			case ActionDeny:
 				reason := rule.Reason
 				if reason == "" {
-					reason = "Skipped by rule: " + rule.Name
+					reason = "Denied by rule: " + rule.Name
 				}
 				return EvalResult{Skip: true, SkipReason: reason}
 
-			case actionBoost:
-				result.BoostAmount += action.boostAmount
-
-			case actionLimit:
-				// Check if we're at the limit for this rule
-				if action.limitMax > 0 {
-					limitCount := countInFlightByRule(inFlight, rule.Name)
-					if limitCount >= action.limitMax {
-						return EvalResult{Skip: true, SkipReason: fmt.Sprintf("rule %q at limit (%d)", rule.Name, action.limitMax)}
-					}
-					result.LimitKey = rule.Name
-					result.LimitMax = action.limitMax
-				}
-
-			case actionAllow:
-				// Explicit allow - skip remaining rules
-				return EvalResult{Allow: true, BoostAmount: result.BoostAmount}
-
-			case actionInclude:
-				// Continue checking other rules (no-op)
+			case ActionAllow:
+				// Continue to next rule (or accept if last)
 				continue
 			}
 		}
@@ -640,54 +637,21 @@ func countInFlightByRule(inFlight map[string]bool, ruleName string) int {
 	return 0
 }
 
-// actionType represents the type of action to take.
-type actionType int
-
-const (
-	actionSkip actionType = iota
-	actionInclude
-	actionAllow
-	actionBoost
-	actionLimit
-)
-
-// parsedAction contains the parsed action and any parameters.
-type parsedAction struct {
-	actionType  actionType
-	boostAmount int
-	limitMax    int
-}
-
-// parseAction parses an action string into its type and parameters.
+// parseAction parses an action string into an Action type.
 // Supported formats:
-//   - "skip" - skip the task
-//   - "include" - continue checking (no-op)
-//   - "allow" - explicitly allow, skip remaining rules
-//   - "boost:5" - add 5 to priority boost
-//   - "limit:3" - limit concurrent tasks matching this rule to 3
-func parseAction(action string) parsedAction {
-	// Check for parameterized actions
-	if len(action) > 6 && action[:6] == "boost:" {
-		var amount int
-		_, _ = fmt.Sscanf(action, "boost:%d", &amount)
-		return parsedAction{actionType: actionBoost, boostAmount: amount}
-	}
-
-	if len(action) > 6 && action[:6] == "limit:" {
-		var limit int
-		_, _ = fmt.Sscanf(action, "limit:%d", &limit)
-		return parsedAction{actionType: actionLimit, limitMax: limit}
-	}
-
+//   - "deny" - stop evaluation and reject the bead
+//   - "allow" - continue to next rule (or accept if last)
+//
+// For backwards compatibility, "skip" is treated as "deny".
+// Unknown actions default to "allow" (continue evaluation).
+func parseAction(action string) Action {
 	switch action {
-	case "skip":
-		return parsedAction{actionType: actionSkip}
-	case "include":
-		return parsedAction{actionType: actionInclude}
-	case "allow":
-		return parsedAction{actionType: actionAllow}
+	case "deny", "skip":
+		return ActionDeny
+	case "allow", "include":
+		return ActionAllow
 	default:
-		// Unknown action, treat as include (continue)
-		return parsedAction{actionType: actionInclude}
+		// Unknown action, treat as allow (continue evaluation)
+		return ActionAllow
 	}
 }

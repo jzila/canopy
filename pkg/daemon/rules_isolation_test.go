@@ -143,8 +143,8 @@ func TestRulesIsolation_RuntimeRulesNotShared(t *testing.T) {
 	err = engineB.AddRuleWithValidation(config.CustomRule{
 		Name:      "repo-b-only-rule",
 		Condition: "type == bug",
-		Action:    "boost:5",
-		Reason:    "prioritize bugs in repo B",
+		Action:    "allow",
+		Reason:    "allow bugs in repo B",
 	})
 	if err != nil {
 		t.Fatalf("failed to add rule to engine B: %v", err)
@@ -320,23 +320,23 @@ func TestRulesIsolation_EvaluationNotAffected(t *testing.T) {
 func TestRulesIsolation_CustomRulesEvaluatedIndependently(t *testing.T) {
 	_, engineA, engineB := setupTwoReposWithRules(t)
 
-	// Add a custom rule to repo A that skips bugs
+	// Add a custom rule to repo A that denies bugs
 	err := engineA.AddRuleWithValidation(config.CustomRule{
-		Name:      "skip-bugs",
+		Name:      "deny-bugs",
 		Condition: "type == bug",
-		Action:    "skip",
+		Action:    "deny",
 		Reason:    "bugs not allowed in repo A",
 	})
 	if err != nil {
 		t.Fatalf("failed to add rule to engine A: %v", err)
 	}
 
-	// Add a custom rule to repo B that boosts bugs
+	// Add a custom rule to repo B that allows bugs (continues evaluation)
 	err = engineB.AddRuleWithValidation(config.CustomRule{
-		Name:      "boost-bugs",
+		Name:      "allow-bugs",
 		Condition: "type == bug",
-		Action:    "boost:10",
-		Reason:    "prioritize bugs in repo B",
+		Action:    "allow",
+		Reason:    "bugs allowed in repo B",
 	})
 	if err != nil {
 		t.Fatalf("failed to add rule to engine B: %v", err)
@@ -358,20 +358,17 @@ func TestRulesIsolation_CustomRulesEvaluatedIndependently(t *testing.T) {
 	resultA := engineA.Evaluate(bugTask, inFlight, inFlightTasks)
 	resultB := engineB.Evaluate(bugTask, inFlight, inFlightTasks)
 
-	// Repo A should skip bugs
+	// Repo A should deny bugs
 	if !resultA.Skip {
-		t.Error("expected repo A to skip bug task")
+		t.Error("expected repo A to deny bug task")
 	}
 	if resultA.SkipReason != "bugs not allowed in repo A" {
 		t.Errorf("expected skip reason 'bugs not allowed in repo A', got %q", resultA.SkipReason)
 	}
 
-	// Repo B should boost bugs
+	// Repo B should allow bugs (allow action continues to next rule, which accepts)
 	if resultB.Skip {
 		t.Error("expected repo B to allow bug task")
-	}
-	if resultB.BoostAmount != 10 {
-		t.Errorf("expected boost amount 10 in repo B, got %d", resultB.BoostAmount)
 	}
 }
 
