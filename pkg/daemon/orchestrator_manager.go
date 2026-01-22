@@ -10,6 +10,7 @@ import (
 
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
+	"github.com/jzila/canopy/pkg/config"
 	canopyerrors "github.com/jzila/canopy/pkg/errors"
 	"github.com/jzila/canopy/pkg/events"
 	"github.com/jzila/canopy/pkg/logging"
@@ -72,6 +73,10 @@ type OrchestratorManager struct {
 	// Active runs indexed by repo path (for single-run-per-repo enforcement)
 	runsByRepo sync.Map // map[string]string (repo path -> run ID)
 
+	// Standalone rules engines for repos without active runs
+	// These are created on-demand when accessing rules without an active run
+	standaloneEngines sync.Map // map[string]*rules.Engine (repo path -> engine)
+
 	// Event bus for publishing orchestration events directly
 	eventBus *events.EventBus
 
@@ -124,6 +129,42 @@ func (m *OrchestratorManager) GetRulesEngineForRun(runID string) *rules.Engine {
 	return runState.orch.GetRulesEngine()
 }
 
+// GetOrCreateRulesEngineForRepo returns a rules engine for a repository.
+// If an active run exists, returns that run's engine.
+// Otherwise, creates/returns a standalone engine loaded from config.
+// Returns the engine and nil error on success, or nil and an error on failure.
+func (m *OrchestratorManager) GetOrCreateRulesEngineForRepo(repoPath string) (*rules.Engine, error) {
+	// First, check if there's an active run for this repo
+	if engine := m.GetRulesEngineForRepo(repoPath); engine != nil {
+		return engine, nil
+	}
+
+	// No active run - check for cached standalone engine
+	if engineI, ok := m.standaloneEngines.Load(repoPath); ok {
+		return engineI.(*rules.Engine), nil
+	}
+
+	// Create a new standalone engine from config
+	cfg, err := config.LoadConfig(repoPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load config for %s: %w", repoPath, err)
+	}
+
+	engine := rules.NewEngine(&cfg.Rules)
+
+	// Cache for future use (another goroutine may have cached one already, that's fine)
+	m.standaloneEngines.Store(repoPath, engine)
+
+	return engine, nil
+}
+
+// InvalidateStandaloneEngine removes the cached standalone engine for a repo.
+// This should be called when a run starts (so the run's engine is used instead)
+// or when the repo's config changes.
+func (m *OrchestratorManager) InvalidateStandaloneEngine(repoPath string) {
+	m.standaloneEngines.Delete(repoPath)
+}
+
 // StartRun creates and starts a new orchestration run.
 // Returns the run ID or an error if the run could not be started.
 // Only one run per repository is allowed at a time.
@@ -158,6 +199,9 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 			m.runsByRepo.Delete(config.WorkDir)
 		}
 	}()
+
+	// Invalidate any standalone engine for this repo so the run's engine is used
+	m.InvalidateStandaloneEngine(config.WorkDir)
 
 	// Apply defaults
 	if config.Concurrency <= 0 {
@@ -369,10 +413,10 @@ func (m *OrchestratorManager) UpdateRunConfig(runID string, concurrency *int, ma
 	// Update concurrency if specified
 	if concurrency != nil && *concurrency > 0 {
 		runState.Config.Concurrency = *concurrency
-		// Apply to running orchestrator - takes effect immediately
-		if runState.orch != nil {
-			runState.orch.SetConcurrency(*concurrency)
-		}
+		// Note: Runtime concurrency changes are recorded in config but cannot
+		// be applied to active scheduler (semaphore doesn't support resizing).
+		// The new concurrency will take effect on the next run.
+		// TODO: Implement SetConcurrency on scheduler if dynamic resizing is needed.
 		logging.Info("updated run concurrency", "run_id", runID, "concurrency", *concurrency)
 	}
 

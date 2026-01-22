@@ -399,3 +399,89 @@ func containsSubstringHelper(s, substr string) bool {
 	}
 	return false
 }
+
+func TestGetOrCreateRulesEngineForRepo_NoActiveRun(t *testing.T) {
+	eventBus := events.NewEventBus()
+	state := NewRuntimeState()
+	manager := NewOrchestratorManager(eventBus, state)
+
+	// Use a temp dir as repo path
+	tmpDir := t.TempDir()
+
+	// Should create a standalone engine
+	engine, err := manager.GetOrCreateRulesEngineForRepo(tmpDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if engine == nil {
+		t.Fatal("expected non-nil engine")
+	}
+}
+
+func TestGetOrCreateRulesEngineForRepo_CachesEngine(t *testing.T) {
+	eventBus := events.NewEventBus()
+	state := NewRuntimeState()
+	manager := NewOrchestratorManager(eventBus, state)
+
+	tmpDir := t.TempDir()
+
+	// First call creates engine
+	engine1, err := manager.GetOrCreateRulesEngineForRepo(tmpDir)
+	if err != nil {
+		t.Fatalf("first call failed: %v", err)
+	}
+
+	// Second call should return the same cached engine
+	engine2, err := manager.GetOrCreateRulesEngineForRepo(tmpDir)
+	if err != nil {
+		t.Fatalf("second call failed: %v", err)
+	}
+
+	if engine1 != engine2 {
+		t.Error("expected same engine instance to be returned (cached)")
+	}
+}
+
+func TestGetOrCreateRulesEngineForRepo_DifferentRepos(t *testing.T) {
+	eventBus := events.NewEventBus()
+	state := NewRuntimeState()
+	manager := NewOrchestratorManager(eventBus, state)
+
+	tmpDir1 := t.TempDir()
+	tmpDir2 := t.TempDir()
+
+	engine1, err := manager.GetOrCreateRulesEngineForRepo(tmpDir1)
+	if err != nil {
+		t.Fatalf("first repo failed: %v", err)
+	}
+
+	engine2, err := manager.GetOrCreateRulesEngineForRepo(tmpDir2)
+	if err != nil {
+		t.Fatalf("second repo failed: %v", err)
+	}
+
+	if engine1 == engine2 {
+		t.Error("expected different engine instances for different repos")
+	}
+}
+
+func TestInvalidateStandaloneEngine(t *testing.T) {
+	eventBus := events.NewEventBus()
+	state := NewRuntimeState()
+	manager := NewOrchestratorManager(eventBus, state)
+
+	tmpDir := t.TempDir()
+
+	// Create engine
+	engine1, _ := manager.GetOrCreateRulesEngineForRepo(tmpDir)
+
+	// Invalidate
+	manager.InvalidateStandaloneEngine(tmpDir)
+
+	// Get again - should be a new instance
+	engine2, _ := manager.GetOrCreateRulesEngineForRepo(tmpDir)
+
+	if engine1 == engine2 {
+		t.Error("expected different engine after invalidation")
+	}
+}

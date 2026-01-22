@@ -416,6 +416,8 @@ func (h *RulesHandler) HandleUpdateConfig(w http.ResponseWriter, r *http.Request
 // getEngine returns the rules engine for the specified repo or run.
 // It extracts repo_path or run_id from the query parameters.
 // If neither is specified, it returns nil with an error message.
+// When repo_path is specified and no active run exists, a standalone engine
+// is created from the repo's config.
 func (h *RulesHandler) getEngine(r *http.Request) (*rules.Engine, string) {
 	if h.daemon == nil {
 		return nil, "daemon not available"
@@ -436,12 +438,13 @@ func (h *RulesHandler) getEngine(r *http.Request) (*rules.Engine, string) {
 		return engine, ""
 	}
 
-	// Try to get the engine by repo_path
+	// Try to get or create the engine by repo_path
+	// This works whether or not an active run exists
 	repoPath := r.URL.Query().Get("repo_path")
 	if repoPath != "" {
-		engine := orchManager.GetRulesEngineForRepo(repoPath)
-		if engine == nil {
-			return nil, fmt.Sprintf("no active run found for repo %q", repoPath)
+		engine, err := orchManager.GetOrCreateRulesEngineForRepo(repoPath)
+		if err != nil {
+			return nil, fmt.Sprintf("failed to get rules engine for repo %q: %v", repoPath, err)
 		}
 		return engine, ""
 	}

@@ -763,6 +763,166 @@ func TestHandleReorderRule_BroadcastsEvent(t *testing.T) {
 	}
 }
 
+// Test rules panel without active run - standalone engine case
+func TestHandleListRules_NoActiveRun(t *testing.T) {
+	// Create a temp directory to use as repo path
+	tmpDir := t.TempDir()
+
+	daemon := newDaemonForTest(Config{}, nil, nil)
+	daemon.Init()
+	handler := NewRulesHandler(daemon)
+
+	// Request rules for a repo with no active run - should work
+	req := httptest.NewRequest(http.MethodGet, "/api/rules?repo_path="+tmpDir, nil)
+	w := httptest.NewRecorder()
+
+	handler.HandleListRules(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var response RulesResponse
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	// Should get default settings
+	if response.Settings == nil {
+		t.Error("expected Settings to be non-nil")
+	}
+}
+
+func TestHandleAddRule_NoActiveRun(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	daemon := newDaemonForTest(Config{}, nil, nil)
+	daemon.Init()
+	handler := NewRulesHandler(daemon)
+
+	reqBody := AddRuleRequest{
+		Name:      "standalone-rule",
+		Condition: "priority > 2",
+		Action:    "deny",
+		Reason:    "test reason",
+	}
+	body, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/rules?repo_path="+tmpDir, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.HandleAddRule(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("expected status 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var response AddRuleResponse
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if !response.Success {
+		t.Errorf("expected success=true, got %v (error: %s)", response.Success, response.Error)
+	}
+
+	if response.Rule.Name != "standalone-rule" {
+		t.Errorf("expected rule name 'standalone-rule', got %s", response.Rule.Name)
+	}
+}
+
+func TestStandaloneEngineReusedAcrossRequests(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	daemon := newDaemonForTest(Config{}, nil, nil)
+	daemon.Init()
+	handler := NewRulesHandler(daemon)
+
+	// First request: add a rule
+	reqBody := AddRuleRequest{
+		Name:      "persisted-across-requests",
+		Condition: "priority > 1",
+		Action:    "deny",
+	}
+	body, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/rules?repo_path="+tmpDir, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.HandleAddRule(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected status 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Second request: list rules - should see the rule we added
+	req = httptest.NewRequest(http.MethodGet, "/api/rules?repo_path="+tmpDir, nil)
+	w = httptest.NewRecorder()
+	handler.HandleListRules(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var response RulesResponse
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	// Should see the rule we added
+	found := false
+	for _, rule := range response.Rules {
+		if rule.Name == "persisted-across-requests" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected to find 'persisted-across-requests' rule in second request")
+	}
+}
+
+func TestStandaloneEngineInvalidatedOnRunStart(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	daemon := newDaemonForTest(Config{}, nil, nil)
+	daemon.Init()
+
+	// Create a standalone engine by accessing rules
+	engine1, err := daemon.orchManager.GetOrCreateRulesEngineForRepo(tmpDir)
+	if err != nil {
+		t.Fatalf("failed to create standalone engine: %v", err)
+	}
+
+	// Add a rule to the standalone engine
+	_ = engine1.AddRuleWithValidation(config.CustomRule{
+		Name:      "standalone-only-rule",
+		Condition: "priority > 0",
+		Action:    "deny",
+	})
+
+	// Simulate invalidation (what happens when a run starts)
+	daemon.orchManager.InvalidateStandaloneEngine(tmpDir)
+
+	// Get engine again - should be a fresh one without our rule
+	engine2, err := daemon.orchManager.GetOrCreateRulesEngineForRepo(tmpDir)
+	if err != nil {
+		t.Fatalf("failed to create engine after invalidation: %v", err)
+	}
+
+	// The new engine should not have the rule we added
+	rule := engine2.GetRule("standalone-only-rule")
+	if rule != nil {
+		t.Error("expected new engine to not have the rule from invalidated engine")
+	}
+
+	// engine1 and engine2 should be different instances
+	if engine1 == engine2 {
+		t.Error("expected different engine instances after invalidation")
+	}
+}
+
 // Helper functions
 func ptrBool(b bool) *bool {
 	return &b
