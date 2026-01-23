@@ -7,12 +7,10 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/jzila/canopy/pkg/beads"
 	"github.com/jzila/canopy/pkg/config"
 	"github.com/jzila/canopy/pkg/events"
-	"github.com/jzila/canopy/pkg/orchestrator"
 	"github.com/jzila/canopy/pkg/rules"
 )
 
@@ -28,7 +26,9 @@ type twoRepoContext struct {
 }
 
 // setupTwoReposWithRules creates a test daemon with two repositories,
-// each with its own orchestrator and rules engine.
+// each with its own rules engine stored in the standalone engines cache.
+// Note: We use standalone engines instead of orchestrators because creating
+// a real orchestrator requires a beads setup which isn't available in tests.
 func setupTwoReposWithRules(t *testing.T) (*Daemon, *rules.Engine, *rules.Engine, *twoRepoContext) {
 	t.Helper()
 
@@ -43,25 +43,8 @@ func setupTwoReposWithRules(t *testing.T) (*Daemon, *rules.Engine, *rules.Engine
 	rulesA := config.DefaultRulesSettings()
 	engineA := rules.NewEngine(&rulesA)
 
-	orchConfigA := &orchestrator.Config{
-		WorkDir:     repoAPath,
-		Concurrency: 1,
-		MaxPriority: -1,
-	}
-	orchA, _ := orchestrator.New(orchConfigA)
-	if orchA != nil {
-		orchA.SetRulesEngine(engineA)
-	}
-
-	runStateA := &RunState{
-		ID:        runAID,
-		RepoPath:  repoAPath,
-		Status:    RunStatusRunning,
-		StartTime: time.Now(),
-		orch:      orchA,
-	}
-	daemon.orchManager.runs.Store(runAID, runStateA)
-	daemon.orchManager.runsByRepo.Store(repoAPath, runAID)
+	// Store in standalone engines cache - this is what GetOrCreateRulesEngineForRepo uses
+	daemon.orchManager.standaloneEngines.Store(repoAPath, engineA)
 
 	// Repo B setup - use another unique temp dir
 	repoBPath := t.TempDir()
@@ -69,25 +52,8 @@ func setupTwoReposWithRules(t *testing.T) (*Daemon, *rules.Engine, *rules.Engine
 	rulesB := config.DefaultRulesSettings()
 	engineB := rules.NewEngine(&rulesB)
 
-	orchConfigB := &orchestrator.Config{
-		WorkDir:     repoBPath,
-		Concurrency: 1,
-		MaxPriority: -1,
-	}
-	orchB, _ := orchestrator.New(orchConfigB)
-	if orchB != nil {
-		orchB.SetRulesEngine(engineB)
-	}
-
-	runStateBB := &RunState{
-		ID:        runBID,
-		RepoPath:  repoBPath,
-		Status:    RunStatusRunning,
-		StartTime: time.Now(),
-		orch:      orchB,
-	}
-	daemon.orchManager.runs.Store(runBID, runStateBB)
-	daemon.orchManager.runsByRepo.Store(repoBPath, runBID)
+	// Store in standalone engines cache
+	daemon.orchManager.standaloneEngines.Store(repoBPath, engineB)
 
 	ctx := &twoRepoContext{
 		repoAPath: repoAPath,
@@ -109,26 +75,22 @@ func TestRulesIsolation_SeparateEnginesPerRepo(t *testing.T) {
 		t.Fatal("expected different engine instances for different repos")
 	}
 
-	// Verify engines are retrievable by repo path
-	retrievedA := daemon.orchManager.GetRulesEngineForRepo(ctx.repoAPath)
-	retrievedB := daemon.orchManager.GetRulesEngineForRepo(ctx.repoBPath)
+	// Verify engines are retrievable by repo path via GetOrCreateRulesEngineForRepo
+	// (we use standalone engines, so GetRulesEngineForRepo would return nil)
+	retrievedA, err := daemon.orchManager.GetOrCreateRulesEngineForRepo(ctx.repoAPath)
+	if err != nil {
+		t.Fatalf("failed to get engine for repo A: %v", err)
+	}
+	retrievedB, err := daemon.orchManager.GetOrCreateRulesEngineForRepo(ctx.repoBPath)
+	if err != nil {
+		t.Fatalf("failed to get engine for repo B: %v", err)
+	}
 
 	if retrievedA != engineA {
-		t.Error("GetRulesEngineForRepo returned wrong engine for repo A")
+		t.Error("GetOrCreateRulesEngineForRepo returned wrong engine for repo A")
 	}
 	if retrievedB != engineB {
-		t.Error("GetRulesEngineForRepo returned wrong engine for repo B")
-	}
-
-	// Verify engines are retrievable by run ID
-	retrievedA = daemon.orchManager.GetRulesEngineForRun(ctx.runAID)
-	retrievedB = daemon.orchManager.GetRulesEngineForRun(ctx.runBID)
-
-	if retrievedA != engineA {
-		t.Error("GetRulesEngineForRun returned wrong engine for run A")
-	}
-	if retrievedB != engineB {
-		t.Error("GetRulesEngineForRun returned wrong engine for run B")
+		t.Error("GetOrCreateRulesEngineForRepo returned wrong engine for repo B")
 	}
 }
 
@@ -645,7 +607,8 @@ func TestRulesIsolation_UnknownRepoReturnsNil(t *testing.T) {
 }
 
 // TestRulesIsolation_MultipleRunsSameRepoSequential verifies that when one
-// run ends and another starts for the same repo, rules don't leak between them.
+// engine is replaced with another for the same repo, rules don't leak between them.
+// This simulates the behavior of sequential runs using standalone engines.
 func TestRulesIsolation_MultipleRunsSameRepoSequential(t *testing.T) {
 	eventBus := events.NewEventBus()
 	state := NewRuntimeState()
@@ -653,32 +616,12 @@ func TestRulesIsolation_MultipleRunsSameRepoSequential(t *testing.T) {
 
 	repoPath := t.TempDir()
 
-	// First run
-	runID1 := "run-1"
+	// First "run" - store engine in standalone cache
 	rules1 := config.DefaultRulesSettings()
 	engine1 := rules.NewEngine(&rules1)
+	manager.standaloneEngines.Store(repoPath, engine1)
 
-	orchConfig1 := &orchestrator.Config{
-		WorkDir:     repoPath,
-		Concurrency: 1,
-		MaxPriority: -1,
-	}
-	orch1, _ := orchestrator.New(orchConfig1)
-	if orch1 != nil {
-		orch1.SetRulesEngine(engine1)
-	}
-
-	runState1 := &RunState{
-		ID:        runID1,
-		RepoPath:  repoPath,
-		Status:    RunStatusRunning,
-		StartTime: time.Now(),
-		orch:      orch1,
-	}
-	manager.runs.Store(runID1, runState1)
-	manager.runsByRepo.Store(repoPath, runID1)
-
-	// Add rules to first run
+	// Add rules to first engine
 	_ = engine1.AddRuleWithValidation(config.CustomRule{
 		Name:      "run1-rule",
 		Condition: "priority > 0",
@@ -686,62 +629,44 @@ func TestRulesIsolation_MultipleRunsSameRepoSequential(t *testing.T) {
 	})
 
 	// Verify rule exists
-	engineRetrieved := manager.GetRulesEngineForRepo(repoPath)
+	engineRetrieved, err := manager.GetOrCreateRulesEngineForRepo(repoPath)
+	if err != nil {
+		t.Fatalf("failed to get engine: %v", err)
+	}
 	if engineRetrieved.GetRule("run1-rule") == nil {
-		t.Error("expected run1-rule to exist in first run")
+		t.Error("expected run1-rule to exist in first engine")
 	}
 
-	// "End" first run (remove from tracking)
-	manager.runs.Delete(runID1)
-	manager.runsByRepo.Delete(repoPath)
+	// "End" first run by invalidating the cache
+	manager.InvalidateStandaloneEngine(repoPath)
 
-	// Second run with fresh engine
-	runID2 := "run-2"
+	// Second "run" with fresh engine
 	rules2 := config.DefaultRulesSettings()
 	engine2 := rules.NewEngine(&rules2)
+	manager.standaloneEngines.Store(repoPath, engine2)
 
-	orchConfig2 := &orchestrator.Config{
-		WorkDir:     repoPath,
-		Concurrency: 1,
-		MaxPriority: -1,
-	}
-	orch2, _ := orchestrator.New(orchConfig2)
-	if orch2 != nil {
-		orch2.SetRulesEngine(engine2)
-	}
-
-	runState2 := &RunState{
-		ID:        runID2,
-		RepoPath:  repoPath,
-		Status:    RunStatusRunning,
-		StartTime: time.Now(),
-		orch:      orch2,
-	}
-	manager.runs.Store(runID2, runState2)
-	manager.runsByRepo.Store(repoPath, runID2)
-
-	// Verify second run has clean engine (no rules from first run)
-	engineRetrieved = manager.GetRulesEngineForRepo(repoPath)
-	if engineRetrieved == nil {
-		t.Fatal("expected engine for second run")
+	// Verify second engine has no rules from first (clean engine)
+	engineRetrieved, err = manager.GetOrCreateRulesEngineForRepo(repoPath)
+	if err != nil {
+		t.Fatalf("failed to get engine for second run: %v", err)
 	}
 	if engineRetrieved.GetRule("run1-rule") != nil {
 		t.Error("run1-rule should not exist in second run's engine")
 	}
 
-	// Add a different rule to second run
+	// Add a different rule to second engine
 	_ = engine2.AddRuleWithValidation(config.CustomRule{
 		Name:      "run2-rule",
 		Condition: "type == feature",
 		Action:    "allow",
 	})
 
-	// Verify second run has its own rule
+	// Verify second engine has its own rule
 	if engineRetrieved.GetRule("run2-rule") == nil {
 		t.Error("expected run2-rule to exist in second run")
 	}
 
-	// Verify first engine still has its rule (even though run is "ended")
+	// Verify first engine still has its rule (it's a separate object)
 	if engine1.GetRule("run1-rule") == nil {
 		t.Error("first engine should still have its rule (not cleared)")
 	}

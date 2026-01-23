@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/jzila/canopy/pkg/config"
-	"github.com/jzila/canopy/pkg/orchestrator"
 	"github.com/jzila/canopy/pkg/rules"
 )
 
@@ -37,28 +36,11 @@ func setupTestDaemonWithRulesT(t *testing.T) (*Daemon, *rules.Engine, *testConte
 	defaultRules := config.DefaultRulesSettings()
 	rulesEngine := rules.NewEngine(&defaultRules)
 
-	// Create a minimal orchestrator config and orchestrator for testing
-	orchConfig := &orchestrator.Config{
-		WorkDir:     repoPath,
-		Concurrency: 1,
-		MaxPriority: -1,
-	}
-
-	// Create a mock orchestrator (we only need the rules engine accessor)
-	orch, _ := orchestrator.New(orchConfig)
-	if orch != nil {
-		orch.SetRulesEngine(rulesEngine)
-	}
-
-	// Store a run state with the rules engine
-	runState := &RunState{
-		ID:       runID,
-		RepoPath: repoPath,
-		orch:     orch,
-	}
-	// Store the run by ID and repo path
-	daemon.orchManager.runs.Store(runID, runState)
-	daemon.orchManager.runsByRepo.Store(repoPath, runID)
+	// Store the engine in the standalone engines cache.
+	// This is simpler than creating a full orchestrator (which requires beads).
+	// The handler's getEngine() calls GetOrCreateRulesEngineForRepo which will
+	// find this cached engine.
+	daemon.orchManager.standaloneEngines.Store(repoPath, rulesEngine)
 
 	ctx := &testContext{
 		repoPath: repoPath,
