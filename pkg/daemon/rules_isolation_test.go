@@ -486,7 +486,7 @@ func TestRulesIsolation_RuleRemovalNotShared(t *testing.T) {
 	// Verify rule still exists in engine B
 	ruleInB := engineB.GetRule("shared-name-rule")
 	if ruleInB == nil {
-		t.Error("rule should still exist in engine B")
+		t.Fatal("rule should still exist in engine B")
 	}
 	if ruleInB.Reason != "repo B version" {
 		t.Errorf("rule in engine B should have its own reason, got %q", ruleInB.Reason)

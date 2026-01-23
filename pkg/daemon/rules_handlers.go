@@ -203,9 +203,9 @@ func (h *RulesHandler) HandleListRules(w http.ResponseWriter, r *http.Request) {
 		Rules:     snapshot.Rules,
 		Persisted: snapshot.Persisted,
 		// Deprecated fields for backwards compatibility
-		ConfigRules:  snapshot.ConfigRules,
-		CustomRules:  snapshot.CustomRules,
-		RuntimeRules: snapshot.RuntimeRules,
+		ConfigRules:  snapshot.ConfigRules,  //nolint:staticcheck // Intentionally using deprecated field for API compatibility
+		CustomRules:  snapshot.CustomRules,  //nolint:staticcheck // Intentionally using deprecated field for API compatibility
+		RuntimeRules: snapshot.RuntimeRules, //nolint:staticcheck // Intentionally using deprecated field for API compatibility
 	}
 
 	w.Header().Set("Content-Type", "application/json")

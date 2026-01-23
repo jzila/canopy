@@ -248,7 +248,7 @@ export const EditRuleModal: React.FC<EditRuleModalProps> = ({
               </button>
             </div>
             <div className="space-y-2">
-              {conditions.map((condition, index) => (
+              {conditions.map((condition) => (
                 <div key={condition.id} className="flex items-center gap-2">
                   {/* Field selector */}
                   <select

@@ -39,11 +39,7 @@ type PeriodicSyncManager struct {
 	config PeriodicSyncConfig
 
 	// Dependencies
-	state       *RuntimeState
-	repoManager *RepositoryManager
-	eventBus    *events.EventBus
-	store       *persistence.Store
-	daemon      *Daemon // For accessing loadTasksFromBeads
+	daemon *Daemon // For accessing loadTasksFromBeads
 
 	// Lifecycle
 	cancel   context.CancelFunc

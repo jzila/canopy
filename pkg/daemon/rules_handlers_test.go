@@ -54,10 +54,6 @@ func addRepoQueryParam(url string) string {
 	return url + "?repo_path=" + testRepoPath
 }
 
-func addRunIDQueryParam(url string) string {
-	return url + "?run_id=" + testRunID
-}
-
 func TestHandleListRules_Success(t *testing.T) {
 	daemon, _ := setupTestDaemonWithRules()
 	handler := NewRulesHandler(daemon)

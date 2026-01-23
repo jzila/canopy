@@ -288,7 +288,7 @@ func TestSlotManager_Available(t *testing.T) {
 		t.Errorf("expected 3 available initially, got %d", sm.Available())
 	}
 
-	sm.Acquire(context.Background())
+	_ = sm.Acquire(context.Background()) // Error intentionally ignored for test
 	if sm.Available() != 2 {
 		t.Errorf("expected 2 available after 1 acquire, got %d", sm.Available())
 	}

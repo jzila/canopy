@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { RulesPanel } from './RulesPanel';
 import type { Rule } from '../../api/client';
@@ -55,6 +55,9 @@ describe('RulesPanel', () => {
       rulesPersistedState: true,
       isRulesLoading: false,
       showAddRuleDialog: false,
+      // Set up active repository for rules to load
+      activeRepoId: 'test-repo-id',
+      repositories: [{ id: 'test-repo-id', name: 'Test Repo', path: '/test/repo' }],
     });
   });
 
@@ -486,7 +489,7 @@ describe('RulesPanel', () => {
       await user.click(toggleButton);
 
       await waitFor(() => {
-        expect(client.updateRule).toHaveBeenCalledWith('toggle-rule', { enabled: false });
+        expect(client.updateRule).toHaveBeenCalledWith('/test/repo', 'toggle-rule', { enabled: false });
       });
     });
   });

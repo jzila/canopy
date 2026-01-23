@@ -517,17 +517,6 @@ type ConfigSettingsUpdate struct {
 	MaxConcurrentPerLabel *map[string]int   `json:"max_concurrent_per_label,omitempty"`
 }
 
-// allRules returns a copy of all rules from the unified slice.
-// Caller must hold at least a read lock.
-func (e *Engine) allRules() []config.CustomRule {
-	if e.rules == nil {
-		return nil
-	}
-	result := make([]config.CustomRule, len(e.rules))
-	copy(result, e.rules)
-	return result
-}
-
 // Evaluate returns whether a task should be selected and any modifications.
 // The inFlight parameter contains task IDs of currently executing tasks.
 // The inFlightTasks parameter maps task IDs to their Task objects (for type/label counting).
@@ -676,16 +665,6 @@ func countInFlightByLabel(inFlightTasks map[string]*beads.Task, label string) in
 		}
 	}
 	return count
-}
-
-// countInFlightByRule counts in-flight tasks that match a rule.
-// For now, this just counts all in-flight tasks (rules don't track matches yet).
-// This is a placeholder for more sophisticated tracking.
-func countInFlightByRule(inFlight map[string]bool, ruleName string) int {
-	// TODO: Track which tasks match which rules for accurate limit counting
-	// For now, we don't have this information, so return 0
-	_ = ruleName
-	return 0
 }
 
 // parseAction parses an action string into an Action type.

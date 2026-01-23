@@ -794,15 +794,6 @@ func (o *Orchestrator) markInFlight(taskID string) {
 	o.inFlight[taskID] = true
 }
 
-// markInFlightWithTask marks a task as currently in-flight and stores the task object
-// for use in concurrency limit calculations.
-func (o *Orchestrator) markInFlightWithTask(task *beads.Task) {
-	o.inFlightMu.Lock()
-	defer o.inFlightMu.Unlock()
-	o.inFlight[task.ID] = true
-	o.inFlightTask[task.ID] = task
-}
-
 // unmarkInFlight removes a task from the in-flight set
 func (o *Orchestrator) unmarkInFlight(taskID string) {
 	o.inFlightMu.Lock()
