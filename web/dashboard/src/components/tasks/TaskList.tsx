@@ -8,7 +8,7 @@ interface TaskListProps {
   onTaskArchived?: (taskId: string, archived: boolean) => void;
 }
 
-type StatusFilter = 'all' | 'ready' | 'running' | 'done' | 'failed';
+type StatusFilter = 'all' | 'ready' | 'running' | 'done' | 'failed' | 'paused';
 
 const SHOW_ARCHIVED_KEY = 'canopy-show-archived';
 
@@ -18,6 +18,7 @@ const STATUS_COLORS: Record<string, string> = {
   done: 'bg-green-500',
   failed: 'bg-red-500',
   blocked: 'bg-yellow-500',
+  'needs-input': 'bg-orange-500',
 };
 
 const PRIORITY_COLORS: Record<number, { bg: string; text: string; label: string }> = {
@@ -36,6 +37,8 @@ const truncateId = (id: string, length: number = 8): string => {
 
 const matchesFilter = (task: TaskState, filter: StatusFilter): boolean => {
   if (filter === 'all') return true;
+  // 'paused' filter matches 'needs-input' status
+  if (filter === 'paused') return task.status.toLowerCase() === 'needs-input';
   return task.status.toLowerCase() === filter;
 };
 
@@ -82,13 +85,14 @@ export const TaskList: React.FC<TaskListProps> = ({ tasks, onSelectTask, onTaskA
         if (a.priority !== b.priority) {
           return a.priority - b.priority;
         }
-        // Then by status (running > ready > blocked > done > failed)
+        // Then by status (running > needs-input > ready > blocked > done > failed)
         const statusOrder: Record<string, number> = {
           running: 0,
-          ready: 1,
-          blocked: 2,
-          done: 3,
-          failed: 4,
+          'needs-input': 1,
+          ready: 2,
+          blocked: 3,
+          done: 4,
+          failed: 5,
         };
         const aOrder = statusOrder[a.status.toLowerCase()] ?? 999;
         const bOrder = statusOrder[b.status.toLowerCase()] ?? 999;
@@ -104,6 +108,7 @@ export const TaskList: React.FC<TaskListProps> = ({ tasks, onSelectTask, onTaskA
       running: nonArchivedTasks.filter(t => t.status.toLowerCase() === 'running').length,
       done: nonArchivedTasks.filter(t => t.status.toLowerCase() === 'done').length,
       failed: nonArchivedTasks.filter(t => t.status.toLowerCase() === 'failed').length,
+      paused: nonArchivedTasks.filter(t => t.status.toLowerCase() === 'needs-input').length,
     };
   }, [taskList, showArchived]);
 
@@ -115,6 +120,7 @@ export const TaskList: React.FC<TaskListProps> = ({ tasks, onSelectTask, onTaskA
     { value: 'all', label: 'All' },
     { value: 'ready', label: 'Ready' },
     { value: 'running', label: 'Running' },
+    { value: 'paused', label: 'Paused' },
     { value: 'done', label: 'Done' },
     { value: 'failed', label: 'Failed' },
   ];

@@ -89,7 +89,7 @@ type Task struct {
 	ID        string `json:"id"`
 	RepoID    string `json:"repo_id,omitempty"`
 	Title     string `json:"title"`
-	Status    string `json:"status"` // ready, in_progress, completed, failed, blocked
+	Status    string `json:"status"` // ready, in_progress, completed, failed, blocked, needs-input
 	Type      string `json:"type,omitempty"`
 	Priority  int    `json:"priority"`
 	AgentID   string `json:"agent_id,omitempty"`

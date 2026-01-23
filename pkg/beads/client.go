@@ -21,7 +21,7 @@ type Task struct {
 	Description string   `json:"description,omitempty"`
 	Type        string   `json:"type,omitempty"`        // bug, feature, task, chore
 	Priority    int      `json:"priority,omitempty"`    // 0-4 (0=critical, 4=backlog)
-	Status      string   `json:"status,omitempty"`      // open, in_progress, closed, deferred
+	Status      string   `json:"status,omitempty"`      // open, in_progress, closed, deferred, needs-input
 	Labels      []string `json:"labels,omitempty"`
 	Assignee    string   `json:"assignee,omitempty"`
 	Blockers    []string `json:"blockers,omitempty"`    // Tasks this task depends on (dependency IDs)
@@ -54,6 +54,10 @@ type BeadsClient interface {
 
 	// Fail marks a task as failed by closing it with a failure reason
 	Fail(ctx context.Context, taskID string, reason string) error
+
+	// NeedsInput marks a task as needing user input (paused state)
+	// The sessionID is preserved so the task can be resumed later
+	NeedsInput(ctx context.Context, taskID string, sessionID string, reason string) error
 
 	// Create creates a new task and returns its ID
 	Create(ctx context.Context, title string, priority int) (string, error)
@@ -187,6 +191,16 @@ func (c *Client) Done(ctx context.Context, taskID string) error {
 // The failure reason is recorded in the reopen event.
 func (c *Client) Fail(ctx context.Context, taskID string, reason string) error {
 	_, err := c.run(ctx, "reopen", taskID, "--reason", "FAILED: "+reason)
+	return err
+}
+
+// NeedsInput marks a task as needing user input by setting its status to needs-input.
+// The sessionID is stored in the notes field so the task can be resumed later.
+// This prevents the scheduler from picking up the task again until user provides input.
+func (c *Client) NeedsInput(ctx context.Context, taskID string, sessionID string, reason string) error {
+	// Update status to needs-input and store session ID in notes
+	noteContent := fmt.Sprintf("NEEDS_INPUT: %s\nSession: %s", reason, sessionID)
+	_, err := c.run(ctx, "update", taskID, "--status", "needs-input", "--notes", noteContent)
 	return err
 }
 
