@@ -159,8 +159,8 @@ describe('RulesPanel', () => {
       // Wait for rules to be loaded and displayed
       await waitFor(() => {
         expect(screen.getByText('high-priority-rule')).toBeInTheDocument();
+        expect(screen.getByText('bug-filter')).toBeInTheDocument();
       });
-      expect(screen.getByText('bug-filter')).toBeInTheDocument();
     });
 
     it('shows empty state when no rules exist', async () => {
