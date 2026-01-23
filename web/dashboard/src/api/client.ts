@@ -473,4 +473,107 @@ export async function reorderRule(repoPath: string, name: string, position: numb
   });
 }
 
+// Configuration API types - matches Go backend pkg/config, pkg/sandbox, pkg/validation
+
+// SandboxConfig from pkg/sandbox/config.go
+export interface SandboxSettings {
+  enabled: boolean;
+  network: 'allow' | 'deny' | 'proxy';
+}
+
+export interface ResourceSettings {
+  max_memory: string;
+  max_processes: number;
+  max_open_files: number;
+  max_disk: string;
+  timeout: string;
+}
+
+export interface ExtraPathSettings {
+  read_only?: string[];
+  copy_configs?: string[];
+}
+
+export interface PathSettings {
+  read_only?: string[];
+  copy_configs?: string[];
+  cache_mounts?: string[];
+  extra?: ExtraPathSettings;
+}
+
+export interface SecuritySettings {
+  blocked?: string[];
+}
+
+export interface SandboxConfig {
+  sandbox: SandboxSettings;
+  resources: ResourceSettings;
+  paths: PathSettings;
+  security: SecuritySettings;
+}
+
+export interface SandboxConfigResponse {
+  config: SandboxConfig | null;
+  error?: string;
+}
+
+// ValidationConfig from pkg/validation/config.go
+export interface ValidationStep {
+  name: string;
+  command: string;
+  timeout?: string;
+  required: boolean;
+}
+
+export interface ValidationSettings {
+  enabled: boolean;
+  strict: boolean;
+  timeout: string;
+  max_repair_attempts: number;
+  steps: ValidationStep[];
+}
+
+export interface ValidationConfig {
+  validation: ValidationSettings;
+}
+
+export interface ValidationConfigResponse {
+  config: ValidationConfig | null;
+  error?: string;
+}
+
+// RulesSettings from pkg/config/config.go
+export interface RulesSettings {
+  priority_min: number;
+  priority_max: number;
+  types?: string[];
+  exclude_types?: string[];
+  labels?: string[];
+  exclude_labels?: string[];
+  assignee?: string;
+  stop_when_empty?: boolean;
+  max_concurrent?: number;
+  max_concurrent_per_type?: Record<string, number>;
+  max_concurrent_per_label?: Record<string, number>;
+}
+
+export interface RulesSettingsResponse {
+  settings: RulesSettings | null;
+  error?: string;
+}
+
+// Config API functions
+
+export async function getSandboxConfig(repoPath: string): Promise<SandboxConfigResponse> {
+  return fetchJson<SandboxConfigResponse>(`/api/config/sandbox?repo_path=${encodeURIComponent(repoPath)}`);
+}
+
+export async function getValidationConfig(repoPath: string): Promise<ValidationConfigResponse> {
+  return fetchJson<ValidationConfigResponse>(`/api/config/validation?repo_path=${encodeURIComponent(repoPath)}`);
+}
+
+export async function getRulesSettings(repoPath: string): Promise<RulesSettingsResponse> {
+  return fetchJson<RulesSettingsResponse>(`/api/config/rules?repo_path=${encodeURIComponent(repoPath)}`);
+}
+
 export { ApiError };

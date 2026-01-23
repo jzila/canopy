@@ -17,19 +17,20 @@ import (
 
 // Server manages the HTTP server that serves the web UI and REST API
 type Server struct {
-	port         int
-	httpServer   *http.Server
-	hub          *Hub
-	handler      *Handler
-	runsHandler  *RunsHandler
-	repoHandler  *RepoHandler
-	beadsHandler *BeadsHandler
-	orchHandler  *OrchestrationHandler
-	rulesHandler *RulesHandler
-	state        *RuntimeState
-	eventBus     *EventBus
-	upgrader     websocket.Upgrader
-	daemon       *Daemon
+	port          int
+	httpServer    *http.Server
+	hub           *Hub
+	handler       *Handler
+	runsHandler   *RunsHandler
+	repoHandler   *RepoHandler
+	beadsHandler  *BeadsHandler
+	orchHandler   *OrchestrationHandler
+	rulesHandler  *RulesHandler
+	configHandler *ConfigHandler
+	state         *RuntimeState
+	eventBus      *EventBus
+	upgrader      websocket.Upgrader
+	daemon        *Daemon
 }
 
 // NewServer creates a new HTTP server instance
@@ -98,6 +99,12 @@ func NewServerWithDaemon(port int, state *RuntimeState, eventBus *EventBus, sche
 		rulesHandler = NewRulesHandler(daemon)
 	}
 
+	// Create config handler for configuration queries (requires daemon reference)
+	var configHandler *ConfigHandler
+	if daemon != nil {
+		configHandler = NewConfigHandler(daemon)
+	}
+
 	// Configure WebSocket upgrader
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:  1024,
@@ -109,18 +116,19 @@ func NewServerWithDaemon(port int, state *RuntimeState, eventBus *EventBus, sche
 	}
 
 	return &Server{
-		port:         port,
-		hub:          hub,
-		handler:      handler,
-		runsHandler:  runsHandler,
-		repoHandler:  repoHandler,
-		beadsHandler: beadsHandler,
-		orchHandler:  orchHandler,
-		rulesHandler: rulesHandler,
-		state:        state,
-		eventBus:     eventBus,
-		upgrader:     upgrader,
-		daemon:       daemon,
+		port:          port,
+		hub:           hub,
+		handler:       handler,
+		runsHandler:   runsHandler,
+		repoHandler:   repoHandler,
+		beadsHandler:  beadsHandler,
+		orchHandler:   orchHandler,
+		rulesHandler:  rulesHandler,
+		configHandler: configHandler,
+		state:         state,
+		eventBus:      eventBus,
+		upgrader:      upgrader,
+		daemon:        daemon,
 	}
 }
 
@@ -210,6 +218,9 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// REST API routes - rules management
 	mux.HandleFunc("/api/rules", s.handleRulesRoutes)  // Handles GET/POST /api/rules
 	mux.HandleFunc("/api/rules/", s.handleRulesRoutes) // Handles /api/rules/:name and /api/rules/config
+
+	// REST API routes - configuration queries
+	mux.HandleFunc("/api/config/", s.handleConfigRoutes) // Handles /api/config/rules, /api/config/sandbox, /api/config/validation
 
 	// Prometheus metrics endpoint
 	mux.Handle("/metrics", promhttp.Handler())
@@ -399,6 +410,15 @@ func (s *Server) handleRulesRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.rulesHandler.RouteRules(w, r)
+}
+
+// handleConfigRoutes routes configuration query requests
+func (s *Server) handleConfigRoutes(w http.ResponseWriter, r *http.Request) {
+	if s.configHandler == nil {
+		http.Error(w, "Configuration queries not available", http.StatusServiceUnavailable)
+		return
+	}
+	s.configHandler.RouteConfig(w, r)
 }
 
 // handleRepositoriesRoutes routes repository management requests
