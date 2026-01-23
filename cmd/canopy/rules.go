@@ -301,7 +301,11 @@ func printRule(rule rules.RuntimeRule) {
 	if rule.Enabled != nil && !*rule.Enabled {
 		enabledStr = "DISABLED"
 	}
-	fmt.Printf("  %s [%s] (%s)\n", rule.Name, enabledStr, rule.Source)
+	persistedStr := "runtime"
+	if rule.Persisted {
+		persistedStr = "persisted"
+	}
+	fmt.Printf("  %s [%s] (%s)\n", rule.Name, enabledStr, persistedStr)
 	fmt.Printf("    Condition: %s\n", rule.Condition)
 	fmt.Printf("    Action: %s\n", rule.Action)
 	if rule.Reason != "" {

@@ -339,66 +339,71 @@ export async function getRunStatus(runId?: string): Promise<RunStatusResponse> {
 }
 
 // Rules types - matches Go backend (pkg/config/config.go and pkg/rules/engine.go)
+
+// ConfigRulesSettings for config-based rule settings
 export interface ConfigRulesSettings {
   priority_min: number;
   priority_max: number;
-  types: string[];
-  exclude_types: string[];
-  labels: string[];
-  exclude_labels: string[];
-  assignee: string;
-  stop_when_empty: boolean;
+  types?: string[];
+  exclude_types?: string[];
+  exclude_labels?: string[];
+  assignee?: string;
   max_concurrent: number;
-  max_concurrent_per_type: Record<string, number>;
-  max_concurrent_per_label: Record<string, number>;
-  custom: CustomRule[];
 }
 
-export interface CustomRule {
+// UpdateConfigRequest for updating config settings
+export interface UpdateConfigRequest {
+  priority_min?: number;
+  priority_max?: number;
+  types?: string[];
+  exclude_types?: string[];
+  exclude_labels?: string[];
+  assignee?: string;
+}
+
+// Unified Rule interface - single format for all rules
+export interface Rule {
   name: string;
-  enabled?: boolean;
-  condition: string;
-  action: string;
-  reason?: string;
+  conditions: string[];
+  action: 'deny' | 'allow';
+  enabled: boolean;
+  persisted: boolean;
 }
 
-export interface RuntimeRule {
-  name: string;
-  enabled?: boolean;
-  condition: string;
-  action: string;
-  reason?: string;
-  source: 'config' | 'runtime';
-  created_at?: string;
+// RulesState contains the unified rules list with list-level persisted flag
+export interface RulesState {
+  rules: Rule[];
+  persisted: boolean;
 }
 
+// RulesResponse from GET /api/rules
 export interface RulesResponse {
-  config_rules: ConfigRulesSettings | null;
-  custom_rules: RuntimeRule[];
-  runtime_rules: RuntimeRule[];
+  rules: Rule[];
+  persisted: boolean;
 }
 
 export interface AddRuleRequest {
   name: string;
-  description?: string;
-  condition: string;
-  action: string;
-  reason?: string;
+  conditions: string[];
+  action: 'deny' | 'allow';
+  enabled?: boolean;
 }
 
 export interface AddRuleResponse {
   success: boolean;
-  rule?: RuntimeRule;
+  rule?: Rule;
   error?: string;
 }
 
 export interface UpdateRuleRequest {
-  enabled: boolean;
+  enabled?: boolean;
+  conditions?: string[];
+  action?: 'deny' | 'allow';
 }
 
 export interface UpdateRuleResponse {
   success: boolean;
-  rule?: RuntimeRule;
+  rule?: Rule;
   error?: string;
 }
 
@@ -407,78 +412,64 @@ export interface DeleteRuleResponse {
   error?: string;
 }
 
-export interface PersistRuleResponse {
-  success: boolean;
-  rule?: RuntimeRule;
-  config_path?: string;
-  error?: string;
+// SaveRulesRequest for POST /api/rules/save
+export interface SaveRulesRequest {
+  rules: Rule[];
 }
 
-export interface PersistAllRulesResponse {
+export interface SaveRulesResponse {
   success: boolean;
-  persisted?: string[];
-  config_path?: string;
-  error?: string;
-}
-
-export interface UpdateConfigRequest {
-  priority_min?: number;
-  priority_max?: number;
-  types?: string[];
-  exclude_types?: string[];
-  labels?: string[];
-  exclude_labels?: string[];
-  assignee?: string;
-  max_concurrent?: number;
-}
-
-export interface UpdateConfigResponse {
-  success: boolean;
-  config_rules?: ConfigRulesSettings;
   error?: string;
 }
 
 // Rules API functions
-export async function getRules(): Promise<RulesResponse> {
-  return fetchJson<RulesResponse>('/api/rules');
+export async function getRules(repoPath: string): Promise<RulesResponse> {
+  return fetchJson<RulesResponse>(`/api/rules?repo_path=${encodeURIComponent(repoPath)}`);
 }
 
-export async function addRule(request: AddRuleRequest): Promise<AddRuleResponse> {
-  return fetchJson<AddRuleResponse>('/api/rules', {
+export async function addRule(repoPath: string, request: AddRuleRequest): Promise<AddRuleResponse> {
+  return fetchJson<AddRuleResponse>(`/api/rules?repo_path=${encodeURIComponent(repoPath)}`, {
     method: 'POST',
     body: JSON.stringify(request),
   });
 }
 
-export async function updateRule(name: string, request: UpdateRuleRequest): Promise<UpdateRuleResponse> {
-  return fetchJson<UpdateRuleResponse>(`/api/rules/${encodeURIComponent(name)}`, {
+export async function updateRule(repoPath: string, name: string, request: UpdateRuleRequest): Promise<UpdateRuleResponse> {
+  return fetchJson<UpdateRuleResponse>(`/api/rules/${encodeURIComponent(name)}?repo_path=${encodeURIComponent(repoPath)}`, {
     method: 'PATCH',
     body: JSON.stringify(request),
   });
 }
 
-export async function deleteRule(name: string): Promise<DeleteRuleResponse> {
-  return fetchJson<DeleteRuleResponse>(`/api/rules/${encodeURIComponent(name)}`, {
+export async function deleteRule(repoPath: string, name: string): Promise<DeleteRuleResponse> {
+  return fetchJson<DeleteRuleResponse>(`/api/rules/${encodeURIComponent(name)}?repo_path=${encodeURIComponent(repoPath)}`, {
     method: 'DELETE',
   });
 }
 
-export async function updateRulesConfig(request: UpdateConfigRequest): Promise<UpdateConfigResponse> {
-  return fetchJson<UpdateConfigResponse>('/api/rules/config', {
-    method: 'PATCH',
+export async function saveRules(repoPath: string, request: SaveRulesRequest): Promise<SaveRulesResponse> {
+  return fetchJson<SaveRulesResponse>(`/api/rules/save?repo_path=${encodeURIComponent(repoPath)}`, {
+    method: 'POST',
     body: JSON.stringify(request),
   });
 }
 
-export async function persistRule(name: string): Promise<PersistRuleResponse> {
-  return fetchJson<PersistRuleResponse>(`/api/rules/${encodeURIComponent(name)}/persist`, {
-    method: 'POST',
-  });
+// ReorderRuleRequest for POST /api/rules/:name/reorder
+export interface ReorderRuleRequest {
+  position: number;
 }
 
-export async function persistAllRules(): Promise<PersistAllRulesResponse> {
-  return fetchJson<PersistAllRulesResponse>('/api/rules/persist-all', {
+export interface ReorderRuleResponse {
+  success: boolean;
+  rules?: Rule[];
+  persisted?: boolean;
+  error?: string;
+}
+
+export async function reorderRule(repoPath: string, name: string, position: number): Promise<ReorderRuleResponse> {
+  return fetchJson<ReorderRuleResponse>(`/api/rules/${encodeURIComponent(name)}/reorder?repo_path=${encodeURIComponent(repoPath)}`, {
     method: 'POST',
+    body: JSON.stringify({ position }),
   });
 }
 

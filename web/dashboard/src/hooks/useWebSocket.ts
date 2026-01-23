@@ -153,22 +153,20 @@ interface RunCompletedEvent {
     conflicts_resolved: number;
   };
 }
-// Rules configuration types
-interface RuntimeRule {
+// Rules configuration types - unified format
+interface Rule {
   name: string;
-  enabled?: boolean;
-  condition: string;
-  action: string;
-  reason?: string;
-  source: 'config' | 'runtime';
-  created_at?: string;
+  conditions: string[];
+  action: 'deny' | 'allow';
+  enabled: boolean;
+  persisted: boolean;
 }
 interface RulesChangedEvent {
   type: 'rules:changed';
   timestamp: string;
   payload: {
-    action: 'added' | 'updated' | 'deleted' | 'config_updated';
-    rule?: RuntimeRule;
+    action: 'added' | 'updated' | 'deleted';
+    rule?: Rule;
   };
 }
 // Backend git commit format

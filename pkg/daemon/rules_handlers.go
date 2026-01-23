@@ -31,9 +31,13 @@ func NewRulesHandler(daemon *Daemon) *RulesHandler {
 
 // RulesResponse is the response for GET /api/rules
 type RulesResponse struct {
-	ConfigRules  *config.RulesSettings `json:"config_rules"`
-	CustomRules  []rules.RuntimeRule   `json:"custom_rules"`
-	RuntimeRules []rules.RuntimeRule   `json:"runtime_rules"`
+	Settings  *config.RulesSettings `json:"settings"`  // Filter settings
+	Rules     []rules.RuntimeRule   `json:"rules"`     // Unified rules list with per-rule persistence status
+	Persisted bool                  `json:"persisted"` // true if entire list matches config (no additions, deletions, or reorders)
+	// Deprecated: use Settings/Rules instead. Kept for API backwards compatibility.
+	ConfigRules  *config.RulesSettings `json:"config_rules,omitempty"`
+	CustomRules  []rules.RuntimeRule   `json:"custom_rules,omitempty"`
+	RuntimeRules []rules.RuntimeRule   `json:"runtime_rules,omitempty"`
 }
 
 // AddRuleRequest is the request body for POST /api/rules
@@ -93,6 +97,19 @@ type UpdateConfigResponse struct {
 	Error       string                `json:"error,omitempty"`
 }
 
+// ReorderRuleRequest is the request body for POST /api/rules/:name/reorder
+type ReorderRuleRequest struct {
+	Position int `json:"position"` // New 0-indexed position
+}
+
+// ReorderRuleResponse is the response for POST /api/rules/:name/reorder
+type ReorderRuleResponse struct {
+	Success   bool                `json:"success"`
+	Rules     []rules.RuntimeRule `json:"rules,omitempty"`     // Updated rules list
+	Persisted bool                `json:"persisted,omitempty"` // List-level persistence status
+	Error     string              `json:"error,omitempty"`
+}
+
 // RouteRules routes rules-related requests to the appropriate handler
 func (h *RulesHandler) RouteRules(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
@@ -135,6 +152,16 @@ func (h *RulesHandler) RouteRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Handle /api/rules/:name/reorder
+	if len(parts) == 4 && parts[0] == "api" && parts[1] == "rules" && parts[3] == "reorder" {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.HandleReorderRule(w, r, parts[2])
+		return
+	}
+
 	// Handle /api/rules/:name
 	if len(parts) != 3 || parts[0] != "api" || parts[1] != "rules" {
 		http.Error(w, "Invalid path", http.StatusBadRequest)
@@ -164,17 +191,21 @@ func (h *RulesHandler) HandleListRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	engine := h.getEngine()
+	engine, errMsg := h.getEngine(r)
 	if engine == nil {
-		http.Error(w, "Rules engine not available", http.StatusServiceUnavailable)
+		http.Error(w, errMsg, http.StatusBadRequest)
 		return
 	}
 
 	snapshot := engine.GetSnapshot()
 	response := RulesResponse{
-		ConfigRules:  snapshot.ConfigRules,
-		CustomRules:  snapshot.CustomRules,
-		RuntimeRules: snapshot.RuntimeRules,
+		Settings:  snapshot.Settings,
+		Rules:     snapshot.Rules,
+		Persisted: snapshot.Persisted,
+		// Deprecated fields for backwards compatibility
+		ConfigRules:  snapshot.ConfigRules,  //nolint:staticcheck // Intentionally using deprecated field for API compatibility
+		CustomRules:  snapshot.CustomRules,  //nolint:staticcheck // Intentionally using deprecated field for API compatibility
+		RuntimeRules: snapshot.RuntimeRules, //nolint:staticcheck // Intentionally using deprecated field for API compatibility
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -191,9 +222,9 @@ func (h *RulesHandler) HandleAddRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	engine := h.getEngine()
+	engine, errMsg := h.getEngine(r)
 	if engine == nil {
-		http.Error(w, "Rules engine not available", http.StatusServiceUnavailable)
+		http.Error(w, errMsg, http.StatusBadRequest)
 		return
 	}
 
@@ -229,8 +260,7 @@ func (h *RulesHandler) HandleAddRule(w http.ResponseWriter, r *http.Request) {
 		// Should not happen, but handle gracefully
 		runtimeRule = &rules.RuntimeRule{
 			CustomRule: rule,
-			Source:     "runtime",
-			CreatedAt:  time.Now(),
+			Persisted:  false,
 		}
 	}
 
@@ -245,9 +275,9 @@ func (h *RulesHandler) HandleAddRule(w http.ResponseWriter, r *http.Request) {
 
 // HandleUpdateRule handles PATCH /api/rules/:name
 func (h *RulesHandler) HandleUpdateRule(w http.ResponseWriter, r *http.Request, ruleName string) {
-	engine := h.getEngine()
+	engine, errMsg := h.getEngine(r)
 	if engine == nil {
-		http.Error(w, "Rules engine not available", http.StatusServiceUnavailable)
+		http.Error(w, errMsg, http.StatusBadRequest)
 		return
 	}
 
@@ -298,13 +328,13 @@ func (h *RulesHandler) HandleUpdateRule(w http.ResponseWriter, r *http.Request, 
 
 // HandleDeleteRule handles DELETE /api/rules/:name
 func (h *RulesHandler) HandleDeleteRule(w http.ResponseWriter, r *http.Request, ruleName string) {
-	engine := h.getEngine()
+	engine, errMsg := h.getEngine(r)
 	if engine == nil {
-		http.Error(w, "Rules engine not available", http.StatusServiceUnavailable)
+		http.Error(w, errMsg, http.StatusBadRequest)
 		return
 	}
 
-	// Check if the rule exists and is a runtime rule
+	// Check if the rule exists
 	rule := engine.GetRule(ruleName)
 	if rule == nil {
 		h.writeJSON(w, http.StatusNotFound, DeleteRuleResponse{
@@ -314,11 +344,11 @@ func (h *RulesHandler) HandleDeleteRule(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// Cannot delete config-sourced rules
-	if rule.Source == "config" {
+	// Cannot delete persisted rules
+	if rule.Persisted {
 		h.writeJSON(w, http.StatusBadRequest, DeleteRuleResponse{
 			Success: false,
-			Error:   fmt.Sprintf("cannot delete config-sourced rule %q; use PATCH to disable instead", ruleName),
+			Error:   fmt.Sprintf("cannot delete persisted rule %q; use PATCH to disable instead", ruleName),
 		})
 		return
 	}
@@ -347,9 +377,9 @@ func (h *RulesHandler) HandleUpdateConfig(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	engine := h.getEngine()
+	engine, errMsg := h.getEngine(r)
 	if engine == nil {
-		http.Error(w, "Rules engine not available", http.StatusServiceUnavailable)
+		http.Error(w, errMsg, http.StatusBadRequest)
 		return
 	}
 
@@ -383,18 +413,43 @@ func (h *RulesHandler) HandleUpdateConfig(w http.ResponseWriter, r *http.Request
 	})
 }
 
-// getEngine returns the rules engine from the daemon's orchestrator manager
-func (h *RulesHandler) getEngine() *rules.Engine {
+// getEngine returns the rules engine for the specified repo or run.
+// It extracts repo_path or run_id from the query parameters.
+// If neither is specified, it returns nil with an error message.
+// When repo_path is specified and no active run exists, a standalone engine
+// is created from the repo's config.
+func (h *RulesHandler) getEngine(r *http.Request) (*rules.Engine, string) {
 	if h.daemon == nil {
-		return nil
+		return nil, "daemon not available"
 	}
 
 	orchManager := h.daemon.GetOrchestratorManager()
 	if orchManager == nil {
-		return nil
+		return nil, "orchestrator manager not available"
 	}
 
-	return orchManager.GetRulesEngine()
+	// Try to get the engine by run_id first (more specific)
+	runID := r.URL.Query().Get("run_id")
+	if runID != "" {
+		engine := orchManager.GetRulesEngineForRun(runID)
+		if engine == nil {
+			return nil, fmt.Sprintf("no active run found for run_id %q", runID)
+		}
+		return engine, ""
+	}
+
+	// Try to get or create the engine by repo_path
+	// This works whether or not an active run exists
+	repoPath := r.URL.Query().Get("repo_path")
+	if repoPath != "" {
+		engine, err := orchManager.GetOrCreateRulesEngineForRepo(repoPath)
+		if err != nil {
+			return nil, fmt.Sprintf("failed to get rules engine for repo %q: %v", repoPath, err)
+		}
+		return engine, ""
+	}
+
+	return nil, "either repo_path or run_id query parameter is required"
 }
 
 // writeJSON writes a JSON response with the given status code
@@ -430,25 +485,18 @@ func (h *RulesHandler) broadcastRulesChanged(action string, rule *rules.RuntimeR
 // HandlePersistRule handles POST /api/rules/:name/persist
 // Persists a single runtime rule to the config file
 func (h *RulesHandler) HandlePersistRule(w http.ResponseWriter, r *http.Request, ruleName string) {
-	engine := h.getEngine()
+	engine, errMsg := h.getEngine(r)
 	if engine == nil {
-		http.Error(w, "Rules engine not available", http.StatusServiceUnavailable)
+		http.Error(w, errMsg, http.StatusBadRequest)
 		return
 	}
 
-	if h.daemon == nil {
-		h.writeJSON(w, http.StatusServiceUnavailable, PersistRuleResponse{
-			Success: false,
-			Error:   "Daemon not available",
-		})
-		return
-	}
-
-	workDir := h.daemon.GetWorkDir()
+	// Get workDir from query parameters (repo_path is required for persist operations)
+	workDir := r.URL.Query().Get("repo_path")
 	if workDir == "" {
-		h.writeJSON(w, http.StatusServiceUnavailable, PersistRuleResponse{
+		h.writeJSON(w, http.StatusBadRequest, PersistRuleResponse{
 			Success: false,
-			Error:   "Work directory not set",
+			Error:   "repo_path query parameter is required for persist operations",
 		})
 		return
 	}
@@ -478,7 +526,7 @@ func (h *RulesHandler) HandlePersistRule(w http.ResponseWriter, r *http.Request,
 	// Create RuntimeRule for response
 	runtimeRule := rules.RuntimeRule{
 		CustomRule: *persistedRule,
-		Source:     "config",
+		Persisted:  true,
 	}
 
 	// Broadcast rules:changed event
@@ -494,25 +542,18 @@ func (h *RulesHandler) HandlePersistRule(w http.ResponseWriter, r *http.Request,
 // HandlePersistAllRules handles POST /api/rules/persist-all
 // Persists all runtime rules to the config file
 func (h *RulesHandler) HandlePersistAllRules(w http.ResponseWriter, r *http.Request) {
-	engine := h.getEngine()
+	engine, errMsg := h.getEngine(r)
 	if engine == nil {
-		http.Error(w, "Rules engine not available", http.StatusServiceUnavailable)
+		http.Error(w, errMsg, http.StatusBadRequest)
 		return
 	}
 
-	if h.daemon == nil {
-		h.writeJSON(w, http.StatusServiceUnavailable, PersistAllRulesResponse{
-			Success: false,
-			Error:   "Daemon not available",
-		})
-		return
-	}
-
-	workDir := h.daemon.GetWorkDir()
+	// Get workDir from query parameters (repo_path is required for persist operations)
+	workDir := r.URL.Query().Get("repo_path")
 	if workDir == "" {
-		h.writeJSON(w, http.StatusServiceUnavailable, PersistAllRulesResponse{
+		h.writeJSON(w, http.StatusBadRequest, PersistAllRulesResponse{
 			Success: false,
-			Error:   "Work directory not set",
+			Error:   "repo_path query parameter is required for persist operations",
 		})
 		return
 	}
@@ -552,6 +593,52 @@ func (h *RulesHandler) HandlePersistAllRules(w http.ResponseWriter, r *http.Requ
 		Success:    true,
 		Persisted:  persisted,
 		ConfigPath: configPath,
+	})
+}
+
+// HandleReorderRule handles POST /api/rules/:name/reorder
+// Moves a rule to a new position in the rules list.
+// Reordering causes list-level persisted to become false since order changed.
+func (h *RulesHandler) HandleReorderRule(w http.ResponseWriter, r *http.Request, ruleName string) {
+	engine, errMsg := h.getEngine(r)
+	if engine == nil {
+		http.Error(w, errMsg, http.StatusBadRequest)
+		return
+	}
+
+	var req ReorderRuleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.writeJSON(w, http.StatusBadRequest, ReorderRuleResponse{
+			Success: false,
+			Error:   fmt.Sprintf("Invalid JSON: %v", err),
+		})
+		return
+	}
+
+	// Reorder the rule
+	if err := engine.ReorderRule(ruleName, req.Position); err != nil {
+		// Determine status code based on error type
+		statusCode := http.StatusBadRequest
+		if strings.Contains(err.Error(), "not found") {
+			statusCode = http.StatusNotFound
+		}
+		h.writeJSON(w, statusCode, ReorderRuleResponse{
+			Success: false,
+			Error:   err.Error(),
+		})
+		return
+	}
+
+	// Get updated snapshot
+	snapshot := engine.GetSnapshot()
+
+	// Broadcast rules:changed event
+	h.broadcastRulesChanged("reordered", nil)
+
+	h.writeJSON(w, http.StatusOK, ReorderRuleResponse{
+		Success:   true,
+		Rules:     snapshot.Rules,
+		Persisted: snapshot.Persisted,
 	})
 }
 

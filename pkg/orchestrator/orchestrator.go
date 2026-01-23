@@ -8,13 +8,12 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/sync/semaphore"
-
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
 	cfgpkg "github.com/jzila/canopy/pkg/config"
 	"github.com/jzila/canopy/pkg/ipc"
 	"github.com/jzila/canopy/pkg/mergecoordinator"
+	"github.com/jzila/canopy/pkg/rules"
 	"github.com/jzila/canopy/pkg/sandbox"
 	"github.com/jzila/canopy/pkg/scheduler"
 )
@@ -84,14 +83,27 @@ type Config struct {
 	MaxRetries      int           // Maximum number of times to retry failed tasks (0 = no retries, -1 = infinite)
 	MaxPriority     int           // Hard filter: only run tasks with priority <= this value (-1 = no filter)
 	ResolverTimeout time.Duration // Timeout for resolver agents (0 = use default 10m)
-	Rules           *cfgpkg.RulesSettings // Task selection rules from config (nil = use MaxPriority only)
+	Rules           *cfgpkg.RulesSettings // CLI overrides for rules (nil = use config.toml only)
+	RulesOverrides  *RulesOverrides       // Tracks which rules fields were explicitly set via CLI
 	Watch           bool          // Watch mode: keep running and poll for new tasks instead of exiting when queue is empty
 	PollInterval    time.Duration // Interval between polling for new tasks in watch mode (default: 5s)
+}
+
+// RulesOverrides tracks which rules fields were explicitly set via CLI flags.
+// This allows merging with config.toml while preserving explicit CLI values.
+type RulesOverrides struct {
+	PriorityMax   bool
+	Types         bool
+	ExcludeTypes  bool
+	Labels        bool
+	ExcludeLabels bool
+	Assignee      bool
 }
 
 // Orchestrator coordinates the execution of tasks from beads
 type Orchestrator struct {
 	config           *Config
+	repoConfig       *cfgpkg.Config // Loaded from .canopy/config.toml
 	beadsClient      beads.BeadsClient
 	scheduler        *scheduler.Scheduler
 	mergeCoordinator *mergecoordinator.MergeCoordinator
@@ -99,11 +111,16 @@ type Orchestrator struct {
 	callbackManager  *CallbackManager
 	failureCounts    map[string]int // Tracks how many times each task has failed
 	sandboxConfig    *sandbox.SandboxConfig
-	taskFilter       *cfgpkg.TaskFilter // Task filter from rules settings
+	taskFilter       *cfgpkg.TaskFilter // Task filter from rules settings (legacy)
+	rulesEngine      *rules.Engine      // Rules engine for per-repo task selection
+
+	// Dynamic concurrency control - supports runtime adjustment via API
+	slotManager *scheduler.SlotManager
 
 	// In-flight task tracking for dynamic task assignment
-	inFlightMu sync.RWMutex
-	inFlight   map[string]bool // Tasks currently being executed
+	inFlightMu   sync.RWMutex
+	inFlight     map[string]bool   // Tasks currently being executed
+	inFlightTask map[string]*beads.Task // Task objects for in-flight tasks (for concurrency limiting)
 
 	// Watch mode statistics
 	watchStatsMu    sync.RWMutex
@@ -118,6 +135,18 @@ func New(config *Config) (*Orchestrator, error) {
 	beadsClient, err := beads.NewClient(config.WorkDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create beads client: %w", err)
+	}
+
+	// Load config.toml - this is the source of truth for rules
+	repoConfig, err := cfgpkg.LoadConfig(config.WorkDir)
+	if err != nil {
+		// Log warning but continue with defaults - config loading should not fail orchestration
+		if config.Verbose {
+			fmt.Fprintf(os.Stderr, "warning: failed to load config.toml: %v\n", err)
+		}
+		repoConfig = cfgpkg.DefaultConfig()
+	} else if config.Verbose {
+		fmt.Printf("Loaded config from %s/.canopy/config.toml\n", config.WorkDir)
 	}
 
 	// Set up overlay directory per persistence invariant (XDG_CACHE_HOME/canopy/overlays)
@@ -182,14 +211,22 @@ func New(config *Config) (*Orchestrator, error) {
 		return nil, fmt.Errorf("failed to create merge coordinator: %w", err)
 	}
 
-	// Create task filter from rules settings
-	var taskFilter *cfgpkg.TaskFilter
+	// Build effective rules settings: start from config.toml, apply CLI overrides
+	effectiveRules := repoConfig.Rules
 	if config.Rules != nil {
-		taskFilter = cfgpkg.NewTaskFilter(config.Rules)
+		// CLI overrides take precedence - merge them in
+		effectiveRules = mergeRulesSettings(&repoConfig.Rules, config.Rules, config.RulesOverrides)
 	}
+
+	// Create task filter from effective rules settings (legacy compatibility)
+	taskFilter := cfgpkg.NewTaskFilter(&effectiveRules)
+
+	// Create rules engine from effective rules (preferred path)
+	rulesEngine := rules.NewEngine(&effectiveRules)
 
 	o := &Orchestrator{
 		config:           config,
+		repoConfig:       repoConfig,
 		beadsClient:      beadsClient,
 		scheduler:        sched,
 		mergeCoordinator: mc,
@@ -198,7 +235,10 @@ func New(config *Config) (*Orchestrator, error) {
 		failureCounts:    make(map[string]int),
 		sandboxConfig:    sandboxConfig,
 		taskFilter:       taskFilter,
+		rulesEngine:      rulesEngine,
+		slotManager:      scheduler.NewSlotManager(config.Concurrency),
 		inFlight:         make(map[string]bool),
+		inFlightTask:     make(map[string]*beads.Task),
 	}
 
 	// Set cleanup callback for merge coordinator
@@ -289,11 +329,30 @@ func (o *Orchestrator) SetRunID(runID string) {
 	o.mergeCoordinator.SetRunID(runID)
 }
 
-// SetConcurrency updates the concurrency setting.
-// Note: This updates the config for future reference but doesn't affect
-// currently running tasks as the scheduler's semaphore is fixed at creation.
+// SetConcurrency dynamically updates the concurrency setting.
+// This takes effect immediately for the running orchestrator - new slots
+// become available if increasing, or existing work drains naturally if decreasing.
 func (o *Orchestrator) SetConcurrency(concurrency int) {
 	o.config.Concurrency = concurrency
+	if o.slotManager != nil {
+		o.slotManager.SetConcurrency(concurrency)
+	}
+}
+
+// SetRulesEngine sets the rules engine for this orchestrator instance.
+// This enables per-repo rules isolation.
+func (o *Orchestrator) SetRulesEngine(engine *rules.Engine) {
+	o.rulesEngine = engine
+}
+
+// GetRulesEngine returns the rules engine for this orchestrator instance.
+func (o *Orchestrator) GetRulesEngine() *rules.Engine {
+	return o.rulesEngine
+}
+
+// GetRepoConfig returns the loaded repository config (.canopy/config.toml).
+func (o *Orchestrator) GetRepoConfig() *cfgpkg.Config {
+	return o.repoConfig
 }
 
 // SetAgentID records the agentID for a taskID, enabling parent-child tracking for resolvers.
@@ -341,8 +400,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		}
 	}
 
-	// Create semaphore for bounded concurrency
-	sem := semaphore.NewWeighted(int64(o.config.Concurrency))
+	// Use the slotManager for bounded concurrency (supports dynamic resizing)
 
 	// Track active workers and results
 	var wg sync.WaitGroup
@@ -435,14 +493,14 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			o.watchStatsMu.Unlock()
 		}
 
-		// Acquire semaphore before spawning worker
-		if err := sem.Acquire(ctx, 1); err != nil {
+		// Acquire slot before spawning worker
+		if err := o.slotManager.Acquire(ctx); err != nil {
 			return err
 		}
 		wg.Add(1)
 		go func(t *beads.Task) {
 			defer wg.Done()
-			defer sem.Release(1)
+			defer o.slotManager.Release()
 
 			o.scheduler.ExecuteTask(ctx, t, completionCallback)
 		}(task)
@@ -463,7 +521,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			// A task completed, try to get more work
 
 		default:
-			// Try to acquire a semaphore slot (non-blocking check first)
+			// Try to acquire a slot (non-blocking check first)
 		}
 
 		// Check if we have an error that should stop us (only in non-watch mode)
@@ -478,8 +536,8 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			runErrorMu.Unlock()
 		}
 
-		// Try to acquire a semaphore slot
-		if err := sem.Acquire(ctx, 1); err != nil {
+		// Try to acquire a slot
+		if err := o.slotManager.Acquire(ctx); err != nil {
 			// Context cancelled
 			wg.Wait()
 			if o.config.Watch && o.config.Verbose {
@@ -491,14 +549,14 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		// Got a slot, get the next task
 		task, shouldStop, err := o.getNextTask(ctx)
 		if err != nil {
-			sem.Release(1)
+			o.slotManager.Release()
 			wg.Wait()
 			return err
 		}
 
 		if shouldStop {
 			// Stop condition met - release slot and wait for in-flight tasks
-			sem.Release(1)
+			o.slotManager.Release()
 			wg.Wait()
 			if o.config.Verbose {
 				fmt.Println("Stop condition met, orchestration complete")
@@ -511,7 +569,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 
 		if task == nil {
 			// No task available right now
-			sem.Release(1)
+			o.slotManager.Release()
 
 			// Check if there are any in-flight tasks
 			o.inFlightMu.RLock()
@@ -580,7 +638,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		wg.Add(1)
 		go func(t *beads.Task) {
 			defer wg.Done()
-			defer sem.Release(1)
+			defer o.slotManager.Release()
 
 			o.scheduler.ExecuteTask(ctx, t, completionCallback)
 		}(task)
@@ -687,15 +745,46 @@ func filterTasksByMaxPriority(tasks []beads.Task, maxPriority int) []beads.Task 
 }
 
 // filterTasks applies configured rules to filter tasks.
-// If task filter is configured, uses full rules; otherwise falls back to maxPriority.
+// Priority: rulesEngine > taskFilter > maxPriority fallback
 func (o *Orchestrator) filterTasks(tasks []beads.Task) []beads.Task {
-	// If we have a task filter, use it
+	// If we have a rules engine, use it (preferred for per-repo isolation)
+	if o.rulesEngine != nil {
+		return o.filterTasksWithEngine(tasks)
+	}
+
+	// If we have a task filter (legacy), use it
 	if o.taskFilter != nil {
 		return o.taskFilter.FilterTasks(tasks)
 	}
 
 	// Fall back to simple maxPriority filter for backward compatibility
 	return filterTasksByMaxPriority(tasks, o.config.MaxPriority)
+}
+
+// filterTasksWithEngine applies the rules engine to filter tasks.
+// This considers in-flight tasks for concurrency limit rules.
+func (o *Orchestrator) filterTasksWithEngine(tasks []beads.Task) []beads.Task {
+	o.inFlightMu.RLock()
+	// Make copies of in-flight state for the rules engine
+	inFlight := make(map[string]bool, len(o.inFlight))
+	for k, v := range o.inFlight {
+		inFlight[k] = v
+	}
+	inFlightTasks := make(map[string]*beads.Task, len(o.inFlightTask))
+	for k, v := range o.inFlightTask {
+		inFlightTasks[k] = v
+	}
+	o.inFlightMu.RUnlock()
+
+	filtered := make([]beads.Task, 0, len(tasks))
+	for i := range tasks {
+		task := &tasks[i]
+		result := o.rulesEngine.Evaluate(task, inFlight, inFlightTasks)
+		if result.Allow && !result.Skip {
+			filtered = append(filtered, tasks[i])
+		}
+	}
+	return filtered
 }
 
 // markInFlight marks a task as currently in-flight
@@ -710,6 +799,7 @@ func (o *Orchestrator) unmarkInFlight(taskID string) {
 	o.inFlightMu.Lock()
 	defer o.inFlightMu.Unlock()
 	delete(o.inFlight, taskID)
+	delete(o.inFlightTask, taskID)
 }
 
 // isInFlight returns whether a task is currently in-flight
@@ -738,8 +828,9 @@ func (o *Orchestrator) getNextTask(ctx context.Context) (*beads.Task, bool, erro
 
 	for i := range tasks {
 		if !o.inFlight[tasks[i].ID] {
-			// Mark this task as in-flight and return it
+			// Mark this task as in-flight (store task object for concurrency limiting)
 			o.inFlight[tasks[i].ID] = true
+			o.inFlightTask[tasks[i].ID] = &tasks[i]
 			return &tasks[i], false, nil
 		}
 	}
@@ -747,4 +838,60 @@ func (o *Orchestrator) getNextTask(ctx context.Context) (*beads.Task, bool, erro
 	// No available tasks (either no ready tasks, or all are in-flight)
 	// Return nil but don't signal stop - there may be in-flight tasks that will complete
 	return nil, false, nil
+}
+
+// mergeRulesSettings merges CLI override settings into base config settings.
+// The overrides parameter tracks which fields were explicitly set via CLI.
+func mergeRulesSettings(base, cliRules *cfgpkg.RulesSettings, overrides *RulesOverrides) cfgpkg.RulesSettings {
+	result := *base
+
+	// If no CLI rules provided, return base as-is
+	if cliRules == nil {
+		return result
+	}
+
+	if overrides == nil {
+		// No overrides tracking - use simple heuristics (legacy behavior)
+		if cliRules.PriorityMax != -1 {
+			result.PriorityMax = cliRules.PriorityMax
+		}
+		if len(cliRules.Types) > 0 {
+			result.Types = cliRules.Types
+		}
+		if len(cliRules.ExcludeTypes) > 0 {
+			result.ExcludeTypes = cliRules.ExcludeTypes
+		}
+		if len(cliRules.Labels) > 0 {
+			result.Labels = cliRules.Labels
+		}
+		if len(cliRules.ExcludeLabels) > 0 {
+			result.ExcludeLabels = cliRules.ExcludeLabels
+		}
+		if cliRules.Assignee != "*" {
+			result.Assignee = cliRules.Assignee
+		}
+		return result
+	}
+
+	// Apply only fields that were explicitly set via CLI flags
+	if overrides.PriorityMax {
+		result.PriorityMax = cliRules.PriorityMax
+	}
+	if overrides.Types {
+		result.Types = cliRules.Types
+	}
+	if overrides.ExcludeTypes {
+		result.ExcludeTypes = cliRules.ExcludeTypes
+	}
+	if overrides.Labels {
+		result.Labels = cliRules.Labels
+	}
+	if overrides.ExcludeLabels {
+		result.ExcludeLabels = cliRules.ExcludeLabels
+	}
+	if overrides.Assignee {
+		result.Assignee = cliRules.Assignee
+	}
+
+	return result
 }

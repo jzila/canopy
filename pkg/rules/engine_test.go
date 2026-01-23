@@ -366,13 +366,12 @@ func TestEngineEvaluateCustomRules(t *testing.T) {
 	falseVal := false
 
 	tests := []struct {
-		name        string
-		config      *config.RulesSettings
-		task        *beads.Task
-		wantSkip    bool
-		wantReason  string
-		wantBoost   int
-		wantAllow   bool
+		name       string
+		config     *config.RulesSettings
+		task       *beads.Task
+		wantSkip   bool
+		wantReason string
+		wantAllow  bool
 	}{
 		{
 			name: "skip rule matches",
@@ -398,7 +397,7 @@ func TestEngineEvaluateCustomRules(t *testing.T) {
 			},
 			task:       &beads.Task{ID: "1", Priority: 3},
 			wantSkip:   true,
-			wantReason: "Skipped by rule: no-low-priority",
+			wantReason: "Denied by rule: no-low-priority",
 		},
 		{
 			name: "skip rule does not match",
@@ -437,21 +436,22 @@ func TestEngineEvaluateCustomRules(t *testing.T) {
 			},
 			task:       &beads.Task{ID: "1", Priority: 3},
 			wantSkip:   true,
-			wantReason: "Skipped by rule: enabled",
+			wantReason: "Denied by rule: enabled",
 		},
 		{
-			name: "allow rule short-circuits",
+			name: "allow rule continues to next rule",
 			config: &config.RulesSettings{
 				PriorityMax: -1,
 				Assignee:    "*",
 				Custom: []config.CustomRule{
-					{Name: "always-allow-bugs", Condition: "type == bug", Action: "allow"},
-					{Name: "skip-all", Condition: "priority >= 0", Action: "skip"},
+					{Name: "allow-bugs", Condition: "type == bug", Action: "allow"},
+					{Name: "deny-all", Condition: "priority >= 0", Action: "deny"},
 				},
 			},
-			task:      &beads.Task{ID: "1", Type: "bug", Priority: 3},
-			wantSkip:  false,
-			wantAllow: true,
+			// ALLOW continues evaluation, then DENY rejects the task
+			task:       &beads.Task{ID: "1", Type: "bug", Priority: 3},
+			wantSkip:   true,
+			wantReason: "Denied by rule: deny-all",
 		},
 		{
 			name: "include rule continues",
@@ -465,36 +465,34 @@ func TestEngineEvaluateCustomRules(t *testing.T) {
 			},
 			task:       &beads.Task{ID: "1", Type: "bug", Priority: 3},
 			wantSkip:   true,
-			wantReason: "Skipped by rule: skip-high-priority",
+			wantReason: "Denied by rule: skip-high-priority",
 		},
 		{
-			name: "boost rule adds boost",
+			name: "deny rule with deny action",
 			config: &config.RulesSettings{
 				PriorityMax: -1,
 				Assignee:    "*",
 				Custom: []config.CustomRule{
-					{Name: "boost-bugs", Condition: "type == bug", Action: "boost:3"},
+					{Name: "deny-bugs", Condition: "type == bug", Action: "deny"},
 				},
 			},
-			task:      &beads.Task{ID: "1", Type: "bug", Priority: 2},
-			wantSkip:  false,
-			wantAllow: true,
-			wantBoost: 3,
+			task:       &beads.Task{ID: "1", Type: "bug", Priority: 2},
+			wantSkip:   true,
+			wantReason: "Denied by rule: deny-bugs",
 		},
 		{
-			name: "multiple boost rules accumulate",
+			name: "allow rule continues evaluation",
 			config: &config.RulesSettings{
 				PriorityMax: -1,
 				Assignee:    "*",
 				Custom: []config.CustomRule{
-					{Name: "boost-bugs", Condition: "type == bug", Action: "boost:2"},
-					{Name: "boost-urgent", Condition: "priority <= 1", Action: "boost:3"},
+					{Name: "allow-bugs", Condition: "type == bug", Action: "allow"},
+					{Name: "deny-all", Condition: "priority >= 0", Action: "deny"},
 				},
 			},
-			task:      &beads.Task{ID: "1", Type: "bug", Priority: 1},
-			wantSkip:  false,
-			wantAllow: true,
-			wantBoost: 5,
+			task:       &beads.Task{ID: "1", Type: "bug", Priority: 1},
+			wantSkip:   true,
+			wantReason: "Denied by rule: deny-all",
 		},
 	}
 
@@ -511,9 +509,6 @@ func TestEngineEvaluateCustomRules(t *testing.T) {
 			}
 			if !tt.wantSkip && result.Allow != tt.wantAllow {
 				t.Errorf("Allow = %v, want %v", result.Allow, tt.wantAllow)
-			}
-			if result.BoostAmount != tt.wantBoost {
-				t.Errorf("BoostAmount = %d, want %d", result.BoostAmount, tt.wantBoost)
 			}
 		})
 	}
@@ -611,32 +606,23 @@ func TestEngineNilConfig(t *testing.T) {
 
 func TestParseAction(t *testing.T) {
 	tests := []struct {
-		action      string
-		wantType    actionType
-		wantBoost   int
-		wantLimit   int
+		action     string
+		wantAction Action
 	}{
-		{"skip", actionSkip, 0, 0},
-		{"include", actionInclude, 0, 0},
-		{"allow", actionAllow, 0, 0},
-		{"boost:5", actionBoost, 5, 0},
-		{"boost:10", actionBoost, 10, 0},
-		{"limit:3", actionLimit, 0, 3},
-		{"limit:1", actionLimit, 0, 1},
-		{"unknown", actionInclude, 0, 0},
+		{"deny", ActionDeny},
+		{"skip", ActionDeny},     // backwards compatibility
+		{"allow", ActionAllow},
+		{"include", ActionAllow}, // backwards compatibility
+		{"unknown", ActionAllow}, // unknown defaults to allow
+		{"boost:5", ActionAllow}, // deprecated, defaults to allow
+		{"limit:3", ActionAllow}, // deprecated, defaults to allow
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.action, func(t *testing.T) {
 			result := parseAction(tt.action)
-			if result.actionType != tt.wantType {
-				t.Errorf("actionType = %v, want %v", result.actionType, tt.wantType)
-			}
-			if result.boostAmount != tt.wantBoost {
-				t.Errorf("boostAmount = %d, want %d", result.boostAmount, tt.wantBoost)
-			}
-			if result.limitMax != tt.wantLimit {
-				t.Errorf("limitMax = %d, want %d", result.limitMax, tt.wantLimit)
+			if result != tt.wantAction {
+				t.Errorf("parseAction(%q) = %v, want %v", tt.action, result, tt.wantAction)
 			}
 		})
 	}
@@ -669,10 +655,10 @@ func TestEnginePersistRule(t *testing.T) {
 		t.Errorf("Expected rule name 'test-persist', got %q", runtimeRules[0].Name)
 	}
 
-	// Verify it's marked as runtime source in GetRule
+	// Verify it's marked as not persisted in GetRule
 	rule := engine.GetRule("test-persist")
-	if rule.Source != "runtime" {
-		t.Errorf("Expected source 'runtime', got %q", rule.Source)
+	if rule.Persisted {
+		t.Error("Expected rule to not be persisted")
 	}
 
 	// Persist the rule
@@ -690,13 +676,13 @@ func TestEnginePersistRule(t *testing.T) {
 		t.Errorf("Expected 0 runtime rules after persist, got %d", len(runtimeRules))
 	}
 
-	// Verify it's now in config rules
+	// Verify it's now persisted
 	rule = engine.GetRule("test-persist")
 	if rule == nil {
 		t.Fatal("Expected to find rule after persist")
 	}
-	if rule.Source != "config" {
-		t.Errorf("Expected source 'config' after persist, got %q", rule.Source)
+	if !rule.Persisted {
+		t.Error("Expected rule to be persisted after persist")
 	}
 
 	// Verify it still works (task should be skipped)
@@ -722,7 +708,7 @@ func TestEnginePersistRule_NotFound(t *testing.T) {
 	}
 }
 
-func TestEnginePersistRule_AlreadyConfig(t *testing.T) {
+func TestEnginePersistRule_AlreadyPersisted(t *testing.T) {
 	cfg := &config.RulesSettings{
 		PriorityMax: -1,
 		Assignee:    "*",
@@ -733,10 +719,10 @@ func TestEnginePersistRule_AlreadyConfig(t *testing.T) {
 
 	engine := NewEngine(cfg)
 
-	// Try to persist a config rule
+	// Try to persist an already persisted rule
 	_, err := engine.PersistRule("existing-config")
 	if err == nil {
-		t.Error("Expected error for config rule")
+		t.Error("Expected error for already persisted rule")
 	}
 }
 
@@ -774,15 +760,15 @@ func TestEnginePersistAllRules(t *testing.T) {
 		t.Errorf("Expected 0 runtime rules after persist all, got %d", len(runtimeRules))
 	}
 
-	// Verify all rules are now in config
+	// Verify all rules are now persisted
 	for _, name := range persisted {
 		rule := engine.GetRule(name)
 		if rule == nil {
 			t.Errorf("Rule %q not found after persist", name)
 			continue
 		}
-		if rule.Source != "config" {
-			t.Errorf("Rule %q has source %q, expected 'config'", name, rule.Source)
+		if !rule.Persisted {
+			t.Errorf("Rule %q is not persisted, expected persisted", name)
 		}
 	}
 }
@@ -848,5 +834,344 @@ func TestEngineGetConfigForPersistence(t *testing.T) {
 	originalConfig := engine.GetConfigSettings()
 	if originalConfig.PriorityMax != 3 {
 		t.Error("GetConfigForPersistence didn't return a copy")
+	}
+}
+
+func TestEngineGetSnapshot_ListPersisted(t *testing.T) {
+	tests := []struct {
+		name           string
+		configRules    []config.CustomRule
+		runtimeOps     func(*Engine) // operations to perform after engine creation
+		wantPersisted  bool
+		wantRulesCount int
+	}{
+		{
+			name:           "empty config - list is persisted",
+			configRules:    nil,
+			runtimeOps:     nil,
+			wantPersisted:  true,
+			wantRulesCount: 0,
+		},
+		{
+			name: "config rules only - list is persisted",
+			configRules: []config.CustomRule{
+				{Name: "rule1", Condition: "priority > 1", Action: "deny"},
+				{Name: "rule2", Condition: "type == bug", Action: "allow"},
+			},
+			runtimeOps:     nil,
+			wantPersisted:  true,
+			wantRulesCount: 2,
+		},
+		{
+			name: "runtime rule added - list is NOT persisted",
+			configRules: []config.CustomRule{
+				{Name: "rule1", Condition: "priority > 1", Action: "deny"},
+			},
+			runtimeOps: func(e *Engine) {
+				e.AddRule(config.CustomRule{Name: "runtime-rule", Condition: "type == bug", Action: "allow"})
+			},
+			wantPersisted:  false,
+			wantRulesCount: 2,
+		},
+		{
+			name: "config rule removed - list is NOT persisted",
+			configRules: []config.CustomRule{
+				{Name: "rule1", Condition: "priority > 1", Action: "deny"},
+				{Name: "rule2", Condition: "type == bug", Action: "allow"},
+			},
+			runtimeOps: func(e *Engine) {
+				e.RemoveRule("rule2")
+			},
+			wantPersisted:  false,
+			wantRulesCount: 1,
+		},
+		{
+			name: "rules reordered - list is NOT persisted",
+			configRules: []config.CustomRule{
+				{Name: "rule1", Condition: "priority > 1", Action: "deny"},
+				{Name: "rule2", Condition: "type == bug", Action: "allow"},
+			},
+			runtimeOps: func(e *Engine) {
+				// Remove both and add in different order
+				e.RemoveRule("rule1")
+				e.RemoveRule("rule2")
+				e.AddRule(config.CustomRule{Name: "rule2", Condition: "type == bug", Action: "allow"})
+				e.AddRule(config.CustomRule{Name: "rule1", Condition: "priority > 1", Action: "deny"})
+			},
+			wantPersisted:  false,
+			wantRulesCount: 2,
+		},
+		{
+			name: "runtime rule added then persisted - list is persisted",
+			configRules: []config.CustomRule{
+				{Name: "rule1", Condition: "priority > 1", Action: "deny"},
+			},
+			runtimeOps: func(e *Engine) {
+				e.AddRule(config.CustomRule{Name: "runtime-rule", Condition: "type == bug", Action: "allow"})
+				_, _ = e.PersistRule("runtime-rule")
+			},
+			wantPersisted:  true,
+			wantRulesCount: 2,
+		},
+		{
+			name:        "multiple runtime rules added then all persisted - list is persisted",
+			configRules: nil,
+			runtimeOps: func(e *Engine) {
+				e.AddRule(config.CustomRule{Name: "rule1", Condition: "priority > 1", Action: "deny"})
+				e.AddRule(config.CustomRule{Name: "rule2", Condition: "type == bug", Action: "allow"})
+				_, _ = e.PersistAllRules()
+			},
+			wantPersisted:  true,
+			wantRulesCount: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.RulesSettings{
+				PriorityMax: -1,
+				Assignee:    "*",
+				Custom:      tt.configRules,
+			}
+
+			engine := NewEngine(cfg)
+			if tt.runtimeOps != nil {
+				tt.runtimeOps(engine)
+			}
+
+			snapshot := engine.GetSnapshot()
+
+			if snapshot.Persisted != tt.wantPersisted {
+				t.Errorf("snapshot.Persisted = %v, want %v", snapshot.Persisted, tt.wantPersisted)
+			}
+			if len(snapshot.Rules) != tt.wantRulesCount {
+				t.Errorf("len(snapshot.Rules) = %d, want %d", len(snapshot.Rules), tt.wantRulesCount)
+			}
+		})
+	}
+}
+
+func TestEngineGetSnapshot_PerRulePersisted(t *testing.T) {
+	cfg := &config.RulesSettings{
+		PriorityMax: -1,
+		Assignee:    "*",
+		Custom: []config.CustomRule{
+			{Name: "config-rule", Condition: "priority > 1", Action: "deny"},
+		},
+	}
+
+	engine := NewEngine(cfg)
+	engine.AddRule(config.CustomRule{Name: "runtime-rule", Condition: "type == bug", Action: "allow"})
+
+	snapshot := engine.GetSnapshot()
+
+	// Should have 2 rules total
+	if len(snapshot.Rules) != 2 {
+		t.Fatalf("Expected 2 rules, got %d", len(snapshot.Rules))
+	}
+
+	// First rule (from config) should be persisted
+	if snapshot.Rules[0].Name != "config-rule" {
+		t.Errorf("Expected first rule to be 'config-rule', got %q", snapshot.Rules[0].Name)
+	}
+	if !snapshot.Rules[0].Persisted {
+		t.Error("Expected config-rule to be persisted")
+	}
+
+	// Second rule (runtime) should NOT be persisted
+	if snapshot.Rules[1].Name != "runtime-rule" {
+		t.Errorf("Expected second rule to be 'runtime-rule', got %q", snapshot.Rules[1].Name)
+	}
+	if snapshot.Rules[1].Persisted {
+		t.Error("Expected runtime-rule to NOT be persisted")
+	}
+
+	// List-level persisted should be false (since we have a runtime rule)
+	if snapshot.Persisted {
+		t.Error("Expected list-level Persisted to be false with runtime rule")
+	}
+}
+
+func TestEngineReorderRule(t *testing.T) {
+	tests := []struct {
+		name          string
+		initialRules  []config.CustomRule
+		reorderName   string
+		newPosition   int
+		wantError     bool
+		wantErrSubstr string
+		wantOrder     []string // expected rule names in order after reorder
+	}{
+		{
+			name: "move rule from first to last position",
+			initialRules: []config.CustomRule{
+				{Name: "rule1", Condition: "priority > 1", Action: "deny"},
+				{Name: "rule2", Condition: "type == bug", Action: "allow"},
+				{Name: "rule3", Condition: "type == feature", Action: "allow"},
+			},
+			reorderName: "rule1",
+			newPosition: 2,
+			wantOrder:   []string{"rule2", "rule3", "rule1"},
+		},
+		{
+			name: "move rule from last to first position",
+			initialRules: []config.CustomRule{
+				{Name: "rule1", Condition: "priority > 1", Action: "deny"},
+				{Name: "rule2", Condition: "type == bug", Action: "allow"},
+				{Name: "rule3", Condition: "type == feature", Action: "allow"},
+			},
+			reorderName: "rule3",
+			newPosition: 0,
+			wantOrder:   []string{"rule3", "rule1", "rule2"},
+		},
+		{
+			name: "move rule to middle position",
+			initialRules: []config.CustomRule{
+				{Name: "rule1", Condition: "priority > 1", Action: "deny"},
+				{Name: "rule2", Condition: "type == bug", Action: "allow"},
+				{Name: "rule3", Condition: "type == feature", Action: "allow"},
+			},
+			reorderName: "rule1",
+			newPosition: 1,
+			wantOrder:   []string{"rule2", "rule1", "rule3"},
+		},
+		{
+			name: "move rule to same position (no-op)",
+			initialRules: []config.CustomRule{
+				{Name: "rule1", Condition: "priority > 1", Action: "deny"},
+				{Name: "rule2", Condition: "type == bug", Action: "allow"},
+			},
+			reorderName: "rule1",
+			newPosition: 0,
+			wantOrder:   []string{"rule1", "rule2"},
+		},
+		{
+			name: "rule not found",
+			initialRules: []config.CustomRule{
+				{Name: "rule1", Condition: "priority > 1", Action: "deny"},
+			},
+			reorderName:   "nonexistent",
+			newPosition:   0,
+			wantError:     true,
+			wantErrSubstr: "not found",
+		},
+		{
+			name: "position out of range (negative)",
+			initialRules: []config.CustomRule{
+				{Name: "rule1", Condition: "priority > 1", Action: "deny"},
+			},
+			reorderName:   "rule1",
+			newPosition:   -1,
+			wantError:     true,
+			wantErrSubstr: "out of range",
+		},
+		{
+			name: "position out of range (too high)",
+			initialRules: []config.CustomRule{
+				{Name: "rule1", Condition: "priority > 1", Action: "deny"},
+				{Name: "rule2", Condition: "type == bug", Action: "allow"},
+			},
+			reorderName:   "rule1",
+			newPosition:   5,
+			wantError:     true,
+			wantErrSubstr: "out of range",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.RulesSettings{
+				PriorityMax: -1,
+				Assignee:    "*",
+				Custom:      tt.initialRules,
+			}
+
+			engine := NewEngine(cfg)
+			err := engine.ReorderRule(tt.reorderName, tt.newPosition)
+
+			if tt.wantError {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if tt.wantErrSubstr != "" && !contains([]string{err.Error()}, tt.wantErrSubstr) {
+					// Check using strings.Contains instead
+					if !containsSubstring(err.Error(), tt.wantErrSubstr) {
+						t.Errorf("error %q does not contain %q", err.Error(), tt.wantErrSubstr)
+					}
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			snapshot := engine.GetSnapshot()
+			if len(snapshot.Rules) != len(tt.wantOrder) {
+				t.Fatalf("got %d rules, want %d", len(snapshot.Rules), len(tt.wantOrder))
+			}
+
+			for i, wantName := range tt.wantOrder {
+				if snapshot.Rules[i].Name != wantName {
+					t.Errorf("rule[%d].Name = %q, want %q", i, snapshot.Rules[i].Name, wantName)
+				}
+			}
+		})
+	}
+}
+
+// containsSubstring checks if s contains substr
+func containsSubstring(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		(len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)))
+}
+
+func findSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
+func TestEngineReorderRule_AffectsListPersisted(t *testing.T) {
+	// Create engine with two config rules
+	cfg := &config.RulesSettings{
+		PriorityMax: -1,
+		Assignee:    "*",
+		Custom: []config.CustomRule{
+			{Name: "rule1", Condition: "priority > 1", Action: "deny"},
+			{Name: "rule2", Condition: "type == bug", Action: "allow"},
+		},
+	}
+
+	engine := NewEngine(cfg)
+
+	// Initially, list should be persisted (matches config snapshot)
+	snapshot := engine.GetSnapshot()
+	if !snapshot.Persisted {
+		t.Fatal("expected list to be persisted initially")
+	}
+
+	// Reorder rules
+	if err := engine.ReorderRule("rule1", 1); err != nil {
+		t.Fatalf("ReorderRule failed: %v", err)
+	}
+
+	// After reorder, list should NOT be persisted (order changed)
+	snapshot = engine.GetSnapshot()
+	if snapshot.Persisted {
+		t.Error("expected list to NOT be persisted after reordering")
+	}
+
+	// Verify order changed
+	if snapshot.Rules[0].Name != "rule2" || snapshot.Rules[1].Name != "rule1" {
+		t.Errorf("unexpected order: %v, %v", snapshot.Rules[0].Name, snapshot.Rules[1].Name)
+	}
+
+	// Individual rules should still show as persisted (they exist in config)
+	if !snapshot.Rules[0].Persisted || !snapshot.Rules[1].Persisted {
+		t.Error("individual rules should still be marked as persisted")
 	}
 }

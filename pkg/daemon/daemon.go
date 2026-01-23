@@ -15,6 +15,7 @@ type Config struct {
 	Port              int    // HTTP server port
 	SocketPath        string // Unix socket path for IPC
 	EnablePersistence bool   // Enable SQLite persistence for run history
+	PeriodicSync      PeriodicSyncConfig // Periodic beads sync configuration
 }
 
 // IPCServer defines the interface for IPC server operations
@@ -46,10 +47,11 @@ type Daemon struct {
 	state    *RuntimeState
 
 	// Managers (single responsibility)
-	repoManager    *RepositoryManager
-	persistManager *PersistenceManager
-	lifecycle      *LifecycleManager
-	orchManager    *OrchestratorManager
+	repoManager      *RepositoryManager
+	persistManager   *PersistenceManager
+	lifecycle        *LifecycleManager
+	orchManager      *OrchestratorManager
+	periodicSyncMgr  *PeriodicSyncManager
 
 	// Server components (managed by lifecycle)
 	ipcServer        IPCServer
@@ -157,6 +159,14 @@ func (d *Daemon) Init() {
 	}
 	if d.orchManager == nil {
 		d.orchManager = NewOrchestratorManager(d.eventBus, d.state)
+	}
+	if d.periodicSyncMgr == nil {
+		syncConfig := d.config.PeriodicSync
+		// Use defaults if no config provided
+		if syncConfig.Interval == 0 {
+			syncConfig = DefaultPeriodicSyncConfig()
+		}
+		d.periodicSyncMgr = NewPeriodicSyncManager(syncConfig, d)
 	}
 
 	// Initialize persistence if enabled
@@ -379,6 +389,11 @@ func (d *Daemon) Start() error {
 	// Start HTTP server in a goroutine
 	httpErrChan := d.lifecycle.StartHTTP()
 
+	// Start periodic sync manager
+	if d.periodicSyncMgr != nil {
+		d.periodicSyncMgr.Start()
+	}
+
 	// Wait for termination signal or HTTP server error
 	sigChan := d.lifecycle.SetupSignalHandling()
 
@@ -398,6 +413,11 @@ func (d *Daemon) Stop() error {
 	logging.Info("stopping canopy daemon")
 
 	var firstErr error
+
+	// Stop periodic sync first (it's non-critical, background)
+	if d.periodicSyncMgr != nil {
+		d.periodicSyncMgr.Stop()
+	}
 
 	// Stop lifecycle-managed components (IPC, HTTP, pidfile)
 	if err := d.lifecycle.Stop(); err != nil && firstErr == nil {
@@ -455,6 +475,12 @@ func (d *Daemon) GetPersistenceStore() *PersistenceManager {
 // Returns nil if Init() has not been called yet.
 func (d *Daemon) GetOrchestratorManager() *OrchestratorManager {
 	return d.orchManager
+}
+
+// GetPeriodicSyncManager returns the periodic sync manager for external access.
+// Returns nil if Init() has not been called yet.
+func (d *Daemon) GetPeriodicSyncManager() *PeriodicSyncManager {
+	return d.periodicSyncMgr
 }
 
 // GetWorkDir returns the path of the currently active repository.
