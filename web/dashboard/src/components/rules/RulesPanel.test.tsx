@@ -57,7 +57,7 @@ describe('RulesPanel', () => {
       showAddRuleDialog: false,
       // Set up active repository for rules to load
       activeRepoId: 'test-repo-id',
-      repositories: [{ id: 'test-repo-id', name: 'Test Repo', path: '/test/repo' }],
+      repositories: [{ id: 'test-repo-id', name: 'Test Repo', path: '/test/repo', created_at: '2024-01-01T00:00:00Z', is_active: true }],
     });
   });
 
