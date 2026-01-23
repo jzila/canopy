@@ -705,6 +705,9 @@ func (e *Executor) ExecuteResume(ctx context.Context, task *beads.Task, overlay 
 func (e *Executor) buildPrompt(task *beads.Task, deps []DependencyContext) string {
 	var parts []string
 
+	// Add system prompt for autonomous operation
+	parts = append(parts, WorkerSystemPrompt)
+
 	// Add dependency context if present
 	if len(deps) > 0 {
 		parts = append(parts, "## Context from upstream tasks\n")
