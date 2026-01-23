@@ -165,6 +165,48 @@ func (m *OrchestratorManager) InvalidateStandaloneEngine(repoPath string) {
 	m.standaloneEngines.Delete(repoPath)
 }
 
+// GetRepoAPI returns a RepoAPI for a repository.
+// If an active run exists, returns a RepoAPI backed by the run's orchestrator.
+// Otherwise, creates/returns a RepoAPI backed by a standalone rules engine.
+// Returns the RepoAPI and nil error on success, or nil and an error on failure.
+func (m *OrchestratorManager) GetRepoAPI(repoPath string) (orchestrator.RepoAPI, error) {
+	// First, check if there's an active run for this repo
+	runIDI, ok := m.runsByRepo.Load(repoPath)
+	if ok {
+		runStateI, ok := m.runs.Load(runIDI.(string))
+		if ok {
+			runState := runStateI.(*RunState)
+			if runState.orch != nil {
+				return orchestrator.NewRepoAPI(runState.orch, repoPath), nil
+			}
+		}
+	}
+
+	// No active run - get or create a standalone rules engine
+	engine, err := m.GetOrCreateRulesEngineForRepo(repoPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get rules engine for %s: %w", repoPath, err)
+	}
+
+	return orchestrator.NewStandaloneRepoAPI(engine, repoPath), nil
+}
+
+// GetRepoAPIForRun returns a RepoAPI for a specific run.
+// Returns nil and an error if the run doesn't exist or has no orchestrator.
+func (m *OrchestratorManager) GetRepoAPIForRun(runID string) (orchestrator.RepoAPI, error) {
+	runStateI, ok := m.runs.Load(runID)
+	if !ok {
+		return nil, fmt.Errorf("run not found: %s", runID)
+	}
+
+	runState := runStateI.(*RunState)
+	if runState.orch == nil {
+		return nil, fmt.Errorf("run %s has no orchestrator", runID)
+	}
+
+	return orchestrator.NewRepoAPI(runState.orch, runState.RepoPath), nil
+}
+
 // StartRun creates and starts a new orchestration run.
 // Returns the run ID or an error if the run could not be started.
 // Only one run per repository is allowed at a time.

@@ -394,13 +394,14 @@ func TestRepoAPI_PersistRules(t *testing.T) {
 	_ = api.AddRule(ctx, rule)
 
 	// Persist rules
-	if err := api.PersistRules(ctx); err != nil {
+	_, _, err := api.PersistRules(ctx)
+	if err != nil {
 		t.Fatalf("PersistRules() error = %v", err)
 	}
 
 	// Verify config.toml was created with the rule
 	configPath := filepath.Join(workDir, ".canopy", "config.toml")
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+	if _, statErr := os.Stat(configPath); os.IsNotExist(statErr) {
 		t.Error("PersistRules() did not create config.toml")
 	}
 

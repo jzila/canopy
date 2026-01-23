@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -551,40 +552,43 @@ func TestRulesIsolation_HTTPHandlerIsolation(t *testing.T) {
 		Action:    "allow",
 	})
 
-	// Test that we get different engines for different repo paths
-	retrievedEngineA, errMsg := handler.getEngine(createRequestWithRepoPath(ctx.repoAPath))
+	// Test that we get different RepoAPIs for different repo paths
+	apiA, errMsg := handler.getRepoAPI(createRequestWithRepoPath(ctx.repoAPath))
 	if errMsg != "" {
-		t.Fatalf("failed to get engine for repo A: %s", errMsg)
+		t.Fatalf("failed to get RepoAPI for repo A: %s", errMsg)
 	}
-	if retrievedEngineA != engineA {
-		t.Error("handler returned wrong engine for repo A")
+	if apiA == nil {
+		t.Fatal("handler returned nil RepoAPI for repo A")
 	}
 
-	retrievedEngineB, errMsg := handler.getEngine(createRequestWithRepoPath(ctx.repoBPath))
+	apiB, errMsg := handler.getRepoAPI(createRequestWithRepoPath(ctx.repoBPath))
 	if errMsg != "" {
-		t.Fatalf("failed to get engine for repo B: %s", errMsg)
+		t.Fatalf("failed to get RepoAPI for repo B: %s", errMsg)
 	}
-	if retrievedEngineB != engineB {
-		t.Error("handler returned wrong engine for repo B")
+	if apiB == nil {
+		t.Fatal("handler returned nil RepoAPI for repo B")
 	}
 
 	// Verify the rules are correctly isolated through handler retrieval
-	ruleA := retrievedEngineA.GetRule("handler-test-a")
-	ruleB := retrievedEngineB.GetRule("handler-test-b")
+	bgCtx := context.Background()
+	ruleA, _ := apiA.GetRule(bgCtx, "handler-test-a")
+	ruleB, _ := apiB.GetRule(bgCtx, "handler-test-b")
 
 	if ruleA == nil {
-		t.Error("expected handler-test-a in engine A")
+		t.Error("expected handler-test-a in API A")
 	}
 	if ruleB == nil {
-		t.Error("expected handler-test-b in engine B")
+		t.Error("expected handler-test-b in API B")
 	}
 
 	// Verify cross-contamination didn't happen
-	if retrievedEngineA.GetRule("handler-test-b") != nil {
-		t.Error("handler-test-b should not exist in engine A")
+	crossRuleA, _ := apiA.GetRule(bgCtx, "handler-test-b")
+	crossRuleB, _ := apiB.GetRule(bgCtx, "handler-test-a")
+	if crossRuleA != nil {
+		t.Error("handler-test-b should not exist in API A")
 	}
-	if retrievedEngineB.GetRule("handler-test-a") != nil {
-		t.Error("handler-test-a should not exist in engine B")
+	if crossRuleB != nil {
+		t.Error("handler-test-a should not exist in API B")
 	}
 }
 

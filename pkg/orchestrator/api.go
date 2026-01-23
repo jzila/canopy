@@ -93,9 +93,25 @@ type RepoAPI interface {
 	// Returns an error if the rule is not found.
 	DeleteRule(ctx context.Context, name string) error
 
+	// GetRule returns a single rule by name.
+	// Returns nil if the rule is not found.
+	GetRule(ctx context.Context, name string) (*rules.RuntimeRule, error)
+
+	// PersistRule persists a single rule to config.toml.
+	// Returns the persisted rule and config path, or an error.
+	PersistRule(ctx context.Context, name string) (*rules.RuntimeRule, string, error)
+
 	// PersistRules saves all non-persisted rules to config.toml.
-	// Returns an error if the save fails.
-	PersistRules(ctx context.Context) error
+	// Returns the list of persisted rule names and config path, or an error.
+	PersistRules(ctx context.Context) ([]string, string, error)
+
+	// ReorderRule moves a rule to a new position in the rules list.
+	// Returns an error if the rule is not found or position is invalid.
+	ReorderRule(ctx context.Context, name string, position int) error
+
+	// UpdateConfigSettings updates the rules engine config settings.
+	// Only non-nil fields in the update are applied.
+	UpdateConfigSettings(ctx context.Context, update rules.ConfigSettingsUpdate) error
 
 	// Config queries (works in any state)
 
@@ -239,33 +255,107 @@ func (r *repoAPIImpl) DeleteRule(ctx context.Context, name string) error {
 	return nil
 }
 
+// GetRule returns a single rule by name.
+func (r *repoAPIImpl) GetRule(ctx context.Context, name string) (*rules.RuntimeRule, error) {
+	engine := r.orchestrator.GetRulesEngine()
+	if engine == nil {
+		return nil, fmt.Errorf("rules engine not initialized")
+	}
+	return engine.GetRule(name), nil
+}
+
+// PersistRule persists a single rule to config.toml.
+func (r *repoAPIImpl) PersistRule(ctx context.Context, name string) (*rules.RuntimeRule, string, error) {
+	engine := r.orchestrator.GetRulesEngine()
+	if engine == nil {
+		return nil, "", fmt.Errorf("rules engine not initialized")
+	}
+
+	// Persist the rule in the engine
+	persistedRule, err := engine.PersistRule(name)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Save the config to disk
+	configPath, err := r.saveConfig(engine)
+	if err != nil {
+		return nil, "", fmt.Errorf("rule persisted in memory but failed to save config: %w", err)
+	}
+
+	// Create RuntimeRule for response
+	runtimeRule := &rules.RuntimeRule{
+		CustomRule: *persistedRule,
+		Persisted:  true,
+	}
+
+	return runtimeRule, configPath, nil
+}
+
 // PersistRules saves all non-persisted rules to config.toml.
-func (r *repoAPIImpl) PersistRules(ctx context.Context) error {
+func (r *repoAPIImpl) PersistRules(ctx context.Context) ([]string, string, error) {
+	engine := r.orchestrator.GetRulesEngine()
+	if engine == nil {
+		return nil, "", fmt.Errorf("rules engine not initialized")
+	}
+
+	// Mark all rules as persisted
+	persisted, err := engine.PersistAllRules()
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to persist rules: %w", err)
+	}
+
+	if len(persisted) == 0 {
+		return []string{}, "", nil
+	}
+
+	// Save the config to disk
+	configPath, err := r.saveConfig(engine)
+	if err != nil {
+		return nil, "", fmt.Errorf("rules persisted in memory but failed to save config: %w", err)
+	}
+
+	return persisted, configPath, nil
+}
+
+// ReorderRule moves a rule to a new position in the rules list.
+func (r *repoAPIImpl) ReorderRule(ctx context.Context, name string, position int) error {
 	engine := r.orchestrator.GetRulesEngine()
 	if engine == nil {
 		return fmt.Errorf("rules engine not initialized")
 	}
+	return engine.ReorderRule(name, position)
+}
 
-	// Mark all rules as persisted
-	_, err := engine.PersistAllRules()
+// UpdateConfigSettings updates the rules engine config settings.
+func (r *repoAPIImpl) UpdateConfigSettings(ctx context.Context, update rules.ConfigSettingsUpdate) error {
+	engine := r.orchestrator.GetRulesEngine()
+	if engine == nil {
+		return fmt.Errorf("rules engine not initialized")
+	}
+	return engine.UpdateConfigSettings(update)
+}
+
+// saveConfig saves the current rules configuration to disk.
+func (r *repoAPIImpl) saveConfig(engine *rules.Engine) (string, error) {
+	// Load existing config (or get default)
+	cfg, err := config.LoadConfig(r.workDir)
 	if err != nil {
-		return fmt.Errorf("failed to persist rules: %w", err)
+		return "", fmt.Errorf("load config: %w", err)
 	}
 
-	// Get config for persistence and save it
+	// Update rules settings from engine
 	rulesSettings := engine.GetConfigForPersistence()
-	if rulesSettings == nil {
-		return nil // Nothing to persist
+	if rulesSettings != nil {
+		cfg.Rules = *rulesSettings
 	}
 
-	// Load current config, update rules section, and save
-	repoConfig := r.orchestrator.GetRepoConfig()
-	if repoConfig == nil {
-		repoConfig = config.DefaultConfig()
+	// Save the config
+	if err := config.SaveConfig(r.workDir, cfg); err != nil {
+		return "", fmt.Errorf("save config: %w", err)
 	}
-	repoConfig.Rules = *rulesSettings
 
-	return config.SaveConfig(r.workDir, repoConfig)
+	return fmt.Sprintf("%s/.canopy/config.toml", r.workDir), nil
 }
 
 // GetSandboxConfig returns the sandbox configuration for this repository.
@@ -285,4 +375,209 @@ func (r *repoAPIImpl) SetConcurrency(ctx context.Context, n int) error {
 	}
 	r.orchestrator.SetConcurrency(n)
 	return nil
+}
+
+// standaloneRepoAPI implements RepoAPI for repos without an active orchestrator run.
+// It provides access to rules and config, but state transitions are not supported.
+type standaloneRepoAPI struct {
+	engine  *rules.Engine
+	workDir string
+}
+
+// NewStandaloneRepoAPI creates a RepoAPI backed by a standalone rules engine.
+// This is used when accessing a repository's rules without an active run.
+func NewStandaloneRepoAPI(engine *rules.Engine, workDir string) RepoAPI {
+	return &standaloneRepoAPI{
+		engine:  engine,
+		workDir: workDir,
+	}
+}
+
+// GetState returns idle since there's no active orchestrator.
+func (s *standaloneRepoAPI) GetState(ctx context.Context) (OrchestratorState, error) {
+	return StateIdle, nil
+}
+
+// Start is not supported without an orchestrator.
+func (s *standaloneRepoAPI) Start(ctx context.Context, cfg RunConfig) error {
+	return fmt.Errorf("cannot start: no active orchestrator for this repository")
+}
+
+// Pause is not supported without an orchestrator.
+func (s *standaloneRepoAPI) Pause(ctx context.Context) error {
+	return fmt.Errorf("cannot pause: no active orchestrator for this repository")
+}
+
+// Resume is not supported without an orchestrator.
+func (s *standaloneRepoAPI) Resume(ctx context.Context) error {
+	return fmt.Errorf("cannot resume: no active orchestrator for this repository")
+}
+
+// Stop is a no-op since there's no active orchestrator.
+func (s *standaloneRepoAPI) Stop(ctx context.Context) error {
+	return nil
+}
+
+// ListRules returns a snapshot of all rules and settings.
+func (s *standaloneRepoAPI) ListRules(ctx context.Context) (*rules.RulesSnapshot, error) {
+	if s.engine == nil {
+		return &rules.RulesSnapshot{}, nil
+	}
+	snapshot := s.engine.GetSnapshot()
+	return &snapshot, nil
+}
+
+// AddRule adds a new rule to the rules engine.
+func (s *standaloneRepoAPI) AddRule(ctx context.Context, rule config.CustomRule) error {
+	if s.engine == nil {
+		return fmt.Errorf("rules engine not initialized")
+	}
+	return s.engine.AddRuleWithValidation(rule)
+}
+
+// UpdateRule updates an existing rule's properties.
+func (s *standaloneRepoAPI) UpdateRule(ctx context.Context, name string, update RuleUpdate) error {
+	if s.engine == nil {
+		return fmt.Errorf("rules engine not initialized")
+	}
+
+	// Apply enabled update
+	if update.Enabled != nil {
+		if err := s.engine.UpdateRule(name, *update.Enabled); err != nil {
+			return err
+		}
+	}
+
+	// Apply position update (reorder)
+	if update.Position != nil {
+		if err := s.engine.ReorderRule(name, *update.Position); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// DeleteRule removes a rule by name.
+func (s *standaloneRepoAPI) DeleteRule(ctx context.Context, name string) error {
+	if s.engine == nil {
+		return fmt.Errorf("rules engine not initialized")
+	}
+	if !s.engine.RemoveRule(name) {
+		return fmt.Errorf("rule %q not found", name)
+	}
+	return nil
+}
+
+// GetRule returns a single rule by name.
+func (s *standaloneRepoAPI) GetRule(ctx context.Context, name string) (*rules.RuntimeRule, error) {
+	if s.engine == nil {
+		return nil, fmt.Errorf("rules engine not initialized")
+	}
+	return s.engine.GetRule(name), nil
+}
+
+// PersistRule persists a single rule to config.toml.
+func (s *standaloneRepoAPI) PersistRule(ctx context.Context, name string) (*rules.RuntimeRule, string, error) {
+	if s.engine == nil {
+		return nil, "", fmt.Errorf("rules engine not initialized")
+	}
+
+	// Persist the rule in the engine
+	persistedRule, err := s.engine.PersistRule(name)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Save the config to disk
+	configPath, err := s.saveConfig()
+	if err != nil {
+		return nil, "", fmt.Errorf("rule persisted in memory but failed to save config: %w", err)
+	}
+
+	// Create RuntimeRule for response
+	runtimeRule := &rules.RuntimeRule{
+		CustomRule: *persistedRule,
+		Persisted:  true,
+	}
+
+	return runtimeRule, configPath, nil
+}
+
+// PersistRules saves all non-persisted rules to config.toml.
+func (s *standaloneRepoAPI) PersistRules(ctx context.Context) ([]string, string, error) {
+	if s.engine == nil {
+		return nil, "", fmt.Errorf("rules engine not initialized")
+	}
+
+	// Mark all rules as persisted
+	persisted, err := s.engine.PersistAllRules()
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to persist rules: %w", err)
+	}
+
+	if len(persisted) == 0 {
+		return []string{}, "", nil
+	}
+
+	// Save the config to disk
+	configPath, err := s.saveConfig()
+	if err != nil {
+		return nil, "", fmt.Errorf("rules persisted in memory but failed to save config: %w", err)
+	}
+
+	return persisted, configPath, nil
+}
+
+// ReorderRule moves a rule to a new position in the rules list.
+func (s *standaloneRepoAPI) ReorderRule(ctx context.Context, name string, position int) error {
+	if s.engine == nil {
+		return fmt.Errorf("rules engine not initialized")
+	}
+	return s.engine.ReorderRule(name, position)
+}
+
+// UpdateConfigSettings updates the rules engine config settings.
+func (s *standaloneRepoAPI) UpdateConfigSettings(ctx context.Context, update rules.ConfigSettingsUpdate) error {
+	if s.engine == nil {
+		return fmt.Errorf("rules engine not initialized")
+	}
+	return s.engine.UpdateConfigSettings(update)
+}
+
+// saveConfig saves the current rules configuration to disk.
+func (s *standaloneRepoAPI) saveConfig() (string, error) {
+	// Load existing config (or get default)
+	cfg, err := config.LoadConfig(s.workDir)
+	if err != nil {
+		return "", fmt.Errorf("load config: %w", err)
+	}
+
+	// Update rules settings from engine
+	rulesSettings := s.engine.GetConfigForPersistence()
+	if rulesSettings != nil {
+		cfg.Rules = *rulesSettings
+	}
+
+	// Save the config
+	if err := config.SaveConfig(s.workDir, cfg); err != nil {
+		return "", fmt.Errorf("save config: %w", err)
+	}
+
+	return fmt.Sprintf("%s/.canopy/config.toml", s.workDir), nil
+}
+
+// GetSandboxConfig returns the sandbox configuration for this repository.
+func (s *standaloneRepoAPI) GetSandboxConfig(ctx context.Context) (*sandbox.SandboxConfig, error) {
+	return sandbox.LoadConfigWithoutValidation(s.workDir)
+}
+
+// GetValidationConfig returns the validation configuration for this repository.
+func (s *standaloneRepoAPI) GetValidationConfig(ctx context.Context) (*validation.ValidationConfig, error) {
+	return validation.LoadValidationConfig(s.workDir)
+}
+
+// SetConcurrency is not supported without an orchestrator.
+func (s *standaloneRepoAPI) SetConcurrency(ctx context.Context, n int) error {
+	return fmt.Errorf("cannot set concurrency: no active orchestrator for this repository")
 }
