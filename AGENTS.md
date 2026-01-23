@@ -424,6 +424,45 @@ This includes:
 
 Repository identity is stored in `$XDG_CACHE_HOME/canopy/repositories.json` keyed by absolute path, not in the repo itself. This keeps repos clean and portable.
 
+## Repo Configuration Invariant
+
+**ALL repo-specific configuration MUST live in `.canopy/config.toml`** - one file, not multiple.
+
+```
+.canopy/
+└── config.toml    # ALL orchestrator settings go here
+```
+
+**Do NOT create separate config files like:**
+- `orchestrator.toml`
+- `rules.toml`
+- `validation.toml`
+- `sandbox.toml`
+- Any other `.toml` files
+
+**Why one file?**
+- Simple mental model: one repo = one config file
+- Easy to review, copy, version control
+- No confusion about which file controls what
+- Avoids config fragmentation and precedence issues
+
+**Example `.canopy/config.toml`:**
+```toml
+[orchestrator]
+concurrency = 4
+
+[validation]
+enabled = true
+mode = "strict"
+steps = ["build", "test"]
+
+[rules]
+max_priority = 2
+types = ["bug", "task"]
+```
+
+All orchestrator settings (concurrency, rules, validation, sandbox paths, etc.) belong in sections within this single file.
+
 ## Epics
 
 Epics define acceptance criteria; tasks implement them. Epic depends on tasks, not vice versa.
