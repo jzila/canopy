@@ -425,24 +425,6 @@ func (s *Server) handleOrchestratorRoutes(w http.ResponseWriter, r *http.Request
 	s.orchHandler.RouteOrchestrator(w, r)
 }
 
-// handleRulesRoutes routes rules management requests
-func (s *Server) handleRulesRoutes(w http.ResponseWriter, r *http.Request) {
-	if s.rulesHandler == nil {
-		http.Error(w, "Rules management not available", http.StatusServiceUnavailable)
-		return
-	}
-	s.rulesHandler.RouteRules(w, r)
-}
-
-// handleConfigRoutes routes configuration query requests
-func (s *Server) handleConfigRoutes(w http.ResponseWriter, r *http.Request) {
-	if s.configHandler == nil {
-		http.Error(w, "Configuration queries not available", http.StatusServiceUnavailable)
-		return
-	}
-	s.configHandler.RouteConfig(w, r)
-}
-
 // handleReposRoutes routes repo-scoped requests for rules and config
 // Handles /api/repos/:repo_id/rules/* and /api/repos/:repo_id/config/*
 func (s *Server) handleReposRoutes(w http.ResponseWriter, r *http.Request) {
