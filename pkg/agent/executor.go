@@ -24,17 +24,18 @@ const processGroupGracePeriod = 3 * time.Second
 
 // Result holds the execution result from an agent
 type Result struct {
-	TaskID   string
-	Success  bool
-	Output   *ClaudeOutput
-	Stdout   string
-	Stderr   string
-	ExitCode int
-	Changes  []sandbox.FileChange
-	GitState *sandbox.GitState // Git commits made by worker
-	Duration time.Duration
-	Error    string
-	Overlay  *sandbox.Overlay  // Overlay sandbox (must be cleaned up after merge)
+	TaskID       string
+	Success      bool
+	Output       *ClaudeOutput
+	Stdout       string
+	Stderr       string
+	ExitCode     int
+	Changes      []sandbox.FileChange
+	GitState     *sandbox.GitState // Git commits made by worker
+	Duration     time.Duration
+	Error        string
+	Overlay      *sandbox.Overlay // Overlay sandbox (must be cleaned up after merge)
+	InputBlocked bool             // True if agent paused waiting for user input
 }
 
 // DependencyContext holds outputs from upstream tasks
@@ -283,6 +284,7 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 
 	// Parse streaming output and collect final result
 	var finalResult *ClaudeStreamResult
+	var inputBlockedTool string // Set if interactive tool detected
 	parser := NewStreamParser(stdoutPipe)
 	for parser.scanner.Scan() {
 		line := parser.scanner.Bytes()
@@ -316,6 +318,23 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 		var event StreamEvent
 		if err := json.Unmarshal(line, &event); err != nil {
 			continue
+		}
+
+		// Check for interactive tools that require user input
+		// Worker agents cannot proceed when these are invoked - fail immediately
+		if toolName := CheckForInteractiveTool(&event); toolName != "" {
+			inputBlockedTool = toolName
+			if e.config.Verbose {
+				fmt.Fprintf(os.Stderr, "[executor] detected interactive tool %s, terminating agent\n", toolName)
+			}
+			// Terminate the process - it cannot proceed without user input
+			if cmd.Process != nil {
+				pid := cmd.Process.Pid
+				if pid > 0 {
+					_ = killProcessGroup(pid, processGroupGracePeriod)
+				}
+			}
+			break // Stop processing stream
 		}
 
 		// Forward live feed events if callback is set
@@ -415,13 +434,26 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 	result.Overlay = overlay
 
 	// Determine success
-	if err != nil {
+	// Priority: input-blocked > timeout > error > exit code
+	if inputBlockedTool != "" {
+		// Agent paused waiting for user input - this is a non-retryable failure
 		result.Success = false
-		if ctx.Err() == context.DeadlineExceeded {
-			result.Error = "execution timed out"
-		} else {
-			result.Error = err.Error()
+		result.InputBlocked = true
+		sessionID := ""
+		if result.Output != nil {
+			sessionID = result.Output.SessionID
 		}
+		if sessionID != "" {
+			result.Error = fmt.Sprintf("agent paused waiting for user input (%s tool); session %s", inputBlockedTool, sessionID)
+		} else {
+			result.Error = fmt.Sprintf("agent paused waiting for user input (%s tool)", inputBlockedTool)
+		}
+	} else if ctx.Err() == context.DeadlineExceeded {
+		result.Success = false
+		result.Error = "execution timed out"
+	} else if err != nil {
+		result.Success = false
+		result.Error = err.Error()
 	} else {
 		result.Success = result.ExitCode == 0
 		if !result.Success {
@@ -432,7 +464,11 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 	// Record task duration metric
 	status := "success"
 	if !result.Success {
-		status = "failure"
+		if result.InputBlocked {
+			status = "input_blocked"
+		} else {
+			status = "failure"
+		}
 	}
 	metrics.RecordTaskDuration(result.Duration.Seconds(), status)
 
@@ -568,6 +604,7 @@ func (e *Executor) ExecuteResume(ctx context.Context, task *beads.Task, overlay 
 
 	// Parse streaming output
 	var finalResult *ClaudeStreamResult
+	var inputBlockedTool string // Set if interactive tool detected
 	parser := NewStreamParser(stdoutPipe)
 	for parser.scanner.Scan() {
 		line := parser.scanner.Bytes()
@@ -597,6 +634,23 @@ func (e *Executor) ExecuteResume(ctx context.Context, task *beads.Task, overlay 
 		var event StreamEvent
 		if err := json.Unmarshal(line, &event); err != nil {
 			continue
+		}
+
+		// Check for interactive tools that require user input
+		// Worker agents cannot proceed when these are invoked - fail immediately
+		if toolName := CheckForInteractiveTool(&event); toolName != "" {
+			inputBlockedTool = toolName
+			if e.config.Verbose {
+				fmt.Fprintf(os.Stderr, "[executor] detected interactive tool %s, terminating agent\n", toolName)
+			}
+			// Terminate the process - it cannot proceed without user input
+			if cmd.Process != nil {
+				pid := cmd.Process.Pid
+				if pid > 0 {
+					_ = killProcessGroup(pid, processGroupGracePeriod)
+				}
+			}
+			break // Stop processing stream
 		}
 
 		if liveFeedCallback != nil {
@@ -677,13 +731,26 @@ func (e *Executor) ExecuteResume(ctx context.Context, task *beads.Task, overlay 
 	result.Overlay = overlay
 
 	// Determine success
-	if err != nil {
+	// Priority: input-blocked > timeout > error > exit code
+	if inputBlockedTool != "" {
+		// Agent paused waiting for user input - this is a non-retryable failure
 		result.Success = false
-		if ctx.Err() == context.DeadlineExceeded {
-			result.Error = "execution timed out"
-		} else {
-			result.Error = err.Error()
+		result.InputBlocked = true
+		resumeSessionID := sessionID // Use the session ID we were resuming
+		if result.Output != nil && result.Output.SessionID != "" {
+			resumeSessionID = result.Output.SessionID
 		}
+		if resumeSessionID != "" {
+			result.Error = fmt.Sprintf("agent paused waiting for user input (%s tool); session %s", inputBlockedTool, resumeSessionID)
+		} else {
+			result.Error = fmt.Sprintf("agent paused waiting for user input (%s tool)", inputBlockedTool)
+		}
+	} else if ctx.Err() == context.DeadlineExceeded {
+		result.Success = false
+		result.Error = "execution timed out"
+	} else if err != nil {
+		result.Success = false
+		result.Error = err.Error()
 	} else {
 		result.Success = result.ExitCode == 0
 		if !result.Success {
@@ -694,7 +761,11 @@ func (e *Executor) ExecuteResume(ctx context.Context, task *beads.Task, overlay 
 	// Record task duration metric
 	status := "success"
 	if !result.Success {
-		status = "failure"
+		if result.InputBlocked {
+			status = "input_blocked"
+		} else {
+			status = "failure"
+		}
 	}
 	metrics.RecordTaskDuration(result.Duration.Seconds(), status)
 

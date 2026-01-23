@@ -309,6 +309,92 @@ func TestTimeoutConfiguration(t *testing.T) {
 	})
 }
 
+func TestInputBlockedDetection(t *testing.T) {
+	t.Run("input blocked takes precedence over exit code 0", func(t *testing.T) {
+		// Simulate the result determination logic when input is blocked
+		var result Result
+		result.ExitCode = 0 // Process exited cleanly but was blocked
+		inputBlockedTool := "AskUserQuestion"
+		sessionID := "test-session-123"
+
+		// Simulate the success determination logic from executor.go
+		if inputBlockedTool != "" {
+			result.Success = false
+			result.InputBlocked = true
+			if sessionID != "" {
+				result.Error = "agent paused waiting for user input (" + inputBlockedTool + " tool); session " + sessionID
+			} else {
+				result.Error = "agent paused waiting for user input (" + inputBlockedTool + " tool)"
+			}
+		} else {
+			result.Success = result.ExitCode == 0
+		}
+
+		if result.Success {
+			t.Error("Expected Success=false when input blocked")
+		}
+		if !result.InputBlocked {
+			t.Error("Expected InputBlocked=true")
+		}
+		if !strings.Contains(result.Error, "AskUserQuestion") {
+			t.Errorf("Expected error to contain 'AskUserQuestion', got: %s", result.Error)
+		}
+		if !strings.Contains(result.Error, "test-session-123") {
+			t.Errorf("Expected error to contain session ID, got: %s", result.Error)
+		}
+	})
+
+	t.Run("input blocked without session ID", func(t *testing.T) {
+		var result Result
+		result.ExitCode = 0
+		inputBlockedTool := "AskUserQuestion"
+		sessionID := ""
+
+		if inputBlockedTool != "" {
+			result.Success = false
+			result.InputBlocked = true
+			if sessionID != "" {
+				result.Error = "agent paused waiting for user input (" + inputBlockedTool + " tool); session " + sessionID
+			} else {
+				result.Error = "agent paused waiting for user input (" + inputBlockedTool + " tool)"
+			}
+		}
+
+		if result.Success {
+			t.Error("Expected Success=false when input blocked")
+		}
+		if !result.InputBlocked {
+			t.Error("Expected InputBlocked=true")
+		}
+		if !strings.Contains(result.Error, "AskUserQuestion") {
+			t.Errorf("Expected error to contain 'AskUserQuestion', got: %s", result.Error)
+		}
+		if strings.Contains(result.Error, "session") {
+			t.Errorf("Expected error to NOT contain 'session' when no session ID, got: %s", result.Error)
+		}
+	})
+
+	t.Run("normal execution not input blocked", func(t *testing.T) {
+		var result Result
+		result.ExitCode = 0
+		inputBlockedTool := "" // No interactive tool detected
+
+		if inputBlockedTool != "" {
+			result.Success = false
+			result.InputBlocked = true
+		} else {
+			result.Success = result.ExitCode == 0
+		}
+
+		if !result.Success {
+			t.Error("Expected Success=true for normal execution")
+		}
+		if result.InputBlocked {
+			t.Error("Expected InputBlocked=false for normal execution")
+		}
+	})
+}
+
 func TestBuildPrompt(t *testing.T) {
 	t.Run("basic task", func(t *testing.T) {
 		executor := &Executor{

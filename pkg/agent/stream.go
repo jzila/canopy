@@ -268,6 +268,39 @@ func filterAssistantMessage(msg *StreamMessage) *LiveFeedEvent {
 	return nil
 }
 
+// InteractiveToolNames lists tools that require user input and should cause
+// worker agents to fail immediately (no user present to respond).
+var InteractiveToolNames = map[string]bool{
+	"AskUserQuestion": true,
+}
+
+// IsInteractiveTool returns true if the tool name requires user input.
+func IsInteractiveTool(toolName string) bool {
+	return InteractiveToolNames[toolName]
+}
+
+// CheckForInteractiveTool examines a stream event and returns the tool name
+// if it's an interactive tool that requires user input, otherwise returns empty string.
+func CheckForInteractiveTool(event *StreamEvent) string {
+	if event == nil || event.Type != "assistant" || event.Message == nil {
+		return ""
+	}
+
+	// Parse content blocks
+	var blocks []ContentBlock
+	if err := json.Unmarshal(event.Message.Content, &blocks); err != nil {
+		return ""
+	}
+
+	for _, block := range blocks {
+		if block.Type == "tool_use" && IsInteractiveTool(block.Name) {
+			return block.Name
+		}
+	}
+
+	return ""
+}
+
 // filterToolUse extracts key information from tool use
 func filterToolUse(block ContentBlock) *LiveFeedEvent {
 	toolName := block.Name
