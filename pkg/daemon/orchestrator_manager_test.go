@@ -308,7 +308,7 @@ func TestSingletonEnforcementConcurrent(t *testing.T) {
 	state := NewRuntimeState()
 	manager := NewOrchestratorManager(eventBus, state)
 
-	repoPath := "/test/concurrent/repo"
+	repoPath := t.TempDir()
 	ctx := context.Background()
 
 	// Launch multiple goroutines trying to start runs concurrently

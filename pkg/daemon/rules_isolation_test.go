@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,17 +16,30 @@ import (
 	"github.com/jzila/canopy/pkg/rules"
 )
 
+// isolationTestCounter ensures unique run IDs across parallel tests
+var isolationTestCounter atomic.Int64
+
+// twoRepoContext holds test-specific values for two-repo isolation tests
+type twoRepoContext struct {
+	repoAPath string
+	repoBPath string
+	runAID    string
+	runBID    string
+}
+
 // setupTwoReposWithRules creates a test daemon with two repositories,
 // each with its own orchestrator and rules engine.
-func setupTwoReposWithRules(t *testing.T) (*Daemon, *rules.Engine, *rules.Engine) {
+func setupTwoReposWithRules(t *testing.T) (*Daemon, *rules.Engine, *rules.Engine, *twoRepoContext) {
 	t.Helper()
+
+	counter := isolationTestCounter.Add(1)
 
 	daemon := newDaemonForTest(Config{}, nil, nil)
 	daemon.Init()
 
-	// Repo A setup
-	repoAPath := "/tmp/test-repo-a"
-	runAID := "run-a-123"
+	// Repo A setup - use unique temp dir per test
+	repoAPath := t.TempDir()
+	runAID := fmt.Sprintf("run-a-%d", counter)
 	rulesA := config.DefaultRulesSettings()
 	engineA := rules.NewEngine(&rulesA)
 
@@ -49,9 +63,9 @@ func setupTwoReposWithRules(t *testing.T) (*Daemon, *rules.Engine, *rules.Engine
 	daemon.orchManager.runs.Store(runAID, runStateA)
 	daemon.orchManager.runsByRepo.Store(repoAPath, runAID)
 
-	// Repo B setup
-	repoBPath := "/tmp/test-repo-b"
-	runBID := "run-b-456"
+	// Repo B setup - use another unique temp dir
+	repoBPath := t.TempDir()
+	runBID := fmt.Sprintf("run-b-%d", counter)
 	rulesB := config.DefaultRulesSettings()
 	engineB := rules.NewEngine(&rulesB)
 
@@ -75,13 +89,20 @@ func setupTwoReposWithRules(t *testing.T) (*Daemon, *rules.Engine, *rules.Engine
 	daemon.orchManager.runs.Store(runBID, runStateBB)
 	daemon.orchManager.runsByRepo.Store(repoBPath, runBID)
 
-	return daemon, engineA, engineB
+	ctx := &twoRepoContext{
+		repoAPath: repoAPath,
+		repoBPath: repoBPath,
+		runAID:    runAID,
+		runBID:    runBID,
+	}
+
+	return daemon, engineA, engineB, ctx
 }
 
 // TestRulesIsolation_SeparateEnginesPerRepo verifies that each repository
 // gets its own independent rules engine.
 func TestRulesIsolation_SeparateEnginesPerRepo(t *testing.T) {
-	daemon, engineA, engineB := setupTwoReposWithRules(t)
+	daemon, engineA, engineB, ctx := setupTwoReposWithRules(t)
 
 	// Verify engines are distinct objects
 	if engineA == engineB {
@@ -89,8 +110,8 @@ func TestRulesIsolation_SeparateEnginesPerRepo(t *testing.T) {
 	}
 
 	// Verify engines are retrievable by repo path
-	retrievedA := daemon.orchManager.GetRulesEngineForRepo("/tmp/test-repo-a")
-	retrievedB := daemon.orchManager.GetRulesEngineForRepo("/tmp/test-repo-b")
+	retrievedA := daemon.orchManager.GetRulesEngineForRepo(ctx.repoAPath)
+	retrievedB := daemon.orchManager.GetRulesEngineForRepo(ctx.repoBPath)
 
 	if retrievedA != engineA {
 		t.Error("GetRulesEngineForRepo returned wrong engine for repo A")
@@ -100,8 +121,8 @@ func TestRulesIsolation_SeparateEnginesPerRepo(t *testing.T) {
 	}
 
 	// Verify engines are retrievable by run ID
-	retrievedA = daemon.orchManager.GetRulesEngineForRun("run-a-123")
-	retrievedB = daemon.orchManager.GetRulesEngineForRun("run-b-456")
+	retrievedA = daemon.orchManager.GetRulesEngineForRun(ctx.runAID)
+	retrievedB = daemon.orchManager.GetRulesEngineForRun(ctx.runBID)
 
 	if retrievedA != engineA {
 		t.Error("GetRulesEngineForRun returned wrong engine for run A")
@@ -114,7 +135,7 @@ func TestRulesIsolation_SeparateEnginesPerRepo(t *testing.T) {
 // TestRulesIsolation_RuntimeRulesNotShared verifies that runtime rules added
 // to one repository's engine don't appear in another repository's engine.
 func TestRulesIsolation_RuntimeRulesNotShared(t *testing.T) {
-	_, engineA, engineB := setupTwoReposWithRules(t)
+	_, engineA, engineB, _ := setupTwoReposWithRules(t)
 
 	// Add a rule to repo A
 	err := engineA.AddRuleWithValidation(config.CustomRule{
@@ -186,7 +207,7 @@ func TestRulesIsolation_RuntimeRulesNotShared(t *testing.T) {
 // TestRulesIsolation_ConfigSettingsNotShared verifies that config settings
 // changes to one repository's engine don't affect another repository's engine.
 func TestRulesIsolation_ConfigSettingsNotShared(t *testing.T) {
-	_, engineA, engineB := setupTwoReposWithRules(t)
+	_, engineA, engineB, _ := setupTwoReposWithRules(t)
 
 	// Update config settings in repo A
 	err := engineA.UpdateConfigSettings(rules.ConfigSettingsUpdate{
@@ -250,7 +271,7 @@ func TestRulesIsolation_ConfigSettingsNotShared(t *testing.T) {
 // TestRulesIsolation_EvaluationNotAffected verifies that task evaluation
 // in one repository is not affected by rules in another repository.
 func TestRulesIsolation_EvaluationNotAffected(t *testing.T) {
-	_, engineA, engineB := setupTwoReposWithRules(t)
+	_, engineA, engineB, _ := setupTwoReposWithRules(t)
 
 	// Configure repo A to skip high priority tasks
 	err := engineA.UpdateConfigSettings(rules.ConfigSettingsUpdate{
@@ -318,7 +339,7 @@ func TestRulesIsolation_EvaluationNotAffected(t *testing.T) {
 // TestRulesIsolation_CustomRulesEvaluatedIndependently verifies that custom rules
 // in one repository don't affect task evaluation in another repository.
 func TestRulesIsolation_CustomRulesEvaluatedIndependently(t *testing.T) {
-	_, engineA, engineB := setupTwoReposWithRules(t)
+	_, engineA, engineB, _ := setupTwoReposWithRules(t)
 
 	// Add a custom rule to repo A that denies bugs
 	err := engineA.AddRuleWithValidation(config.CustomRule{
@@ -375,7 +396,7 @@ func TestRulesIsolation_CustomRulesEvaluatedIndependently(t *testing.T) {
 // TestRulesIsolation_ConcurrentAccess verifies that concurrent modifications
 // to different repositories' rules engines are isolated.
 func TestRulesIsolation_ConcurrentAccess(t *testing.T) {
-	_, engineA, engineB := setupTwoReposWithRules(t)
+	_, engineA, engineB, _ := setupTwoReposWithRules(t)
 
 	const numOperations = 100
 	var wg sync.WaitGroup
@@ -439,7 +460,7 @@ func TestRulesIsolation_ConcurrentAccess(t *testing.T) {
 // TestRulesIsolation_RuleRemovalNotShared verifies that removing a rule
 // from one repository doesn't affect another repository.
 func TestRulesIsolation_RuleRemovalNotShared(t *testing.T) {
-	_, engineA, engineB := setupTwoReposWithRules(t)
+	_, engineA, engineB, _ := setupTwoReposWithRules(t)
 
 	// Add the same-named rule to both engines
 	ruleA := config.CustomRule{
@@ -496,7 +517,7 @@ func TestRulesIsolation_RuleRemovalNotShared(t *testing.T) {
 // TestRulesIsolation_ClearRuntimeRulesNotShared verifies that clearing
 // runtime rules from one repository doesn't affect another repository.
 func TestRulesIsolation_ClearRuntimeRulesNotShared(t *testing.T) {
-	_, engineA, engineB := setupTwoReposWithRules(t)
+	_, engineA, engineB, _ := setupTwoReposWithRules(t)
 
 	// Add multiple rules to both engines
 	for i := 0; i < 5; i++ {
@@ -553,7 +574,7 @@ func TestRulesIsolation_ClearRuntimeRulesNotShared(t *testing.T) {
 // TestRulesIsolation_HTTPHandlerIsolation verifies that the HTTP handlers
 // correctly route requests to the appropriate repository's rules engine.
 func TestRulesIsolation_HTTPHandlerIsolation(t *testing.T) {
-	daemon, engineA, engineB := setupTwoReposWithRules(t)
+	daemon, engineA, engineB, ctx := setupTwoReposWithRules(t)
 	handler := NewRulesHandler(daemon)
 
 	// Add different rules to each engine directly
@@ -569,7 +590,7 @@ func TestRulesIsolation_HTTPHandlerIsolation(t *testing.T) {
 	})
 
 	// Test that we get different engines for different repo paths
-	retrievedEngineA, errMsg := handler.getEngine(createRequestWithRepoPath("/tmp/test-repo-a"))
+	retrievedEngineA, errMsg := handler.getEngine(createRequestWithRepoPath(ctx.repoAPath))
 	if errMsg != "" {
 		t.Fatalf("failed to get engine for repo A: %s", errMsg)
 	}
@@ -577,7 +598,7 @@ func TestRulesIsolation_HTTPHandlerIsolation(t *testing.T) {
 		t.Error("handler returned wrong engine for repo A")
 	}
 
-	retrievedEngineB, errMsg := handler.getEngine(createRequestWithRepoPath("/tmp/test-repo-b"))
+	retrievedEngineB, errMsg := handler.getEngine(createRequestWithRepoPath(ctx.repoBPath))
 	if errMsg != "" {
 		t.Fatalf("failed to get engine for repo B: %s", errMsg)
 	}
@@ -608,7 +629,7 @@ func TestRulesIsolation_HTTPHandlerIsolation(t *testing.T) {
 // TestRulesIsolation_UnknownRepoReturnsNil verifies that requesting rules
 // for an unknown repository returns nil, not another repo's engine.
 func TestRulesIsolation_UnknownRepoReturnsNil(t *testing.T) {
-	daemon, _, _ := setupTwoReposWithRules(t)
+	daemon, _, _, _ := setupTwoReposWithRules(t)
 
 	// Request rules for a repo that doesn't exist
 	engine := daemon.orchManager.GetRulesEngineForRepo("/tmp/nonexistent-repo")
@@ -630,7 +651,7 @@ func TestRulesIsolation_MultipleRunsSameRepoSequential(t *testing.T) {
 	state := NewRuntimeState()
 	manager := NewOrchestratorManager(eventBus, state)
 
-	repoPath := "/tmp/sequential-repo"
+	repoPath := t.TempDir()
 
 	// First run
 	runID1 := "run-1"
