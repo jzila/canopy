@@ -112,7 +112,7 @@ type ReorderRuleResponse struct {
 	Error     string              `json:"error,omitempty"`
 }
 
-// RouteRules routes rules-related requests to the appropriate handler
+// RouteRules routes rules-related requests to the appropriate handler (legacy /api/rules/* routes)
 func (h *RulesHandler) RouteRules(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 
@@ -184,6 +184,76 @@ func (h *RulesHandler) RouteRules(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// RouteRepoRules routes repo-scoped rules requests
+// Handles /api/repos/:repo_id/rules/* where repo_id is already extracted
+// The suffix contains remaining path parts after /api/repos/:repo_id/rules
+func (h *RulesHandler) RouteRepoRules(w http.ResponseWriter, r *http.Request, suffix []string) {
+	// /api/repos/:repo_id/rules (no suffix)
+	if len(suffix) == 0 {
+		switch r.Method {
+		case http.MethodGet:
+			h.HandleListRules(w, r)
+		case http.MethodPost:
+			h.HandleAddRule(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
+	}
+
+	// /api/repos/:repo_id/rules/config
+	if len(suffix) == 1 && suffix[0] == "config" && r.Method == http.MethodPatch {
+		h.HandleUpdateConfig(w, r)
+		return
+	}
+
+	// /api/repos/:repo_id/rules/persist-all
+	if len(suffix) == 1 && suffix[0] == "persist-all" && r.Method == http.MethodPost {
+		h.HandlePersistAllRules(w, r)
+		return
+	}
+
+	// /api/repos/:repo_id/rules/:name
+	if len(suffix) == 1 {
+		ruleName := suffix[0]
+		if ruleName == "" {
+			http.Error(w, "Rule name required", http.StatusBadRequest)
+			return
+		}
+		switch r.Method {
+		case http.MethodPatch:
+			h.HandleUpdateRule(w, r, ruleName)
+		case http.MethodDelete:
+			h.HandleDeleteRule(w, r, ruleName)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
+	}
+
+	// /api/repos/:repo_id/rules/:name/persist
+	if len(suffix) == 2 && suffix[1] == "persist" {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.HandlePersistRule(w, r, suffix[0])
+		return
+	}
+
+	// /api/repos/:repo_id/rules/:name/reorder
+	if len(suffix) == 2 && suffix[1] == "reorder" {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.HandleReorderRule(w, r, suffix[0])
+		return
+	}
+
+	http.Error(w, "Not found", http.StatusNotFound)
 }
 
 // HandleListRules handles GET /api/rules
@@ -437,9 +507,9 @@ func (h *RulesHandler) HandleUpdateConfig(w http.ResponseWriter, r *http.Request
 }
 
 // getRepoAPI returns the RepoAPI for the specified repo or run.
-// It extracts repo_path or run_id from the query parameters.
-// If neither is specified, it returns nil with an error message.
-// When repo_path is specified and no active run exists, a standalone RepoAPI
+// It extracts repo_id, repo_path, or run_id from the query parameters.
+// If none is specified, it returns nil with an error message.
+// When repo_path/repo_id is specified and no active run exists, a standalone RepoAPI
 // is created from the repo's config.
 func (h *RulesHandler) getRepoAPI(r *http.Request) (orchestrator.RepoAPI, string) {
 	if h.daemon == nil {
@@ -461,7 +531,18 @@ func (h *RulesHandler) getRepoAPI(r *http.Request) (orchestrator.RepoAPI, string
 		return api, ""
 	}
 
-	// Try to get or create the RepoAPI by repo_path
+	// Try to get or create the RepoAPI by repo_id (new URL scheme)
+	// repo_id is the repo path for now (from /api/repos/:repo_id/...)
+	repoID := r.URL.Query().Get("repo_id")
+	if repoID != "" {
+		api, err := orchManager.GetRepoAPI(repoID)
+		if err != nil {
+			return nil, fmt.Sprintf("failed to get RepoAPI for repo %q: %v", repoID, err)
+		}
+		return api, ""
+	}
+
+	// Try to get or create the RepoAPI by repo_path (legacy)
 	// This works whether or not an active run exists
 	repoPath := r.URL.Query().Get("repo_path")
 	if repoPath != "" {
@@ -472,7 +553,7 @@ func (h *RulesHandler) getRepoAPI(r *http.Request) (orchestrator.RepoAPI, string
 		return api, ""
 	}
 
-	return nil, "either repo_path or run_id query parameter is required"
+	return nil, "either repo_id, repo_path, or run_id query parameter is required"
 }
 
 // writeJSON writes a JSON response with the given status code

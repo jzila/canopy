@@ -43,7 +43,7 @@ type ValidationConfigResponse struct {
 	Error  string                       `json:"error,omitempty"`
 }
 
-// RouteConfig routes config-related requests to the appropriate handler.
+// RouteConfig routes config-related requests to the appropriate handler (legacy /api/config/* routes).
 func (h *ConfigHandler) RouteConfig(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 
@@ -59,6 +59,33 @@ func (h *ConfigHandler) RouteConfig(w http.ResponseWriter, r *http.Request) {
 	case "/api/config/sandbox":
 		h.HandleGetSandboxConfig(w, r)
 	case "/api/config/validation":
+		h.HandleGetValidationConfig(w, r)
+	default:
+		http.Error(w, "Not found", http.StatusNotFound)
+	}
+}
+
+// RouteRepoConfig routes repo-scoped config requests.
+// Handles /api/repos/:repo_id/config/* where repo_id is already extracted.
+// The suffix contains remaining path parts after /api/repos/:repo_id/config
+func (h *ConfigHandler) RouteRepoConfig(w http.ResponseWriter, r *http.Request, suffix []string) {
+	// Only GET requests are supported for config queries
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if len(suffix) != 1 {
+		http.Error(w, "Not found", http.StatusNotFound)
+		return
+	}
+
+	switch suffix[0] {
+	case "rules":
+		h.HandleGetRulesSettings(w, r)
+	case "sandbox":
+		h.HandleGetSandboxConfig(w, r)
+	case "validation":
 		h.HandleGetValidationConfig(w, r)
 	default:
 		http.Error(w, "Not found", http.StatusNotFound)
@@ -139,7 +166,7 @@ func (h *ConfigHandler) HandleGetValidationConfig(w http.ResponseWriter, r *http
 }
 
 // getRepoAPI returns the RepoAPI for the specified repo or run.
-// It extracts repo_path or run_id from the query parameters.
+// It extracts repo_id, repo_path, or run_id from the query parameters.
 func (h *ConfigHandler) getRepoAPI(r *http.Request) (orchestrator.RepoAPI, string) {
 	if h.daemon == nil {
 		return nil, "daemon not available"
@@ -160,7 +187,18 @@ func (h *ConfigHandler) getRepoAPI(r *http.Request) (orchestrator.RepoAPI, strin
 		return api, ""
 	}
 
-	// Try to get or create the RepoAPI by repo_path
+	// Try to get or create the RepoAPI by repo_id (new URL scheme)
+	// repo_id is the repo path for now (from /api/repos/:repo_id/...)
+	repoID := r.URL.Query().Get("repo_id")
+	if repoID != "" {
+		api, err := orchManager.GetRepoAPI(repoID)
+		if err != nil {
+			return nil, fmt.Sprintf("failed to get RepoAPI for repo %q: %v", repoID, err)
+		}
+		return api, ""
+	}
+
+	// Try to get or create the RepoAPI by repo_path (legacy)
 	repoPath := r.URL.Query().Get("repo_path")
 	if repoPath != "" {
 		api, err := orchManager.GetRepoAPI(repoPath)
@@ -170,7 +208,7 @@ func (h *ConfigHandler) getRepoAPI(r *http.Request) (orchestrator.RepoAPI, strin
 		return api, ""
 	}
 
-	return nil, "either repo_path or run_id query parameter is required"
+	return nil, "either repo_id, repo_path, or run_id query parameter is required"
 }
 
 // writeJSON writes a JSON response with the given status code.
