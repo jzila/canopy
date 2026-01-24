@@ -901,10 +901,6 @@ func (p *Processor) runValidationAndRepair(ctx context.Context, taskID, taskTitl
 		return result
 	}
 
-	// Send initial "pending" status before starting validation
-	p.sendValidationStatus(agentID, ipc.MergeStatusMerging, "", commitsApplied, hadConflict, resolverSpawned,
-		"pending", "", 0, nil)
-
 	maxAttempts := p.validationConfig.GetMaxRepairAttempts()
 	var previousAttempts []string
 

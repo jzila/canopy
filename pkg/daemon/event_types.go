@@ -16,6 +16,7 @@ const (
 	EventRunStarted       = events.EventRunStarted
 	EventRunCompleted     = events.EventRunCompleted
 	EventAgentStarted     = events.EventAgentStarted
+	EventAgentRunning     = events.EventAgentRunning
 	EventAgentResumed     = events.EventAgentResumed
 	EventAgentOutput      = events.EventAgentOutput
 	EventAgentLiveFeed    = events.EventAgentLiveFeed

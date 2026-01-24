@@ -19,6 +19,7 @@ const (
 	EventRunStarted         EventType = "run:started"
 	EventRunCompleted       EventType = "run:completed"
 	EventAgentStarted       EventType = "agent:started"
+	EventAgentRunning       EventType = "agent:running" // Agent transitioned from starting to running
 	EventAgentResumed       EventType = "agent:resumed" // Agent resumed after daemon restart
 	EventAgentOutput        EventType = "agent:output"
 	EventAgentOutputClear   EventType = "agent:output_clear"
@@ -42,7 +43,7 @@ const (
 func (et EventType) IsCritical() bool {
 	switch et {
 	case EventRunStarted, EventRunCompleted,
-		EventAgentStarted, EventAgentResumed, EventAgentCompleted,
+		EventAgentStarted, EventAgentRunning, EventAgentResumed, EventAgentCompleted,
 		EventAgentDone, EventAgentFailed,
 		EventAgentMergeStatus,
 		EventOrchPaused, EventOrchResumed, EventOrchStateChanged,

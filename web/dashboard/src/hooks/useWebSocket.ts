@@ -21,6 +21,13 @@ interface AgentStartedEvent {
     max_retries?: number;  // Maximum retry attempts configured (0 = no retries, -1 = infinite)
   };
 }
+interface AgentRunningEvent {
+  type: 'agent:running';
+  timestamp: string;
+  payload: {
+    agent_id: string;
+  };
+}
 interface AgentOutputEvent {
   type: 'agent:output';
   timestamp: string;
@@ -317,6 +324,7 @@ interface OrchStateChangedEvent {
 type EventType =
   | StateSyncEvent
   | AgentStartedEvent
+  | AgentRunningEvent
   | AgentOutputEvent
   | AgentOutputClearEvent
   | AgentLiveFeedEvent
@@ -531,12 +539,12 @@ export function useWebSocket() {
             }
             case 'agent:started': {
               const { agent_id, run_id, task_id, task_title, task_description, parent_agent_id, attempt, max_retries } = message.payload;
-              // Create new agent entry
+              // Create new agent entry with starting status
               updateAgent(agent_id, {
                 id: agent_id,
                 task_id,
                 task_title,
-                status: 'running',
+                status: 'starting',
                 start_time: message.timestamp,
                 end_time: null,
                 duration: 0,
@@ -560,6 +568,14 @@ export function useWebSocket() {
                 // Retry information
                 ...(attempt !== undefined && { attempt }),
                 ...(max_retries !== undefined && { max_retries }),
+              });
+              break;
+            }
+            case 'agent:running': {
+              const { agent_id } = message.payload;
+              // Transition agent from starting to running
+              updateAgent(agent_id, {
+                status: 'running',
               });
               break;
             }

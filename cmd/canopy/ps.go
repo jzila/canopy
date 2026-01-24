@@ -90,6 +90,7 @@ type WorkerInfo struct {
 	TaskID           string `json:"taskId"`
 	TaskTitle        string `json:"taskTitle,omitempty"`
 	Status           string `json:"status"`
+	LifecycleState   string `json:"lifecycleState,omitempty"`
 	MergeStatus      string `json:"mergeStatus,omitempty"`
 	ValidationStatus string `json:"validationStatus,omitempty"`
 	RepairAttempts   int    `json:"repairAttempts,omitempty"`
@@ -204,6 +205,7 @@ type AgentInfo struct {
 	Status           string    `json:"status"`
 	MergeStatus      string    `json:"merge_status"`
 	ValidationStatus string    `json:"validation_status"`
+	LifecycleState   string    `json:"lifecycle_state"`
 	RepairAttempts   int       `json:"repair_attempts"`
 	StartTime        time.Time `json:"start_time"`
 	Duration         float64   `json:"duration"`
@@ -284,9 +286,19 @@ func getWorkerInfo() ([]WorkerInfo, error) {
 			continue
 		}
 
-		// Only show running agents by default
-		if agent.Status != "running" && agent.Status != "starting" {
-			continue
+		// Only show active (non-terminal) agents by default
+		// Prefer lifecycle state when available, fall back to legacy status
+		if agent.LifecycleState != "" {
+			// Skip terminal lifecycle states
+			switch agent.LifecycleState {
+			case "completed", "failed", "needs_attention", "cancelled", "timed_out":
+				continue
+			}
+		} else {
+			// Fall back to legacy status check
+			if agent.Status != "running" && agent.Status != "starting" {
+				continue
+			}
 		}
 
 		duration := ""
@@ -301,6 +313,7 @@ func getWorkerInfo() ([]WorkerInfo, error) {
 			TaskID:           agent.TaskID,
 			TaskTitle:        agent.TaskTitle,
 			Status:           agent.Status,
+			LifecycleState:   agent.LifecycleState,
 			MergeStatus:      agent.MergeStatus,
 			ValidationStatus: agent.ValidationStatus,
 			RepairAttempts:   agent.RepairAttempts,
@@ -377,16 +390,23 @@ func outputPsTable(info ProcessInfo) error {
 					title = title[:37] + "..."
 				}
 
-				status := w.Status
-				// Show validation status when repairing (takes precedence)
-				if w.ValidationStatus == "repairing" {
-					if w.RepairAttempts > 0 {
-						status = fmt.Sprintf("repairing (%d)", w.RepairAttempts)
-					} else {
-						status = "repairing"
+				// Prefer lifecycle state from state machine if available
+				status := w.LifecycleState
+				if status == "" {
+					// Fall back to legacy status derivation for backwards compatibility
+					status = w.Status
+					if w.ValidationStatus == "repairing" {
+						if w.RepairAttempts > 0 {
+							status = fmt.Sprintf("repairing (%d)", w.RepairAttempts)
+						} else {
+							status = "repairing"
+						}
+					} else if w.MergeStatus != "" && w.MergeStatus != "none" {
+						status = w.MergeStatus
 					}
-				} else if w.MergeStatus != "" && w.MergeStatus != "none" {
-					status = w.MergeStatus
+				} else if status == "repairing" && w.RepairAttempts > 0 {
+					// Enhance repairing state with attempt count
+					status = fmt.Sprintf("repairing (%d)", w.RepairAttempts)
 				}
 
 				fmt.Printf("  %-30s  %-16s  %-10s  %-10s  %s\n",
