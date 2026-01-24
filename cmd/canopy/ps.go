@@ -61,15 +61,17 @@ type ProcessInfo struct {
 
 // DaemonInfo contains information about the daemon process
 type DaemonInfo struct {
-	Running    bool      `json:"running"`
-	PID        int       `json:"pid,omitempty"`
-	Port       int       `json:"port"`
-	SocketPath string    `json:"socketPath"`
-	Uptime     string    `json:"uptime,omitempty"`
-	StartTime  time.Time `json:"startTime,omitempty"`
-	IsPaused   bool      `json:"isPaused"`
-	ActiveRepo string    `json:"activeRepo,omitempty"`
-	Stats      *StatsInfo `json:"stats,omitempty"`
+	Running           bool       `json:"running"`
+	PID               int        `json:"pid,omitempty"`
+	Port              int        `json:"port"`
+	SocketPath        string     `json:"socketPath"`
+	Uptime            string     `json:"uptime,omitempty"`
+	StartTime         time.Time  `json:"startTime,omitempty"`
+	IsPaused          bool       `json:"isPaused"`
+	ActiveRepo        string     `json:"activeRepo,omitempty"`
+	Stats             *StatsInfo `json:"stats,omitempty"`
+	OrchestratorState string     `json:"orchestratorState,omitempty"`
+	ActiveAgentCount  int        `json:"activeAgentCount,omitempty"`
 }
 
 // StatsInfo contains aggregate statistics from the daemon
@@ -155,6 +157,10 @@ func getDaemonInfo() (*DaemonInfo, error) {
 		info.Uptime = formatDuration(time.Since(stateResp.StartTime))
 	}
 
+	// Get orchestrator state from response
+	info.OrchestratorState = stateResp.OrchestratorState
+	info.ActiveAgentCount = stateResp.ActiveAgentCount
+
 	// Get active repo ID from response
 	if activeRepoID, ok := stateResp.Extra["active_repo_id"].(string); ok && activeRepoID != "" {
 		info.ActiveRepo = activeRepoID
@@ -174,12 +180,14 @@ func getDaemonInfo() (*DaemonInfo, error) {
 
 // StateResponse matches the daemon's state response structure
 type StateResponse struct {
-	Agents    map[string]AgentInfo `json:"agents"`
-	Tasks     map[string]TaskInfo  `json:"tasks"`
-	Stats     StatsResponse        `json:"stats"`
-	IsPaused  bool                 `json:"is_paused"`
-	StartTime time.Time            `json:"start_time"`
-	Extra     map[string]interface{} `json:"-"` // For capturing additional fields like active_repo_id
+	Agents            map[string]AgentInfo   `json:"agents"`
+	Tasks             map[string]TaskInfo    `json:"tasks"`
+	Stats             StatsResponse          `json:"stats"`
+	IsPaused          bool                   `json:"is_paused"`
+	StartTime         time.Time              `json:"start_time"`
+	OrchestratorState string                 `json:"orchestrator_state,omitempty"`
+	ActiveAgentCount  int                    `json:"active_agent_count,omitempty"`
+	Extra             map[string]interface{} `json:"-"` // For capturing additional fields like active_repo_id
 }
 
 // AgentInfo matches the daemon's agent state structure
@@ -314,6 +322,15 @@ func outputPsTable(info ProcessInfo) error {
 			fmt.Printf("  Socket: %s\n", info.Daemon.SocketPath)
 			if info.Daemon.Uptime != "" {
 				fmt.Printf("  Uptime: %s\n", info.Daemon.Uptime)
+			}
+			// Display orchestrator state
+			if info.Daemon.OrchestratorState != "" {
+				orchState := info.Daemon.OrchestratorState
+				if orchState == "active" && info.Daemon.ActiveAgentCount > 0 {
+					fmt.Printf("  Orchestrator: %s (%d agents)\n", orchState, info.Daemon.ActiveAgentCount)
+				} else {
+					fmt.Printf("  Orchestrator: %s\n", orchState)
+				}
 			}
 			if info.Daemon.IsPaused {
 				fmt.Printf("  Paused: yes\n")
