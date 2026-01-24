@@ -237,6 +237,10 @@ func (h *PersistenceHandler) handleAgentStarted(event Event) {
 	parentAgentID, _ := payload["parent_agent_id"].(string)
 	lifecycleState, _ := payload["lifecycle_state"].(string)
 
+	// Extract retry information
+	attempt, _ := getIntFromPayload(payload, "attempt")
+	maxRetries, _ := getIntFromPayload(payload, "max_retries")
+
 	// Get current run ID
 	h.mu.RLock()
 	runID := h.currentRunID
@@ -253,6 +257,8 @@ func (h *PersistenceHandler) handleAgentStarted(event Event) {
 		StartedAt:       event.Timestamp,
 		RepoID:          repoID,
 		ParentAgentID:   parentAgentID,
+		Attempt:         attempt,
+		MaxRetries:      maxRetries,
 	}
 
 	if err := h.store.CreateAgent(agent); err != nil {

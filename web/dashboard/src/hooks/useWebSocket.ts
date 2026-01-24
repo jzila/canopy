@@ -261,6 +261,9 @@ interface BackendAgentState {
   validation_error?: string;
   repair_attempts?: number;
   last_repair_output?: string;
+  // Retry information
+  attempt?: number;      // Current attempt number (1 = first try, 2 = first retry, etc.)
+  max_retries?: number;  // Maximum retry attempts configured (0 = no retries, -1 = infinite)
 }
 // Backend task state format
 interface BackendTaskState {
@@ -518,6 +521,9 @@ export function useWebSocket() {
                   ...(agent.last_repair_output && { last_repair_output: agent.last_repair_output }),
                   // Lifecycle state (new unified state machine)
                   ...(agent.lifecycle_state && { lifecycle_state: agent.lifecycle_state as import('../stores/stateStore').LifecycleState }),
+                  // Retry information
+                  ...(agent.attempt !== undefined && agent.attempt > 0 && { attempt: agent.attempt }),
+                  ...(agent.max_retries !== undefined && { max_retries: agent.max_retries }),
                 };
               }
               // Merge dual-source tasks: runtime overlays persistent for display

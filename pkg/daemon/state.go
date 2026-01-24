@@ -1336,6 +1336,15 @@ func (r *RuntimeState) handleAgentStarted(payload map[string]interface{}, timest
 	parentAgentID, _ := payload["parent_agent_id"].(string)
 	repoID, _ := payload["repo_id"].(string)
 
+	// Extract retry information from payload
+	var attempt, maxRetries int
+	if attemptVal, ok := payload["attempt"].(float64); ok {
+		attempt = int(attemptVal)
+	}
+	if maxRetriesVal, ok := payload["max_retries"].(float64); ok {
+		maxRetries = int(maxRetriesVal)
+	}
+
 	if agentID == "" {
 		return
 	}
@@ -1363,6 +1372,8 @@ func (r *RuntimeState) handleAgentStarted(payload map[string]interface{}, timest
 		Status:          AgentStatusRunning,
 		StartTime:       timestamp,
 		Lifecycle:       agentLifecycle,
+		Attempt:         attempt,
+		MaxRetries:      maxRetries,
 	}
 
 	// IMPORTANT: Add agent to RuntimeState BEFORE lifecycle transition.
