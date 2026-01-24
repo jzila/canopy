@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Clock,
   Hash,
@@ -11,7 +11,10 @@ import {
   XCircle,
   Timer,
   Activity,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react';
+import { CommitList } from './CommitList';
 import type { AgentState, MergeStatus } from '../../stores/stateStore';
 
 interface AgentDetailProps {
@@ -169,6 +172,42 @@ const Section: React.FC<{ title: string; children: React.ReactNode }> = ({ title
   </div>
 );
 
+// Collapsible section component for expandable content
+const CollapsibleSection: React.FC<{
+  title: string;
+  badge?: number;
+  defaultExpanded?: boolean;
+  children: React.ReactNode;
+}> = ({ title, badge, defaultExpanded = false, children }) => {
+  const [isExpanded, setIsExpanded] = useState(defaultExpanded);
+
+  return (
+    <div className="mb-4">
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="w-full flex items-center justify-between text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2 hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          {isExpanded ? (
+            <ChevronDown className="w-4 h-4" />
+          ) : (
+            <ChevronRight className="w-4 h-4" />
+          )}
+          <span>{title}</span>
+          {badge !== undefined && badge > 0 && (
+            <span className="px-1.5 py-0.5 text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded normal-case">
+              {badge}
+            </span>
+          )}
+        </div>
+      </button>
+      {isExpanded && (
+        <div className="bg-gray-50 dark:bg-gray-800/50 rounded-lg p-3">{children}</div>
+      )}
+    </div>
+  );
+};
+
 export const AgentDetail: React.FC<AgentDetailProps> = ({ agent }) => {
   const hasTokenUsage = agent.token_usage && agent.token_usage.total_tokens > 0;
   const hasMergeStatus = agent.merge_status && agent.merge_status !== 'pending';
@@ -284,19 +323,21 @@ export const AgentDetail: React.FC<AgentDetailProps> = ({ agent }) => {
 
       {/* Work Summary */}
       <Section title="Work Summary">
-        <div className="grid grid-cols-2 gap-4">
-          <DetailRow
-            icon={<FileText className="w-4 h-4" />}
-            label="Files Changed"
-            value={agent.changes.toString()}
-          />
-          <DetailRow
-            icon={<GitMerge className="w-4 h-4" />}
-            label="Commits"
-            value={(agent.git_commits?.length || agent.commits || 0).toString()}
-          />
-        </div>
+        <DetailRow
+          icon={<FileText className="w-4 h-4" />}
+          label="Files Changed"
+          value={agent.changes.toString()}
+        />
       </Section>
+
+      {/* Commits - Collapsible list */}
+      <CollapsibleSection
+        title="Commits"
+        badge={agent.git_commits?.length || agent.commits || 0}
+        defaultExpanded={false}
+      >
+        <CommitList commits={agent.git_commits || []} />
+      </CollapsibleSection>
 
       {/* Merge Status */}
       {hasMergeStatus && (
