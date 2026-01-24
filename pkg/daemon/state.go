@@ -1348,14 +1348,29 @@ func (r *RuntimeState) handleAgentMergeStatus(payload map[string]interface{}) {
 	taskID := agent.TaskID
 	agent.mu.RUnlock()
 
+	now := time.Now()
 	agent.Update(func(a *AgentState) {
 		a.MergeStatus = MergeStatus(mergeStatus)
 		a.MergeQueuePos = queuePos
 		a.MergeError = mergeErr
 
-		// NOTE: Agent Status is intentionally NOT set here. Only EventAgentCompleted
-		// should set terminal status (completed/failed) to avoid race conditions
-		// when both events arrive in close succession.
+		// Update agent status atomically with merge status for terminal states.
+		// This prevents the race condition where agent appears 'running' after
+		// merge completes but before EventAgentCompleted is processed.
+		switch MergeStatus(mergeStatus) {
+		case MergeStatusMerged, MergeStatusMergedNeedsRepair, MergeStatusResolved, MergeStatusSkipped:
+			// Merge succeeded (with or without repair/resolution)
+			a.Status = AgentStatusCompleted
+			if a.EndTime == nil {
+				a.EndTime = &now
+			}
+		case MergeStatusFailed:
+			// Merge failed
+			a.Status = AgentStatusFailed
+			if a.EndTime == nil {
+				a.EndTime = &now
+			}
+		}
 
 		// Update merge result fields (only if present to avoid overwriting)
 		if commitsApplied > 0 {
