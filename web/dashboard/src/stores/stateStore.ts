@@ -307,6 +307,7 @@ interface StateStore {
   setOrchestratorState: (state: OrchestratorState, activeAgentCount: number) => void;
   // Run filtering actions
   setRuns: (runs: Run[]) => void;
+  mergeRuns: (runs: Run[]) => void;
   setActiveRunId: (runId: string) => void;
   setRunsLoading: (loading: boolean) => void;
   addRun: (run: Run) => void;
@@ -710,6 +711,28 @@ export const useStateStore = create<StateStore>((set) => ({
 
   // Run filtering actions
   setRuns: (runs) => set({ runs }),
+
+  // Merge runs from API with existing state to avoid race conditions where
+  // WebSocket events add runs before the initial API fetch completes
+  mergeRuns: (apiRuns) =>
+    set((state) => {
+      // Build a map of API runs for efficient lookup
+      const apiRunMap = new Map(apiRuns.map((r) => [r.id, r]));
+
+      // Keep any existing runs that aren't in the API response (recently added via WebSocket)
+      // These are typically runs that were just created and haven't been persisted yet
+      const runsNotInApi = state.runs.filter((r) => !apiRunMap.has(r.id));
+
+      // Merge: API runs (fresher data) + runs not in API (WebSocket-added)
+      // Sort by started_at descending (most recent first)
+      const merged = [...apiRuns, ...runsNotInApi].sort((a, b) => {
+        const aTime = a.started_at ? new Date(a.started_at).getTime() : 0;
+        const bTime = b.started_at ? new Date(b.started_at).getTime() : 0;
+        return bTime - aTime;
+      });
+
+      return { runs: merged };
+    }),
 
   setActiveRunId: (activeRunId) => set({ activeRunId }),
 

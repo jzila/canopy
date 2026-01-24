@@ -134,6 +134,7 @@ export const Dashboard: React.FC = () => {
   const activeRunId = useStateStore((state) => state.activeRunId);
   const isRunsLoading = useStateStore((state) => state.isRunsLoading);
   const setRuns = useStateStore((state) => state.setRuns);
+  const mergeRuns = useStateStore((state) => state.mergeRuns);
   const setActiveRunId = useStateStore((state) => state.setActiveRunId);
   const setRunsLoading = useStateStore((state) => state.setRunsLoading);
   const selectedBeadId = useStateStore((state) => state.selectedBeadId);
@@ -225,7 +226,10 @@ export const Dashboard: React.FC = () => {
       try {
         setRunsLoading(true);
         const response = await getRuns({ repo_id: activeRepoId, limit: 50 });
-        setRuns(response.runs);
+        // Use mergeRuns instead of setRuns to avoid race condition where
+        // a WebSocket run:started event adds a run before this API call completes.
+        // mergeRuns preserves any runs added via WebSocket that aren't yet in the API response.
+        mergeRuns(response.runs);
         setActiveRunId('');
       } catch (error) {
         console.error('Failed to load runs:', error);
@@ -236,7 +240,7 @@ export const Dashboard: React.FC = () => {
     };
 
     loadRuns();
-  }, [activeRepoId, setRuns, setActiveRunId, setRunsLoading]);
+  }, [activeRepoId, mergeRuns, setRuns, setActiveRunId, setRunsLoading]);
 
   // Event handlers - using optimistic updates
   const handlePause = async () => {
