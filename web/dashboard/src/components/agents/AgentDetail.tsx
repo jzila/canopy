@@ -13,6 +13,7 @@ import {
   Activity,
   ChevronDown,
   ChevronRight,
+  RefreshCw,
 } from 'lucide-react';
 import { CommitList } from './CommitList';
 import type { AgentState, MergeStatus } from '../../stores/stateStore';
@@ -263,6 +264,42 @@ export const AgentDetail: React.FC<AgentDetailProps> = ({ agent }) => {
           )}
         </div>
       </Section>
+
+      {/* Retry Information - shown when this is a retry attempt */}
+      {agent.attempt !== undefined && agent.attempt > 1 && (
+        <Section title="Retry Information">
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <RefreshCw className="w-4 h-4 text-orange-500" />
+              <span className="text-sm text-gray-800 dark:text-gray-200">
+                {agent.max_retries === -1
+                  ? `Retry ${agent.attempt - 1} (infinite retries enabled)`
+                  : `Attempt ${agent.attempt} of ${(agent.max_retries ?? 0) + 1}`}
+              </span>
+            </div>
+
+            {/* Show previous failure reason if available */}
+            {(agent.merge_error || agent.validation_error) && (
+              <div className="mt-2 p-2 bg-orange-50 dark:bg-orange-900/20 rounded border border-orange-200 dark:border-orange-800">
+                <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Previous Failure Reason</div>
+                <div className="text-sm text-orange-700 dark:text-orange-300 whitespace-pre-wrap">
+                  {agent.merge_error || agent.validation_error}
+                </div>
+              </div>
+            )}
+
+            {/* Show last repair output if available */}
+            {agent.last_repair_output && (
+              <div className="mt-2 p-2 bg-yellow-50 dark:bg-yellow-900/20 rounded border border-yellow-200 dark:border-yellow-800">
+                <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Last Repair Output</div>
+                <div className="text-sm text-yellow-700 dark:text-yellow-300 whitespace-pre-wrap font-mono text-xs">
+                  {agent.last_repair_output}
+                </div>
+              </div>
+            )}
+          </div>
+        </Section>
+      )}
 
       {/* Timing */}
       <Section title="Timing">
