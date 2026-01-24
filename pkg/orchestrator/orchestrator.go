@@ -118,7 +118,8 @@ type Orchestrator struct {
 	mergeCoordinator *mergecoordinator.MergeCoordinator
 	tempDir          string
 	callbackManager  *CallbackManager
-	failureCounts    map[string]int // Tracks how many times each task has failed
+	failureCountsMu  sync.RWMutex       // Protects failureCounts
+	failureCounts    map[string]int     // Tracks how many times each task has failed
 	sandboxConfig    *sandbox.SandboxConfig
 	taskFilter       *cfgpkg.TaskFilter // Task filter from rules settings (legacy)
 	rulesEngine      *rules.Engine      // Rules engine for per-repo task selection
@@ -380,6 +381,23 @@ func (o *Orchestrator) SetStateCallbacks(callbacks *StateCallbacks) {
 	o.stateCallbacks = callbacks
 }
 
+// GetTaskAttempt returns the current attempt number for a task (1-indexed).
+// Returns 1 for first attempt, 2 for first retry, etc.
+// The attempt is calculated as: number of previous failures + 1.
+func (o *Orchestrator) GetTaskAttempt(taskID string) int {
+	o.failureCountsMu.RLock()
+	defer o.failureCountsMu.RUnlock()
+	// Attempt = previous failures + 1
+	// If no failures, this is attempt 1 (first try)
+	return o.failureCounts[taskID] + 1
+}
+
+// GetMaxRetries returns the configured maximum retry attempts.
+// Returns 0 = no retries, -1 = infinite, positive = retry limit.
+func (o *Orchestrator) GetMaxRetries() int {
+	return o.config.MaxRetries
+}
+
 // notifyStateChange checks if state has changed and invokes appropriate callback.
 func (o *Orchestrator) notifyStateChange(inFlightCount int) {
 	if o.stateCallbacks == nil {
@@ -442,8 +460,10 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 
 		resultsMu.Lock()
 		results = append(results, result)
+		resultsMu.Unlock()
 
-		// Track success/failure counts
+		// Track success/failure counts (using dedicated mutex)
+		o.failureCountsMu.Lock()
 		if result.Success {
 			delete(o.failureCounts, taskID)
 		} else {
@@ -458,7 +478,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 				fmt.Fprintf(os.Stderr, "ERROR: Task %s has failed %d times and will not be retried\n", taskID, o.failureCounts[taskID])
 			}
 		}
-		resultsMu.Unlock()
+		o.failureCountsMu.Unlock()
 
 		// Signal that a task completed (non-blocking)
 		select {

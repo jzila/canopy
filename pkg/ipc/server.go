@@ -316,6 +316,13 @@ func (s *Server) convertToEvent(msg *Message) *events.Event {
 		if payload.RepoID != "" {
 			eventPayload["repo_id"] = payload.RepoID
 		}
+		// Include retry information for UI display
+		if payload.Attempt > 0 {
+			eventPayload["attempt"] = payload.Attempt
+		}
+		if payload.MaxRetries != 0 {
+			eventPayload["max_retries"] = payload.MaxRetries
+		}
 		return &events.Event{
 			Type:      events.EventAgentStarted,
 			Timestamp: msg.Timestamp,

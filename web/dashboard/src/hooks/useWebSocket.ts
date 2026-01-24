@@ -17,6 +17,8 @@ interface AgentStartedEvent {
     task_title: string;
     task_description?: string;
     parent_agent_id?: string;
+    attempt?: number;      // Current attempt number (1 = first try, 2 = first retry, etc.)
+    max_retries?: number;  // Maximum retry attempts configured (0 = no retries, -1 = infinite)
   };
 }
 interface AgentOutputEvent {
@@ -528,7 +530,7 @@ export function useWebSocket() {
               break;
             }
             case 'agent:started': {
-              const { agent_id, run_id, task_id, task_title, task_description, parent_agent_id } = message.payload;
+              const { agent_id, run_id, task_id, task_title, task_description, parent_agent_id, attempt, max_retries } = message.payload;
               // Create new agent entry
               updateAgent(agent_id, {
                 id: agent_id,
@@ -555,6 +557,9 @@ export function useWebSocket() {
                 ...(run_id && { run_id }),
                 ...(task_description && { task_description }),
                 ...(parent_agent_id && { parent_agent_id }),
+                // Retry information
+                ...(attempt !== undefined && { attempt }),
+                ...(max_retries !== undefined && { max_retries }),
               });
               break;
             }

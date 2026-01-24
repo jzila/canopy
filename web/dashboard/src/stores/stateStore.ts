@@ -87,6 +87,9 @@ export interface AgentState {
   git_commits: GitCommit[];
   result_message?: string;    // Final result message from agent
   archived: boolean;
+  // Retry information
+  attempt?: number;           // Current attempt number (1 = first try, 2 = first retry, etc.)
+  max_retries?: number;       // Maximum retry attempts configured (0 = no retries, -1 = infinite)
   // Merge status fields (snake_case per API conventions)
   merge_status?: MergeStatus;
   merge_queue_pos?: number;

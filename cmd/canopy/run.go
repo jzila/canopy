@@ -334,7 +334,14 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 			// Record agent ID for parent-child tracking (resolver agents need this)
 			orch.SetAgentID(taskID, agentID)
 			parentAgentID := "" // Top-level agents have no parent
-			if err := ipcClient.SendAgentStart(agentID, runID, taskID, task.Title, task.Description, parentAgentID, repoID); err != nil && verbose {
+			// Get retry information from the orchestrator
+			attempt := orch.GetTaskAttempt(taskID)
+			maxRetriesVal := orch.GetMaxRetries()
+			opts := &ipc.AgentStartOptions{
+				Attempt:    attempt,
+				MaxRetries: maxRetriesVal,
+			}
+			if err := ipcClient.SendAgentStartWithOptions(agentID, runID, taskID, task.Title, task.Description, parentAgentID, repoID, opts); err != nil && verbose {
 				fmt.Fprintf(os.Stderr, "warning: failed to send agent start: %v\n", err)
 			}
 		},

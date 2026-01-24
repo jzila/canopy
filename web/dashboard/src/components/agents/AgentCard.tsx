@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Clock, Zap, DollarSign, XCircle, GitCommit, Archive, ExternalLink, GitMerge, AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react';
+import { Clock, Zap, DollarSign, XCircle, GitCommit, Archive, ExternalLink, GitMerge, AlertTriangle, ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
 import type { AgentState } from '../../stores/stateStore';
 import { useStateStore } from '../../stores/stateStore';
 import { killAgent, archiveAgent } from '../../api/client';
@@ -12,6 +12,20 @@ interface AgentCardProps {
   isSelected: boolean;
   onArchiveToggle?: (agentId: string, archived: boolean) => void;
 }
+
+// Format retry badge text: "Attempt N of M" or "Retry N" for infinite retries
+const formatRetryBadge = (attempt: number, maxRetries: number): string | null => {
+  // Only show badge if this is a retry (attempt > 1)
+  if (attempt <= 1) return null;
+
+  if (maxRetries === -1) {
+    // Infinite retries: show "Retry N" (attempt 2 = Retry 1, etc.)
+    return `Retry ${attempt - 1}`;
+  }
+
+  // Finite retries: show "Attempt N of M+1" (maxRetries + 1 = total attempts)
+  return `Attempt ${attempt} of ${maxRetries + 1}`;
+};
 
 const STATUS_COLORS: Record<string, string> = {
   starting: 'bg-yellow-500',
@@ -191,6 +205,16 @@ export const AgentCard: React.FC<AgentCardProps> = ({
             <span className={`inline-flex items-center px-2.5 py-1 rounded text-xs font-medium tracking-wider text-white ${statusColor}`}>
               {agent.status}
             </span>
+            {/* Retry indicator badge - only shown for retried tasks */}
+            {agent.attempt !== undefined && agent.max_retries !== undefined && formatRetryBadge(agent.attempt, agent.max_retries) && (
+              <span
+                className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium tracking-wider bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200"
+                title={`This is attempt ${agent.attempt}${agent.max_retries === -1 ? ' (infinite retries)' : ` of ${agent.max_retries + 1}`}`}
+              >
+                <RefreshCw className="w-3 h-3" />
+                {formatRetryBadge(agent.attempt, agent.max_retries)}
+              </span>
+            )}
           </div>
           <h3 className={`text-sm font-medium tracking-wide leading-relaxed truncate ${agent.archived ? 'text-gray-500 dark:text-gray-400 line-through' : 'text-gray-900 dark:text-gray-100'}`}>
             {agent.task_title}
