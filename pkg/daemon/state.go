@@ -306,6 +306,23 @@ func getBoolFromMap(m map[string]interface{}, key string) bool {
 	return false
 }
 
+func getInt64FromMap(m map[string]interface{}, key string) (int64, bool) {
+	val, exists := m[key]
+	if !exists {
+		return 0, false
+	}
+	switch v := val.(type) {
+	case int:
+		return int64(v), true
+	case int64:
+		return v, true
+	case float64:
+		return int64(v), true
+	default:
+		return 0, false
+	}
+}
+
 // GitCommit represents a git commit made by an agent
 type GitCommit struct {
 	Hash         string   `json:"hash"`          // Full commit hash
@@ -1288,10 +1305,78 @@ func (r *RuntimeState) handleAgentMergeStatus(payload map[string]interface{}) {
 	queuePos, _ := getIntFromPayload(payload, "queue_pos")
 	mergeErr, _ := payload["error"].(string)
 
+	// Extract merge result fields
+	commitsApplied, _ := getIntFromPayload(payload, "commits_applied")
+	hadConflict, _ := payload["had_conflict"].(bool)
+	resolverSpawned, _ := payload["resolver_spawned"].(bool)
+
+	// Extract validation fields
+	validationStatus, _ := payload["validation_status"].(string)
+	validationError, _ := payload["validation_error"].(string)
+	validationDuration, _ := getInt64FromPayload(payload, "validation_duration_ms")
+
+	// Extract validation steps (comes as []interface{} from JSON)
+	var validationSteps []ValidationStep
+	if stepsRaw, ok := payload["validation_steps"].([]interface{}); ok {
+		for _, stepRaw := range stepsRaw {
+			if stepMap, ok := stepRaw.(map[string]interface{}); ok {
+				step := ValidationStep{
+					Name:   getStringFromMap(stepMap, "name"),
+					Status: getStringFromMap(stepMap, "status"),
+					Output: getStringFromMap(stepMap, "output"),
+				}
+				if dur, ok := getInt64FromMap(stepMap, "duration_ms"); ok {
+					step.Duration = dur
+				}
+				validationSteps = append(validationSteps, step)
+			}
+		}
+	} else if stepsTyped, ok := payload["validation_steps"].([]ValidationStep); ok {
+		// Direct type assertion if already typed (e.g., from internal events)
+		validationSteps = stepsTyped
+	}
+
+	// Extract repair tracking fields
+	repairAttempts, _ := getIntFromPayload(payload, "repair_attempts")
+	lastRepairOutput, _ := payload["last_repair_output"].(string)
+
 	agent.Update(func(a *AgentState) {
 		a.MergeStatus = MergeStatus(mergeStatus)
 		a.MergeQueuePos = queuePos
 		a.MergeError = mergeErr
+
+		// Update merge result fields (only if present to avoid overwriting)
+		if commitsApplied > 0 {
+			a.Commits = commitsApplied
+		}
+		// Store conflict info in merge error if there was a conflict
+		if hadConflict && a.MergeError == "" {
+			a.MergeError = "merge had conflicts"
+		}
+		// Note: resolverSpawned is informational, no field to store it currently
+		_ = resolverSpawned
+
+		// Update validation fields
+		if validationStatus != "" {
+			a.ValidationStatus = validationStatus
+		}
+		if validationError != "" {
+			a.ValidationError = validationError
+		}
+		if validationDuration > 0 {
+			a.ValidationDuration = validationDuration
+		}
+		if len(validationSteps) > 0 {
+			a.ValidationSteps = validationSteps
+		}
+
+		// Update repair tracking fields
+		if repairAttempts > 0 {
+			a.RepairAttempts = repairAttempts
+		}
+		if lastRepairOutput != "" {
+			a.LastRepairOutput = lastRepairOutput
+		}
 	})
 }
 
