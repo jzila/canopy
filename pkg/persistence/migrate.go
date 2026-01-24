@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-const currentSchemaVersion = 16
+const currentSchemaVersion = 17
 
 // migrate runs all pending database migrations
 func (s *Store) migrate() error {
@@ -107,6 +107,10 @@ func (s *Store) runMigration(version int) error {
 		}
 	case 16:
 		if err := s.migrateV16(tx); err != nil {
+			return err
+		}
+	case 17:
+		if err := s.migrateV17(tx); err != nil {
 			return err
 		}
 	default:
@@ -481,6 +485,25 @@ func (s *Store) migrateV16(tx *sql.Tx) error {
 	_, err := tx.Exec(schema)
 	if err != nil {
 		return fmt.Errorf("failed to create run_configs table: %w", err)
+	}
+
+	return nil
+}
+
+// migrateV17 adds task retry tracking fields (attempt and max_retries) to agents table.
+// These are separate from RepairAttempts which tracks validation repair attempts.
+func (s *Store) migrateV17(tx *sql.Tx) error {
+	migrations := []string{
+		// Add attempt column (1 = first try, 2 = first retry, etc.)
+		`ALTER TABLE agents ADD COLUMN attempt INTEGER DEFAULT 1`,
+		// Add max_retries column (how many retries are allowed)
+		`ALTER TABLE agents ADD COLUMN max_retries INTEGER DEFAULT 3`,
+	}
+
+	for _, m := range migrations {
+		if _, err := tx.Exec(m); err != nil {
+			return fmt.Errorf("failed to execute migration: %s: %w", m, err)
+		}
 	}
 
 	return nil

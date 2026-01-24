@@ -480,6 +480,8 @@ type AgentState struct {
 	IsResume           bool            `json:"is_resume,omitempty"`            // True if this agent was resumed after daemon restart
 	ResumeCount        int             `json:"resume_count,omitempty"`         // Number of times this agent has been resumed
 	InterruptedAt      *time.Time      `json:"interrupted_at,omitempty"`       // When the agent was interrupted (for resumed agents)
+	Attempt            int             `json:"attempt,omitempty"`              // Current attempt number (1 = first try)
+	MaxRetries         int             `json:"max_retries,omitempty"`          // Max retry attempts configured
 	mu                 sync.RWMutex
 }
 
@@ -557,6 +559,8 @@ func (a *AgentState) GetSnapshot() AgentState {
 		IsResume:           a.IsResume,
 		ResumeCount:        a.ResumeCount,
 		InterruptedAt:      a.InterruptedAt,
+		Attempt:            a.Attempt,
+		MaxRetries:         a.MaxRetries,
 		// mu is intentionally not copied
 	}
 }

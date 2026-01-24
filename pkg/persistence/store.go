@@ -165,6 +165,9 @@ type Agent struct {
 	LastRepairOutput string `json:"last_repair_output,omitempty"` // Output/error from the last repair attempt
 	// Session tracking for claude --resume support
 	SessionID string `json:"session_id,omitempty"` // Claude CLI session ID for resumability
+	// Task retry tracking fields
+	Attempt    int `json:"attempt"`     // Current attempt number (1 = first try)
+	MaxRetries int `json:"max_retries"` // Max retry attempts configured
 }
 
 // RunFilter specifies criteria for querying runs
@@ -680,8 +683,8 @@ func (s *Store) ListRuns(filter RunFilter) (*RunListResult, error) {
 // the existing record is updated with the new values.
 func (s *Store) CreateAgent(agent *Agent) error {
 	query := `
-		INSERT INTO agents (id, run_id, task_id, task_title, task_description, status, lifecycle_state, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived, parent_agent_id, merge_status, merge_commits_applied, merge_had_conflict, merge_resolver_spawned, merge_error, validation_status, validation_duration_ms, validation_error, validation_steps, session_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO agents (id, run_id, task_id, task_title, task_description, status, lifecycle_state, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived, parent_agent_id, merge_status, merge_commits_applied, merge_had_conflict, merge_resolver_spawned, merge_error, validation_status, validation_duration_ms, validation_error, validation_steps, session_id, attempt, max_retries)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			run_id = excluded.run_id,
 			task_description = excluded.task_description,
@@ -714,7 +717,9 @@ func (s *Store) CreateAgent(agent *Agent) error {
 			validation_duration_ms = excluded.validation_duration_ms,
 			validation_error = excluded.validation_error,
 			validation_steps = excluded.validation_steps,
-			session_id = excluded.session_id
+			session_id = excluded.session_id,
+			attempt = excluded.attempt,
+			max_retries = excluded.max_retries
 	`
 	var finishedAt *int64
 	if agent.FinishedAt != nil {
@@ -759,6 +764,8 @@ func (s *Store) CreateAgent(agent *Agent) error {
 		nullString(agent.ValidationError),
 		nullString(agent.ValidationSteps),
 		nullString(agent.SessionID),
+		agent.Attempt,
+		agent.MaxRetries,
 	)
 	return err
 }
@@ -983,7 +990,7 @@ func (s *Store) UpdateAgentLifecycleState(agentID string, lifecycleState string)
 }
 
 // agentColumns lists all columns for agent queries
-const agentColumns = `id, run_id, task_id, task_title, task_description, status, lifecycle_state, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived, parent_agent_id, merge_status, merge_commits_applied, merge_had_conflict, merge_resolver_spawned, merge_error, validation_status, validation_duration_ms, validation_error, validation_steps, repair_attempts, last_repair_output, session_id`
+const agentColumns = `id, run_id, task_id, task_title, task_description, status, lifecycle_state, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived, parent_agent_id, merge_status, merge_commits_applied, merge_had_conflict, merge_resolver_spawned, merge_error, validation_status, validation_duration_ms, validation_error, validation_steps, repair_attempts, last_repair_output, session_id, attempt, max_retries`
 
 // agentColumnsWithPrefix returns the agent columns with a table alias prefix.
 // This is used for queries with JOINs to disambiguate column names.
@@ -997,7 +1004,7 @@ func agentColumnsWithPrefix(prefix string) string {
 		"merge_status", "merge_commits_applied", "merge_had_conflict",
 		"merge_resolver_spawned", "merge_error",
 		"validation_status", "validation_duration_ms", "validation_error", "validation_steps",
-		"repair_attempts", "last_repair_output", "session_id",
+		"repair_attempts", "last_repair_output", "session_id", "attempt", "max_retries",
 	}
 	result := make([]string, len(cols))
 	for i, col := range cols {
@@ -1599,6 +1606,7 @@ func (s *Store) scanAgent(row *sql.Row) (*Agent, error) {
 	var repairAttempts sql.NullInt64
 	var lastRepairOutput sql.NullString
 	var sessionID sql.NullString
+	var attempt, maxRetries sql.NullInt64
 
 	err := row.Scan(
 		&agent.ID,
@@ -1640,6 +1648,8 @@ func (s *Store) scanAgent(row *sql.Row) (*Agent, error) {
 		&repairAttempts,
 		&lastRepairOutput,
 		&sessionID,
+		&attempt,
+		&maxRetries,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -1679,6 +1689,8 @@ func (s *Store) scanAgent(row *sql.Row) (*Agent, error) {
 	agent.RepairAttempts = int(repairAttempts.Int64)
 	agent.LastRepairOutput = lastRepairOutput.String
 	agent.SessionID = sessionID.String
+	agent.Attempt = int(attempt.Int64)
+	agent.MaxRetries = int(maxRetries.Int64)
 
 	return &agent, nil
 }
@@ -1699,6 +1711,7 @@ func (s *Store) scanAgentFromRows(rows *sql.Rows) (*Agent, error) {
 	var repairAttempts sql.NullInt64
 	var lastRepairOutput sql.NullString
 	var sessionID sql.NullString
+	var attempt, maxRetries sql.NullInt64
 
 	err := rows.Scan(
 		&agent.ID,
@@ -1740,6 +1753,8 @@ func (s *Store) scanAgentFromRows(rows *sql.Rows) (*Agent, error) {
 		&repairAttempts,
 		&lastRepairOutput,
 		&sessionID,
+		&attempt,
+		&maxRetries,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan agent: %w", err)
@@ -1776,6 +1791,8 @@ func (s *Store) scanAgentFromRows(rows *sql.Rows) (*Agent, error) {
 	agent.RepairAttempts = int(repairAttempts.Int64)
 	agent.LastRepairOutput = lastRepairOutput.String
 	agent.SessionID = sessionID.String
+	agent.Attempt = int(attempt.Int64)
+	agent.MaxRetries = int(maxRetries.Int64)
 
 	return &agent, nil
 }

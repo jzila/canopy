@@ -272,6 +272,10 @@ func ConvertPersistenceAgentToState(pAgent *persistence.Agent) *AgentState {
 	// Restore session ID for claude --resume support
 	agent.SessionID = pAgent.SessionID
 
+	// Restore task retry tracking fields
+	agent.Attempt = pAgent.Attempt
+	agent.MaxRetries = pAgent.MaxRetries
+
 	// Restore lifecycle state - use persisted state if available, otherwise derive from legacy fields
 	lifecycleState := pAgent.LifecycleState
 	if lifecycleState == "" {
