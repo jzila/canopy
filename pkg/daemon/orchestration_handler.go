@@ -254,11 +254,18 @@ func (h *OrchestrationHandler) HandleDeactivate(w http.ResponseWriter, r *http.R
 
 	var err error
 	if req.RunID != "" {
-		// Deactivate by run ID
-		err = h.manager.Deactivate(req.RunID)
+		// Stop by run ID
+		err = h.manager.StopRun(req.RunID)
 	} else if req.RepoPath != "" {
-		// Deactivate by repo path
-		err = h.manager.DeactivateByRepo(req.RepoPath)
+		// Stop by repo path - find the active run and stop it
+		runState, getErr := h.manager.GetActiveRunForRepo(req.RepoPath)
+		if getErr != nil {
+			err = getErr
+		} else if runState == nil {
+			err = nil // No active run, treat as success
+		} else {
+			err = h.manager.StopRun(runState.ID)
+		}
 	} else {
 		writeJSON(w, http.StatusBadRequest, DeactivateResponse{
 			Success: false,
