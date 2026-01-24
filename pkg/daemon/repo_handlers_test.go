@@ -31,6 +31,10 @@ func (m *mockDaemon) ListRepositories() ([]repository.Repository, error) {
 	return repository.List()
 }
 
+func (m *mockDaemon) GetOrchestratorManager() *OrchestratorManager {
+	return nil
+}
+
 // mockRepoStore implements RepositoryStoreInterface for testing
 type mockRepoStore struct {
 	stats *persistence.AggregateStats

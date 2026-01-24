@@ -16,6 +16,7 @@ import (
 // DaemonInterface abstracts daemon operations for handlers
 type DaemonInterface interface {
 	GetActiveRepositoryID() string
+	GetOrchestratorManager() *OrchestratorManager
 }
 
 // MergeQueueInterface abstracts merge queue operations for handlers
@@ -177,12 +178,6 @@ func (h *Handler) HandleKillAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if scheduler is available
-	if h.scheduler == nil {
-		http.Error(w, "Scheduler not available", http.StatusNotImplemented)
-		return
-	}
-
 	// Check if agent exists
 	agent := h.state.GetAgent(agentID)
 	if agent == nil {
@@ -190,9 +185,27 @@ func (h *Handler) HandleKillAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Kill the agent via scheduler
-	if err := h.scheduler.Kill(agentID); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to kill agent: %v", err), http.StatusInternalServerError)
+	// Kill via OrchestratorManager (preferred) or legacy scheduler
+	var killErr error
+	if h.daemon != nil {
+		orchManager := h.daemon.GetOrchestratorManager()
+		if orchManager != nil {
+			killErr = orchManager.KillAgent(agentID)
+		} else if h.scheduler != nil {
+			killErr = h.scheduler.Kill(agentID)
+		} else {
+			http.Error(w, "No kill mechanism available", http.StatusNotImplemented)
+			return
+		}
+	} else if h.scheduler != nil {
+		killErr = h.scheduler.Kill(agentID)
+	} else {
+		http.Error(w, "No kill mechanism available", http.StatusNotImplemented)
+		return
+	}
+
+	if killErr != nil {
+		http.Error(w, fmt.Sprintf("Failed to kill agent: %v", killErr), http.StatusInternalServerError)
 		return
 	}
 
