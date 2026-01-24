@@ -84,7 +84,7 @@ const (
 Looking at `pkg/daemon/orchestrator_manager.go`, much of this is already in place:
 
 ```go
-type RepoOrchestrator struct {
+type OrchestratorLifecycle struct {
     RepoPath    string
     RepoID      string
     State       OrchestratorState  // idle | active | paused
@@ -96,7 +96,7 @@ type RepoOrchestrator struct {
 
 The `RegisterRepo()` function creates an always-running orchestrator:
 ```go
-func (m *OrchestratorManager) RegisterRepo(repoPath string, repoID string) (*RepoOrchestrator, error)
+func (m *OrchestratorManager) RegisterRepo(repoPath string, repoID string) (*OrchestratorLifecycle, error)
 ```
 
 ### What Needs to Change
@@ -165,7 +165,7 @@ The UI should present:
 
 #### Phase 1: Backend Alignment (Mostly Done)
 
-The backend already has `RepoOrchestrator` with state management. Remaining work:
+The backend already has `OrchestratorLifecycle` with state management. Remaining work:
 - [ ] Ensure rules engine persists in idle state (already implemented)
 - [ ] Add `GET /api/repos/:repo_id/orchestrator` endpoint
 - [ ] Add `PATCH /api/repos/:repo_id/orchestrator` for config updates
@@ -251,6 +251,6 @@ See child tasks of canopy-i4sm for implementation breakdown.
 
 ## References
 
-- `pkg/daemon/orchestrator_manager.go` - Current RepoOrchestrator implementation
+- `pkg/daemon/orchestrator_manager.go` - Current OrchestratorLifecycle implementation
 - `web/dashboard/src/stores/stateStore.ts` - Dashboard state model
 - `pkg/daemon/rules_handlers.go` - Rules API (already supports standalone engine)
