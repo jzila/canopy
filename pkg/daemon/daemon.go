@@ -58,6 +58,9 @@ type Daemon struct {
 	ipcServerFactory IPCServerFactory
 	httpServer       *Server
 	scheduler        SchedulerInterface
+
+	// Subscription cleanup
+	stateUnsubscribe func()
 }
 
 // NewDaemon creates a new daemon instance with the given configuration.
@@ -145,6 +148,14 @@ func (d *Daemon) Init() {
 	}
 	if d.state == nil {
 		d.state = NewRuntimeState()
+	}
+
+	// Subscribe RuntimeState to EventBus early, before state restoration.
+	// This ensures lifecycle callbacks can publish events during restoration.
+	// Without this, agents restored with non-terminal lifecycles would have
+	// callbacks that silently drop events because eventBus is nil.
+	if d.stateUnsubscribe == nil {
+		d.stateUnsubscribe = d.state.SubscribeToEventBus(d.eventBus)
 	}
 
 	// Initialize managers if nil (for backwards compatibility with tests)
@@ -358,11 +369,15 @@ func (d *Daemon) Start() error {
 	d.Init()
 	logging.Debug("eventbus initialized")
 	logging.Debug("runtime state initialized")
-
-	// Subscribe RuntimeState to EventBus to update from IPC events
-	unsubscribeState := d.state.SubscribeToEventBus(d.eventBus)
-	defer unsubscribeState()
 	logging.Debug("runtime state subscribed to eventbus")
+
+	// Ensure cleanup of state subscription when Start() returns
+	defer func() {
+		if d.stateUnsubscribe != nil {
+			d.stateUnsubscribe()
+			d.stateUnsubscribe = nil
+		}
+	}()
 
 	// Initialize HTTP server
 	d.httpServer = NewServerWithDaemon(
