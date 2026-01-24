@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -43,8 +44,11 @@ func setupTwoReposWithRules(t *testing.T) (*Daemon, *rules.Engine, *rules.Engine
 	rulesA := config.DefaultRulesSettings()
 	engineA := rules.NewEngine(&rulesA)
 
-	// Store in standalone engines cache - this is what GetOrCreateRulesEngineForRepo uses
-	daemon.orchManager.standaloneEngines.Store(repoAPath, engineA)
+	// Register repo A and set its engine
+	repoOrchA, _ := daemon.orchManager.RegisterRepo(repoAPath, "")
+	repoOrchA.mu.Lock()
+	repoOrchA.rulesEngine = engineA
+	repoOrchA.mu.Unlock()
 
 	// Repo B setup - use another unique temp dir
 	repoBPath := t.TempDir()
@@ -52,8 +56,11 @@ func setupTwoReposWithRules(t *testing.T) (*Daemon, *rules.Engine, *rules.Engine
 	rulesB := config.DefaultRulesSettings()
 	engineB := rules.NewEngine(&rulesB)
 
-	// Store in standalone engines cache
-	daemon.orchManager.standaloneEngines.Store(repoBPath, engineB)
+	// Register repo B and set its engine
+	repoOrchB, _ := daemon.orchManager.RegisterRepo(repoBPath, "")
+	repoOrchB.mu.Lock()
+	repoOrchB.rulesEngine = engineB
+	repoOrchB.mu.Unlock()
 
 	ctx := &twoRepoContext{
 		repoAPath: repoAPath,
@@ -551,40 +558,43 @@ func TestRulesIsolation_HTTPHandlerIsolation(t *testing.T) {
 		Action:    "allow",
 	})
 
-	// Test that we get different engines for different repo paths
-	retrievedEngineA, errMsg := handler.getEngine(createRequestWithRepoPath(ctx.repoAPath))
+	// Test that we get different RepoAPIs for different repo paths
+	apiA, errMsg := handler.getRepoAPI(createRequestWithRepoPath(ctx.repoAPath))
 	if errMsg != "" {
-		t.Fatalf("failed to get engine for repo A: %s", errMsg)
+		t.Fatalf("failed to get RepoAPI for repo A: %s", errMsg)
 	}
-	if retrievedEngineA != engineA {
-		t.Error("handler returned wrong engine for repo A")
+	if apiA == nil {
+		t.Fatal("handler returned nil RepoAPI for repo A")
 	}
 
-	retrievedEngineB, errMsg := handler.getEngine(createRequestWithRepoPath(ctx.repoBPath))
+	apiB, errMsg := handler.getRepoAPI(createRequestWithRepoPath(ctx.repoBPath))
 	if errMsg != "" {
-		t.Fatalf("failed to get engine for repo B: %s", errMsg)
+		t.Fatalf("failed to get RepoAPI for repo B: %s", errMsg)
 	}
-	if retrievedEngineB != engineB {
-		t.Error("handler returned wrong engine for repo B")
+	if apiB == nil {
+		t.Fatal("handler returned nil RepoAPI for repo B")
 	}
 
 	// Verify the rules are correctly isolated through handler retrieval
-	ruleA := retrievedEngineA.GetRule("handler-test-a")
-	ruleB := retrievedEngineB.GetRule("handler-test-b")
+	bgCtx := context.Background()
+	ruleA, _ := apiA.GetRule(bgCtx, "handler-test-a")
+	ruleB, _ := apiB.GetRule(bgCtx, "handler-test-b")
 
 	if ruleA == nil {
-		t.Error("expected handler-test-a in engine A")
+		t.Error("expected handler-test-a in API A")
 	}
 	if ruleB == nil {
-		t.Error("expected handler-test-b in engine B")
+		t.Error("expected handler-test-b in API B")
 	}
 
 	// Verify cross-contamination didn't happen
-	if retrievedEngineA.GetRule("handler-test-b") != nil {
-		t.Error("handler-test-b should not exist in engine A")
+	crossRuleA, _ := apiA.GetRule(bgCtx, "handler-test-b")
+	crossRuleB, _ := apiB.GetRule(bgCtx, "handler-test-a")
+	if crossRuleA != nil {
+		t.Error("handler-test-b should not exist in API A")
 	}
-	if retrievedEngineB.GetRule("handler-test-a") != nil {
-		t.Error("handler-test-a should not exist in engine B")
+	if crossRuleB != nil {
+		t.Error("handler-test-a should not exist in API B")
 	}
 }
 
@@ -606,9 +616,9 @@ func TestRulesIsolation_UnknownRepoReturnsNil(t *testing.T) {
 	}
 }
 
-// TestRulesIsolation_MultipleRunsSameRepoSequential verifies that when one
-// engine is replaced with another for the same repo, rules don't leak between them.
-// This simulates the behavior of sequential runs using standalone engines.
+// TestRulesIsolation_MultipleRunsSameRepoSequential verifies that when the
+// rules engine is invalidated and recreated, rules don't leak between them.
+// This simulates the behavior of sequential runs.
 func TestRulesIsolation_MultipleRunsSameRepoSequential(t *testing.T) {
 	eventBus := events.NewEventBus()
 	state := NewRuntimeState()
@@ -616,10 +626,13 @@ func TestRulesIsolation_MultipleRunsSameRepoSequential(t *testing.T) {
 
 	repoPath := t.TempDir()
 
-	// First "run" - store engine in standalone cache
+	// First "run" - register repo and set up engine
 	rules1 := config.DefaultRulesSettings()
 	engine1 := rules.NewEngine(&rules1)
-	manager.standaloneEngines.Store(repoPath, engine1)
+	repoOrch, _ := manager.RegisterRepo(repoPath, "")
+	repoOrch.mu.Lock()
+	repoOrch.rulesEngine = engine1
+	repoOrch.mu.Unlock()
 
 	// Add rules to first engine
 	_ = engine1.AddRuleWithValidation(config.CustomRule{
@@ -637,13 +650,15 @@ func TestRulesIsolation_MultipleRunsSameRepoSequential(t *testing.T) {
 		t.Error("expected run1-rule to exist in first engine")
 	}
 
-	// "End" first run by invalidating the cache
-	manager.InvalidateStandaloneEngine(repoPath)
+	// "End" first run by invalidating the rules engine
+	manager.InvalidateRulesEngine(repoPath)
 
 	// Second "run" with fresh engine
 	rules2 := config.DefaultRulesSettings()
 	engine2 := rules.NewEngine(&rules2)
-	manager.standaloneEngines.Store(repoPath, engine2)
+	repoOrch.mu.Lock()
+	repoOrch.rulesEngine = engine2
+	repoOrch.mu.Unlock()
 
 	// Verify second engine has no rules from first (clean engine)
 	engineRetrieved, err = manager.GetOrCreateRulesEngineForRepo(repoPath)

@@ -29,6 +29,11 @@ type MockClient struct {
 			TaskID string
 			Reason string
 		}
+		NeedsInput []struct {
+			TaskID    string
+			SessionID string
+			Reason    string
+		}
 		Create []struct {
 			Title    string
 			Priority int
@@ -59,6 +64,7 @@ type MockClient struct {
 		Start                 error
 		Done                  error
 		Fail                  error
+		NeedsInput            error
 		Create                error
 		CreateWithDescription error
 		AddDep                error
@@ -211,6 +217,29 @@ func (m *MockClient) Fail(_ context.Context, taskID string, reason string) error
 	return nil
 }
 
+// NeedsInput marks a task as needing user input
+func (m *MockClient) NeedsInput(_ context.Context, taskID string, sessionID string, reason string) error {
+	m.mu.Lock()
+	m.Calls.NeedsInput = append(m.Calls.NeedsInput, struct {
+		TaskID    string
+		SessionID string
+		Reason    string
+	}{taskID, sessionID, reason})
+	m.mu.Unlock()
+
+	if m.Errors.NeedsInput != nil {
+		return m.Errors.NeedsInput
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if task, ok := m.Tasks[taskID]; ok {
+		task.Status = "needs-input"
+	}
+	return nil
+}
+
 // Create creates a new task
 func (m *MockClient) Create(_ context.Context, title string, priority int) (string, error) {
 	m.mu.Lock()
@@ -357,6 +386,7 @@ func (m *MockClient) Reset() {
 	m.Calls.Start = nil
 	m.Calls.Done = nil
 	m.Calls.Fail = nil
+	m.Calls.NeedsInput = nil
 	m.Calls.Create = nil
 	m.Calls.CreateWithDescription = nil
 	m.Calls.AddDep = nil
@@ -371,6 +401,7 @@ func (m *MockClient) Reset() {
 	m.Errors.Start = nil
 	m.Errors.Done = nil
 	m.Errors.Fail = nil
+	m.Errors.NeedsInput = nil
 	m.Errors.Create = nil
 	m.Errors.CreateWithDescription = nil
 	m.Errors.AddDep = nil

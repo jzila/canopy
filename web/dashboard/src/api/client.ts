@@ -179,11 +179,11 @@ export interface RepositoryListResponse {
 }
 
 export async function getRepositories(): Promise<RepositoryListResponse> {
-  return fetchJson<RepositoryListResponse>('/api/repositories');
+  return fetchJson<RepositoryListResponse>('/api/daemon/repositories');
 }
 
 export async function activateRepository(repoId: string): Promise<Repository> {
-  return fetchJson<Repository>(`/api/repositories/${repoId}/activate`, {
+  return fetchJson<Repository>(`/api/daemon/repositories/${repoId}/activate`, {
     method: 'POST',
   });
 }
@@ -274,7 +274,7 @@ export async function getRuns(filter?: RunListFilter): Promise<RunListResponse> 
   if (filter?.offset) params.set('offset', String(filter.offset));
 
   const queryString = params.toString();
-  const endpoint = queryString ? `/api/runs?${queryString}` : '/api/runs';
+  const endpoint = queryString ? `/api/daemon/runs?${queryString}` : '/api/daemon/runs';
   return fetchJson<RunListResponse>(endpoint);
 }
 
@@ -423,38 +423,39 @@ export interface SaveRulesResponse {
 }
 
 // Rules API functions
+// New URL structure: /api/repos/:repo_id/rules/*
 export async function getRules(repoPath: string): Promise<RulesResponse> {
-  return fetchJson<RulesResponse>(`/api/rules?repo_path=${encodeURIComponent(repoPath)}`);
+  return fetchJson<RulesResponse>(`/api/repos/${encodeURIComponent(repoPath)}/rules`);
 }
 
 export async function addRule(repoPath: string, request: AddRuleRequest): Promise<AddRuleResponse> {
-  return fetchJson<AddRuleResponse>(`/api/rules?repo_path=${encodeURIComponent(repoPath)}`, {
+  return fetchJson<AddRuleResponse>(`/api/repos/${encodeURIComponent(repoPath)}/rules`, {
     method: 'POST',
     body: JSON.stringify(request),
   });
 }
 
 export async function updateRule(repoPath: string, name: string, request: UpdateRuleRequest): Promise<UpdateRuleResponse> {
-  return fetchJson<UpdateRuleResponse>(`/api/rules/${encodeURIComponent(name)}?repo_path=${encodeURIComponent(repoPath)}`, {
+  return fetchJson<UpdateRuleResponse>(`/api/repos/${encodeURIComponent(repoPath)}/rules/${encodeURIComponent(name)}`, {
     method: 'PATCH',
     body: JSON.stringify(request),
   });
 }
 
 export async function deleteRule(repoPath: string, name: string): Promise<DeleteRuleResponse> {
-  return fetchJson<DeleteRuleResponse>(`/api/rules/${encodeURIComponent(name)}?repo_path=${encodeURIComponent(repoPath)}`, {
+  return fetchJson<DeleteRuleResponse>(`/api/repos/${encodeURIComponent(repoPath)}/rules/${encodeURIComponent(name)}`, {
     method: 'DELETE',
   });
 }
 
 export async function saveRules(repoPath: string, request: SaveRulesRequest): Promise<SaveRulesResponse> {
-  return fetchJson<SaveRulesResponse>(`/api/rules/save?repo_path=${encodeURIComponent(repoPath)}`, {
+  return fetchJson<SaveRulesResponse>(`/api/repos/${encodeURIComponent(repoPath)}/rules/save`, {
     method: 'POST',
     body: JSON.stringify(request),
   });
 }
 
-// ReorderRuleRequest for POST /api/rules/:name/reorder
+// ReorderRuleRequest for POST /api/repos/:repo_id/rules/:name/reorder
 export interface ReorderRuleRequest {
   position: number;
 }
@@ -467,10 +468,114 @@ export interface ReorderRuleResponse {
 }
 
 export async function reorderRule(repoPath: string, name: string, position: number): Promise<ReorderRuleResponse> {
-  return fetchJson<ReorderRuleResponse>(`/api/rules/${encodeURIComponent(name)}/reorder?repo_path=${encodeURIComponent(repoPath)}`, {
+  return fetchJson<ReorderRuleResponse>(`/api/repos/${encodeURIComponent(repoPath)}/rules/${encodeURIComponent(name)}/reorder`, {
     method: 'POST',
     body: JSON.stringify({ position }),
   });
+}
+
+// Configuration API types - matches Go backend pkg/config, pkg/sandbox, pkg/validation
+
+// SandboxConfig from pkg/sandbox/config.go
+export interface SandboxSettings {
+  enabled: boolean;
+  network: 'allow' | 'deny' | 'proxy';
+}
+
+export interface ResourceSettings {
+  max_memory: string;
+  max_processes: number;
+  max_open_files: number;
+  max_disk: string;
+  timeout: string;
+}
+
+export interface ExtraPathSettings {
+  read_only?: string[];
+  copy_configs?: string[];
+}
+
+export interface PathSettings {
+  read_only?: string[];
+  copy_configs?: string[];
+  cache_mounts?: string[];
+  extra?: ExtraPathSettings;
+}
+
+export interface SecuritySettings {
+  blocked?: string[];
+}
+
+export interface SandboxConfig {
+  sandbox: SandboxSettings;
+  resources: ResourceSettings;
+  paths: PathSettings;
+  security: SecuritySettings;
+}
+
+export interface SandboxConfigResponse {
+  config: SandboxConfig | null;
+  error?: string;
+}
+
+// ValidationConfig from pkg/validation/config.go
+export interface ValidationStep {
+  name: string;
+  command: string;
+  timeout?: string;
+  required: boolean;
+}
+
+export interface ValidationSettings {
+  enabled: boolean;
+  strict: boolean;
+  timeout: string;
+  max_repair_attempts: number;
+  steps: ValidationStep[];
+}
+
+export interface ValidationConfig {
+  validation: ValidationSettings;
+}
+
+export interface ValidationConfigResponse {
+  config: ValidationConfig | null;
+  error?: string;
+}
+
+// RulesSettings from pkg/config/config.go
+export interface RulesSettings {
+  priority_min: number;
+  priority_max: number;
+  types?: string[];
+  exclude_types?: string[];
+  labels?: string[];
+  exclude_labels?: string[];
+  assignee?: string;
+  stop_when_empty?: boolean;
+  max_concurrent?: number;
+  max_concurrent_per_type?: Record<string, number>;
+  max_concurrent_per_label?: Record<string, number>;
+}
+
+export interface RulesSettingsResponse {
+  settings: RulesSettings | null;
+  error?: string;
+}
+
+// Config API functions
+// New URL structure: /api/repos/:repo_id/config/*
+
+export async function getSandboxConfig(repoPath: string): Promise<SandboxConfigResponse> {
+  return fetchJson<SandboxConfigResponse>(`/api/repos/${encodeURIComponent(repoPath)}/config/sandbox`);
+}
+
+export async function getValidationConfig(repoPath: string): Promise<ValidationConfigResponse> {
+  return fetchJson<ValidationConfigResponse>(`/api/repos/${encodeURIComponent(repoPath)}/config/validation`);
+}
+
+export async function getRulesSettings(repoPath: string): Promise<RulesSettingsResponse> {
+  return fetchJson<RulesSettingsResponse>(`/api/repos/${encodeURIComponent(repoPath)}/config/rules`);
 }
 
 export { ApiError };

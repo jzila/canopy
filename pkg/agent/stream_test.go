@@ -237,3 +237,127 @@ func TestFilterToolUse(t *testing.T) {
 		})
 	}
 }
+
+func TestIsInteractiveTool(t *testing.T) {
+	tests := []struct {
+		toolName string
+		expected bool
+	}{
+		{"AskUserQuestion", true},
+		{"Read", false},
+		{"Write", false},
+		{"Bash", false},
+		{"Grep", false},
+		{"Edit", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.toolName, func(t *testing.T) {
+			result := IsInteractiveTool(tt.toolName)
+			if result != tt.expected {
+				t.Errorf("IsInteractiveTool(%q) = %v, want %v", tt.toolName, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestCheckForInteractiveTool(t *testing.T) {
+	t.Run("nil event returns empty", func(t *testing.T) {
+		result := CheckForInteractiveTool(nil)
+		if result != "" {
+			t.Errorf("Expected empty string for nil event, got %q", result)
+		}
+	})
+
+	t.Run("non-assistant event returns empty", func(t *testing.T) {
+		event := &StreamEvent{Type: "system"}
+		result := CheckForInteractiveTool(event)
+		if result != "" {
+			t.Errorf("Expected empty string for system event, got %q", result)
+		}
+	})
+
+	t.Run("assistant event without message returns empty", func(t *testing.T) {
+		event := &StreamEvent{Type: "assistant"}
+		result := CheckForInteractiveTool(event)
+		if result != "" {
+			t.Errorf("Expected empty string for event without message, got %q", result)
+		}
+	})
+
+	t.Run("assistant event with Read tool returns empty", func(t *testing.T) {
+		content := `[{"type":"tool_use","name":"Read","input":{"file_path":"/tmp/test.txt"}}]`
+		event := &StreamEvent{
+			Type: "assistant",
+			Message: &StreamMessage{
+				Role:    "assistant",
+				Content: json.RawMessage(content),
+			},
+		}
+		result := CheckForInteractiveTool(event)
+		if result != "" {
+			t.Errorf("Expected empty string for Read tool, got %q", result)
+		}
+	})
+
+	t.Run("assistant event with AskUserQuestion returns tool name", func(t *testing.T) {
+		content := `[{"type":"tool_use","name":"AskUserQuestion","input":{"questions":[{"question":"What?"}]}}]`
+		event := &StreamEvent{
+			Type: "assistant",
+			Message: &StreamMessage{
+				Role:    "assistant",
+				Content: json.RawMessage(content),
+			},
+		}
+		result := CheckForInteractiveTool(event)
+		if result != "AskUserQuestion" {
+			t.Errorf("Expected 'AskUserQuestion', got %q", result)
+		}
+	})
+
+	t.Run("assistant event with text content returns empty", func(t *testing.T) {
+		content := `[{"type":"text","text":"Hello world"}]`
+		event := &StreamEvent{
+			Type: "assistant",
+			Message: &StreamMessage{
+				Role:    "assistant",
+				Content: json.RawMessage(content),
+			},
+		}
+		result := CheckForInteractiveTool(event)
+		if result != "" {
+			t.Errorf("Expected empty string for text content, got %q", result)
+		}
+	})
+
+	t.Run("assistant event with multiple tools returns first interactive", func(t *testing.T) {
+		content := `[{"type":"tool_use","name":"Read","input":{}},{"type":"tool_use","name":"AskUserQuestion","input":{}}]`
+		event := &StreamEvent{
+			Type: "assistant",
+			Message: &StreamMessage{
+				Role:    "assistant",
+				Content: json.RawMessage(content),
+			},
+		}
+		result := CheckForInteractiveTool(event)
+		if result != "AskUserQuestion" {
+			t.Errorf("Expected 'AskUserQuestion', got %q", result)
+		}
+	})
+
+	t.Run("assistant event with malformed content returns empty", func(t *testing.T) {
+		content := `{"not":"an array"}`
+		event := &StreamEvent{
+			Type: "assistant",
+			Message: &StreamMessage{
+				Role:    "assistant",
+				Content: json.RawMessage(content),
+			},
+		}
+		result := CheckForInteractiveTool(event)
+		if result != "" {
+			t.Errorf("Expected empty string for malformed content, got %q", result)
+		}
+	})
+}

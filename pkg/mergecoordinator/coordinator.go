@@ -221,6 +221,8 @@ func (mc *MergeCoordinator) EnqueueMerge(ctx context.Context, result *agent.Resu
 
 // HandleFailure handles a failed task - cleans up and marks failed in beads.
 // Failed tasks don't need merge since there are no changes to merge.
+// If the task failed because it's waiting for user input (InputBlocked), it's
+// marked as needs-input instead of failed to prevent scheduler re-pickup.
 func (mc *MergeCoordinator) HandleFailure(ctx context.Context, taskID string, result *agent.Result, errMsg string) {
 	// Get task title from cache before cleanup for IPC notification
 	var taskTitle string
@@ -234,6 +236,24 @@ func (mc *MergeCoordinator) HandleFailure(ctx context.Context, taskID string, re
 
 	// Clean up overlay for failed task
 	mc.cleanup(ctx, result)
+
+	// Check if this is an input-blocked failure (agent paused waiting for user input)
+	if result != nil && result.InputBlocked {
+		// Get session ID for resume support
+		sessionID := ""
+		if result.Output != nil {
+			sessionID = result.Output.SessionID
+		}
+
+		// Mark task as needs-input instead of failed
+		if err := mc.beadsClient.NeedsInput(ctx, taskID, sessionID, errMsg); err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR: failed to mark task %s as needs-input: %v\n", taskID, err)
+		}
+
+		// Send task status update via IPC with needs-input status
+		mc.SendTaskUpdated(taskID, taskTitle, "needs-input")
+		return
+	}
 
 	// Mark task as failed in beads
 	if err := mc.beadsClient.Fail(ctx, taskID, errMsg); err != nil {

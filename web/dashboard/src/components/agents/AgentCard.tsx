@@ -256,7 +256,7 @@ export const AgentCard: React.FC<AgentCardProps> = ({
       </div>
 
       {/* Merge and validation status indicators */}
-      {(agent.merge_status || agent.validation_status) && (
+      {hasWorkerChainData && (
         <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
           {/* Merge status */}
           {agent.merge_status === 'merged' || agent.merge_status === 'merged_needs_repair' ? (

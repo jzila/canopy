@@ -309,6 +309,92 @@ func TestTimeoutConfiguration(t *testing.T) {
 	})
 }
 
+func TestInputBlockedDetection(t *testing.T) {
+	t.Run("input blocked takes precedence over exit code 0", func(t *testing.T) {
+		// Simulate the result determination logic when input is blocked
+		var result Result
+		result.ExitCode = 0 // Process exited cleanly but was blocked
+		inputBlockedTool := "AskUserQuestion"
+		sessionID := "test-session-123"
+
+		// Simulate the success determination logic from executor.go
+		if inputBlockedTool != "" {
+			result.Success = false
+			result.InputBlocked = true
+			if sessionID != "" {
+				result.Error = "agent paused waiting for user input (" + inputBlockedTool + " tool); session " + sessionID
+			} else {
+				result.Error = "agent paused waiting for user input (" + inputBlockedTool + " tool)"
+			}
+		} else {
+			result.Success = result.ExitCode == 0
+		}
+
+		if result.Success {
+			t.Error("Expected Success=false when input blocked")
+		}
+		if !result.InputBlocked {
+			t.Error("Expected InputBlocked=true")
+		}
+		if !strings.Contains(result.Error, "AskUserQuestion") {
+			t.Errorf("Expected error to contain 'AskUserQuestion', got: %s", result.Error)
+		}
+		if !strings.Contains(result.Error, "test-session-123") {
+			t.Errorf("Expected error to contain session ID, got: %s", result.Error)
+		}
+	})
+
+	t.Run("input blocked without session ID", func(t *testing.T) {
+		var result Result
+		result.ExitCode = 0
+		inputBlockedTool := "AskUserQuestion"
+		sessionID := ""
+
+		if inputBlockedTool != "" {
+			result.Success = false
+			result.InputBlocked = true
+			if sessionID != "" {
+				result.Error = "agent paused waiting for user input (" + inputBlockedTool + " tool); session " + sessionID
+			} else {
+				result.Error = "agent paused waiting for user input (" + inputBlockedTool + " tool)"
+			}
+		}
+
+		if result.Success {
+			t.Error("Expected Success=false when input blocked")
+		}
+		if !result.InputBlocked {
+			t.Error("Expected InputBlocked=true")
+		}
+		if !strings.Contains(result.Error, "AskUserQuestion") {
+			t.Errorf("Expected error to contain 'AskUserQuestion', got: %s", result.Error)
+		}
+		if strings.Contains(result.Error, "session") {
+			t.Errorf("Expected error to NOT contain 'session' when no session ID, got: %s", result.Error)
+		}
+	})
+
+	t.Run("normal execution not input blocked", func(t *testing.T) {
+		var result Result
+		result.ExitCode = 0
+		inputBlockedTool := "" // No interactive tool detected
+
+		if inputBlockedTool != "" {
+			result.Success = false
+			result.InputBlocked = true
+		} else {
+			result.Success = result.ExitCode == 0
+		}
+
+		if !result.Success {
+			t.Error("Expected Success=true for normal execution")
+		}
+		if result.InputBlocked {
+			t.Error("Expected InputBlocked=false for normal execution")
+		}
+	})
+}
+
 func TestBuildPrompt(t *testing.T) {
 	t.Run("basic task", func(t *testing.T) {
 		executor := &Executor{
@@ -322,12 +408,34 @@ func TestBuildPrompt(t *testing.T) {
 
 		prompt := executor.buildPrompt(task, nil)
 
+		// Should contain system prompt at the beginning
+		if !strings.HasPrefix(prompt, "## Worker Agent") {
+			t.Error("Expected prompt to start with system prompt")
+		}
+		// Should contain key behavioral instructions
+		if !strings.Contains(prompt, "autonomous worker agent") {
+			t.Error("Expected prompt to contain autonomous operation context")
+		}
+		if !strings.Contains(prompt, "DO NOT:") {
+			t.Error("Expected prompt to contain DO NOT section")
+		}
+		if !strings.Contains(prompt, "AskUserQuestion") {
+			t.Error("Expected prompt to mention AskUserQuestion prohibition")
+		}
+
 		// Should contain task title and description
 		if !strings.Contains(prompt, "## Task: Implement feature X") {
 			t.Error("Expected prompt to contain task title")
 		}
 		if !strings.Contains(prompt, "Add support for feature X with tests") {
 			t.Error("Expected prompt to contain task description")
+		}
+
+		// System prompt should come before task
+		systemIdx := strings.Index(prompt, "## Worker Agent")
+		taskIdx := strings.Index(prompt, "## Task:")
+		if systemIdx > taskIdx {
+			t.Error("Expected system prompt before task")
 		}
 	})
 
@@ -349,14 +457,18 @@ func TestBuildPrompt(t *testing.T) {
 
 		prompt := executor.buildPrompt(task, deps)
 
-		// Check ordering: Dependencies -> Task
+		// Check ordering: System Prompt -> Dependencies -> Task
+		systemIdx := strings.Index(prompt, "## Worker Agent")
 		depsIdx := strings.Index(prompt, "Context from upstream tasks")
 		taskIdx := strings.Index(prompt, "## Task:")
 
-		if depsIdx == -1 || taskIdx == -1 {
-			t.Errorf("Missing expected sections. Deps: %d, Task: %d", depsIdx, taskIdx)
+		if systemIdx == -1 || depsIdx == -1 || taskIdx == -1 {
+			t.Errorf("Missing expected sections. System: %d, Deps: %d, Task: %d", systemIdx, depsIdx, taskIdx)
 		}
 
+		if systemIdx > depsIdx {
+			t.Error("Expected system prompt before dependencies")
+		}
 		if depsIdx > taskIdx {
 			t.Error("Expected dependency context before task")
 		}

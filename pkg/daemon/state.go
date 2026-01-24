@@ -504,7 +504,7 @@ func (a *AgentState) GetSnapshot() AgentState {
 type TaskState struct {
 	ID           string   `json:"id"`
 	Title        string   `json:"title"`
-	Status       string   `json:"status"`   // ready, in_progress, completed, failed
+	Status       string   `json:"status"`   // ready, in_progress, completed, failed, needs-input
 	Type         string   `json:"type,omitempty"` // Task type (task, bug, feature, etc.)
 	AgentID      string   `json:"agent_id"` // ID of agent executing this task
 	Priority     int      `json:"priority"`

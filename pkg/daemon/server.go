@@ -17,19 +17,20 @@ import (
 
 // Server manages the HTTP server that serves the web UI and REST API
 type Server struct {
-	port         int
-	httpServer   *http.Server
-	hub          *Hub
-	handler      *Handler
-	runsHandler  *RunsHandler
-	repoHandler  *RepoHandler
-	beadsHandler *BeadsHandler
-	orchHandler  *OrchestrationHandler
-	rulesHandler *RulesHandler
-	state        *RuntimeState
-	eventBus     *EventBus
-	upgrader     websocket.Upgrader
-	daemon       *Daemon
+	port          int
+	httpServer    *http.Server
+	hub           *Hub
+	handler       *Handler
+	runsHandler   *RunsHandler
+	repoHandler   *RepoHandler
+	beadsHandler  *BeadsHandler
+	orchHandler   *OrchestrationHandler
+	rulesHandler  *RulesHandler
+	configHandler *ConfigHandler
+	state         *RuntimeState
+	eventBus      *EventBus
+	upgrader      websocket.Upgrader
+	daemon        *Daemon
 }
 
 // NewServer creates a new HTTP server instance
@@ -98,6 +99,12 @@ func NewServerWithDaemon(port int, state *RuntimeState, eventBus *EventBus, sche
 		rulesHandler = NewRulesHandler(daemon)
 	}
 
+	// Create config handler for configuration queries (requires daemon reference)
+	var configHandler *ConfigHandler
+	if daemon != nil {
+		configHandler = NewConfigHandler(daemon)
+	}
+
 	// Configure WebSocket upgrader
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:  1024,
@@ -109,18 +116,19 @@ func NewServerWithDaemon(port int, state *RuntimeState, eventBus *EventBus, sche
 	}
 
 	return &Server{
-		port:         port,
-		hub:          hub,
-		handler:      handler,
-		runsHandler:  runsHandler,
-		repoHandler:  repoHandler,
-		beadsHandler: beadsHandler,
-		orchHandler:  orchHandler,
-		rulesHandler: rulesHandler,
-		state:        state,
-		eventBus:     eventBus,
-		upgrader:     upgrader,
-		daemon:       daemon,
+		port:          port,
+		hub:           hub,
+		handler:       handler,
+		runsHandler:   runsHandler,
+		repoHandler:   repoHandler,
+		beadsHandler:  beadsHandler,
+		orchHandler:   orchHandler,
+		rulesHandler:  rulesHandler,
+		configHandler: configHandler,
+		state:         state,
+		eventBus:      eventBus,
+		upgrader:      upgrader,
+		daemon:        daemon,
 	}
 }
 
@@ -193,23 +201,37 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/merge-queue", s.handler.HandleGetMergeQueue)
 
 	// REST API routes - historical run data (persistence)
-	mux.HandleFunc("/api/runs", s.handleRunsRoutes)       // Handles GET /api/runs
-	mux.HandleFunc("/api/runs/", s.handleRunsRoutes)      // Handles /api/runs/:id and /api/runs/:id/agents
+	// New: /api/daemon/runs (cross-repo run listing)
+	mux.HandleFunc("/api/daemon/runs", s.handleRunsRoutes)  // Handles GET /api/daemon/runs
+	mux.HandleFunc("/api/daemon/runs/", s.handleRunsRoutes) // Handles /api/daemon/runs/:id and /api/daemon/runs/:id/agents
+	// Legacy routes (redirect to new paths)
+	mux.HandleFunc("/api/runs", s.handleLegacyRunsRedirect)  // Redirects to /api/daemon/runs
+	mux.HandleFunc("/api/runs/", s.handleLegacyRunsRedirect) // Redirects to /api/daemon/runs/:id
 	mux.HandleFunc("/api/stats/history", s.handleStatsHistory) // Aggregate historical stats
 
 	// REST API routes - repository management
-	mux.HandleFunc("/api/repositories", s.handleRepositoriesRoutes)  // Handles GET /api/repositories
-	mux.HandleFunc("/api/repositories/", s.handleRepositoriesRoutes) // Handles /api/repositories/:id and /api/repositories/:id/activate
+	// New: /api/daemon/repositories (daemon-owned)
+	mux.HandleFunc("/api/daemon/repositories", s.handleRepositoriesRoutes)  // Handles GET /api/daemon/repositories
+	mux.HandleFunc("/api/daemon/repositories/", s.handleRepositoriesRoutes) // Handles /api/daemon/repositories/:id and activate
+	// Legacy routes (redirect to new paths)
+	mux.HandleFunc("/api/repositories", s.handleLegacyRepositoriesRedirect)  // Redirects to /api/daemon/repositories
+	mux.HandleFunc("/api/repositories/", s.handleLegacyRepositoriesRedirect) // Redirects to /api/daemon/repositories/:id
 
 	// REST API routes - beads operations
 	mux.HandleFunc("/api/beads/sync", s.handleBeadsSyncRoute) // Handles POST /api/beads/sync
 
 	// REST API routes - orchestration control (daemon-owned runs)
-	mux.HandleFunc("/api/orchestrator/", s.handleOrchestratorRoutes) // Handles all /api/orchestrator/* routes
+	// New: /api/runs/:run_id/... for run-scoped operations
+	mux.HandleFunc("/api/orchestrator/", s.handleOrchestratorRoutes) // Legacy: handles all /api/orchestrator/* routes
 
-	// REST API routes - rules management
-	mux.HandleFunc("/api/rules", s.handleRulesRoutes)  // Handles GET/POST /api/rules
-	mux.HandleFunc("/api/rules/", s.handleRulesRoutes) // Handles /api/rules/:name and /api/rules/config
+	// REST API routes - repo-scoped rules management
+	// New: /api/repos/:repo_id/rules
+	mux.HandleFunc("/api/repos/", s.handleReposRoutes) // Handles /api/repos/:repo_id/rules and /api/repos/:repo_id/config/*
+	// Legacy rules routes (redirect to new paths)
+	mux.HandleFunc("/api/rules", s.handleLegacyRulesRedirect)  // Redirects to /api/repos/:repo_id/rules
+	mux.HandleFunc("/api/rules/", s.handleLegacyRulesRedirect) // Redirects to /api/repos/:repo_id/rules/:name
+	// Legacy config routes (redirect to new paths)
+	mux.HandleFunc("/api/config/", s.handleLegacyConfigRedirect) // Redirects to /api/repos/:repo_id/config/*
 
 	// Prometheus metrics endpoint
 	mux.Handle("/metrics", promhttp.Handler())
@@ -323,6 +345,7 @@ func (s *Server) handleTasksRoutes(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRunsRoutes routes run history requests
+// Handles both new /api/daemon/runs and normalized paths from legacy redirects
 func (s *Server) handleRunsRoutes(w http.ResponseWriter, r *http.Request) {
 	if s.runsHandler == nil {
 		http.Error(w, "Persistence not enabled", http.StatusNotImplemented)
@@ -331,38 +354,48 @@ func (s *Server) handleRunsRoutes(w http.ResponseWriter, r *http.Request) {
 
 	path := r.URL.Path
 
-	// GET /api/runs - list runs
-	if path == "/api/runs" {
+	// GET /api/daemon/runs - list runs
+	if path == "/api/daemon/runs" {
 		s.runsHandler.HandleListRuns(w, r)
 		return
 	}
 
-	// Parse run ID from path: /api/runs/:id or /api/runs/:id/agents
+	// Parse run ID from path: /api/daemon/runs/:id or /api/daemon/runs/:id/agents
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) < 3 || parts[0] != "api" || parts[1] != "runs" {
+	if len(parts) < 4 || parts[0] != "api" || parts[1] != "daemon" || parts[2] != "runs" {
 		http.Error(w, "Invalid path", http.StatusBadRequest)
 		return
 	}
 
-	runID := parts[2]
+	runID := parts[3]
 	if runID == "" {
 		http.Error(w, "Run ID required", http.StatusBadRequest)
 		return
 	}
 
-	// GET /api/runs/:id/agents
-	if len(parts) == 4 && parts[3] == "agents" {
+	// GET /api/daemon/runs/:id/agents
+	if len(parts) == 5 && parts[4] == "agents" {
 		s.runsHandler.HandleGetRunAgents(w, r, runID)
 		return
 	}
 
-	// GET /api/runs/:id
-	if len(parts) == 3 {
+	// GET /api/daemon/runs/:id
+	if len(parts) == 4 {
 		s.runsHandler.HandleGetRun(w, r, runID)
 		return
 	}
 
 	http.Error(w, "Not found", http.StatusNotFound)
+}
+
+// handleLegacyRunsRedirect redirects legacy /api/runs/* to /api/daemon/runs/*
+func (s *Server) handleLegacyRunsRedirect(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+	newPath := strings.Replace(path, "/api/runs", "/api/daemon/runs", 1)
+	if r.URL.RawQuery != "" {
+		newPath += "?" + r.URL.RawQuery
+	}
+	http.Redirect(w, r, newPath, http.StatusTemporaryRedirect)
 }
 
 // handleStatsHistory handles aggregate historical statistics
@@ -392,33 +425,14 @@ func (s *Server) handleOrchestratorRoutes(w http.ResponseWriter, r *http.Request
 	s.orchHandler.RouteOrchestrator(w, r)
 }
 
-// handleRulesRoutes routes rules management requests
-func (s *Server) handleRulesRoutes(w http.ResponseWriter, r *http.Request) {
-	if s.rulesHandler == nil {
-		http.Error(w, "Rules management not available", http.StatusServiceUnavailable)
-		return
-	}
-	s.rulesHandler.RouteRules(w, r)
-}
-
-// handleRepositoriesRoutes routes repository management requests
-func (s *Server) handleRepositoriesRoutes(w http.ResponseWriter, r *http.Request) {
-	if s.repoHandler == nil {
-		http.Error(w, "Repository management not available", http.StatusNotImplemented)
-		return
-	}
-
+// handleReposRoutes routes repo-scoped requests for rules and config
+// Handles /api/repos/:repo_id/rules/* and /api/repos/:repo_id/config/*
+func (s *Server) handleReposRoutes(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 
-	// GET /api/repositories - list all repositories
-	if path == "/api/repositories" {
-		s.repoHandler.HandleListRepositories(w, r)
-		return
-	}
-
-	// Parse repository ID from path: /api/repositories/:id or /api/repositories/:id/activate
+	// Parse: /api/repos/:repo_id/...
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) < 3 || parts[0] != "api" || parts[1] != "repositories" {
+	if len(parts) < 4 || parts[0] != "api" || parts[1] != "repos" {
 		http.Error(w, "Invalid path", http.StatusBadRequest)
 		return
 	}
@@ -429,19 +443,142 @@ func (s *Server) handleRepositoriesRoutes(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// POST /api/repositories/:id/activate
-	if len(parts) == 4 && parts[3] == "activate" {
+	// Inject repo_id as query parameter for downstream handlers
+	q := r.URL.Query()
+	q.Set("repo_id", repoID)
+	r.URL.RawQuery = q.Encode()
+
+	resource := parts[3]
+	switch resource {
+	case "rules":
+		if s.rulesHandler == nil {
+			http.Error(w, "Rules management not available", http.StatusServiceUnavailable)
+			return
+		}
+		s.rulesHandler.RouteRepoRules(w, r, parts[4:])
+	case "config":
+		if s.configHandler == nil {
+			http.Error(w, "Configuration queries not available", http.StatusServiceUnavailable)
+			return
+		}
+		s.configHandler.RouteRepoConfig(w, r, parts[4:])
+	default:
+		http.Error(w, "Not found", http.StatusNotFound)
+	}
+}
+
+// handleLegacyRulesRedirect redirects legacy /api/rules?repo_path=X to /api/repos/:repo_id/rules
+func (s *Server) handleLegacyRulesRedirect(w http.ResponseWriter, r *http.Request) {
+	repoPath := r.URL.Query().Get("repo_path")
+	if repoPath == "" {
+		http.Error(w, "repo_path query parameter required", http.StatusBadRequest)
+		return
+	}
+
+	// Use repo_path as repo_id (URL-encoded for path safety)
+	repoID := repoPath // The repo path becomes the repo ID
+	path := r.URL.Path
+
+	// Transform: /api/rules -> /api/repos/:repo_id/rules
+	// Transform: /api/rules/:name -> /api/repos/:repo_id/rules/:name
+	// Transform: /api/rules/:name/persist -> /api/repos/:repo_id/rules/:name/persist
+	var newPath string
+	if path == "/api/rules" {
+		newPath = "/api/repos/" + repoID + "/rules"
+	} else {
+		// Extract the suffix after /api/rules/
+		suffix := strings.TrimPrefix(path, "/api/rules")
+		newPath = "/api/repos/" + repoID + "/rules" + suffix
+	}
+
+	// Remove repo_path from query params, keep others
+	q := r.URL.Query()
+	q.Del("repo_path")
+	if len(q) > 0 {
+		newPath += "?" + q.Encode()
+	}
+
+	http.Redirect(w, r, newPath, http.StatusTemporaryRedirect)
+}
+
+// handleLegacyConfigRedirect redirects legacy /api/config/*?repo_path=X to /api/repos/:repo_id/config/*
+func (s *Server) handleLegacyConfigRedirect(w http.ResponseWriter, r *http.Request) {
+	repoPath := r.URL.Query().Get("repo_path")
+	if repoPath == "" {
+		http.Error(w, "repo_path query parameter required", http.StatusBadRequest)
+		return
+	}
+
+	// Use repo_path as repo_id
+	repoID := repoPath
+	path := r.URL.Path
+
+	// Transform: /api/config/sandbox -> /api/repos/:repo_id/config/sandbox
+	suffix := strings.TrimPrefix(path, "/api/config")
+	newPath := "/api/repos/" + repoID + "/config" + suffix
+
+	// Remove repo_path from query params, keep others
+	q := r.URL.Query()
+	q.Del("repo_path")
+	if len(q) > 0 {
+		newPath += "?" + q.Encode()
+	}
+
+	http.Redirect(w, r, newPath, http.StatusTemporaryRedirect)
+}
+
+// handleRepositoriesRoutes routes repository management requests
+// Handles /api/daemon/repositories and /api/daemon/repositories/:id/*
+func (s *Server) handleRepositoriesRoutes(w http.ResponseWriter, r *http.Request) {
+	if s.repoHandler == nil {
+		http.Error(w, "Repository management not available", http.StatusNotImplemented)
+		return
+	}
+
+	path := r.URL.Path
+
+	// GET /api/daemon/repositories - list all repositories
+	if path == "/api/daemon/repositories" {
+		s.repoHandler.HandleListRepositories(w, r)
+		return
+	}
+
+	// Parse repository ID from path: /api/daemon/repositories/:id or /api/daemon/repositories/:id/activate
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 4 || parts[0] != "api" || parts[1] != "daemon" || parts[2] != "repositories" {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+
+	repoID := parts[3]
+	if repoID == "" {
+		http.Error(w, "Repository ID required", http.StatusBadRequest)
+		return
+	}
+
+	// POST /api/daemon/repositories/:id/activate
+	if len(parts) == 5 && parts[4] == "activate" {
 		s.repoHandler.HandleActivateRepository(w, r, repoID)
 		return
 	}
 
-	// GET /api/repositories/:id
-	if len(parts) == 3 {
+	// GET /api/daemon/repositories/:id
+	if len(parts) == 4 {
 		s.repoHandler.HandleGetRepository(w, r, repoID)
 		return
 	}
 
 	http.Error(w, "Not found", http.StatusNotFound)
+}
+
+// handleLegacyRepositoriesRedirect redirects legacy /api/repositories/* to /api/daemon/repositories/*
+func (s *Server) handleLegacyRepositoriesRedirect(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+	newPath := strings.Replace(path, "/api/repositories", "/api/daemon/repositories", 1)
+	if r.URL.RawQuery != "" {
+		newPath += "?" + r.URL.RawQuery
+	}
+	http.Redirect(w, r, newPath, http.StatusTemporaryRedirect)
 }
 
 // handleWebSocket upgrades HTTP connections to WebSocket

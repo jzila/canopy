@@ -36,11 +36,14 @@ func setupTestDaemonWithRulesT(t *testing.T) (*Daemon, *rules.Engine, *testConte
 	defaultRules := config.DefaultRulesSettings()
 	rulesEngine := rules.NewEngine(&defaultRules)
 
-	// Store the engine in the standalone engines cache.
-	// This is simpler than creating a full orchestrator (which requires beads).
+	// Register the repo to create an orchestrator with a rules engine.
 	// The handler's getEngine() calls GetOrCreateRulesEngineForRepo which will
-	// find this cached engine.
-	daemon.orchManager.standaloneEngines.Store(repoPath, rulesEngine)
+	// find the registered orchestrator's engine.
+	repoOrch, _ := daemon.orchManager.RegisterRepo(repoPath, "")
+	// Replace the auto-created engine with our test engine
+	repoOrch.mu.Lock()
+	repoOrch.rulesEngine = rulesEngine
+	repoOrch.mu.Unlock()
 
 	ctx := &testContext{
 		repoPath: repoPath,
