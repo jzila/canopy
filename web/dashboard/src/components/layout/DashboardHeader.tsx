@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   DollarSign,
   Zap,
@@ -6,6 +6,7 @@ import {
   FileEdit,
   Sun,
   Moon,
+  ChevronDown,
 } from 'lucide-react';
 import type { Repository, Run } from '../../api/client';
 import type { Stats } from '../../stores/stateStore';
@@ -48,6 +49,100 @@ function formatTokens(tokens: number): string {
   }
   return tokens.toString();
 }
+
+/**
+ * TokenBreakdown shows token usage with a dropdown for detailed breakdown.
+ * Displays total tokens as the main number, with a dropdown showing
+ * input/output/cache breakdown on click.
+ */
+const TokenBreakdown: React.FC<{ stats: Stats }> = ({ stats }) => {
+  const [isOpen, setIsOpen] = useState(false);
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="flex items-center gap-2.5 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 transition-colors"
+        title="Click for token breakdown"
+      >
+        <Zap className="w-4 h-4" />
+        <span className="font-mono font-medium tabular-nums tracking-mono-normal">
+          {formatTokens(stats.total_tokens)}
+        </span>
+        <ChevronDown className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+      </button>
+
+      {isOpen && (
+        <>
+          {/* Backdrop to close dropdown */}
+          <div
+            className="fixed inset-0 z-10"
+            onClick={() => setIsOpen(false)}
+          />
+          {/* Dropdown panel */}
+          <div className="absolute top-full right-0 mt-2 z-20 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg p-4 min-w-[200px]">
+            <div className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-3 uppercase tracking-wide">
+              Token Breakdown
+            </div>
+            <div className="space-y-2.5">
+              <TokenRow
+                label="Input"
+                value={stats.total_input_tokens}
+                color="text-blue-600 dark:text-blue-400"
+              />
+              <TokenRow
+                label="Output"
+                value={stats.total_output_tokens}
+                color="text-green-600 dark:text-green-400"
+              />
+              {stats.total_cache_read_tokens > 0 && (
+                <TokenRow
+                  label="Cache Read"
+                  value={stats.total_cache_read_tokens}
+                  color="text-purple-600 dark:text-purple-400"
+                />
+              )}
+              {stats.total_cache_creation_tokens > 0 && (
+                <TokenRow
+                  label="Cache Write"
+                  value={stats.total_cache_creation_tokens}
+                  color="text-orange-600 dark:text-orange-400"
+                />
+              )}
+              <div className="border-t border-gray-200 dark:border-gray-700 pt-2 mt-2">
+                <TokenRow
+                  label="Total"
+                  value={stats.total_tokens}
+                  color="text-gray-900 dark:text-gray-100"
+                  bold
+                />
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
+/**
+ * TokenRow displays a single row in the token breakdown.
+ */
+const TokenRow: React.FC<{
+  label: string;
+  value: number;
+  color: string;
+  bold?: boolean;
+}> = ({ label, value, color, bold }) => (
+  <div className="flex items-center justify-between gap-4">
+    <span className={`text-sm ${bold ? 'font-medium' : ''} text-gray-600 dark:text-gray-400`}>
+      {label}
+    </span>
+    <span className={`font-mono text-sm tabular-nums ${bold ? 'font-medium' : ''} ${color}`}>
+      {value.toLocaleString()}
+    </span>
+  </div>
+);
 
 /**
  * Dashboard header component containing:
@@ -120,12 +215,8 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
 
         {/* Stats Summary */}
         <div className="flex items-center gap-6 text-sm">
-          <div className="flex items-center gap-2.5 text-gray-600 dark:text-gray-400">
-            <Zap className="w-4 h-4" />
-            <span className="font-mono font-medium tabular-nums tracking-mono-normal">
-              {formatTokens(stats.total_tokens)}
-            </span>
-          </div>
+          <TokenBreakdown stats={stats} />
+
           <div className="flex items-center gap-2.5 text-gray-600 dark:text-gray-400">
             <DollarSign className="w-4 h-4" />
             <span className="font-mono font-medium tabular-nums tracking-mono-normal">
