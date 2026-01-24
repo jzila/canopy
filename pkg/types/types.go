@@ -5,6 +5,20 @@
 // we ensure type safety across package boundaries and eliminate conversion overhead.
 package types
 
+// AgentStatus represents the current state of an agent.
+// This type is used consistently across IPC communication, daemon state tracking,
+// lifecycle management, and persistence storage.
+type AgentStatus string
+
+const (
+	AgentStatusStarting  AgentStatus = "starting"
+	AgentStatusRunning   AgentStatus = "running"
+	AgentStatusCompleted AgentStatus = "completed"
+	AgentStatusFailed    AgentStatus = "failed"
+	AgentStatusTimedOut  AgentStatus = "timed_out"
+	AgentStatusCancelled AgentStatus = "cancelled"
+)
+
 // MergeStatus represents the current phase of merge processing for an agent's changes.
 // This type is used consistently across IPC communication, daemon state tracking,
 // and persistence storage.

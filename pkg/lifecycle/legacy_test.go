@@ -3,28 +3,27 @@ package lifecycle
 import (
 	"testing"
 
-	"github.com/jzila/canopy/pkg/daemon"
 	"github.com/jzila/canopy/pkg/types"
 )
 
 func TestLegacyStatus(t *testing.T) {
 	tests := []struct {
 		state    AgentLifecycleState
-		expected daemon.AgentStatus
+		expected types.AgentStatus
 	}{
-		{StateStarting, daemon.AgentStatusStarting},
-		{StateRunning, daemon.AgentStatusRunning},
-		{StateQueuedForMerge, daemon.AgentStatusRunning},
-		{StateMerging, daemon.AgentStatusRunning},
-		{StateResolving, daemon.AgentStatusRunning},
-		{StateValidating, daemon.AgentStatusRunning},
-		{StateRepairing, daemon.AgentStatusRunning},
-		{StateCompleted, daemon.AgentStatusCompleted},
-		{StateFailed, daemon.AgentStatusFailed},
-		{StateMergeFailed, daemon.AgentStatusFailed},
-		{StateNeedsAttention, daemon.AgentStatusFailed},
-		{StateCancelled, daemon.AgentStatusCancelled},
-		{StateTimedOut, daemon.AgentStatusTimedOut},
+		{StateStarting, types.AgentStatusStarting},
+		{StateRunning, types.AgentStatusRunning},
+		{StateQueuedForMerge, types.AgentStatusRunning},
+		{StateMerging, types.AgentStatusRunning},
+		{StateResolving, types.AgentStatusRunning},
+		{StateValidating, types.AgentStatusRunning},
+		{StateRepairing, types.AgentStatusRunning},
+		{StateCompleted, types.AgentStatusCompleted},
+		{StateFailed, types.AgentStatusFailed},
+		{StateMergeFailed, types.AgentStatusFailed},
+		{StateNeedsAttention, types.AgentStatusFailed},
+		{StateCancelled, types.AgentStatusCancelled},
+		{StateTimedOut, types.AgentStatusTimedOut},
 	}
 
 	for _, tt := range tests {
@@ -41,21 +40,21 @@ func TestLegacyStatus(t *testing.T) {
 func TestLegacyStatusFromState(t *testing.T) {
 	tests := []struct {
 		state    AgentLifecycleState
-		expected daemon.AgentStatus
+		expected types.AgentStatus
 	}{
-		{StateStarting, daemon.AgentStatusStarting},
-		{StateRunning, daemon.AgentStatusRunning},
-		{StateQueuedForMerge, daemon.AgentStatusRunning},
-		{StateMerging, daemon.AgentStatusRunning},
-		{StateResolving, daemon.AgentStatusRunning},
-		{StateValidating, daemon.AgentStatusRunning},
-		{StateRepairing, daemon.AgentStatusRunning},
-		{StateCompleted, daemon.AgentStatusCompleted},
-		{StateFailed, daemon.AgentStatusFailed},
-		{StateMergeFailed, daemon.AgentStatusFailed},
-		{StateNeedsAttention, daemon.AgentStatusFailed},
-		{StateCancelled, daemon.AgentStatusCancelled},
-		{StateTimedOut, daemon.AgentStatusTimedOut},
+		{StateStarting, types.AgentStatusStarting},
+		{StateRunning, types.AgentStatusRunning},
+		{StateQueuedForMerge, types.AgentStatusRunning},
+		{StateMerging, types.AgentStatusRunning},
+		{StateResolving, types.AgentStatusRunning},
+		{StateValidating, types.AgentStatusRunning},
+		{StateRepairing, types.AgentStatusRunning},
+		{StateCompleted, types.AgentStatusCompleted},
+		{StateFailed, types.AgentStatusFailed},
+		{StateMergeFailed, types.AgentStatusFailed},
+		{StateNeedsAttention, types.AgentStatusFailed},
+		{StateCancelled, types.AgentStatusCancelled},
+		{StateTimedOut, types.AgentStatusTimedOut},
 	}
 
 	for _, tt := range tests {

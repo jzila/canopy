@@ -1,28 +1,27 @@
 package lifecycle
 
 import (
-	"github.com/jzila/canopy/pkg/daemon"
 	"github.com/jzila/canopy/pkg/types"
 )
 
 // LegacyStatus returns the legacy AgentStatus for backwards compatibility.
 // This maps the unified lifecycle state to the original 6-value status enum.
-func (l *AgentLifecycle) LegacyStatus() daemon.AgentStatus {
+func (l *AgentLifecycle) LegacyStatus() types.AgentStatus {
 	switch l.State() {
 	case StateStarting:
-		return daemon.AgentStatusStarting
+		return types.AgentStatusStarting
 	case StateRunning, StateQueuedForMerge, StateMerging, StateResolving, StateValidating, StateRepairing:
-		return daemon.AgentStatusRunning
+		return types.AgentStatusRunning
 	case StateCompleted:
-		return daemon.AgentStatusCompleted
+		return types.AgentStatusCompleted
 	case StateFailed, StateMergeFailed, StateNeedsAttention:
-		return daemon.AgentStatusFailed
+		return types.AgentStatusFailed
 	case StateCancelled:
-		return daemon.AgentStatusCancelled
+		return types.AgentStatusCancelled
 	case StateTimedOut:
-		return daemon.AgentStatusTimedOut
+		return types.AgentStatusTimedOut
 	default:
-		return daemon.AgentStatusRunning
+		return types.AgentStatusRunning
 	}
 }
 
@@ -82,22 +81,22 @@ func (l *AgentLifecycle) LegacyValidationStatus() string {
 
 // LegacyStatusFromState returns the legacy AgentStatus for a given lifecycle state.
 // This is a static version useful when you have a state but not the full lifecycle.
-func LegacyStatusFromState(state AgentLifecycleState) daemon.AgentStatus {
+func LegacyStatusFromState(state AgentLifecycleState) types.AgentStatus {
 	switch state {
 	case StateStarting:
-		return daemon.AgentStatusStarting
+		return types.AgentStatusStarting
 	case StateRunning, StateQueuedForMerge, StateMerging, StateResolving, StateValidating, StateRepairing:
-		return daemon.AgentStatusRunning
+		return types.AgentStatusRunning
 	case StateCompleted:
-		return daemon.AgentStatusCompleted
+		return types.AgentStatusCompleted
 	case StateFailed, StateMergeFailed, StateNeedsAttention:
-		return daemon.AgentStatusFailed
+		return types.AgentStatusFailed
 	case StateCancelled:
-		return daemon.AgentStatusCancelled
+		return types.AgentStatusCancelled
 	case StateTimedOut:
-		return daemon.AgentStatusTimedOut
+		return types.AgentStatusTimedOut
 	default:
-		return daemon.AgentStatusRunning
+		return types.AgentStatusRunning
 	}
 }
 

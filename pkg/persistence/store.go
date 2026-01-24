@@ -937,13 +937,6 @@ func (s *Store) UpdateAgentValidationResult(agentID string, validationStatus str
 	return err
 }
 
-// UpdateAgentStatus updates only the status field of an agent
-func (s *Store) UpdateAgentStatus(agentID string, status AgentStatus) error {
-	query := `UPDATE agents SET status = ? WHERE id = ?`
-	_, err := s.db.Exec(query, string(status), agentID)
-	return err
-}
-
 // UpdateAgentRepairState updates only the repair-related fields of an agent
 func (s *Store) UpdateAgentRepairState(agentID string, repairAttempts int, lastRepairOutput string, validationStatus string) error {
 	query := `

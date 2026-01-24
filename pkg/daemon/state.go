@@ -5,22 +5,25 @@ import (
 	"time"
 
 	"github.com/jzila/canopy/pkg/beads"
+	"github.com/jzila/canopy/pkg/lifecycle"
 	"github.com/jzila/canopy/pkg/logging"
 	"github.com/jzila/canopy/pkg/metrics"
 	"github.com/jzila/canopy/pkg/persistence"
 	"github.com/jzila/canopy/pkg/types"
 )
 
-// AgentStatus represents the current state of an agent
-type AgentStatus string
+// AgentStatus is an alias to types.AgentStatus for backwards compatibility.
+// New code should import types.AgentStatus directly.
+type AgentStatus = types.AgentStatus
 
+// AgentStatus constants - aliases to types package for backwards compatibility.
 const (
-	AgentStatusStarting  AgentStatus = "starting"
-	AgentStatusRunning   AgentStatus = "running"
-	AgentStatusCompleted AgentStatus = "completed"
-	AgentStatusFailed    AgentStatus = "failed"
-	AgentStatusTimedOut  AgentStatus = "timed_out"
-	AgentStatusCancelled AgentStatus = "cancelled"
+	AgentStatusStarting  = types.AgentStatusStarting
+	AgentStatusRunning   = types.AgentStatusRunning
+	AgentStatusCompleted = types.AgentStatusCompleted
+	AgentStatusFailed    = types.AgentStatusFailed
+	AgentStatusTimedOut  = types.AgentStatusTimedOut
+	AgentStatusCancelled = types.AgentStatusCancelled
 )
 
 // OutputBuffer stores stdout/stderr output from an agent
@@ -427,8 +430,14 @@ type AgentState struct {
 	RepoID          string          `json:"repo_id,omitempty"`          // Repository this agent is working in
 	ParentAgentID   string          `json:"parent_agent_id,omitempty"`  // ID of parent agent if spawned by another agent
 	ChildAgentIDs   []string        `json:"child_agent_ids,omitempty"`  // IDs of child agents spawned by this agent
-	Status          AgentStatus     `json:"status"`                     // Current agent status
-	MergeStatus     MergeStatus     `json:"merge_status,omitempty"`     // Current merge queue status
+	Status          AgentStatus     `json:"status"`                     // Current agent status (legacy)
+	MergeStatus     MergeStatus     `json:"merge_status,omitempty"`     // Current merge queue status (legacy)
+
+	// Lifecycle is the new state machine that runs in parallel with legacy fields.
+	// During the transition period (Phase 1), both systems run concurrently and
+	// divergence is logged for monitoring. The lifecycle field is not serialized
+	// to JSON as it is ephemeral runtime state.
+	Lifecycle *lifecycle.AgentLifecycle `json:"-"`
 	MergeQueuePos   int             `json:"merge_queue_pos,omitempty"`  // Position in merge wait queue (0 = not waiting)
 	MergeError      string          `json:"merge_error,omitempty"`      // Error message if merge failed
 	StartTime       time.Time       `json:"start_time"`                 // When agent started
@@ -453,7 +462,6 @@ type AgentState struct {
 	ValidationSteps    []ValidationStep `json:"validation_steps,omitempty"`    // Results of individual validation steps
 	ValidationDuration int64           `json:"validation_duration_ms,omitempty"` // Total validation duration in milliseconds
 	ValidationError    string          `json:"validation_error,omitempty"`     // Error message if validation failed
-	LifecycleState     string          `json:"lifecycle_state,omitempty"`      // Agent lifecycle state from state machine (e.g., running, merging, validating)
 	SessionID          string          `json:"session_id,omitempty"`           // Claude CLI session ID for claude --resume support
 	IsResume           bool            `json:"is_resume,omitempty"`            // True if this agent was resumed after daemon restart
 	ResumeCount        int             `json:"resume_count,omitempty"`         // Number of times this agent has been resumed
@@ -513,7 +521,6 @@ func (a *AgentState) GetSnapshot() AgentState {
 		ValidationSteps:    append([]ValidationStep(nil), a.ValidationSteps...),
 		ValidationDuration: a.ValidationDuration,
 		ValidationError:    a.ValidationError,
-		LifecycleState:     a.LifecycleState,
 		SessionID:          a.SessionID,
 		IsResume:           a.IsResume,
 		ResumeCount:        a.ResumeCount,
@@ -1068,6 +1075,92 @@ func (s *RuntimeStateSnapshot) recalculateStats() {
 	s.Stats = stats
 }
 
+// expectedLifecycleState returns the lifecycle state that corresponds to the legacy
+// Status and MergeStatus fields. Used to detect divergence during parallel rollout.
+func expectedLifecycleState(status AgentStatus, mergeStatus MergeStatus, validationStatus string) lifecycle.AgentLifecycleState {
+	// First check validation status if merge is complete
+	if mergeStatus == MergeStatusMerged || mergeStatus == MergeStatusResolved {
+		switch validationStatus {
+		case "running":
+			return lifecycle.StateValidating
+		case "repairing":
+			return lifecycle.StateRepairing
+		case "failed":
+			return lifecycle.StateNeedsAttention
+		case "passed", "skipped", "":
+			// Fall through to check agent status
+		}
+	}
+
+	// Check merge status
+	switch mergeStatus {
+	case MergeStatusPending:
+		return lifecycle.StateQueuedForMerge
+	case MergeStatusAcquiring, MergeStatusMerging:
+		return lifecycle.StateMerging
+	case MergeStatusResolving:
+		return lifecycle.StateResolving
+	case MergeStatusFailed:
+		return lifecycle.StateMergeFailed
+	}
+
+	// Check agent status
+	switch status {
+	case AgentStatusStarting:
+		return lifecycle.StateStarting
+	case AgentStatusRunning:
+		// If we have a merge status indicating queue, use that
+		if mergeStatus == MergeStatusPending {
+			return lifecycle.StateQueuedForMerge
+		}
+		return lifecycle.StateRunning
+	case AgentStatusCompleted:
+		return lifecycle.StateCompleted
+	case AgentStatusFailed:
+		return lifecycle.StateFailed
+	case AgentStatusCancelled:
+		return lifecycle.StateCancelled
+	case AgentStatusTimedOut:
+		return lifecycle.StateTimedOut
+	}
+
+	// Default to running if we can't determine
+	return lifecycle.StateRunning
+}
+
+// checkLifecycleDivergence compares the lifecycle state machine state against the
+// legacy status fields and logs a warning + records a metric if they diverge.
+// This is used during the parallel rollout phase to detect inconsistencies.
+func checkLifecycleDivergence(agent *AgentState, event string) {
+	if agent == nil || agent.Lifecycle == nil {
+		return
+	}
+
+	// Read legacy fields under lock
+	agent.mu.RLock()
+	legacyStatus := agent.Status
+	mergeStatus := agent.MergeStatus
+	validationStatus := agent.ValidationStatus
+	agentID := agent.ID
+	agent.mu.RUnlock()
+
+	lifecycleState := agent.Lifecycle.State()
+	expected := expectedLifecycleState(legacyStatus, mergeStatus, validationStatus)
+
+	if lifecycleState != expected {
+		logging.Warn("lifecycle state divergence detected",
+			"agent_id", agentID,
+			"event", event,
+			"legacy_status", string(legacyStatus),
+			"merge_status", string(mergeStatus),
+			"validation_status", validationStatus,
+			"lifecycle_state", lifecycleState.String(),
+			"expected_lifecycle_state", expected.String(),
+		)
+		metrics.RecordLifecycleDivergence(string(legacyStatus), lifecycleState.String(), event)
+	}
+}
+
 // SubscribeToEventBus subscribes to the EventBus and updates state from events.
 // Returns an unsubscribe function. This bridges IPC events to RuntimeState updates.
 func (r *RuntimeState) SubscribeToEventBus(eventBus *EventBus) func() {
@@ -1138,6 +1231,9 @@ func (r *RuntimeState) handleAgentStarted(payload map[string]interface{}, timest
 		r.mu.RUnlock()
 	}
 
+	// Initialize lifecycle state machine in starting state
+	agentLifecycle := lifecycle.New()
+
 	agent := &AgentState{
 		ID:              agentID,
 		RunID:           runID,
@@ -1148,7 +1244,20 @@ func (r *RuntimeState) handleAgentStarted(payload map[string]interface{}, timest
 		ParentAgentID:   parentAgentID,
 		Status:          AgentStatusRunning,
 		StartTime:       timestamp,
+		Lifecycle:       agentLifecycle,
 	}
+
+	// Transition lifecycle to running state (parallel with legacy Status field)
+	if err := agentLifecycle.Transition(lifecycle.EventAgentSpawned, lifecycle.TransitionContext{}); err != nil {
+		logging.Warn("lifecycle transition failed on agent start",
+			"agent_id", agentID,
+			"event", lifecycle.EventAgentSpawned,
+			"error", err,
+		)
+	}
+
+	// Check for divergence between legacy and lifecycle state
+	checkLifecycleDivergence(agent, "agent_started")
 
 	r.AddAgent(agent)
 
@@ -1350,14 +1459,29 @@ func (r *RuntimeState) handleAgentMergeStatus(payload map[string]interface{}) {
 	taskID := agent.TaskID
 	agent.mu.RUnlock()
 
+	now := time.Now()
 	agent.Update(func(a *AgentState) {
 		a.MergeStatus = MergeStatus(mergeStatus)
 		a.MergeQueuePos = queuePos
 		a.MergeError = mergeErr
 
-		// NOTE: Agent Status is intentionally NOT set here. Only EventAgentCompleted
-		// should set terminal status (completed/failed) to avoid race conditions
-		// when both events arrive in close succession.
+		// Update agent status atomically with merge status for terminal states.
+		// This prevents the race condition where agent appears 'running' after
+		// merge completes but before EventAgentCompleted is processed.
+		switch MergeStatus(mergeStatus) {
+		case MergeStatusMerged, MergeStatusMergedNeedsRepair, MergeStatusResolved, MergeStatusSkipped:
+			// Merge succeeded (with or without repair/resolution)
+			a.Status = AgentStatusCompleted
+			if a.EndTime == nil {
+				a.EndTime = &now
+			}
+		case MergeStatusFailed:
+			// Merge failed
+			a.Status = AgentStatusFailed
+			if a.EndTime == nil {
+				a.EndTime = &now
+			}
+		}
 
 		// Update merge result fields (only if present to avoid overwriting)
 		if commitsApplied > 0 {
@@ -1393,6 +1517,14 @@ func (r *RuntimeState) handleAgentMergeStatus(payload map[string]interface{}) {
 		}
 	})
 
+	// Update lifecycle state machine (parallel with legacy fields)
+	if agent.Lifecycle != nil {
+		transitionLifecycleForMergeStatus(agent, mergeStatus, hadConflict, validationStatus, repairAttempts)
+	}
+
+	// Check for divergence after all updates
+	checkLifecycleDivergence(agent, "merge_status_"+mergeStatus)
+
 	// Update task status for terminal merge states
 	if taskID != "" {
 		switch MergeStatus(mergeStatus) {
@@ -1405,6 +1537,141 @@ func (r *RuntimeState) handleAgentMergeStatus(payload map[string]interface{}) {
 
 	// Recalculate stats to reflect agent completion
 	r.UpdateStats()
+}
+
+// transitionLifecycleForMergeStatus maps merge status changes to lifecycle events.
+// Called during handleAgentMergeStatus to keep lifecycle state machine in sync.
+func transitionLifecycleForMergeStatus(agent *AgentState, mergeStatus string, hadConflict bool, validationStatus string, repairAttempts int) {
+	if agent.Lifecycle == nil {
+		return
+	}
+
+	agentID := agent.ID
+	lc := agent.Lifecycle
+
+	// Build transition context
+	ctx := lifecycle.TransitionContext{
+		RepairAttempt:     repairAttempts,
+		MaxRepairAttempts: 3, // Default, would need to get from config
+	}
+
+	// Determine the appropriate lifecycle event based on merge status
+	var event lifecycle.AgentEvent
+	var shouldTransition bool
+
+	switch MergeStatus(mergeStatus) {
+	case MergeStatusPending:
+		// Agent work complete, now queued for merge
+		if lc.State() == lifecycle.StateRunning {
+			event = lifecycle.EventWorkComplete
+			shouldTransition = true
+		}
+
+	case MergeStatusAcquiring, MergeStatusMerging:
+		// Merge started
+		if lc.State() == lifecycle.StateQueuedForMerge {
+			event = lifecycle.EventMergeStarted
+			shouldTransition = true
+		}
+
+	case MergeStatusResolving:
+		// Merge had conflict, now resolving
+		if lc.State() == lifecycle.StateMerging && hadConflict {
+			event = lifecycle.EventMergeConflict
+			shouldTransition = true
+		}
+
+	case MergeStatusMerged, MergeStatusResolved, MergeStatusSkipped:
+		// Handle based on current state and validation status
+		currentState := lc.State()
+
+		// If we're in merging state and merge succeeded
+		if currentState == lifecycle.StateMerging {
+			event = lifecycle.EventMergeSuccess
+			ctx.ValidationEnabled = validationStatus != "" && validationStatus != "skipped"
+			shouldTransition = true
+		} else if currentState == lifecycle.StateResolving {
+			event = lifecycle.EventResolveSuccess
+			ctx.ValidationEnabled = validationStatus != "" && validationStatus != "skipped"
+			shouldTransition = true
+		} else if currentState == lifecycle.StateValidating {
+			// Validation completed
+			if validationStatus == "passed" {
+				event = lifecycle.EventValidationPassed
+				shouldTransition = true
+			} else if validationStatus == "skipped" {
+				event = lifecycle.EventValidationSkipped
+				shouldTransition = true
+			}
+		} else if currentState == lifecycle.StateRepairing {
+			// Repair complete, back to validation
+			event = lifecycle.EventRepairComplete
+			shouldTransition = true
+		}
+
+	case MergeStatusMergedNeedsRepair:
+		// Validation failed but kept the merge
+		if lc.State() == lifecycle.StateValidating {
+			event = lifecycle.EventValidationFailed
+			ctx.RepairEnabled = false // No more repair attempts
+			ctx.StrictMode = false     // Lenient mode keeps merge
+			shouldTransition = true
+		}
+
+	case MergeStatusFailed:
+		// Merge failed
+		currentState := lc.State()
+		if currentState == lifecycle.StateMerging {
+			event = lifecycle.EventMergeFailed
+			shouldTransition = true
+		} else if currentState == lifecycle.StateResolving {
+			event = lifecycle.EventResolveFailed
+			shouldTransition = true
+		} else if currentState == lifecycle.StateValidating {
+			event = lifecycle.EventValidationFailed
+			ctx.StrictMode = true // Strict mode fails on validation failure
+			shouldTransition = true
+		}
+	}
+
+	// Also handle validation status transitions if merge is already complete
+	if !shouldTransition && validationStatus != "" {
+		currentState := lc.State()
+		switch validationStatus {
+		case "running":
+			// Validation starting - should already be in validating state
+		case "passed":
+			if currentState == lifecycle.StateValidating {
+				event = lifecycle.EventValidationPassed
+				shouldTransition = true
+			}
+		case "failed":
+			if currentState == lifecycle.StateValidating {
+				event = lifecycle.EventValidationFailed
+				ctx.RepairEnabled = repairAttempts > 0
+				shouldTransition = true
+			}
+		case "repairing":
+			if currentState == lifecycle.StateValidating {
+				event = lifecycle.EventValidationFailed
+				ctx.RepairEnabled = true
+				ctx.RepairAttempt = repairAttempts
+				shouldTransition = true
+			}
+		}
+	}
+
+	if shouldTransition {
+		if err := lc.Transition(event, ctx); err != nil {
+			logging.Warn("lifecycle transition failed on merge status",
+				"agent_id", agentID,
+				"event", event,
+				"merge_status", mergeStatus,
+				"current_state", lc.State(),
+				"error", err,
+			)
+		}
+	}
 }
 
 func (r *RuntimeState) handleAgentCompleted(payload map[string]interface{}, timestamp time.Time) {
@@ -1501,6 +1768,16 @@ func (r *RuntimeState) handleAgentCompleted(payload map[string]interface{}, time
 		}
 	})
 
+	// Update lifecycle state machine for completion (parallel with legacy fields)
+	// Note: Many completion events are already handled via merge status events,
+	// but agents can also complete directly (e.g., work failed, cancelled, timeout).
+	if agent.Lifecycle != nil {
+		transitionLifecycleForCompletion(agent, payload)
+	}
+
+	// Check for divergence after all updates
+	checkLifecycleDivergence(agent, "agent_completed")
+
 	// Update task status
 	if agent.TaskID != "" {
 		status := "completed"
@@ -1511,6 +1788,55 @@ func (r *RuntimeState) handleAgentCompleted(payload map[string]interface{}, time
 	}
 
 	r.UpdateStats()
+}
+
+// transitionLifecycleForCompletion handles lifecycle transitions for agent completion.
+// Called during handleAgentCompleted to keep lifecycle state machine in sync.
+func transitionLifecycleForCompletion(agent *AgentState, payload map[string]interface{}) {
+	if agent.Lifecycle == nil {
+		return
+	}
+
+	agentID := agent.ID
+	lc := agent.Lifecycle
+	currentState := lc.State()
+
+	// Skip if already in a terminal state
+	if currentState.IsTerminal() {
+		return
+	}
+
+	// Determine the appropriate lifecycle event
+	var event lifecycle.AgentEvent
+	var shouldTransition bool
+	ctx := lifecycle.TransitionContext{}
+
+	// Check if this is an error completion
+	errMsg, hasError := payload["error"].(string)
+	if hasError && errMsg != "" {
+		ctx.Error = errMsg
+		// Work failed while running
+		if currentState == lifecycle.StateRunning {
+			event = lifecycle.EventWorkFailed
+			ctx.AttemptsRemaining = 0 // No retries for direct failure
+			shouldTransition = true
+		}
+	}
+
+	// If not an error and lifecycle isn't already terminal/advanced past running,
+	// we don't need to transition here - the merge status handler will do it.
+	// This is because agent_completed events often arrive after merge completion.
+
+	if shouldTransition {
+		if err := lc.Transition(event, ctx); err != nil {
+			logging.Warn("lifecycle transition failed on agent completed",
+				"agent_id", agentID,
+				"event", event,
+				"current_state", currentState,
+				"error", err,
+			)
+		}
+	}
 }
 
 func (r *RuntimeState) handleTaskUpdated(payload map[string]interface{}) {
