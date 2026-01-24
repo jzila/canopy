@@ -37,6 +37,17 @@ type EventCallbacks struct {
 	OnFailFn func(ctx context.Context, taskID string, result *agent.Result)
 }
 
+// StateCallbacks defines callbacks for orchestrator state transitions.
+// These allow external components to observe when the orchestrator transitions
+// between Idle (no work available, polling) and Active (processing tasks) states.
+type StateCallbacks struct {
+	// OnIdle is called when the orchestrator enters the idle state (no work available, entering poll-wait)
+	OnIdle func()
+
+	// OnActive is called when the orchestrator becomes active (starting to process tasks)
+	OnActive func()
+}
+
 // OnAgentStart implements scheduler.CallbackHandler
 func (e *EventCallbacks) OnAgentStart(ctx context.Context, taskID string, task *beads.Task) {
 	if e != nil && e.OnAgentStartFn != nil {
@@ -120,6 +131,9 @@ type Orchestrator struct {
 	inFlightMu   sync.RWMutex
 	inFlight     map[string]bool   // Tasks currently being executed
 	inFlightTask map[string]*beads.Task // Task objects for in-flight tasks (for concurrency limiting)
+
+	// State transition callbacks for Idle/Active observation
+	stateCallbacks *StateCallbacks
 }
 
 // New creates a new orchestrator
@@ -248,6 +262,13 @@ func New(config *Config) (*Orchestrator, error) {
 // when events occur.
 func (o *Orchestrator) SetCallbacks(callbacks *EventCallbacks) {
 	o.callbackManager.Register(callbacks)
+}
+
+// SetStateCallbacks configures state transition callbacks for the orchestrator.
+// These callbacks are invoked when the orchestrator transitions between
+// Idle (no work, polling) and Active (processing tasks) states.
+func (o *Orchestrator) SetStateCallbacks(callbacks *StateCallbacks) {
+	o.stateCallbacks = callbacks
 }
 
 // setupInternalCallbacks registers the orchestrator's internal callbacks with the CallbackManager.
@@ -389,6 +410,10 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 	var resultsMu sync.Mutex
 	var results []*agent.Result
 
+	// Track current state for state transition callbacks
+	// Start as active since we're about to look for work
+	isIdle := false
+
 	// Create a channel to signal when workers should check for new tasks
 	// Workers send on this channel when they complete a task
 	taskComplete := make(chan struct{}, o.config.Concurrency)
@@ -459,7 +484,15 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			o.inFlightMu.RUnlock()
 
 			if inFlightCount == 0 {
-				// No in-flight tasks and no ready tasks - idle state
+				// No in-flight tasks and no ready tasks - entering idle state
+				// Signal state transition if not already idle
+				if !isIdle {
+					isIdle = true
+					if o.stateCallbacks != nil && o.stateCallbacks.OnIdle != nil {
+						o.stateCallbacks.OnIdle()
+					}
+				}
+
 				// Poll for new tasks after interval
 				if o.config.Verbose {
 					fmt.Println("Idle, polling for new tasks...")
@@ -483,6 +516,14 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			case <-taskComplete:
 				// A task completed, loop back to try again
 				continue
+			}
+		}
+
+		// Got a task - signal active state transition if coming from idle
+		if isIdle {
+			isIdle = false
+			if o.stateCallbacks != nil && o.stateCallbacks.OnActive != nil {
+				o.stateCallbacks.OnActive()
 			}
 		}
 
