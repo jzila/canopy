@@ -499,6 +499,17 @@ func ApplyRestoredState(state *RuntimeState, restored *RestoredState) {
 	// Restore agents
 	for i := range restored.Agents {
 		agentState := ConvertPersistenceAgentToState(&restored.Agents[i])
+
+		// Wire up lifecycle callbacks for non-terminal agents so any future
+		// transitions publish events to the EventBus for real-time UI updates.
+		if agentState.Lifecycle != nil && !agentState.Lifecycle.IsTerminal() {
+			// Create a new lifecycle with the callback and same initial state
+			agentState.Lifecycle = lifecycle.New(
+				lifecycle.WithInitialState(agentState.Lifecycle.State()),
+				lifecycle.WithTransitionCallback(state.makeLifecycleCallback(agentState.ID)),
+			)
+		}
+
 		state.AddAgent(agentState)
 		logging.Debug("restored agent",
 			"agent_id", restored.Agents[i].ID,

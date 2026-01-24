@@ -610,6 +610,10 @@ type RuntimeState struct {
 	persistentTasks map[string]*TaskState // From beads - does NOT get modified during runtime
 	runtimeTasks    map[string]*TaskState // Runtime overlay - rebuilt from agent events
 
+	// eventBus is stored when SubscribeToEventBus is called, enabling lifecycle
+	// transition callbacks to publish events for real-time UI updates.
+	eventBus *EventBus
+
 	mu sync.RWMutex
 }
 
@@ -1193,9 +1197,58 @@ func checkLifecycleDivergence(agent *AgentState, event string) {
 	}
 }
 
+// makeLifecycleCallback creates a callback that publishes lifecycle state transitions
+// to the EventBus for real-time UI updates. The callback maps lifecycle state changes
+// to the appropriate event types (e.g., starting→running publishes EventAgentRunning).
+func (r *RuntimeState) makeLifecycleCallback(agentID string) lifecycle.TransitionCallback {
+	return func(from, to lifecycle.AgentLifecycleState, event lifecycle.AgentEvent) {
+		r.mu.RLock()
+		eventBus := r.eventBus
+		r.mu.RUnlock()
+
+		if eventBus == nil {
+			return
+		}
+
+		// Map lifecycle transitions to event types
+		var eventType EventType
+		switch to {
+		case lifecycle.StateRunning:
+			// starting → running
+			eventType = EventAgentRunning
+		case lifecycle.StateCompleted:
+			// Various states → completed (already handled by EventAgentCompleted elsewhere)
+			return
+		case lifecycle.StateFailed:
+			// Various states → failed (already handled by EventAgentFailed elsewhere)
+			return
+		default:
+			// For other state transitions, we don't have specific event types yet.
+			// The dashboard receives these via periodic state:sync.
+			return
+		}
+
+		eventBus.Publish(Event{
+			Type:      eventType,
+			Timestamp: time.Now(),
+			Payload: map[string]interface{}{
+				"agent_id":       agentID,
+				"lifecycle_state": to.String(),
+				"previous_state": from.String(),
+				"event":          event.String(),
+			},
+		})
+	}
+}
+
 // SubscribeToEventBus subscribes to the EventBus and updates state from events.
 // Returns an unsubscribe function. This bridges IPC events to RuntimeState updates.
+// Also stores the eventBus reference for publishing lifecycle transition events.
 func (r *RuntimeState) SubscribeToEventBus(eventBus *EventBus) func() {
+	r.mu.Lock()
+	r.eventBus = eventBus
+	r.mu.Unlock()
+
 	return eventBus.Subscribe(func(event Event) {
 		r.handleEvent(event)
 	})
@@ -1263,8 +1316,10 @@ func (r *RuntimeState) handleAgentStarted(payload map[string]interface{}, timest
 		r.mu.RUnlock()
 	}
 
-	// Initialize lifecycle state machine in starting state
-	agentLifecycle := lifecycle.New()
+	// Initialize lifecycle state machine with transition callback for real-time UI updates
+	agentLifecycle := lifecycle.New(
+		lifecycle.WithTransitionCallback(r.makeLifecycleCallback(agentID)),
+	)
 
 	agent := &AgentState{
 		ID:              agentID,
