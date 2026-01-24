@@ -648,11 +648,11 @@ func (e *Engine) UpdateConfigSettings(update ConfigSettingsUpdate) error {
 		e.settings.Assignee = *update.Assignee
 	}
 
-	if update.MaxConcurrent != nil {
-		if *update.MaxConcurrent < 0 {
-			return fmt.Errorf("max_concurrent must be >= 0, got %d", *update.MaxConcurrent)
+	if update.MaxConcurrentTasks != nil {
+		if *update.MaxConcurrentTasks < 0 {
+			return fmt.Errorf("max_concurrent_tasks must be >= 0, got %d", *update.MaxConcurrentTasks)
 		}
-		e.settings.MaxConcurrent = *update.MaxConcurrent
+		e.settings.MaxConcurrentTasks = *update.MaxConcurrentTasks
 	}
 
 	if update.MaxConcurrentPerType != nil {
@@ -676,7 +676,7 @@ type ConfigSettingsUpdate struct {
 	Labels                *[]string         `json:"labels,omitempty"`
 	ExcludeLabels         *[]string         `json:"exclude_labels,omitempty"`
 	Assignee              *string           `json:"assignee,omitempty"`
-	MaxConcurrent         *int              `json:"max_concurrent,omitempty"`
+	MaxConcurrentTasks    *int              `json:"max_concurrent_tasks,omitempty"`
 	MaxConcurrentPerType  *map[string]int   `json:"max_concurrent_per_type,omitempty"`
 	MaxConcurrentPerLabel *map[string]int   `json:"max_concurrent_per_label,omitempty"`
 }

@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/jzila/canopy/pkg/beads"
+	"github.com/jzila/canopy/pkg/config"
+	"github.com/jzila/canopy/pkg/rules"
 	"github.com/jzila/canopy/pkg/scheduler"
 )
 
@@ -98,9 +100,15 @@ func TestGetNextTask_FiltersInFlight(t *testing.T) {
 		closed: make(map[string]bool),
 	}
 
+	// Create rules engine with no priority filter (PriorityMax = -1 means no limit)
+	rulesEngine := rules.NewEngine(&config.RulesSettings{
+		PriorityMax: -1,
+	})
+
 	o := &Orchestrator{
-		config:       &Config{MaxPriority: -1},
+		config:       &Config{},
 		beadsClient:  mockClient,
+		rulesEngine:  rulesEngine,
 		inFlight:     make(map[string]bool),
 		inFlightTask: make(map[string]*beads.Task),
 	}
@@ -164,9 +172,15 @@ func TestGetNextTask_ReturnsNewlyUnblockedTasks(t *testing.T) {
 		closed: make(map[string]bool),
 	}
 
+	// Create rules engine with no priority filter
+	rulesEngine := rules.NewEngine(&config.RulesSettings{
+		PriorityMax: -1,
+	})
+
 	o := &Orchestrator{
-		config:       &Config{MaxPriority: -1},
+		config:       &Config{},
 		beadsClient:  mockClient,
+		rulesEngine:  rulesEngine,
 		inFlight:     make(map[string]bool),
 		inFlightTask: make(map[string]*beads.Task),
 	}
@@ -199,7 +213,7 @@ func TestGetNextTask_ReturnsNewlyUnblockedTasks(t *testing.T) {
 	}
 }
 
-func TestGetNextTask_AppliesMaxPriorityFilter(t *testing.T) {
+func TestGetNextTask_AppliesPriorityMaxFilter(t *testing.T) {
 	mockClient := &MockBeadsClientForDynamic{
 		tasks: []beads.Task{
 			{ID: "task-1", Title: "P0 task", Priority: 0},
@@ -208,9 +222,15 @@ func TestGetNextTask_AppliesMaxPriorityFilter(t *testing.T) {
 		closed: make(map[string]bool),
 	}
 
+	// Create rules engine with priority filter: only P0 and P1
+	rulesEngine := rules.NewEngine(&config.RulesSettings{
+		PriorityMax: 1,
+	})
+
 	o := &Orchestrator{
-		config:       &Config{MaxPriority: 1}, // Only P0 and P1
+		config:       &Config{},
 		beadsClient:  mockClient,
+		rulesEngine:  rulesEngine,
 		inFlight:     make(map[string]bool),
 		inFlightTask: make(map[string]*beads.Task),
 	}

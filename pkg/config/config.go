@@ -47,9 +47,9 @@ type RulesSettings struct {
 	// StopWhenEmpty stops the orchestrator when no tasks match rules
 	StopWhenEmpty bool `toml:"stop_when_empty"`
 
-	// Concurrency limits
-	// MaxConcurrent overrides the global concurrency limit
-	MaxConcurrent int `toml:"max_concurrent"`
+	// Concurrency limits (task-level throttling, separate from agent concurrency)
+	// MaxConcurrentTasks overrides the global task concurrency limit
+	MaxConcurrentTasks int `toml:"max_concurrent_tasks"`
 	// MaxConcurrentPerType limits concurrent tasks by type (e.g., {"bug": 2})
 	MaxConcurrentPerType map[string]int `toml:"max_concurrent_per_type"`
 	// MaxConcurrentPerLabel limits concurrent tasks by label (e.g., {"frontend": 1})
@@ -290,10 +290,10 @@ func (r *RulesSettings) Validate() ValidationErrors {
 	}
 
 	// Validate concurrency limits are positive
-	if r.MaxConcurrent < 0 {
+	if r.MaxConcurrentTasks < 0 {
 		errs = append(errs, ValidationError{
-			Field:   "rules.max_concurrent",
-			Message: fmt.Sprintf("must be >= 0, got %d", r.MaxConcurrent),
+			Field:   "rules.max_concurrent_tasks",
+			Message: fmt.Sprintf("must be >= 0, got %d", r.MaxConcurrentTasks),
 		})
 	}
 	for typeName, limit := range r.MaxConcurrentPerType {

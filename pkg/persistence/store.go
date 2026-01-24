@@ -124,11 +124,13 @@ type ActiveOverlay struct {
 	Status    string `json:"status"` // active, completed, orphaned
 }
 
-// RunConfig represents persisted orchestrator settings for a repository
+// RunConfig represents saved orchestrator configuration for a repository.
+// Note: Task selection parameters (priority_max, types, labels) are stored in
+// RulesSettings and persisted via the rules API, not in RunConfig.
 type RunConfig struct {
 	RepoID      string `json:"repo_id"`
 	Concurrency int    `json:"concurrency"`
-	MaxPriority int    `json:"max_priority"`
+	PriorityMax int    `json:"priority_max"` // Max priority filter for task selection
 	UseBwrap    bool   `json:"use_bwrap"`
 	MaxRetries  int    `json:"max_retries"`
 	UpdatedAt   int64  `json:"updated_at,omitempty"`
@@ -2148,7 +2150,7 @@ func DefaultRunConfig(repoID string) *RunConfig {
 	return &RunConfig{
 		RepoID:      repoID,
 		Concurrency: 4,
-		MaxPriority: 4,
+		PriorityMax: 4,
 		UseBwrap:    true,
 		MaxRetries:  3,
 	}
@@ -2167,7 +2169,7 @@ func (s *Store) GetRunConfig(repoID string) (*RunConfig, error) {
 	err := row.Scan(
 		&config.RepoID,
 		&config.Concurrency,
-		&config.MaxPriority,
+		&config.PriorityMax,
 		&useBwrap,
 		&config.MaxRetries,
 		&updatedAt,
@@ -2202,7 +2204,7 @@ func (s *Store) SaveRunConfig(repoID string, config *RunConfig) error {
 	_, err := s.db.Exec(query,
 		repoID,
 		config.Concurrency,
-		config.MaxPriority,
+		config.PriorityMax,
 		boolToInt(config.UseBwrap),
 		config.MaxRetries,
 	)

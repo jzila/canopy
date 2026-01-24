@@ -291,8 +291,8 @@ func printConfigRules(cfg *config.RulesSettings) {
 	if cfg.Assignee != "" && cfg.Assignee != "*" {
 		fmt.Printf("  Assignee: %s\n", cfg.Assignee)
 	}
-	if cfg.MaxConcurrent > 0 {
-		fmt.Printf("  Max Concurrent: %d\n", cfg.MaxConcurrent)
+	if cfg.MaxConcurrentTasks > 0 {
+		fmt.Printf("  Max Concurrent Tasks: %d\n", cfg.MaxConcurrentTasks)
 	}
 }
 

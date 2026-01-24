@@ -92,7 +92,6 @@ type Config struct {
 	DryRun          bool
 	UseBwrap        bool          // Use bubblewrap sandbox for agent isolation
 	MaxRetries      int           // Maximum number of times to retry failed tasks (0 = no retries, -1 = infinite)
-	MaxPriority     int           // Hard filter: only run tasks with priority <= this value (-1 = no filter)
 	ResolverTimeout time.Duration // Timeout for resolver agents (0 = use default 10m)
 	Rules           *cfgpkg.RulesSettings // CLI overrides for rules (nil = use config.toml only)
 	RulesOverrides  *RulesOverrides       // Tracks which rules fields were explicitly set via CLI
@@ -101,7 +100,9 @@ type Config struct {
 
 // RulesOverrides tracks which rules fields were explicitly set via CLI flags.
 // This allows merging with config.toml while preserving explicit CLI values.
+// The 3-tier precedence hierarchy is: default < config < runtime override.
 type RulesOverrides struct {
+	PriorityMin   bool
 	PriorityMax   bool
 	Types         bool
 	ExcludeTypes  bool
@@ -122,7 +123,6 @@ type Orchestrator struct {
 	failureCountsMu  sync.RWMutex       // Protects failureCounts
 	failureCounts    map[string]int     // Tracks how many times each task has failed
 	sandboxConfig    *sandbox.SandboxConfig
-	taskFilter       *cfgpkg.TaskFilter // Task filter from rules settings (legacy)
 	rulesEngine      *rules.Engine      // Rules engine for per-repo task selection
 
 	// Dynamic concurrency control - supports runtime adjustment via API
@@ -227,10 +227,7 @@ func New(config *Config) (*Orchestrator, error) {
 		effectiveRules = mergeRulesSettings(&repoConfig.Rules, config.Rules, config.RulesOverrides)
 	}
 
-	// Create task filter from effective rules settings (legacy compatibility)
-	taskFilter := cfgpkg.NewTaskFilter(&effectiveRules)
-
-	// Create rules engine from effective rules (preferred path)
+	// Create rules engine from effective rules
 	rulesEngine := rules.NewEngine(&effectiveRules)
 
 	o := &Orchestrator{
@@ -243,7 +240,6 @@ func New(config *Config) (*Orchestrator, error) {
 		callbackManager:  NewCallbackManager(),
 		failureCounts:    make(map[string]int),
 		sandboxConfig:    sandboxConfig,
-		taskFilter:       taskFilter,
 		rulesEngine:      rulesEngine,
 		slotManager:      scheduler.NewSlotManager(config.Concurrency),
 		inFlight:         make(map[string]bool),
@@ -656,38 +652,15 @@ func (o *Orchestrator) Shutdown(timeout time.Duration) (int, error) {
 	return 0, nil
 }
 
-// filterTasksByMaxPriority filters tasks to only include those with priority <= maxPriority.
-// This is a hard filter applied after fetching tasks from beads.
-// Deprecated: Use TaskFilter.FilterTasks() instead for full rules support.
-func filterTasksByMaxPriority(tasks []beads.Task, maxPriority int) []beads.Task {
-	if maxPriority < 0 {
-		return tasks
-	}
 
-	filtered := make([]beads.Task, 0, len(tasks))
-	for _, task := range tasks {
-		if task.Priority <= maxPriority {
-			filtered = append(filtered, task)
-		}
-	}
-	return filtered
-}
-
-// filterTasks applies configured rules to filter tasks.
-// Priority: rulesEngine > taskFilter > maxPriority fallback
+// filterTasks applies configured rules to filter tasks using the rules engine.
 func (o *Orchestrator) filterTasks(tasks []beads.Task) []beads.Task {
-	// If we have a rules engine, use it (preferred for per-repo isolation)
+	// Use the rules engine for all task filtering
 	if o.rulesEngine != nil {
 		return o.filterTasksWithEngine(tasks)
 	}
-
-	// If we have a task filter (legacy), use it
-	if o.taskFilter != nil {
-		return o.taskFilter.FilterTasks(tasks)
-	}
-
-	// Fall back to simple maxPriority filter for backward compatibility
-	return filterTasksByMaxPriority(tasks, o.config.MaxPriority)
+	// No rules engine - return all tasks unfiltered
+	return tasks
 }
 
 // filterTasksWithEngine applies the rules engine to filter tasks.
@@ -792,7 +765,11 @@ func mergeRulesSettings(base, cliRules *cfgpkg.RulesSettings, overrides *RulesOv
 
 	if overrides == nil {
 		// No overrides tracking - use simple heuristics (legacy behavior)
-		if cliRules.PriorityMax != -1 {
+		// Only apply if value differs from default
+		if cliRules.PriorityMin > 0 {
+			result.PriorityMin = cliRules.PriorityMin
+		}
+		if cliRules.PriorityMax != -1 && cliRules.PriorityMax != 0 {
 			result.PriorityMax = cliRules.PriorityMax
 		}
 		if len(cliRules.Types) > 0 {
@@ -807,13 +784,17 @@ func mergeRulesSettings(base, cliRules *cfgpkg.RulesSettings, overrides *RulesOv
 		if len(cliRules.ExcludeLabels) > 0 {
 			result.ExcludeLabels = cliRules.ExcludeLabels
 		}
-		if cliRules.Assignee != "*" {
+		if cliRules.Assignee != "*" && cliRules.Assignee != "" {
 			result.Assignee = cliRules.Assignee
 		}
 		return result
 	}
 
-	// Apply only fields that were explicitly set via CLI flags
+	// Apply only fields that were explicitly set via CLI flags (3-tier precedence)
+	// Runtime overrides take precedence over config.toml settings
+	if overrides.PriorityMin {
+		result.PriorityMin = cliRules.PriorityMin
+	}
 	if overrides.PriorityMax {
 		result.PriorityMax = cliRules.PriorityMax
 	}

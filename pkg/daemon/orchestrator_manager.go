@@ -24,6 +24,8 @@ import (
 
 // RunConfig holds configuration for starting a new orchestration run.
 // This mirrors orchestrator.Config but is used at the IPC/daemon boundary.
+// Task selection parameters (priority, type, labels, assignee) are handled via
+// RuleOverrides or direct RulesSettings fields, not as top-level config.
 type RunConfig struct {
 	WorkDir         string        `json:"work_dir"`
 	OutputDir       string        `json:"output_dir,omitempty"`
@@ -32,15 +34,16 @@ type RunConfig struct {
 	DryRun          bool          `json:"dry_run,omitempty"`
 	UseBwrap        bool          `json:"use_bwrap,omitempty"`
 	MaxRetries      int           `json:"max_retries,omitempty"`
-	MaxPriority     int           `json:"max_priority,omitempty"`
 	ResolverTimeout time.Duration `json:"resolver_timeout,omitempty"`
 	PollInterval    time.Duration `json:"poll_interval,omitempty"`
 	RepoID          string        `json:"repo_id,omitempty"`
-	Types           []string      `json:"types,omitempty"`
-	ExcludeTypes    []string      `json:"exclude_types,omitempty"`
-	Labels          []string      `json:"labels,omitempty"`
-	ExcludeLabels   []string      `json:"exclude_labels,omitempty"`
-	Assignee        string        `json:"assignee,omitempty"`
+	// Task selection settings (applied to RulesSettings)
+	PriorityMax   int      `json:"priority_max,omitempty"` // Max priority filter (-1 = no filter)
+	Types         []string `json:"types,omitempty"`
+	ExcludeTypes  []string `json:"exclude_types,omitempty"`
+	Labels        []string `json:"labels,omitempty"`
+	ExcludeLabels []string `json:"exclude_labels,omitempty"`
+	Assignee      string   `json:"assignee,omitempty"`
 	// RuleOverrides contains custom rules to apply for this run only.
 	// These rules are applied with the highest precedence (above config.toml rules).
 	// When the run ends, these overrides are discarded unless persisted.
@@ -516,9 +519,6 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 	if config.MaxRetries == 0 {
 		config.MaxRetries = 3
 	}
-	if config.MaxPriority == 0 {
-		config.MaxPriority = -1 // No filter by default
-	}
 
 	// Update OrchestratorLifecycle state before releasing lock
 	lifecycle.State = OrchestratorActive
@@ -541,14 +541,15 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 		DryRun:          config.DryRun,
 		UseBwrap:        config.UseBwrap,
 		MaxRetries:      config.MaxRetries,
-		MaxPriority:     config.MaxPriority,
 		ResolverTimeout: config.ResolverTimeout,
 		PollInterval:    config.PollInterval,
 	}
 
 	// Apply CLI rules overrides if any were provided
+	// All task selection parameters go through the rules system
 	if hasRulesOverrides(&config) {
 		orchConfig.Rules = &cfgpkg.RulesSettings{
+			PriorityMax:   config.PriorityMax,
 			Types:         config.Types,
 			ExcludeTypes:  config.ExcludeTypes,
 			Labels:        config.Labels,
@@ -556,6 +557,7 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 			Assignee:      config.Assignee,
 		}
 		orchConfig.RulesOverrides = &orchestrator.RulesOverrides{
+			PriorityMax:   config.PriorityMax != 0,
 			Types:         len(config.Types) > 0,
 			ExcludeTypes:  len(config.ExcludeTypes) > 0,
 			Labels:        len(config.Labels) > 0,
@@ -817,9 +819,10 @@ func (m *OrchestratorManager) GetActiveRunForRepo(repoPath string) (*RunState, e
 }
 
 // UpdateRunConfig updates the configuration of a running orchestration.
-// Supports modifying concurrency and max priority filter.
+// Supports modifying concurrency. Task selection parameters (priority, types, labels)
+// are updated through the rules engine via the rules API, not this method.
 // Returns an error if the run is not found or not active.
-func (m *OrchestratorManager) UpdateRunConfig(runID string, concurrency *int, maxPriority *int) error {
+func (m *OrchestratorManager) UpdateRunConfig(runID string, concurrency *int) error {
 	runStateI, ok := m.runs.Load(runID)
 	if !ok {
 		return fmt.Errorf("run not found: %s", runID)
@@ -842,13 +845,6 @@ func (m *OrchestratorManager) UpdateRunConfig(runID string, concurrency *int, ma
 		// The new concurrency will take effect on the next run.
 		// TODO: Implement SetConcurrency on scheduler if dynamic resizing is needed.
 		logging.Info("updated run concurrency", "run_id", runID, "concurrency", *concurrency)
-	}
-
-	// Update max priority filter if specified
-	if maxPriority != nil {
-		runState.Config.MaxPriority = *maxPriority
-		// Note: MaxPriority changes will take effect on next task selection
-		logging.Info("updated run max priority", "run_id", runID, "max_priority", *maxPriority)
 	}
 
 	return nil
@@ -1405,7 +1401,8 @@ func (m *OrchestratorManager) KillAgent(agentID string) error {
 
 // hasRulesOverrides checks if any CLI rules overrides were provided in the RunConfig.
 func hasRulesOverrides(cfg *RunConfig) bool {
-	return len(cfg.Types) > 0 ||
+	return cfg.PriorityMax != 0 ||
+		len(cfg.Types) > 0 ||
 		len(cfg.ExcludeTypes) > 0 ||
 		len(cfg.Labels) > 0 ||
 		len(cfg.ExcludeLabels) > 0 ||

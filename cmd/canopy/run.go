@@ -255,15 +255,16 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		DryRun:            dryRun,
 		UseBwrap:          useSandbox,
 		MaxRetries:        maxRetries,
-		MaxPriority:       maxPriority,
 		ResolverTimeoutMS: effectiveResolverTimeout.Milliseconds(),
 		RepoID:            repoID,
 		PollIntervalMS:    pollInterval.Milliseconds(),
-		Types:             filterTypes,
-		ExcludeTypes:      excludeTypes,
-		Labels:            filterLabels,
-		ExcludeLabels:     excludeLabels,
-		Assignee:          filterAssignee,
+		// Task selection parameters
+		PriorityMax:   maxPriority,
+		Types:         filterTypes,
+		ExcludeTypes:  excludeTypes,
+		Labels:        filterLabels,
+		ExcludeLabels: excludeLabels,
+		Assignee:      filterAssignee,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to start orchestrator run: %w", err)
@@ -298,15 +299,16 @@ type startRunRequest struct {
 	DryRun            bool     `json:"dry_run,omitempty"`
 	UseBwrap          bool     `json:"use_bwrap,omitempty"`
 	MaxRetries        int      `json:"max_retries,omitempty"`
-	MaxPriority       int      `json:"max_priority,omitempty"`
 	ResolverTimeoutMS int64    `json:"resolver_timeout_ms,omitempty"`
 	RepoID            string   `json:"repo_id,omitempty"`
 	PollIntervalMS    int64    `json:"poll_interval_ms,omitempty"`
-	Types             []string `json:"types,omitempty"`
-	ExcludeTypes      []string `json:"exclude_types,omitempty"`
-	Labels            []string `json:"labels,omitempty"`
-	ExcludeLabels     []string `json:"exclude_labels,omitempty"`
-	Assignee          string   `json:"assignee,omitempty"`
+	// Task selection parameters (go through RulesSettings)
+	PriorityMax   int      `json:"priority_max,omitempty"`
+	Types         []string `json:"types,omitempty"`
+	ExcludeTypes  []string `json:"exclude_types,omitempty"`
+	Labels        []string `json:"labels,omitempty"`
+	ExcludeLabels []string `json:"exclude_labels,omitempty"`
+	Assignee      string   `json:"assignee,omitempty"`
 }
 
 // startRunResponse matches the daemon's ExecuteRunResponse

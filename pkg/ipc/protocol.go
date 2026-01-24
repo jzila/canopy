@@ -342,7 +342,7 @@ type ExecuteRunRequestPayload struct {
 	DryRun          bool   `json:"dry_run,omitempty"`           // Show plan without executing
 	UseBwrap        bool   `json:"use_bwrap,omitempty"`         // Use bubblewrap sandbox
 	MaxRetries      int    `json:"max_retries,omitempty"`       // Max retry attempts (default: 3)
-	MaxPriority     int    `json:"max_priority,omitempty"`      // Max priority filter (-1 = no filter)
+	PriorityMax     int    `json:"priority_max,omitempty"`      // Max priority filter (via RulesSettings)
 	ResolverTimeout int64  `json:"resolver_timeout_ms,omitempty"` // Resolver timeout in milliseconds
 	RepoID          string `json:"repo_id,omitempty"`           // Repository ID for tracking
 }

@@ -31,8 +31,9 @@ type RunConfig struct {
 	DryRun bool `json:"dry_run"`
 	// MaxRetries is the maximum retry count for failed tasks (-1 = infinite)
 	MaxRetries int `json:"max_retries"`
-	// MaxPriority filters tasks by priority (only tasks with priority <= this value)
-	MaxPriority int `json:"max_priority"`
+	// PriorityMax filters tasks by priority (only tasks with priority <= this value)
+	// This is set via RulesSettings, not as a direct Config parameter
+	PriorityMax int `json:"priority_max"`
 	// RuleOverrides contains custom rules to apply for this run only.
 	// These rules are applied with the highest precedence (above config.toml rules).
 	// When the run ends, these overrides are discarded unless persisted.
