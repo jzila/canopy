@@ -59,15 +59,23 @@ const (
 	OrchestratorPaused OrchestratorState = "paused"
 )
 
-// RepoOrchestrator represents an always-running orchestrator for a registered repository.
-// The orchestrator goroutine starts when the repo is registered and stops when unregistered.
-// "Starting a run" is a state transition (idle → active), not object creation.
-type RepoOrchestrator struct {
+// OrchestratorLifecycle manages the lifecycle of an always-running orchestrator for a repository.
+// It wraps orchestrator instances and manages state transitions between off, idle, active, and paused.
+//
+// State machine:
+//   - Off: Not activated, no orchestrator instance exists
+//   - Idle: Activated and watching for work, but no tasks currently available
+//   - Active: Processing tasks
+//   - Paused: Temporarily stopped by user or agent, will resume when unpaused
+//
+// The orchestrator starts when Activate() is called and stops when Deactivate() is called.
+// State transitions between Idle and Active happen automatically based on work availability.
+type OrchestratorLifecycle struct {
 	RepoPath string            `json:"repo_path"`
 	RepoID   string            `json:"repo_id"`
 	State    OrchestratorState `json:"state"`
 
-	// Current run information (only valid when State == OrchestratorActive)
+	// Current run information (only valid when State != OrchestratorOff)
 	RunID       string     `json:"run_id,omitempty"`
 	RunConfig   RunConfig  `json:"run_config,omitempty"`
 	StartTime   time.Time  `json:"start_time,omitempty"`
@@ -119,7 +127,7 @@ type OrchestratorManager struct {
 
 	// Always-running orchestrators indexed by repo path
 	// These are created when a repo is registered and destroyed when unregistered
-	orchestrators sync.Map // map[string]*RepoOrchestrator (repo path -> orchestrator)
+	orchestrators sync.Map // map[string]*OrchestratorLifecycle (repo path -> orchestrator)
 
 	// Event bus for publishing orchestration events directly
 	eventBus *events.EventBus
@@ -139,11 +147,11 @@ func NewOrchestratorManager(eventBus *events.EventBus, state *RuntimeState) *Orc
 // RegisterRepo creates an always-running orchestrator for a repository.
 // The orchestrator starts in IDLE state and waits for activation (StartRun).
 // If repoID is empty, it will be derived from the path.
-// Returns the RepoOrchestrator or an error if registration fails.
-func (m *OrchestratorManager) RegisterRepo(repoPath string, repoID string) (*RepoOrchestrator, error) {
+// Returns the OrchestratorLifecycle or an error if registration fails.
+func (m *OrchestratorManager) RegisterRepo(repoPath string, repoID string) (*OrchestratorLifecycle, error) {
 	// Check if already registered
 	if existing, ok := m.orchestrators.Load(repoPath); ok {
-		return existing.(*RepoOrchestrator), nil
+		return existing.(*OrchestratorLifecycle), nil
 	}
 
 	// Load config to create rules engine
@@ -158,8 +166,8 @@ func (m *OrchestratorManager) RegisterRepo(repoPath string, repoID string) (*Rep
 	// Create rules engine from config
 	rulesEngine := rules.NewEngine(&cfg.Rules)
 
-	// Create the RepoOrchestrator in OFF state (registered but not activated)
-	repoOrch := &RepoOrchestrator{
+	// Create the OrchestratorLifecycle in OFF state (registered but not activated)
+	lifecycle := &OrchestratorLifecycle{
 		RepoPath:    repoPath,
 		RepoID:      repoID,
 		State:       OrchestratorOff,
@@ -167,41 +175,41 @@ func (m *OrchestratorManager) RegisterRepo(repoPath string, repoID string) (*Rep
 	}
 
 	// Store atomically - another goroutine may have registered in parallel
-	if existing, loaded := m.orchestrators.LoadOrStore(repoPath, repoOrch); loaded {
-		return existing.(*RepoOrchestrator), nil
+	if existing, loaded := m.orchestrators.LoadOrStore(repoPath, lifecycle); loaded {
+		return existing.(*OrchestratorLifecycle), nil
 	}
 
 	logging.Info("registered repo orchestrator", "repo_path", repoPath, "state", OrchestratorOff)
 
-	return repoOrch, nil
+	return lifecycle, nil
 }
 
 // UnregisterRepo stops and removes the orchestrator for a repository.
 // If the orchestrator is active, it will be stopped first.
 // Returns an error if the repo is not registered.
 func (m *OrchestratorManager) UnregisterRepo(repoPath string) error {
-	repoOrchI, ok := m.orchestrators.Load(repoPath)
+	lifecycleI, ok := m.orchestrators.Load(repoPath)
 	if !ok {
 		return fmt.Errorf("repo not registered: %s", repoPath)
 	}
 
-	repoOrch := repoOrchI.(*RepoOrchestrator)
+	lifecycle := lifecycleI.(*OrchestratorLifecycle)
 
-	repoOrch.mu.Lock()
-	defer repoOrch.mu.Unlock()
+	lifecycle.mu.Lock()
+	defer lifecycle.mu.Unlock()
 
 	// Cancel any running orchestrator
-	if repoOrch.cancel != nil {
-		repoOrch.cancel()
-		repoOrch.cancel = nil
+	if lifecycle.cancel != nil {
+		lifecycle.cancel()
+		lifecycle.cancel = nil
 	}
 
 	// Remove from registry
 	m.orchestrators.Delete(repoPath)
 
 	// Also clean up any active run tracking
-	if repoOrch.RunID != "" {
-		m.runs.Delete(repoOrch.RunID)
+	if lifecycle.RunID != "" {
+		m.runs.Delete(lifecycle.RunID)
 		m.runsByRepo.Delete(repoPath)
 	}
 
@@ -210,11 +218,11 @@ func (m *OrchestratorManager) UnregisterRepo(repoPath string) error {
 	return nil
 }
 
-// GetRepoOrchestrator returns the orchestrator for a repository, if registered.
+// GetOrchestratorLifecycle returns the orchestrator for a repository, if registered.
 // Returns nil if the repo is not registered.
-func (m *OrchestratorManager) GetRepoOrchestrator(repoPath string) *RepoOrchestrator {
-	if repoOrchI, ok := m.orchestrators.Load(repoPath); ok {
-		return repoOrchI.(*RepoOrchestrator)
+func (m *OrchestratorManager) GetOrchestratorLifecycle(repoPath string) *OrchestratorLifecycle {
+	if lifecycleI, ok := m.orchestrators.Load(repoPath); ok {
+		return lifecycleI.(*OrchestratorLifecycle)
 	}
 	return nil
 }
@@ -222,10 +230,10 @@ func (m *OrchestratorManager) GetRepoOrchestrator(repoPath string) *RepoOrchestr
 // GetOrchestratorState returns the current state of the orchestrator for a repo.
 // Returns empty string if the repo is not registered.
 func (m *OrchestratorManager) GetOrchestratorState(repoPath string) OrchestratorState {
-	if repoOrch := m.GetRepoOrchestrator(repoPath); repoOrch != nil {
-		repoOrch.mu.RLock()
-		defer repoOrch.mu.RUnlock()
-		return repoOrch.State
+	if lifecycle := m.GetOrchestratorLifecycle(repoPath); lifecycle != nil {
+		lifecycle.mu.RLock()
+		defer lifecycle.mu.RUnlock()
+		return lifecycle.State
 	}
 	return ""
 }
@@ -245,11 +253,11 @@ func (m *OrchestratorManager) ListRegisteredRepos() []string {
 // Returns nil if no orchestrator exists for the repository.
 func (m *OrchestratorManager) GetRulesEngineForRepo(repoPath string) *rules.Engine {
 	// Check for always-running orchestrator first (preferred path)
-	if repoOrchI, ok := m.orchestrators.Load(repoPath); ok {
-		repoOrch := repoOrchI.(*RepoOrchestrator)
-		repoOrch.mu.RLock()
-		engine := repoOrch.rulesEngine
-		repoOrch.mu.RUnlock()
+	if lifecycleI, ok := m.orchestrators.Load(repoPath); ok {
+		lifecycle := lifecycleI.(*OrchestratorLifecycle)
+		lifecycle.mu.RLock()
+		engine := lifecycle.rulesEngine
+		lifecycle.mu.RUnlock()
 		if engine != nil {
 			return engine
 		}
@@ -301,14 +309,14 @@ func (m *OrchestratorManager) GetOrCreateRulesEngineForRepo(repoPath string) (*r
 	}
 
 	// No orchestrator yet - check if we have one registered but without an engine
-	if repoOrchI, ok := m.orchestrators.Load(repoPath); ok {
-		repoOrch := repoOrchI.(*RepoOrchestrator)
-		repoOrch.mu.Lock()
-		defer repoOrch.mu.Unlock()
+	if lifecycleI, ok := m.orchestrators.Load(repoPath); ok {
+		lifecycle := lifecycleI.(*OrchestratorLifecycle)
+		lifecycle.mu.Lock()
+		defer lifecycle.mu.Unlock()
 
 		// Double-check after acquiring lock
-		if repoOrch.rulesEngine != nil {
-			return repoOrch.rulesEngine, nil
+		if lifecycle.rulesEngine != nil {
+			return lifecycle.rulesEngine, nil
 		}
 
 		// Create engine for the registered orchestrator
@@ -317,28 +325,28 @@ func (m *OrchestratorManager) GetOrCreateRulesEngineForRepo(repoPath string) (*r
 			return nil, fmt.Errorf("failed to load config for %s: %w", repoPath, err)
 		}
 
-		repoOrch.rulesEngine = rules.NewEngine(&cfg.Rules)
-		return repoOrch.rulesEngine, nil
+		lifecycle.rulesEngine = rules.NewEngine(&cfg.Rules)
+		return lifecycle.rulesEngine, nil
 	}
 
 	// No orchestrator registered - auto-register one for this repo (lazy registration)
 	// This provides backwards compatibility: rules can be accessed without explicit registration
-	repoOrch, err := m.RegisterRepo(repoPath, "")
+	lifecycle, err := m.RegisterRepo(repoPath, "")
 	if err != nil {
 		return nil, fmt.Errorf("failed to register repo %s: %w", repoPath, err)
 	}
 
-	return repoOrch.rulesEngine, nil
+	return lifecycle.rulesEngine, nil
 }
 
 // InvalidateRulesEngine reloads the rules engine for a repo from config.
 // This should be called when the repo's config changes.
 // For backwards compatibility, this is also aliased as InvalidateStandaloneEngine.
 func (m *OrchestratorManager) InvalidateRulesEngine(repoPath string) {
-	if repoOrchI, ok := m.orchestrators.Load(repoPath); ok {
-		repoOrch := repoOrchI.(*RepoOrchestrator)
-		repoOrch.mu.Lock()
-		defer repoOrch.mu.Unlock()
+	if lifecycleI, ok := m.orchestrators.Load(repoPath); ok {
+		lifecycle := lifecycleI.(*OrchestratorLifecycle)
+		lifecycle.mu.Lock()
+		defer lifecycle.mu.Unlock()
 
 		// Reload config and create new engine
 		cfg, err := config.LoadConfig(repoPath)
@@ -348,7 +356,7 @@ func (m *OrchestratorManager) InvalidateRulesEngine(repoPath string) {
 			return
 		}
 
-		repoOrch.rulesEngine = rules.NewEngine(&cfg.Rules)
+		lifecycle.rulesEngine = rules.NewEngine(&cfg.Rules)
 	}
 }
 
@@ -410,22 +418,22 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 		return "", fmt.Errorf("work_dir is required")
 	}
 
-	// Get or create the RepoOrchestrator for this repo
-	repoOrch, err := m.RegisterRepo(config.WorkDir, config.RepoID)
+	// Get or create the OrchestratorLifecycle for this repo
+	lifecycle, err := m.RegisterRepo(config.WorkDir, config.RepoID)
 	if err != nil {
 		return "", fmt.Errorf("failed to register repo: %w", err)
 	}
 
 	// Lock the orchestrator for state transition
-	repoOrch.mu.Lock()
+	lifecycle.mu.Lock()
 
 	// Check if already active
-	if repoOrch.State == OrchestratorActive {
-		repoOrch.mu.Unlock()
+	if lifecycle.State == OrchestratorActive {
+		lifecycle.mu.Unlock()
 		return "", &canopyerrors.RunActiveError{
 			RepoPath:  config.WorkDir,
-			RunID:     repoOrch.RunID,
-			StartedAt: repoOrch.StartTime,
+			RunID:     lifecycle.RunID,
+			StartedAt: lifecycle.StartTime,
 		}
 	}
 
@@ -434,7 +442,7 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 
 	// Also check the legacy runsByRepo for backwards compatibility
 	if existingRunID, loaded := m.runsByRepo.LoadOrStore(config.WorkDir, runID); loaded {
-		repoOrch.mu.Unlock()
+		lifecycle.mu.Unlock()
 		existingID := existingRunID.(string)
 		var startedAt time.Time
 		if runStateI, ok := m.runs.Load(existingID); ok {
@@ -452,10 +460,10 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 	defer func() {
 		if cleanupOnError {
 			m.runsByRepo.Delete(config.WorkDir)
-			repoOrch.mu.Lock()
-			repoOrch.State = OrchestratorOff
-			repoOrch.RunID = ""
-			repoOrch.mu.Unlock()
+			lifecycle.mu.Lock()
+			lifecycle.State = OrchestratorOff
+			lifecycle.RunID = ""
+			lifecycle.mu.Unlock()
 		}
 	}()
 
@@ -473,17 +481,17 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 		config.MaxPriority = -1 // No filter by default
 	}
 
-	// Update RepoOrchestrator state before releasing lock
-	repoOrch.State = OrchestratorActive
-	repoOrch.RunID = runID
-	repoOrch.RunConfig = config
-	repoOrch.StartTime = time.Now()
-	repoOrch.TasksTotal = 0
-	repoOrch.TasksDone = 0
-	repoOrch.TasksFailed = 0
+	// Update OrchestratorLifecycle state before releasing lock
+	lifecycle.State = OrchestratorActive
+	lifecycle.RunID = runID
+	lifecycle.RunConfig = config
+	lifecycle.StartTime = time.Now()
+	lifecycle.TasksTotal = 0
+	lifecycle.TasksDone = 0
+	lifecycle.TasksFailed = 0
 
 	// Release lock before creating orchestrator (may block)
-	repoOrch.mu.Unlock()
+	lifecycle.mu.Unlock()
 
 	// Create orchestrator config
 	orchConfig := &orchestrator.Config{
@@ -508,15 +516,15 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 	// Create cancellable context for this run
 	runCtx, cancel := context.WithCancel(ctx)
 
-	// Update RepoOrchestrator with orchestrator instance
-	repoOrch.mu.Lock()
-	repoOrch.orch = orch
-	repoOrch.cancel = cancel
+	// Update OrchestratorLifecycle with orchestrator instance
+	lifecycle.mu.Lock()
+	lifecycle.orch = orch
+	lifecycle.cancel = cancel
 	// Update rules engine to use the orchestrator's engine for consistency
 	if orchEngine := orch.GetRulesEngine(); orchEngine != nil {
-		repoOrch.rulesEngine = orchEngine
+		lifecycle.rulesEngine = orchEngine
 	}
-	repoOrch.mu.Unlock()
+	lifecycle.mu.Unlock()
 
 	// Create run state for backwards compatibility
 	runState := &RunState{
@@ -525,7 +533,7 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 		RepoID:    config.RepoID,
 		Status:    RunStatusPending,
 		Config:    config,
-		StartTime: repoOrch.StartTime,
+		StartTime: lifecycle.StartTime,
 		orch:      orch,
 		cancel:    cancel,
 	}
@@ -535,7 +543,7 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 	orch.SetCallbacks(callbacks)
 
 	// Register state callbacks to track Idle/Active transitions
-	orch.SetStateCallbacks(m.createStateCallbacks(repoOrch))
+	orch.SetStateCallbacks(m.createStateCallbacks(lifecycle))
 
 	// Set run and repo IDs on the orchestrator for agent tracking
 	orch.SetRunID(runID)
@@ -555,9 +563,9 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 			runState.TasksTotal = len(tasks)
 			runState.mu.Unlock()
 
-			repoOrch.mu.Lock()
-			repoOrch.TasksTotal = len(tasks)
-			repoOrch.mu.Unlock()
+			lifecycle.mu.Lock()
+			lifecycle.TasksTotal = len(tasks)
+			lifecycle.mu.Unlock()
 		}
 	}
 
@@ -568,7 +576,7 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 	m.publishStateChange(OrchestratorIdle, 0)
 
 	// Start orchestrator in background goroutine
-	go m.runOrchestrator(runCtx, runState, repoOrch)
+	go m.runOrchestrator(runCtx, runState, lifecycle)
 
 	logging.Info("started orchestration run",
 		"run_id", runID,
@@ -608,18 +616,61 @@ func (m *OrchestratorManager) StopRun(runID string) error {
 	now := time.Now()
 	runState.EndTime = &now
 
-	// Also update the RepoOrchestrator state (back to off since orchestrator stopped)
-	if repoOrch := m.GetRepoOrchestrator(runState.RepoPath); repoOrch != nil {
-		repoOrch.mu.Lock()
-		repoOrch.State = OrchestratorOff
-		repoOrch.orch = nil
-		repoOrch.cancel = nil
-		repoOrch.mu.Unlock()
+	// Also update the OrchestratorLifecycle state (back to off since orchestrator stopped)
+	if lifecycle := m.GetOrchestratorLifecycle(runState.RepoPath); lifecycle != nil {
+		lifecycle.mu.Lock()
+		lifecycle.State = OrchestratorOff
+		lifecycle.orch = nil
+		lifecycle.cancel = nil
+		lifecycle.mu.Unlock()
 	}
 
 	logging.Info("cancelled orchestration run", "run_id", runID)
 
 	return nil
+}
+
+// Activate starts the orchestrator for a repository.
+// This is the preferred method for the always-active model. It wraps StartRun
+// and returns the run ID for backwards compatibility.
+//
+// State transition: Off → Idle (or Active if work is immediately available)
+func (m *OrchestratorManager) Activate(ctx context.Context, config RunConfig) (string, error) {
+	return m.StartRun(ctx, config)
+}
+
+// Deactivate stops the orchestrator for a repository by run ID.
+// This is the preferred method for the always-active model. It wraps StopRun.
+//
+// State transition: * → Off
+func (m *OrchestratorManager) Deactivate(runID string) error {
+	return m.StopRun(runID)
+}
+
+// DeactivateByRepo stops the orchestrator for a repository by repo path.
+// Returns an error if no active orchestrator exists for the repo.
+//
+// State transition: * → Off
+func (m *OrchestratorManager) DeactivateByRepo(repoPath string) error {
+	lifecycle := m.GetOrchestratorLifecycle(repoPath)
+	if lifecycle == nil {
+		return fmt.Errorf("no orchestrator registered for repo: %s", repoPath)
+	}
+
+	lifecycle.mu.RLock()
+	runID := lifecycle.RunID
+	state := lifecycle.State
+	lifecycle.mu.RUnlock()
+
+	if state == OrchestratorOff {
+		return fmt.Errorf("orchestrator is not active for repo: %s", repoPath)
+	}
+
+	if runID == "" {
+		return fmt.Errorf("no run ID found for active orchestrator: %s", repoPath)
+	}
+
+	return m.StopRun(runID)
 }
 
 // GetRunStatus returns the current status of a run.
@@ -728,8 +779,8 @@ func (m *OrchestratorManager) UpdateRunConfig(runID string, concurrency *int, ma
 }
 
 // runOrchestrator executes the orchestrator and handles completion.
-// It updates both the RunState (for backwards compatibility) and the RepoOrchestrator.
-func (m *OrchestratorManager) runOrchestrator(ctx context.Context, runState *RunState, repoOrch *RepoOrchestrator) {
+// It updates both the RunState (for backwards compatibility) and the OrchestratorLifecycle.
+func (m *OrchestratorManager) runOrchestrator(ctx context.Context, runState *RunState, lifecycle *OrchestratorLifecycle) {
 	// Update status to running
 	runState.mu.Lock()
 	runState.Status = RunStatusRunning
@@ -753,18 +804,18 @@ func (m *OrchestratorManager) runOrchestrator(ctx context.Context, runState *Run
 	}
 	runState.mu.Unlock()
 
-	// Transition RepoOrchestrator back to OFF state (orchestrator stopped)
-	if repoOrch != nil {
-		repoOrch.mu.Lock()
-		repoOrch.State = OrchestratorOff
-		repoOrch.orch = nil
-		repoOrch.cancel = nil
+	// Transition OrchestratorLifecycle back to OFF state (orchestrator stopped)
+	if lifecycle != nil {
+		lifecycle.mu.Lock()
+		lifecycle.State = OrchestratorOff
+		lifecycle.orch = nil
+		lifecycle.cancel = nil
 		// Keep rulesEngine for continued rules access in OFF state
 		// Reload from config to ensure fresh state
-		if cfg, err := config.LoadConfig(repoOrch.RepoPath); err == nil {
-			repoOrch.rulesEngine = rules.NewEngine(&cfg.Rules)
+		if cfg, err := config.LoadConfig(lifecycle.RepoPath); err == nil {
+			lifecycle.rulesEngine = rules.NewEngine(&cfg.Rules)
 		}
-		repoOrch.mu.Unlock()
+		lifecycle.mu.Unlock()
 	}
 
 	// Remove from active runs by repo
@@ -919,25 +970,25 @@ func (m *OrchestratorManager) createEventCallbacks(runID, repoID string) *orches
 	}
 }
 
-// createStateCallbacks creates state transition callbacks for a RepoOrchestrator.
-// These callbacks update the RepoOrchestrator's State field when the underlying
+// createStateCallbacks creates state transition callbacks for a OrchestratorLifecycle.
+// These callbacks update the OrchestratorLifecycle's State field when the underlying
 // Orchestrator transitions between Idle and Active states.
-func (m *OrchestratorManager) createStateCallbacks(repoOrch *RepoOrchestrator) *orchestrator.StateCallbacks {
+func (m *OrchestratorManager) createStateCallbacks(lifecycle *OrchestratorLifecycle) *orchestrator.StateCallbacks {
 	return &orchestrator.StateCallbacks{
 		OnIdle: func() {
-			repoOrch.mu.Lock()
-			repoOrch.State = OrchestratorIdle
-			repoOrch.mu.Unlock()
-			logging.Debug("orchestrator entered idle state", "repo_path", repoOrch.RepoPath)
+			lifecycle.mu.Lock()
+			lifecycle.State = OrchestratorIdle
+			lifecycle.mu.Unlock()
+			logging.Debug("orchestrator entered idle state", "repo_path", lifecycle.RepoPath)
 
 			// Publish state change event
 			m.publishStateChange(OrchestratorIdle, 0)
 		},
 		OnActive: func() {
-			repoOrch.mu.Lock()
-			repoOrch.State = OrchestratorActive
-			repoOrch.mu.Unlock()
-			logging.Debug("orchestrator entered active state", "repo_path", repoOrch.RepoPath)
+			lifecycle.mu.Lock()
+			lifecycle.State = OrchestratorActive
+			lifecycle.mu.Unlock()
+			logging.Debug("orchestrator entered active state", "repo_path", lifecycle.RepoPath)
 
 			// Count active agents
 			activeCount := m.countActiveAgents()

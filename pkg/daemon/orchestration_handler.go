@@ -54,6 +54,22 @@ type StopRunResponse struct {
 	Error   string `json:"error,omitempty"`
 }
 
+// ActivateRequest is the JSON request body for activating an orchestrator.
+// This is the preferred API for the always-active model.
+type ActivateRequest = ExecuteRunRequest
+
+// ActivateResponse is the JSON response for activating an orchestrator.
+type ActivateResponse = ExecuteRunResponse
+
+// DeactivateRequest is the JSON request body for deactivating an orchestrator.
+type DeactivateRequest struct {
+	RunID    string `json:"run_id,omitempty"`
+	RepoPath string `json:"repo_path,omitempty"`
+}
+
+// DeactivateResponse is the JSON response for deactivating an orchestrator.
+type DeactivateResponse = StopRunResponse
+
 // RunStatusResponse is the JSON response for run status queries.
 type RunStatusResponse struct {
 	Success bool            `json:"success"`
@@ -199,6 +215,76 @@ func (h *OrchestrationHandler) HandleStopRun(w http.ResponseWriter, r *http.Requ
 	logging.Info("stopped orchestration run via HTTP", "run_id", req.RunID)
 
 	writeJSON(w, http.StatusOK, StopRunResponse{
+		Success: true,
+	})
+}
+
+// HandleActivate handles POST /api/orchestrator/activate requests.
+// This is the preferred endpoint for the always-active orchestrator model.
+func (h *OrchestrationHandler) HandleActivate(w http.ResponseWriter, r *http.Request) {
+	// Delegate to HandleExecuteRun - they use the same request/response format
+	h.HandleExecuteRun(w, r)
+}
+
+// HandleDeactivate handles POST /api/orchestrator/deactivate requests.
+// This is the preferred endpoint for the always-active orchestrator model.
+// Accepts either run_id or repo_path.
+func (h *OrchestrationHandler) HandleDeactivate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if h.manager == nil {
+		writeJSON(w, http.StatusServiceUnavailable, DeactivateResponse{
+			Success: false,
+			Error:   "orchestration not available",
+		})
+		return
+	}
+
+	var req DeactivateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, DeactivateResponse{
+			Success: false,
+			Error:   "invalid request body: " + err.Error(),
+		})
+		return
+	}
+
+	var err error
+	if req.RunID != "" {
+		// Deactivate by run ID
+		err = h.manager.Deactivate(req.RunID)
+	} else if req.RepoPath != "" {
+		// Deactivate by repo path
+		err = h.manager.DeactivateByRepo(req.RepoPath)
+	} else {
+		writeJSON(w, http.StatusBadRequest, DeactivateResponse{
+			Success: false,
+			Error:   "either run_id or repo_path is required",
+		})
+		return
+	}
+
+	if err != nil {
+		logging.Warn("failed to deactivate orchestrator",
+			"run_id", req.RunID,
+			"repo_path", req.RepoPath,
+			"error", err)
+
+		writeJSON(w, http.StatusInternalServerError, DeactivateResponse{
+			Success: false,
+			Error:   err.Error(),
+		})
+		return
+	}
+
+	logging.Info("deactivated orchestrator via HTTP",
+		"run_id", req.RunID,
+		"repo_path", req.RepoPath)
+
+	writeJSON(w, http.StatusOK, DeactivateResponse{
 		Success: true,
 	})
 }
@@ -375,13 +461,25 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 func (h *OrchestrationHandler) RouteOrchestrator(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 
-	// POST /api/orchestrator/run - start a new run
+	// POST /api/orchestrator/activate - activate orchestrator (preferred)
+	if path == "/api/orchestrator/activate" && r.Method == http.MethodPost {
+		h.HandleActivate(w, r)
+		return
+	}
+
+	// POST /api/orchestrator/deactivate - deactivate orchestrator (preferred)
+	if path == "/api/orchestrator/deactivate" && r.Method == http.MethodPost {
+		h.HandleDeactivate(w, r)
+		return
+	}
+
+	// POST /api/orchestrator/run - start a new run (legacy, calls activate internally)
 	if path == "/api/orchestrator/run" && r.Method == http.MethodPost {
 		h.HandleExecuteRun(w, r)
 		return
 	}
 
-	// POST /api/orchestrator/run/stop - stop a run
+	// POST /api/orchestrator/run/stop - stop a run (legacy, calls deactivate internally)
 	if path == "/api/orchestrator/run/stop" && r.Method == http.MethodPost {
 		h.HandleStopRun(w, r)
 		return

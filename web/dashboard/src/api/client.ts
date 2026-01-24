@@ -333,6 +333,55 @@ export async function stopRun(runId: string): Promise<StopRunResponse> {
   });
 }
 
+// Activate/Deactivate API - preferred endpoints for always-active orchestrator model
+
+export interface ActivateRequest {
+  work_dir: string;
+  repo_id?: string;
+  concurrency?: number;
+  max_priority?: number;
+  use_bwrap?: boolean;
+  max_retries?: number;
+}
+
+export interface ActivateResponse {
+  success: boolean;
+  run_id?: string;
+  error?: string;
+}
+
+export interface DeactivateRequest {
+  run_id?: string;
+  repo_path?: string;
+}
+
+export interface DeactivateResponse {
+  success: boolean;
+  error?: string;
+}
+
+/**
+ * Activate the orchestrator for a repository.
+ * This is the preferred API for the always-active orchestrator model.
+ */
+export async function activate(request: ActivateRequest): Promise<ActivateResponse> {
+  return fetchJson<ActivateResponse>('/api/orchestrator/activate', {
+    method: 'POST',
+    body: JSON.stringify(request),
+  });
+}
+
+/**
+ * Deactivate the orchestrator.
+ * Can specify either run_id or repo_path.
+ */
+export async function deactivate(request: DeactivateRequest): Promise<DeactivateResponse> {
+  return fetchJson<DeactivateResponse>('/api/orchestrator/deactivate', {
+    method: 'POST',
+    body: JSON.stringify(request),
+  });
+}
+
 export async function getRunStatus(runId?: string): Promise<RunStatusResponse> {
   const endpoint = runId ? `/api/orchestrator/run?id=${runId}` : '/api/orchestrator/run';
   return fetchJson<RunStatusResponse>(endpoint);
