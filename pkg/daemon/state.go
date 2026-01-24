@@ -578,6 +578,9 @@ type RuntimeState struct {
 	persistentTasks map[string]*TaskState // From beads - does NOT get modified during runtime
 	runtimeTasks    map[string]*TaskState // Runtime overlay - rebuilt from agent events
 
+	// eventBus for publishing lifecycle transition events
+	eventBus *EventBus
+
 	mu sync.RWMutex
 }
 
@@ -1163,10 +1166,49 @@ func checkLifecycleDivergence(agent *AgentState, event string) {
 
 // SubscribeToEventBus subscribes to the EventBus and updates state from events.
 // Returns an unsubscribe function. This bridges IPC events to RuntimeState updates.
+// Also stores the EventBus reference for publishing lifecycle transition events.
 func (r *RuntimeState) SubscribeToEventBus(eventBus *EventBus) func() {
+	r.mu.Lock()
+	r.eventBus = eventBus
+	r.mu.Unlock()
+
 	return eventBus.Subscribe(func(event Event) {
 		r.handleEvent(event)
 	})
+}
+
+// makeLifecycleTransitionCallback creates a callback that publishes lifecycle
+// state transitions to the EventBus. This enables real-time tracking of agent
+// lifecycle state changes by dashboard and other subscribers.
+func (r *RuntimeState) makeLifecycleTransitionCallback(agentID string) lifecycle.TransitionCallback {
+	return func(from, to lifecycle.AgentLifecycleState, event lifecycle.AgentEvent) {
+		r.mu.RLock()
+		eventBus := r.eventBus
+		r.mu.RUnlock()
+
+		if eventBus == nil {
+			return
+		}
+
+		// Publish lifecycle state change event
+		eventBus.Publish(Event{
+			Type:      EventAgentRunning, // Reuse existing event type for lifecycle transitions
+			Timestamp: time.Now(),
+			Payload: map[string]interface{}{
+				"agent_id":        agentID,
+				"lifecycle_state": to.String(),
+				"previous_state":  from.String(),
+				"event":           event.String(),
+			},
+		})
+
+		logging.Debug("lifecycle state transition",
+			"agent_id", agentID,
+			"from", from.String(),
+			"to", to.String(),
+			"event", event.String(),
+		)
+	}
 }
 
 // handleEvent processes an event and updates the runtime state accordingly
@@ -1231,8 +1273,13 @@ func (r *RuntimeState) handleAgentStarted(payload map[string]interface{}, timest
 		r.mu.RUnlock()
 	}
 
-	// Initialize lifecycle state machine in starting state
-	agentLifecycle := lifecycle.New()
+	// Initialize lifecycle state machine in starting state with transition callback.
+	// The callback publishes lifecycle state changes to the EventBus.
+	// Note: The transition to running state is done in OnAgentStartFn callback,
+	// not here. This handler only initializes the agent with lifecycle in starting state.
+	agentLifecycle := lifecycle.New(
+		lifecycle.WithTransitionCallback(r.makeLifecycleTransitionCallback(agentID)),
+	)
 
 	agent := &AgentState{
 		ID:              agentID,
@@ -1247,17 +1294,8 @@ func (r *RuntimeState) handleAgentStarted(payload map[string]interface{}, timest
 		Lifecycle:       agentLifecycle,
 	}
 
-	// Transition lifecycle to running state (parallel with legacy Status field)
-	if err := agentLifecycle.Transition(lifecycle.EventAgentSpawned, lifecycle.TransitionContext{}); err != nil {
-		logging.Warn("lifecycle transition failed on agent start",
-			"agent_id", agentID,
-			"event", lifecycle.EventAgentSpawned,
-			"error", err,
-		)
-	}
-
-	// Check for divergence between legacy and lifecycle state
-	checkLifecycleDivergence(agent, "agent_started")
+	// Note: Lifecycle transition (EventAgentSpawned) is called in OnAgentStartFn callback
+	// after this event handler completes. This ensures the agent exists before transition.
 
 	r.AddAgent(agent)
 
@@ -1769,8 +1807,11 @@ func (r *RuntimeState) handleAgentCompleted(payload map[string]interface{}, time
 	})
 
 	// Update lifecycle state machine for completion (parallel with legacy fields)
-	// Note: Many completion events are already handled via merge status events,
-	// but agents can also complete directly (e.g., work failed, cancelled, timeout).
+	// Note: Primary lifecycle transitions are now handled in orchestrator callbacks:
+	// - OnDoneFn: EventWorkComplete → StateQueuedForMerge
+	// - OnFailFn: EventWorkFailed → StateFailed
+	// This handler only transitions for edge cases not covered by callbacks
+	// (e.g., events from recovery, or agents created without going through callbacks).
 	if agent.Lifecycle != nil {
 		transitionLifecycleForCompletion(agent, payload)
 	}

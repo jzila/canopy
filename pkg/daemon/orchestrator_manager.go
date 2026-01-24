@@ -14,6 +14,7 @@ import (
 	"github.com/jzila/canopy/pkg/config"
 	canopyerrors "github.com/jzila/canopy/pkg/errors"
 	"github.com/jzila/canopy/pkg/events"
+	"github.com/jzila/canopy/pkg/lifecycle"
 	"github.com/jzila/canopy/pkg/logging"
 	"github.com/jzila/canopy/pkg/orchestrator"
 	"github.com/jzila/canopy/pkg/rules"
@@ -844,7 +845,7 @@ func (m *OrchestratorManager) createEventCallbacks(runID, repoID string) *orches
 			// Record agent ID for parent-child tracking
 			// The orchestrator instance manages this via SetAgentID
 
-			// Publish agent started event
+			// Publish agent started event - this synchronously creates the agent in RuntimeState
 			m.eventBus.Publish(events.Event{
 				Type:      events.EventAgentStarted,
 				Timestamp: time.Now(),
@@ -858,6 +859,20 @@ func (m *OrchestratorManager) createEventCallbacks(runID, repoID string) *orches
 					"repo_id":          repoID,
 				},
 			})
+
+			// Transition lifecycle to running state (agent was created by event handler above)
+			// This is the authoritative state change - the event handler only initializes the lifecycle
+			if m.state != nil {
+				if agent := m.state.GetAgent(agentID); agent != nil && agent.Lifecycle != nil {
+					if err := agent.Lifecycle.Transition(lifecycle.EventAgentSpawned, lifecycle.TransitionContext{}); err != nil {
+						logging.Warn("lifecycle transition failed on agent start",
+							"agent_id", agentID,
+							"event", lifecycle.EventAgentSpawned,
+							"error", err,
+						)
+					}
+				}
+			}
 
 			// Update task status
 			m.eventBus.Publish(events.Event{
@@ -912,6 +927,20 @@ func (m *OrchestratorManager) createEventCallbacks(runID, repoID string) *orches
 				runState.mu.Unlock()
 			}
 
+			// Transition lifecycle to queued_for_merge state (work complete, awaiting merge)
+			// This is the authoritative state change - the merge processor will handle subsequent transitions
+			if m.state != nil {
+				if agent := m.state.GetAgent(agentID); agent != nil && agent.Lifecycle != nil {
+					if err := agent.Lifecycle.Transition(lifecycle.EventWorkComplete, lifecycle.TransitionContext{}); err != nil {
+						logging.Warn("lifecycle transition failed on agent done",
+							"agent_id", agentID,
+							"event", lifecycle.EventWorkComplete,
+							"error", err,
+						)
+					}
+				}
+			}
+
 			// Build completion payload
 			payload := m.buildCompletionPayload(agentID, result)
 
@@ -943,6 +972,24 @@ func (m *OrchestratorManager) createEventCallbacks(runID, repoID string) *orches
 				runState.mu.Lock()
 				runState.TasksFailed++
 				runState.mu.Unlock()
+			}
+
+			// Transition lifecycle to failed state (work failed, no retries)
+			// This is the authoritative state change
+			if m.state != nil {
+				if agent := m.state.GetAgent(agentID); agent != nil && agent.Lifecycle != nil {
+					// AttemptsRemaining = 0 means no retries, transition directly to failed
+					if err := agent.Lifecycle.Transition(lifecycle.EventWorkFailed, lifecycle.TransitionContext{
+						AttemptsRemaining: 0,
+						Error:             result.Error,
+					}); err != nil {
+						logging.Warn("lifecycle transition failed on agent fail",
+							"agent_id", agentID,
+							"event", lifecycle.EventWorkFailed,
+							"error", err,
+						)
+					}
+				}
 			}
 
 			// Build failure payload

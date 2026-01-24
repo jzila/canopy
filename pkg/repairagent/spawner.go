@@ -145,19 +145,6 @@ func (r *RepairAgent) Repair(ctx context.Context, repairCtx *RepairContext, pare
 	// Unlike the resolver, we don't need isolation since the merge is already applied.
 	overlay := sandbox.NewDirectOverlay(r.config.WorkDir)
 
-	// Send "repairing" status to indicate agent execution has begun
-	// This status is sent for the parent agent (implementor), not the repair agent
-	if r.ipcClient != nil {
-		if err := r.ipcClient.SendAgentRepairStatus(
-			parentAgentID,
-			repairCtx.RepairAttempt,
-			fmt.Sprintf("Repair attempt %d/%d in progress", repairCtx.RepairAttempt, repairCtx.MaxRepairAttempts),
-			"repairing",
-		); err != nil && r.config.Verbose {
-			fmt.Fprintf(os.Stderr, "warning: failed to send repairing status: %v\n", err)
-		}
-	}
-
 	// Execute the repair agent
 	agentResult := r.executor.Execute(ctx, repairTask, overlay, nil, nil)
 
@@ -278,19 +265,6 @@ func (r *RepairAgent) RepairPreCommit(ctx context.Context, repairCtx *PreCommitR
 	// Create a direct overlay that wraps the working directory without isolation.
 	// This allows the repair agent to commit directly to the repo.
 	overlay := sandbox.NewDirectOverlay(r.config.WorkDir)
-
-	// Send "repairing" status to indicate agent execution has begun
-	// This status is sent for the parent agent (implementor), not the repair agent
-	if r.ipcClient != nil {
-		if err := r.ipcClient.SendAgentRepairStatus(
-			parentAgentID,
-			repairCtx.RepairAttempt,
-			fmt.Sprintf("Pre-commit repair attempt %d/%d in progress", repairCtx.RepairAttempt, repairCtx.MaxRepairAttempts),
-			"repairing",
-		); err != nil && r.config.Verbose {
-			fmt.Fprintf(os.Stderr, "warning: failed to send pre-commit repairing status: %v\n", err)
-		}
-	}
 
 	// Execute the repair agent
 	agentResult := r.executor.Execute(ctx, repairTask, overlay, nil, nil)

@@ -109,10 +109,6 @@ type RulesOverrides struct {
 	Assignee      bool
 }
 
-// idleDebounceDelay is the delay before transitioning to idle state.
-// This prevents UI flickering when tasks complete and new work becomes available quickly.
-const idleDebounceDelay = 150 * time.Millisecond
-
 // Orchestrator coordinates the execution of tasks from beads
 type Orchestrator struct {
 	config           *Config
@@ -139,10 +135,6 @@ type Orchestrator struct {
 	// State transition callbacks
 	stateCallbacks *StateCallbacks
 	wasActive      bool // Track previous state to detect transitions
-
-	// Debounced idle transition - prevents flickering when work completes but new work arrives quickly
-	idleTimerMu sync.Mutex     // Protects idleTimer
-	idleTimer   *time.Timer    // Pending idle transition timer (nil if none pending)
 }
 
 // New creates a new orchestrator
@@ -407,7 +399,6 @@ func (o *Orchestrator) GetMaxRetries() int {
 }
 
 // notifyStateChange checks if state has changed and invokes appropriate callback.
-// Active transitions are immediate; idle transitions are debounced to prevent flickering.
 func (o *Orchestrator) notifyStateChange(inFlightCount int) {
 	if o.stateCallbacks == nil {
 		return
@@ -415,57 +406,18 @@ func (o *Orchestrator) notifyStateChange(inFlightCount int) {
 
 	isActive := inFlightCount > 0
 	if isActive && !o.wasActive {
-		// Transition to Active - immediate, and cancel any pending idle transition
-		o.cancelPendingIdleTransition()
+		// Transition to Active
 		o.wasActive = true
 		if o.stateCallbacks.OnActive != nil {
 			o.stateCallbacks.OnActive()
 		}
 	} else if !isActive && o.wasActive {
-		// Schedule debounced transition to Idle
-		o.scheduleIdleTransition()
-	}
-}
-
-// cancelPendingIdleTransition cancels any pending idle state transition.
-func (o *Orchestrator) cancelPendingIdleTransition() {
-	o.idleTimerMu.Lock()
-	defer o.idleTimerMu.Unlock()
-	if o.idleTimer != nil {
-		o.idleTimer.Stop()
-		o.idleTimer = nil
-	}
-}
-
-// scheduleIdleTransition schedules a debounced transition to idle state.
-// If new work arrives before the timer fires, the transition is cancelled.
-func (o *Orchestrator) scheduleIdleTransition() {
-	o.idleTimerMu.Lock()
-	defer o.idleTimerMu.Unlock()
-
-	// Cancel any existing timer
-	if o.idleTimer != nil {
-		o.idleTimer.Stop()
-	}
-
-	// Schedule the idle transition
-	o.idleTimer = time.AfterFunc(idleDebounceDelay, func() {
-		o.idleTimerMu.Lock()
-		o.idleTimer = nil
-		o.idleTimerMu.Unlock()
-
-		// Double-check we're still idle (no new work arrived)
-		o.inFlightMu.RLock()
-		stillIdle := len(o.inFlight) == 0
-		o.inFlightMu.RUnlock()
-
-		if stillIdle && o.wasActive {
-			o.wasActive = false
-			if o.stateCallbacks != nil && o.stateCallbacks.OnIdle != nil {
-				o.stateCallbacks.OnIdle()
-			}
+		// Transition to Idle
+		o.wasActive = false
+		if o.stateCallbacks.OnIdle != nil {
+			o.stateCallbacks.OnIdle()
 		}
-	})
+	}
 }
 
 // Run executes the orchestration loop, polling continuously for work until context is cancelled.
@@ -718,9 +670,6 @@ func (o *Orchestrator) markInFlight(taskID string) {
 	o.inFlight[taskID] = true
 	count := len(o.inFlight)
 	o.inFlightMu.Unlock()
-
-	// Cancel any pending idle transition - new work arrived
-	o.cancelPendingIdleTransition()
 
 	// Notify state change if we transitioned from empty to non-empty
 	if wasEmpty {
