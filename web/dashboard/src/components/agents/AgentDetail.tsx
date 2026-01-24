@@ -14,12 +14,16 @@ import {
   ChevronDown,
   ChevronRight,
   RefreshCw,
+  Users,
+  ExternalLink,
 } from 'lucide-react';
 import { CommitList } from './CommitList';
 import type { AgentState, MergeStatus } from '../../stores/stateStore';
+import { useStateStore } from '../../stores/stateStore';
 
 interface AgentDetailProps {
   agent: AgentState;
+  onSelectAgent?: (agentId: string) => void;
 }
 
 // Format duration in a readable way
@@ -209,9 +213,77 @@ const CollapsibleSection: React.FC<{
   );
 };
 
-export const AgentDetail: React.FC<AgentDetailProps> = ({ agent }) => {
+// Child agent row component - clickable to switch view
+const ChildAgentRow: React.FC<{
+  childAgent: AgentState;
+  onSelect?: (agentId: string) => void;
+}> = ({ childAgent, onSelect }) => {
+  const isResolver = !childAgent.task_id.includes('repair');
+  const isRepair = childAgent.task_id.includes('repair');
+  const isRunning = childAgent.status === 'running' || childAgent.status === 'starting';
+
+  const statusColors: Record<string, string> = {
+    starting: 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300',
+    running: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300',
+    completed: 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300',
+    failed: 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300',
+    timed_out: 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300',
+    cancelled: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300',
+  };
+
+  return (
+    <div
+      onClick={() => onSelect?.(childAgent.id)}
+      className={`
+        flex items-center justify-between p-2 rounded-lg border transition-all
+        ${onSelect ? 'cursor-pointer hover:border-blue-400 dark:hover:border-blue-500' : ''}
+        ${isRunning
+          ? 'border-amber-300 dark:border-amber-600 bg-amber-50 dark:bg-amber-900/20'
+          : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800'
+        }
+      `}
+    >
+      <div className="flex items-center gap-2">
+        <div className={`p-1 rounded ${isRunning ? 'bg-amber-100 dark:bg-amber-800' : 'bg-gray-100 dark:bg-gray-700'}`}>
+          {isResolver ? (
+            <GitMerge className={`w-4 h-4 ${isRunning ? 'text-amber-600 dark:text-amber-400' : 'text-purple-600 dark:text-purple-400'}`} />
+          ) : isRepair ? (
+            <RefreshCw className={`w-4 h-4 ${isRunning ? 'text-amber-600 dark:text-amber-400 animate-spin' : 'text-orange-600 dark:text-orange-400'}`} />
+          ) : (
+            <Activity className={`w-4 h-4 ${isRunning ? 'text-amber-600 dark:text-amber-400' : 'text-gray-600 dark:text-gray-400'}`} />
+          )}
+        </div>
+        <div>
+          <div className="text-sm font-medium text-gray-800 dark:text-gray-200">
+            {isResolver ? 'Conflict Resolver' : isRepair ? 'Repair Agent' : 'Child Agent'}
+          </div>
+          <div className="text-xs font-mono text-gray-500 dark:text-gray-400">{childAgent.id}</div>
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <span className={`text-xs px-2 py-0.5 rounded ${statusColors[childAgent.status] || 'bg-gray-100 text-gray-600'}`}>
+          {isRunning ? (isResolver ? 'Resolving' : 'Running') : childAgent.status}
+        </span>
+        {onSelect && (
+          <ExternalLink className="w-4 h-4 text-gray-400 dark:text-gray-500" />
+        )}
+      </div>
+    </div>
+  );
+};
+
+export const AgentDetail: React.FC<AgentDetailProps> = ({ agent, onSelectAgent }) => {
+  const agents = useStateStore((state) => state.agents);
   const hasTokenUsage = agent.token_usage && agent.token_usage.total_tokens > 0;
   const hasMergeStatus = agent.merge_status && agent.merge_status !== 'pending';
+
+  // Get child agents (resolvers, repair agents)
+  const childAgents = Object.values(agents).filter(
+    a => a.parent_agent_id === agent.id
+  ).sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
+
+  // Get parent agent if this is a child
+  const parentAgent = agent.parent_agent_id ? agents[agent.parent_agent_id] : null;
 
   return (
     <div className="h-full overflow-y-auto p-4 bg-gray-50 dark:bg-gray-900">
@@ -387,23 +459,56 @@ export const AgentDetail: React.FC<AgentDetailProps> = ({ agent }) => {
         </Section>
       )}
 
+      {/* Related Agents - show parent and children with click-to-view */}
+      {(childAgents.length > 0 || parentAgent) && (
+        <Section title="Related Agents">
+          <div className="space-y-2">
+            {/* Parent agent link */}
+            {parentAgent && (
+              <div
+                onClick={() => onSelectAgent?.(parentAgent.id)}
+                className={`
+                  flex items-center justify-between p-2 rounded-lg border transition-all
+                  ${onSelectAgent ? 'cursor-pointer hover:border-blue-400 dark:hover:border-blue-500' : ''}
+                  border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800
+                `}
+              >
+                <div className="flex items-center gap-2">
+                  <div className="p-1 rounded bg-gray-100 dark:bg-gray-700">
+                    <Users className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+                  </div>
+                  <div>
+                    <div className="text-sm font-medium text-gray-800 dark:text-gray-200">Parent Worker</div>
+                    <div className="text-xs font-mono text-gray-500 dark:text-gray-400">{parentAgent.id}</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-500 dark:text-gray-400">{parentAgent.task_title}</span>
+                  {onSelectAgent && (
+                    <ExternalLink className="w-4 h-4 text-gray-400 dark:text-gray-500" />
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Child agents */}
+            {childAgents.map(child => (
+              <ChildAgentRow
+                key={child.id}
+                childAgent={child}
+                {...(onSelectAgent && { onSelect: onSelectAgent })}
+              />
+            ))}
+          </div>
+        </Section>
+      )}
+
       {/* Agent IDs */}
       <Section title="Identifiers">
         <div className="space-y-2">
           <DetailRow icon={<Hash className="w-4 h-4" />} label="Agent ID" value={agent.id} monospace />
           {agent.run_id && (
             <DetailRow icon={<Hash className="w-4 h-4" />} label="Run ID" value={agent.run_id} monospace />
-          )}
-          {agent.parent_agent_id && (
-            <DetailRow icon={<Hash className="w-4 h-4" />} label="Parent Agent" value={agent.parent_agent_id} monospace />
-          )}
-          {agent.child_agent_ids && agent.child_agent_ids.length > 0 && (
-            <DetailRow
-              icon={<Hash className="w-4 h-4" />}
-              label="Child Agents"
-              value={agent.child_agent_ids.join(', ')}
-              monospace
-            />
           )}
         </div>
       </Section>

@@ -556,6 +556,7 @@ export const Dashboard: React.FC = () => {
               isResizing={isResizing}
               onResizeStart={handleResizeStart}
               onClose={() => setSelectedAgent(null)}
+              onSelectAgent={handleSelectAgent}
             />
           )}
         </main>

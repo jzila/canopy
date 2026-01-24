@@ -176,6 +176,13 @@ export const AgentCard: React.FC<AgentCardProps> = ({
     a => a.parent_agent_id === agent.id
   );
 
+  // Check if there's an active resolver for this agent's task
+  const activeResolver = childAgents.find(
+    child => (child.status === 'running' || child.status === 'starting') &&
+             !child.task_id.includes('repair')
+  );
+  const hasActiveResolver = Boolean(activeResolver);
+
   // Update elapsed time every second for running agents
   useEffect(() => {
     if (agent.status === 'running' || agent.status === 'starting') {
@@ -298,8 +305,8 @@ export const AgentCard: React.FC<AgentCardProps> = ({
                 {agent.task_id}
               </code>
             )}
-            <span className={`inline-flex items-center px-2.5 py-1 rounded text-xs font-medium tracking-wider text-white ${lifecycleDisplay.color}`}>
-              {lifecycleDisplay.label}
+            <span className={`inline-flex items-center px-2.5 py-1 rounded text-xs font-medium tracking-wider text-white ${hasActiveResolver ? 'bg-amber-500' : lifecycleDisplay.color}`}>
+              {hasActiveResolver ? 'Resolving' : lifecycleDisplay.label}
             </span>
             {/* Retry indicator badge - only shown for retried tasks */}
             {agent.attempt !== undefined && agent.max_retries !== undefined && formatRetryBadge(agent.attempt, agent.max_retries) && (

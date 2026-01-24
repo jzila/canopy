@@ -19,6 +19,8 @@ export interface TerminalPanelProps {
   onResizeStart: (e: React.MouseEvent) => void;
   /** Called when close button is clicked */
   onClose: () => void;
+  /** Called when a different agent is selected (e.g., clicking on child agent) */
+  onSelectAgent?: (agentId: string) => void;
 }
 
 /**
@@ -36,6 +38,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
   isResizing,
   onResizeStart,
   onClose,
+  onSelectAgent,
 }) => {
   const [activeTab, setActiveTab] = useState<TerminalTab>('feed');
 
@@ -157,7 +160,7 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
               <CommitList commits={agent.git_commits || []} />
             </div>
           )}
-          {activeTab === 'detail' && <AgentDetail agent={agent} />}
+          {activeTab === 'detail' && <AgentDetail agent={agent} {...(onSelectAgent && { onSelectAgent })} />}
         </div>
       </div>
     </div>
