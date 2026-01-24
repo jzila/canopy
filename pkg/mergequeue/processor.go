@@ -967,6 +967,10 @@ func (p *Processor) runValidationAndRepair(ctx context.Context, taskID, taskTitl
 		// Spawn repair agent
 		result.RepairAttempted = true
 
+		// Send pending_repair status - deciding to spawn repair agent
+		p.sendValidationStatus(agentID, ipc.MergeStatusResolving, "", commitsApplied, hadConflict, resolverSpawned,
+			"pending_repair", fmt.Sprintf("Preparing repair attempt %d/%d", attempt+1, maxAttempts), 0, nil)
+
 		if p.verbose {
 			fmt.Printf("[%s] Validation failed, spawning repair agent (attempt %d/%d)...\n",
 				taskID, attempt+1, maxAttempts)
@@ -993,11 +997,11 @@ func (p *Processor) runValidationAndRepair(ctx context.Context, taskID, taskTitl
 			MaxRepairAttempts: maxAttempts,
 		}
 
-		// Send IPC status update for repair starting
+		// Send spawning_repair status - creating repair agent
 		p.sendValidationStatus(agentID, ipc.MergeStatusResolving, "", commitsApplied, hadConflict, resolverSpawned,
-			"repairing", fmt.Sprintf("Repair attempt %d/%d", attempt+1, maxAttempts), 0, nil)
+			"spawning_repair", fmt.Sprintf("Spawning repair agent %d/%d", attempt+1, maxAttempts), 0, nil)
 
-		// Execute repair agent
+		// Execute repair agent (will transition to "repairing" when agent starts)
 		repairResult, err := p.repairAgent.Repair(ctx, repairCtx, agentID)
 		if err != nil {
 			result.Error = fmt.Sprintf("repair agent error: %v", err)

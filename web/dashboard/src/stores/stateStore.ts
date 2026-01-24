@@ -15,7 +15,8 @@ export type AgentStatus =
 export type MergeStatus = 'pending' | 'acquiring' | 'merging' | 'resolving' | 'merged' | 'failed' | 'skipped' | 'merged_needs_repair';
 
 // Validation status types matching Go backend (validation/executor.go)
-export type ValidationStatus = 'pending' | 'running' | 'passed' | 'failed' | 'skipped' | 'repairing';
+// Includes repair-related intermediate states: pending_repair (deciding to spawn), spawning_repair (creating agent), repairing (agent executing)
+export type ValidationStatus = 'pending' | 'running' | 'passed' | 'failed' | 'skipped' | 'pending_repair' | 'spawning_repair' | 'repairing';
 
 // ValidationStep represents a single validation step result
 export interface ValidationStep {
