@@ -6,7 +6,6 @@ import (
 	"net"
 	"os"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/jzila/canopy/pkg/repository"
@@ -47,9 +46,6 @@ type Client struct {
 	reconnecting   bool          // Whether a reconnect goroutine is running
 	reconnectStop  chan struct{} // Signal to stop reconnect goroutine
 	verbose        bool          // Whether to log warnings to stderr
-
-	// Merge status sequence counter for ordering events
-	mergeStatusSeq atomic.Int64
 }
 
 // NewClient creates a new IPC client and connects to the daemon socket
@@ -401,19 +397,11 @@ func (c *Client) SendAgentCommit(agentID string, commit *AgentCommitPayload) err
 	return c.sendMessage(MessageTypeAgentCommit, commit)
 }
 
-// nextMergeStatusSeq returns the next monotonically increasing sequence number
-// for merge status events. This allows the frontend to detect and discard
-// out-of-order events.
-func (c *Client) nextMergeStatusSeq() int64 {
-	return c.mergeStatusSeq.Add(1)
-}
-
 // SendAgentMergeStatus notifies the daemon of an agent's merge queue status
 func (c *Client) SendAgentMergeStatus(agentID string, status MergeStatus, queuePos int, errMsg string) error {
 	payload := AgentMergeStatusPayload{
 		AgentID:     agentID,
 		MergeStatus: status,
-		Sequence:    c.nextMergeStatusSeq(),
 		QueuePos:    queuePos,
 		Error:       errMsg,
 	}
@@ -427,7 +415,6 @@ func (c *Client) SendAgentMergeStatusFull(agentID string, status MergeStatus, qu
 	payload := AgentMergeStatusPayload{
 		AgentID:         agentID,
 		MergeStatus:     status,
-		Sequence:        c.nextMergeStatusSeq(),
 		QueuePos:        queuePos,
 		Error:           errMsg,
 		CommitsApplied:  commitsApplied,
@@ -444,7 +431,6 @@ func (c *Client) SendAgentMergeStatusWithValidation(agentID string, status Merge
 	payload := AgentMergeStatusPayload{
 		AgentID:            agentID,
 		MergeStatus:        status,
-		Sequence:           c.nextMergeStatusSeq(),
 		Error:              errMsg,
 		CommitsApplied:     commitsApplied,
 		HadConflict:        hadConflict,
@@ -464,7 +450,6 @@ func (c *Client) SendAgentRepairStatus(agentID string, repairAttempts int, lastR
 	payload := AgentMergeStatusPayload{
 		AgentID:          agentID,
 		MergeStatus:      MergeStatusResolving, // Repair uses resolving status
-		Sequence:         c.nextMergeStatusSeq(),
 		ValidationStatus: validationStatus,
 		RepairAttempts:   repairAttempts,
 		LastRepairOutput: lastRepairOutput,

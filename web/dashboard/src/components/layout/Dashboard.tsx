@@ -145,10 +145,18 @@ export const Dashboard: React.FC = () => {
   const isStoppingRun = useStateStore((state) => state.isStoppingRun);
   const runConfig = useStateStore((state) => state.runConfig);
   const showRunConfigDialog = useStateStore((state) => state.showRunConfigDialog);
-  const setStartingRun = useStateStore((state) => state.setStartingRun);
-  const setStoppingRun = useStateStore((state) => state.setStoppingRun);
   const setShowRunConfigDialog = useStateStore((state) => state.setShowRunConfigDialog);
-  const setCurrentRunId = useStateStore((state) => state.setCurrentRunId);
+  // Optimistic update actions
+  const startOptimisticRun = useStateStore((state) => state.startOptimisticRun);
+  const confirmRunStarted = useStateStore((state) => state.confirmRunStarted);
+  const rollbackRunStart = useStateStore((state) => state.rollbackRunStart);
+  const startOptimisticStop = useStateStore((state) => state.startOptimisticStop);
+  const confirmRunStopped = useStateStore((state) => state.confirmRunStopped);
+  const rollbackRunStop = useStateStore((state) => state.rollbackRunStop);
+  const startOptimisticPause = useStateStore((state) => state.startOptimisticPause);
+  const rollbackPause = useStateStore((state) => state.rollbackPause);
+  const startOptimisticResume = useStateStore((state) => state.startOptimisticResume);
+  const rollbackResume = useStateStore((state) => state.rollbackResume);
 
   // Use the agent filtering hook
   const { groupedAgents, archivedCount } = useAgentFiltering({
@@ -223,16 +231,21 @@ export const Dashboard: React.FC = () => {
     loadRuns();
   }, [activeRepoId, setRuns, setActiveRunId, setRunsLoading]);
 
-  // Event handlers
+  // Event handlers - using optimistic updates
   const handlePause = async () => {
     if (isPauseLoading) return;
 
+    // Optimistic update - immediately show paused state
+    startOptimisticPause();
+    setIsPauseLoading(true);
+
     try {
-      setIsPauseLoading(true);
       await pauseOrch();
-      // State update comes from WebSocket event
+      // WebSocket event will confirm the pause with final state
     } catch (error) {
       console.error('Failed to pause orchestration:', error);
+      // Rollback to previous state on error
+      rollbackPause(error instanceof Error ? error.message : 'Failed to pause');
     } finally {
       setIsPauseLoading(false);
     }
@@ -241,12 +254,17 @@ export const Dashboard: React.FC = () => {
   const handleResume = async () => {
     if (isResumeLoading) return;
 
+    // Optimistic update - immediately show resumed state
+    startOptimisticResume();
+    setIsResumeLoading(true);
+
     try {
-      setIsResumeLoading(true);
       await resumeOrch();
-      // State update comes from WebSocket event
+      // WebSocket event will confirm the resume with final state
     } catch (error) {
       console.error('Failed to resume orchestration:', error);
+      // Rollback to previous state on error
+      rollbackResume(error instanceof Error ? error.message : 'Failed to resume');
     } finally {
       setIsResumeLoading(false);
     }
@@ -297,8 +315,13 @@ export const Dashboard: React.FC = () => {
       return;
     }
 
+    // Generate a temporary run ID for optimistic update
+    const tempRunId = `temp-${Date.now()}`;
+
+    // Optimistic update - immediately show starting state
+    startOptimisticRun(tempRunId);
+
     try {
-      setStartingRun(true);
       const response = await startRun({
         work_dir: activeRepo.path,
         repo_id: activeRepo.id,
@@ -309,20 +332,22 @@ export const Dashboard: React.FC = () => {
       });
 
       if (response.success && response.run_id) {
-        setCurrentRunId(response.run_id);
+        // Confirm with the actual run ID
+        confirmRunStarted(response.run_id);
         setShowRunConfigDialog(false);
         // Refresh state after starting run
         const state = await getState();
         syncState(state);
       } else {
-        console.error('Failed to start run:', response.error);
+        // Rollback on failure response
+        rollbackRunStart(response.error || 'Failed to start run');
       }
     } catch (error) {
       console.error('Failed to start run:', error);
-    } finally {
-      setStartingRun(false);
+      // Rollback on exception
+      rollbackRunStart(error instanceof Error ? error.message : 'Failed to start run');
     }
-  }, [activeRepoId, repositories, setStartingRun, setCurrentRunId, setShowRunConfigDialog, syncState]);
+  }, [activeRepoId, repositories, startOptimisticRun, confirmRunStarted, rollbackRunStart, setShowRunConfigDialog, syncState]);
 
   const handleStopRun = useCallback(async () => {
     const runId = useStateStore.getState().currentRunId;
@@ -331,24 +356,28 @@ export const Dashboard: React.FC = () => {
       return;
     }
 
+    // Optimistic update - immediately show stopping state
+    startOptimisticStop();
+
     try {
-      setStoppingRun(true);
       const response = await stopRun(runId);
 
       if (response.success) {
-        // The currentRunId will be cleared by run:completed WebSocket event
+        // Confirm the stop
+        confirmRunStopped();
         // Refresh state after stopping run
         const state = await getState();
         syncState(state);
       } else {
-        console.error('Failed to stop run:', response.error);
+        // Rollback on failure response
+        rollbackRunStop(response.error || 'Failed to stop run');
       }
     } catch (error) {
       console.error('Failed to stop run:', error);
-    } finally {
-      setStoppingRun(false);
+      // Rollback on exception
+      rollbackRunStop(error instanceof Error ? error.message : 'Failed to stop run');
     }
-  }, [setStoppingRun, syncState]);
+  }, [startOptimisticStop, confirmRunStopped, rollbackRunStop, syncState]);
 
   // Activate orchestrator - starts with current run config
   const handleActivate = useCallback(async () => {
@@ -358,8 +387,13 @@ export const Dashboard: React.FC = () => {
       return;
     }
 
+    // Generate a temporary run ID for optimistic update
+    const tempRunId = `temp-${Date.now()}`;
+
+    // Optimistic update - immediately show activating state
+    startOptimisticRun(tempRunId);
+
     try {
-      setStartingRun(true);
       const config = useStateStore.getState().runConfig;
       const response = await startRun({
         work_dir: activeRepo.path,
@@ -371,19 +405,21 @@ export const Dashboard: React.FC = () => {
       });
 
       if (response.success && response.run_id) {
-        setCurrentRunId(response.run_id);
+        // Confirm with the actual run ID
+        confirmRunStarted(response.run_id);
         // Refresh state after activating
         const state = await getState();
         syncState(state);
       } else {
-        console.error('Failed to activate orchestrator:', response.error);
+        // Rollback on failure response
+        rollbackRunStart(response.error || 'Failed to activate orchestrator');
       }
     } catch (error) {
       console.error('Failed to activate orchestrator:', error);
-    } finally {
-      setStartingRun(false);
+      // Rollback on exception
+      rollbackRunStart(error instanceof Error ? error.message : 'Failed to activate orchestrator');
     }
-  }, [activeRepoId, repositories, setStartingRun, setCurrentRunId, syncState]);
+  }, [activeRepoId, repositories, startOptimisticRun, confirmRunStarted, rollbackRunStart, syncState]);
 
   // Deactivate orchestrator - same as stop run
   const handleDeactivate = handleStopRun;

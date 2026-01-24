@@ -213,7 +213,6 @@ type ValidationStep = types.ValidationStep
 type AgentMergeStatusPayload struct {
 	AgentID         string      `json:"agent_id"`
 	MergeStatus     MergeStatus `json:"merge_status"`
-	Sequence        int64       `json:"sequence"`                    // Monotonic sequence number for ordering events
 	QueuePos        int         `json:"queue_pos,omitempty"`         // Position in wait queue (0 = not waiting)
 	Error           string      `json:"error,omitempty"`             // Error message if merge failed
 	CommitsApplied  int         `json:"commits_applied,omitempty"`   // Number of commits applied (for final status)

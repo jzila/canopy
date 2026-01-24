@@ -18,6 +18,23 @@ export type MergeStatus = 'pending' | 'acquiring' | 'merging' | 'resolving' | 'm
 // Includes repair-related intermediate states: pending_repair (deciding to spawn), spawning_repair (creating agent), repairing (agent executing)
 export type ValidationStatus = 'pending' | 'running' | 'passed' | 'failed' | 'skipped' | 'pending_repair' | 'spawning_repair' | 'repairing';
 
+// Lifecycle state types matching Go backend (lifecycle/state.go)
+// This is the new unified state machine that replaces interpreting multiple fields
+export type LifecycleState =
+  | 'starting'
+  | 'running'
+  | 'queued_for_merge'
+  | 'merging'
+  | 'resolving'
+  | 'validating'
+  | 'repairing'
+  | 'merge_failed'
+  | 'completed'
+  | 'failed'
+  | 'needs_attention'
+  | 'cancelled'
+  | 'timed_out';
+
 // ValidationStep represents a single validation step result
 export interface ValidationStep {
   name: string;           // e.g., "build", "test", "lint"
@@ -75,6 +92,7 @@ export interface AgentState {
   parent_agent_id?: string;    // ID of parent agent if spawned by another agent
   child_agent_ids?: string[];  // IDs of child agents spawned by this agent
   status: AgentStatus;
+  lifecycle_state?: LifecycleState; // New unified lifecycle state (optional for backwards compat)
   start_time: string;
   end_time: string | null;
   duration: number;
@@ -93,7 +111,6 @@ export interface AgentState {
   max_retries?: number;       // Maximum retry attempts configured (0 = no retries, -1 = infinite)
   // Merge status fields (snake_case per API conventions)
   merge_status?: MergeStatus;
-  merge_status_seq?: number;        // Last processed sequence number for out-of-order detection
   merge_queue_pos?: number;
   merge_error?: string;
   merge_commits_applied?: number;   // Number of commits applied during merge
@@ -161,6 +178,32 @@ export const DEFAULT_RUN_CONFIG: RunConfig = {
   max_retries: 3,
 };
 
+// Optimistic update types
+export type OptimisticOperationType =
+  | 'start_run'
+  | 'stop_run'
+  | 'pause_orch'
+  | 'resume_orch';
+
+export interface OptimisticOperation {
+  id: string;
+  type: OptimisticOperationType;
+  previousState: Partial<OptimisticStateSnapshot>;
+  timestamp: number;
+}
+
+// Snapshot of state fields that can be optimistically updated
+export interface OptimisticStateSnapshot {
+  orchestratorState: OrchestratorState;
+  pauseState: PauseState;
+  isPaused: boolean;
+  isPausedByUser: boolean;
+  isPausedByAgent: boolean;
+  currentRunId: string;
+  isStartingRun: boolean;
+  isStoppingRun: boolean;
+}
+
 export interface RuntimeState {
   agents: Record<string, AgentState>;
   tasks: Record<string, TaskState>;
@@ -212,6 +255,10 @@ interface StateStore {
   isRulesLoading: boolean;
   showAddRuleDialog: boolean;
 
+  // Optimistic update state
+  pendingOperations: OptimisticOperation[];
+  lastError: { operation: OptimisticOperationType; message: string } | null;
+
   // Actions
   setConnected: (connected: boolean) => void;
   updateAgent: (id: string, update: Partial<AgentState>) => void;
@@ -237,7 +284,6 @@ interface StateStore {
   updateAgentMergeStatus: (
     agentId: string,
     mergeStatus: MergeStatus,
-    sequence: number,
     queuePos?: number,
     error?: string,
     validationStatus?: ValidationStatus,
@@ -272,6 +318,25 @@ interface StateStore {
   updateRule: (name: string, update: Partial<Rule>) => void;
   removeRule: (name: string) => void;
   reorderRules: (fromIndex: number, toIndex: number) => void;
+
+  // Optimistic update actions
+  startOptimisticRun: (tempRunId: string) => void;
+  confirmRunStarted: (runId: string) => void;
+  rollbackRunStart: (error: string) => void;
+
+  startOptimisticStop: () => void;
+  confirmRunStopped: () => void;
+  rollbackRunStop: (error: string) => void;
+
+  startOptimisticPause: () => void;
+  confirmPause: (pauseState: PauseState) => void;
+  rollbackPause: (error: string) => void;
+
+  startOptimisticResume: () => void;
+  confirmResume: (pauseState: PauseState) => void;
+  rollbackResume: (error: string) => void;
+
+  clearLastError: () => void;
 }
 
 // Initial stats
@@ -376,6 +441,10 @@ export const useStateStore = create<StateStore>((set) => ({
   rulesPersistedState: false,
   isRulesLoading: false,
   showAddRuleDialog: false,
+
+  // Optimistic update state
+  pendingOperations: [],
+  lastError: null,
 
   // Actions
   setConnected: (connected) => set({ connected }),
@@ -564,7 +633,7 @@ export const useStateStore = create<StateStore>((set) => ({
 
   setMergeQueue: (mergeQueue) => set({ mergeQueue }),
 
-  updateAgentMergeStatus: (agentId, mergeStatus, sequence, queuePos, error, validationStatus, validationSteps, validationDurationMs, validationError, repairAttempts, lastRepairOutput) =>
+  updateAgentMergeStatus: (agentId, mergeStatus, queuePos, error, validationStatus, validationSteps, validationDurationMs, validationError, repairAttempts, lastRepairOutput) =>
     set((state) => {
       const agent = state.agents[agentId];
       if (!agent) {
@@ -574,19 +643,10 @@ export const useStateStore = create<StateStore>((set) => ({
         return state;
       }
 
-      // Check for out-of-order events: if we've already processed a higher sequence
-      // number, discard this stale event to prevent UI confusion
-      const lastSeq = agent.merge_status_seq ?? 0;
-      if (sequence > 0 && sequence <= lastSeq) {
-        console.debug('[StateStore] Discarding out-of-order merge status event:', agentId, 'seq:', sequence, 'last:', lastSeq);
-        return state;
-      }
-
       // Build update object with proper handling of optional fields
       const updatedAgent: AgentState = {
         ...agent,
         merge_status: mergeStatus,
-        merge_status_seq: sequence,
       };
 
       // Only set fields if provided (exactOptionalPropertyTypes compliance)
@@ -717,4 +777,193 @@ export const useStateStore = create<StateStore>((set) => ({
         rulesPersistedState: false, // Reordering changes persisted state
       };
     }),
+
+  // Optimistic update actions - Start Run
+  startOptimisticRun: (tempRunId) =>
+    set((state) => {
+      const operation: OptimisticOperation = {
+        id: `start_run_${Date.now()}`,
+        type: 'start_run',
+        previousState: {
+          orchestratorState: state.orchestratorState,
+          currentRunId: state.currentRunId,
+          isStartingRun: state.isStartingRun,
+        },
+        timestamp: Date.now(),
+      };
+      return {
+        pendingOperations: [...state.pendingOperations, operation],
+        orchestratorState: 'active' as OrchestratorState,
+        currentRunId: tempRunId,
+        isStartingRun: true,
+        lastError: null,
+      };
+    }),
+
+  confirmRunStarted: (runId) =>
+    set((state) => ({
+      pendingOperations: state.pendingOperations.filter((op) => op.type !== 'start_run'),
+      currentRunId: runId,
+      isStartingRun: false,
+    })),
+
+  rollbackRunStart: (error) =>
+    set((state) => {
+      const operation = state.pendingOperations.find((op) => op.type === 'start_run');
+      if (!operation) {
+        return { isStartingRun: false, lastError: { operation: 'start_run', message: error } };
+      }
+      return {
+        pendingOperations: state.pendingOperations.filter((op) => op.type !== 'start_run'),
+        orchestratorState: operation.previousState.orchestratorState ?? state.orchestratorState,
+        currentRunId: operation.previousState.currentRunId ?? '',
+        isStartingRun: false,
+        lastError: { operation: 'start_run', message: error },
+      };
+    }),
+
+  // Optimistic update actions - Stop Run
+  startOptimisticStop: () =>
+    set((state) => {
+      const operation: OptimisticOperation = {
+        id: `stop_run_${Date.now()}`,
+        type: 'stop_run',
+        previousState: {
+          orchestratorState: state.orchestratorState,
+          currentRunId: state.currentRunId,
+          isStoppingRun: state.isStoppingRun,
+        },
+        timestamp: Date.now(),
+      };
+      return {
+        pendingOperations: [...state.pendingOperations, operation],
+        orchestratorState: 'idle' as OrchestratorState,
+        isStoppingRun: true,
+        lastError: null,
+      };
+    }),
+
+  confirmRunStopped: () =>
+    set((state) => ({
+      pendingOperations: state.pendingOperations.filter((op) => op.type !== 'stop_run'),
+      currentRunId: '',
+      isStoppingRun: false,
+    })),
+
+  rollbackRunStop: (error) =>
+    set((state) => {
+      const operation = state.pendingOperations.find((op) => op.type === 'stop_run');
+      if (!operation) {
+        return { isStoppingRun: false, lastError: { operation: 'stop_run', message: error } };
+      }
+      return {
+        pendingOperations: state.pendingOperations.filter((op) => op.type !== 'stop_run'),
+        orchestratorState: operation.previousState.orchestratorState ?? state.orchestratorState,
+        currentRunId: operation.previousState.currentRunId ?? state.currentRunId,
+        isStoppingRun: false,
+        lastError: { operation: 'stop_run', message: error },
+      };
+    }),
+
+  // Optimistic update actions - Pause
+  startOptimisticPause: () =>
+    set((state) => {
+      const operation: OptimisticOperation = {
+        id: `pause_orch_${Date.now()}`,
+        type: 'pause_orch',
+        previousState: {
+          pauseState: state.pauseState,
+          isPaused: state.isPaused,
+          isPausedByUser: state.isPausedByUser,
+          isPausedByAgent: state.isPausedByAgent,
+        },
+        timestamp: Date.now(),
+      };
+      // Determine new pause state based on current state
+      const newPauseState: PauseState = state.isPausedByAgent ? 'paused_both' : 'paused_user';
+      return {
+        pendingOperations: [...state.pendingOperations, operation],
+        pauseState: newPauseState,
+        isPaused: true,
+        isPausedByUser: true,
+        lastError: null,
+      };
+    }),
+
+  confirmPause: (pauseState) =>
+    set((state) => ({
+      pendingOperations: state.pendingOperations.filter((op) => op.type !== 'pause_orch'),
+      pauseState,
+      isPaused: pauseState !== 'running',
+      isPausedByUser: pauseState === 'paused_user' || pauseState === 'paused_both',
+      isPausedByAgent: pauseState === 'paused_agent' || pauseState === 'paused_both',
+    })),
+
+  rollbackPause: (error) =>
+    set((state) => {
+      const operation = state.pendingOperations.find((op) => op.type === 'pause_orch');
+      if (!operation) {
+        return { lastError: { operation: 'pause_orch', message: error } };
+      }
+      return {
+        pendingOperations: state.pendingOperations.filter((op) => op.type !== 'pause_orch'),
+        pauseState: operation.previousState.pauseState ?? state.pauseState,
+        isPaused: operation.previousState.isPaused ?? state.isPaused,
+        isPausedByUser: operation.previousState.isPausedByUser ?? state.isPausedByUser,
+        isPausedByAgent: operation.previousState.isPausedByAgent ?? state.isPausedByAgent,
+        lastError: { operation: 'pause_orch', message: error },
+      };
+    }),
+
+  // Optimistic update actions - Resume
+  startOptimisticResume: () =>
+    set((state) => {
+      const operation: OptimisticOperation = {
+        id: `resume_orch_${Date.now()}`,
+        type: 'resume_orch',
+        previousState: {
+          pauseState: state.pauseState,
+          isPaused: state.isPaused,
+          isPausedByUser: state.isPausedByUser,
+          isPausedByAgent: state.isPausedByAgent,
+        },
+        timestamp: Date.now(),
+      };
+      // When user resumes, only the user pause is cleared
+      const newPauseState: PauseState = state.isPausedByAgent ? 'paused_agent' : 'running';
+      return {
+        pendingOperations: [...state.pendingOperations, operation],
+        pauseState: newPauseState,
+        isPaused: newPauseState !== 'running',
+        isPausedByUser: false,
+        lastError: null,
+      };
+    }),
+
+  confirmResume: (pauseState) =>
+    set((state) => ({
+      pendingOperations: state.pendingOperations.filter((op) => op.type !== 'resume_orch'),
+      pauseState,
+      isPaused: pauseState !== 'running',
+      isPausedByUser: pauseState === 'paused_user' || pauseState === 'paused_both',
+      isPausedByAgent: pauseState === 'paused_agent' || pauseState === 'paused_both',
+    })),
+
+  rollbackResume: (error) =>
+    set((state) => {
+      const operation = state.pendingOperations.find((op) => op.type === 'resume_orch');
+      if (!operation) {
+        return { lastError: { operation: 'resume_orch', message: error } };
+      }
+      return {
+        pendingOperations: state.pendingOperations.filter((op) => op.type !== 'resume_orch'),
+        pauseState: operation.previousState.pauseState ?? state.pauseState,
+        isPaused: operation.previousState.isPaused ?? state.isPaused,
+        isPausedByUser: operation.previousState.isPausedByUser ?? state.isPausedByUser,
+        isPausedByAgent: operation.previousState.isPausedByAgent ?? state.isPausedByAgent,
+        lastError: { operation: 'resume_orch', message: error },
+      };
+    }),
+
+  clearLastError: () => set({ lastError: null }),
 }));
