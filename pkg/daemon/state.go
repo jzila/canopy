@@ -401,13 +401,16 @@ type MergeStatus = types.MergeStatus
 
 // MergeStatus constants - aliases to types package for backwards compatibility.
 const (
-	MergeStatusNone      = types.MergeStatusNone
-	MergeStatusPending   = types.MergeStatusPending
-	MergeStatusAcquiring = types.MergeStatusAcquiring
-	MergeStatusMerging   = types.MergeStatusMerging
-	MergeStatusResolving = types.MergeStatusResolving
-	MergeStatusMerged    = types.MergeStatusMerged
-	MergeStatusFailed    = types.MergeStatusFailed
+	MergeStatusNone             = types.MergeStatusNone
+	MergeStatusPending          = types.MergeStatusPending
+	MergeStatusAcquiring        = types.MergeStatusAcquiring
+	MergeStatusMerging          = types.MergeStatusMerging
+	MergeStatusResolving        = types.MergeStatusResolving
+	MergeStatusMerged           = types.MergeStatusMerged
+	MergeStatusFailed           = types.MergeStatusFailed
+	MergeStatusResolved         = types.MergeStatusResolved
+	MergeStatusSkipped          = types.MergeStatusSkipped
+	MergeStatusMergedNeedsRepair = types.MergeStatusMergedNeedsRepair
 )
 
 // ValidationStep is an alias to types.ValidationStep for backwards compatibility.
@@ -1340,10 +1343,34 @@ func (r *RuntimeState) handleAgentMergeStatus(payload map[string]interface{}) {
 	repairAttempts, _ := getIntFromPayload(payload, "repair_attempts")
 	lastRepairOutput, _ := payload["last_repair_output"].(string)
 
+	// Get taskID before update (immutable after creation, but read under lock for safety)
+	agent.mu.RLock()
+	taskID := agent.TaskID
+	agent.mu.RUnlock()
+
+	now := time.Now()
 	agent.Update(func(a *AgentState) {
 		a.MergeStatus = MergeStatus(mergeStatus)
 		a.MergeQueuePos = queuePos
 		a.MergeError = mergeErr
+
+		// Update agent status atomically with merge status for terminal states.
+		// This prevents the race condition where agent appears 'running' after
+		// merge completes but before EventAgentCompleted is processed.
+		switch MergeStatus(mergeStatus) {
+		case MergeStatusMerged, MergeStatusMergedNeedsRepair, MergeStatusResolved, MergeStatusSkipped:
+			// Merge succeeded (with or without repair/resolution)
+			a.Status = AgentStatusCompleted
+			if a.EndTime == nil {
+				a.EndTime = &now
+			}
+		case MergeStatusFailed:
+			// Merge failed
+			a.Status = AgentStatusFailed
+			if a.EndTime == nil {
+				a.EndTime = &now
+			}
+		}
 
 		// Update merge result fields (only if present to avoid overwriting)
 		if commitsApplied > 0 {
@@ -1378,6 +1405,19 @@ func (r *RuntimeState) handleAgentMergeStatus(payload map[string]interface{}) {
 			a.LastRepairOutput = lastRepairOutput
 		}
 	})
+
+	// Update task status for terminal merge states
+	if taskID != "" {
+		switch MergeStatus(mergeStatus) {
+		case MergeStatusMerged, MergeStatusMergedNeedsRepair, MergeStatusResolved, MergeStatusSkipped:
+			r.UpdateTaskStatus(taskID, "completed", agentID)
+		case MergeStatusFailed:
+			r.UpdateTaskStatus(taskID, "failed", agentID)
+		}
+	}
+
+	// Recalculate stats to reflect agent completion
+	r.UpdateStats()
 }
 
 func (r *RuntimeState) handleAgentCompleted(payload map[string]interface{}, timestamp time.Time) {
