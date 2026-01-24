@@ -102,6 +102,8 @@ type MergeStatus = 'pending' | 'acquiring' | 'merging' | 'resolving' | 'merged' 
 // Validation status types matching Go backend (validation/executor.go)
 // Includes repair-related intermediate states: pending_repair (deciding to spawn), spawning_repair (creating agent), repairing (agent executing)
 type ValidationStatus = 'pending' | 'running' | 'passed' | 'failed' | 'skipped' | 'pending_repair' | 'spawning_repair' | 'repairing';
+// Lifecycle state types matching Go backend (lifecycle/state.go)
+type LifecycleState = 'starting' | 'running' | 'queued_for_merge' | 'merging' | 'resolving' | 'validating' | 'repairing' | 'merge_failed' | 'completed' | 'failed' | 'needs_attention' | 'cancelled' | 'timed_out';
 // Validation step result matching Go backend (ipc/protocol.go)
 interface ValidationStep {
   name: string;
@@ -197,6 +199,7 @@ interface BackendAgentState {
   task_title: string;
   task_description?: string;
   status: string;
+  lifecycle_state?: string; // New unified lifecycle state
   start_time: string;
   end_time: string | null;
   duration: number;
@@ -456,6 +459,8 @@ export function useWebSocket() {
                   ...(agent.validation_error && { validation_error: agent.validation_error }),
                   ...(agent.repair_attempts !== undefined && { repair_attempts: agent.repair_attempts }),
                   ...(agent.last_repair_output && { last_repair_output: agent.last_repair_output }),
+                  // Lifecycle state (new unified state machine)
+                  ...(agent.lifecycle_state && { lifecycle_state: agent.lifecycle_state as import('../stores/stateStore').LifecycleState }),
                 };
               }
               // Merge dual-source tasks: runtime overlays persistent for display
@@ -573,10 +578,18 @@ export function useWebSocket() {
               break;
             }
             case 'agent:running': {
-              const { agent_id } = message.payload;
-              // Transition agent from starting to running
+              const payload = message.payload as {
+                agent_id: string;
+                lifecycle_state?: string;
+                previous_state?: string;
+                event?: string;
+              };
+              const { agent_id, lifecycle_state } = payload;
+              // Transition agent from starting to running, include lifecycle_state if present
+              // The lifecycle_state field comes from lifecycle transition callbacks
               updateAgent(agent_id, {
                 status: 'running',
+                ...(lifecycle_state && { lifecycle_state: lifecycle_state as import('../stores/stateStore').LifecycleState }),
               });
               break;
             }

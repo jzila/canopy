@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Clock, Zap, DollarSign, XCircle, GitCommit, Archive, ExternalLink, GitMerge, AlertTriangle, ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
-import type { AgentState } from '../../stores/stateStore';
+import type { AgentState, LifecycleState } from '../../stores/stateStore';
 import { useStateStore } from '../../stores/stateStore';
 import { killAgent, archiveAgent } from '../../api/client';
 import { WorkerChainTimeline } from './WorkerChainTimeline';
@@ -34,6 +34,94 @@ const STATUS_COLORS: Record<string, string> = {
   failed: 'bg-red-500',
   timed_out: 'bg-orange-500',
   cancelled: 'bg-gray-500',
+};
+
+// Lifecycle state colors - more detailed states from the state machine
+const LIFECYCLE_COLORS: Record<LifecycleState, string> = {
+  starting: 'bg-yellow-500',
+  running: 'bg-blue-500',
+  queued_for_merge: 'bg-purple-500',
+  merging: 'bg-indigo-500',
+  resolving: 'bg-amber-500',
+  validating: 'bg-cyan-500',
+  repairing: 'bg-orange-500',
+  merge_failed: 'bg-red-500',
+  completed: 'bg-green-500',
+  failed: 'bg-red-500',
+  needs_attention: 'bg-orange-600',
+  cancelled: 'bg-gray-500',
+  timed_out: 'bg-orange-500',
+};
+
+// User-friendly display labels for lifecycle states
+const LIFECYCLE_LABELS: Record<LifecycleState, string> = {
+  starting: 'Starting',
+  running: 'Running',
+  queued_for_merge: 'Queued',
+  merging: 'Merging',
+  resolving: 'Resolving',
+  validating: 'Validating',
+  repairing: 'Repairing',
+  merge_failed: 'Merge Failed',
+  completed: 'Completed',
+  failed: 'Failed',
+  needs_attention: 'Needs Attention',
+  cancelled: 'Cancelled',
+  timed_out: 'Timed Out',
+};
+
+// Get display info for lifecycle state with optional context (queue pos, repair attempt)
+const getLifecycleDisplay = (
+  state: LifecycleState,
+  queuePos?: number,
+  repairAttempts?: number,
+  maxRepairAttempts?: number
+): { label: string; color: string } => {
+  const baseLabel = LIFECYCLE_LABELS[state];
+  const color = LIFECYCLE_COLORS[state];
+
+  // Add context for specific states
+  if (state === 'queued_for_merge' && queuePos !== undefined && queuePos > 0) {
+    return { label: `Queued (#${queuePos})`, color };
+  }
+
+  if (state === 'repairing' && repairAttempts !== undefined) {
+    const maxAttempts = maxRepairAttempts ?? 3;
+    return { label: `Repairing (${repairAttempts}/${maxAttempts})`, color };
+  }
+
+  return { label: baseLabel, color };
+};
+
+// Derive lifecycle state from legacy fields for backwards compatibility
+// Used when lifecycle_state is not present (older backend versions)
+const deriveLifecycleState = (agent: AgentState): LifecycleState => {
+  // First check validation/repair status if merge is complete
+  if (agent.merge_status === 'merged' || agent.merge_status === 'merged_needs_repair') {
+    if (agent.validation_status === 'running') return 'validating';
+    if (agent.validation_status === 'repairing') return 'repairing';
+    if (agent.validation_status === 'failed') return 'needs_attention';
+    // If validation passed or not present, fall through
+  }
+
+  // Check merge status
+  if (agent.merge_status === 'pending') return 'queued_for_merge';
+  if (agent.merge_status === 'acquiring' || agent.merge_status === 'merging') return 'merging';
+  if (agent.merge_status === 'resolving') return 'resolving';
+  if (agent.merge_status === 'failed') return 'merge_failed';
+
+  // Check agent status
+  switch (agent.status) {
+    case 'starting': return 'starting';
+    case 'running': return 'running';
+    case 'completed': return 'completed';
+    case 'failed': return 'failed';
+    case 'cancelled': return 'cancelled';
+    case 'timed_out': return 'timed_out';
+  }
+
+  // Default fallback
+  return 'running';
 };
 
 const formatElapsedTime = (startTime: string, endTime: string | null): string => {
@@ -163,9 +251,17 @@ export const AgentCard: React.FC<AgentCardProps> = ({
     step => step.status === 'failed'
   )?.name;
 
+  // Use lifecycle_state if available, otherwise derive from legacy fields
+  const lifecycleState = agent.lifecycle_state ?? deriveLifecycleState(agent);
+  const lifecycleDisplay = getLifecycleDisplay(
+    lifecycleState,
+    agent.merge_queue_pos,
+    agent.repair_attempts,
+    3 // Default max repair attempts
+  );
+
   const isRunning = agent.status === 'running' || agent.status === 'starting';
   const isFinished = agent.status === 'completed' || agent.status === 'failed' || agent.status === 'timed_out' || agent.status === 'cancelled';
-  const statusColor = STATUS_COLORS[agent.status] || 'bg-gray-500';
 
   return (
     <div
@@ -202,8 +298,8 @@ export const AgentCard: React.FC<AgentCardProps> = ({
                 {agent.task_id}
               </code>
             )}
-            <span className={`inline-flex items-center px-2.5 py-1 rounded text-xs font-medium tracking-wider text-white ${statusColor}`}>
-              {agent.status}
+            <span className={`inline-flex items-center px-2.5 py-1 rounded text-xs font-medium tracking-wider text-white ${lifecycleDisplay.color}`}>
+              {lifecycleDisplay.label}
             </span>
             {/* Retry indicator badge - only shown for retried tasks */}
             {agent.attempt !== undefined && agent.max_retries !== undefined && formatRetryBadge(agent.attempt, agent.max_retries) && (

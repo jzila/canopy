@@ -18,6 +18,23 @@ export type MergeStatus = 'pending' | 'acquiring' | 'merging' | 'resolving' | 'm
 // Includes repair-related intermediate states: pending_repair (deciding to spawn), spawning_repair (creating agent), repairing (agent executing)
 export type ValidationStatus = 'pending' | 'running' | 'passed' | 'failed' | 'skipped' | 'pending_repair' | 'spawning_repair' | 'repairing';
 
+// Lifecycle state types matching Go backend (lifecycle/state.go)
+// This is the new unified state machine that replaces interpreting multiple fields
+export type LifecycleState =
+  | 'starting'
+  | 'running'
+  | 'queued_for_merge'
+  | 'merging'
+  | 'resolving'
+  | 'validating'
+  | 'repairing'
+  | 'merge_failed'
+  | 'completed'
+  | 'failed'
+  | 'needs_attention'
+  | 'cancelled'
+  | 'timed_out';
+
 // ValidationStep represents a single validation step result
 export interface ValidationStep {
   name: string;           // e.g., "build", "test", "lint"
@@ -75,6 +92,7 @@ export interface AgentState {
   parent_agent_id?: string;    // ID of parent agent if spawned by another agent
   child_agent_ids?: string[];  // IDs of child agents spawned by this agent
   status: AgentStatus;
+  lifecycle_state?: LifecycleState; // New unified lifecycle state (optional for backwards compat)
   start_time: string;
   end_time: string | null;
   duration: number;
