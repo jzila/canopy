@@ -619,6 +619,18 @@ func (o *Orchestrator) GetScheduler() *scheduler.Scheduler {
 	return o.scheduler
 }
 
+// Shutdown gracefully stops the orchestrator and waits for cleanup to complete.
+// This ensures all active overlays are unmounted before returning.
+// The timeout specifies how long to wait for overlay cleanup (not task completion).
+// Returns the number of overlays cleaned and any errors encountered.
+func (o *Orchestrator) Shutdown(timeout time.Duration) (int, error) {
+	// Clean up overlays via the scheduler
+	if o.scheduler != nil {
+		return o.scheduler.CleanupAll(timeout)
+	}
+	return 0, nil
+}
+
 // filterTasksByMaxPriority filters tasks to only include those with priority <= maxPriority.
 // This is a hard filter applied after fetching tasks from beads.
 // Deprecated: Use TaskFilter.FilterTasks() instead for full rules support.

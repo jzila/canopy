@@ -192,7 +192,8 @@ func (m *OrchestratorManager) RegisterRepo(repoPath string, repoID string) (*Orc
 }
 
 // UnregisterRepo stops and removes the orchestrator for a repository.
-// If the orchestrator is active, it will be stopped first.
+// If the orchestrator is active, it will be stopped first with graceful cleanup.
+// This waits for active overlays to be cleaned up before returning.
 // Returns an error if the repo is not registered.
 func (m *OrchestratorManager) UnregisterRepo(repoPath string) error {
 	lifecycleI, ok := m.orchestrators.Load(repoPath)
@@ -203,7 +204,9 @@ func (m *OrchestratorManager) UnregisterRepo(repoPath string) error {
 	lifecycle := lifecycleI.(*OrchestratorLifecycle)
 
 	lifecycle.mu.Lock()
-	defer lifecycle.mu.Unlock()
+
+	// Get orchestrator reference before cancelling
+	orch := lifecycle.orch
 
 	// Cancel any running orchestrator
 	if lifecycle.cancel != nil {
@@ -211,12 +214,35 @@ func (m *OrchestratorManager) UnregisterRepo(repoPath string) error {
 		lifecycle.cancel = nil
 	}
 
+	lifecycle.mu.Unlock()
+
+	// Wait for orchestrator cleanup outside the lock to avoid blocking other operations
+	if orch != nil {
+		const shutdownTimeout = 30 * time.Second
+		if cleaned, err := orch.Shutdown(shutdownTimeout); err != nil {
+			logging.Warn("overlay cleanup during unregister had errors",
+				"repo_path", repoPath,
+				"overlays_cleaned", cleaned,
+				"error", err,
+			)
+		} else if cleaned > 0 {
+			logging.Info("cleaned up overlays during unregister",
+				"repo_path", repoPath,
+				"overlays_cleaned", cleaned,
+			)
+		}
+	}
+
 	// Remove from registry
 	m.orchestrators.Delete(repoPath)
 
 	// Also clean up any active run tracking
-	if lifecycle.RunID != "" {
-		m.runs.Delete(lifecycle.RunID)
+	lifecycle.mu.Lock()
+	runID := lifecycle.RunID
+	lifecycle.mu.Unlock()
+
+	if runID != "" {
+		m.runs.Delete(runID)
 		m.runsByRepo.Delete(repoPath)
 	}
 
