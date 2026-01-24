@@ -13,6 +13,7 @@ import (
 	cfgpkg "github.com/jzila/canopy/pkg/config"
 	"github.com/jzila/canopy/pkg/ipc"
 	"github.com/jzila/canopy/pkg/mergecoordinator"
+	"github.com/jzila/canopy/pkg/mergequeue"
 	"github.com/jzila/canopy/pkg/rules"
 	"github.com/jzila/canopy/pkg/sandbox"
 	"github.com/jzila/canopy/pkg/scheduler"
@@ -72,6 +73,16 @@ func (e *EventCallbacks) OnFail(ctx context.Context, taskID string, result *agen
 	}
 }
 
+// StateCallbacks defines callbacks for orchestrator state transitions.
+// These are called when the orchestrator transitions between Idle and Active states.
+type StateCallbacks struct {
+	// OnIdle is called when the orchestrator enters idle state (no in-flight tasks)
+	OnIdle func()
+
+	// OnActive is called when the orchestrator enters active state (has in-flight tasks)
+	OnActive func()
+}
+
 // Config holds orchestrator configuration
 type Config struct {
 	WorkDir         string
@@ -85,8 +96,7 @@ type Config struct {
 	ResolverTimeout time.Duration // Timeout for resolver agents (0 = use default 10m)
 	Rules           *cfgpkg.RulesSettings // CLI overrides for rules (nil = use config.toml only)
 	RulesOverrides  *RulesOverrides       // Tracks which rules fields were explicitly set via CLI
-	Watch           bool          // Watch mode: keep running and poll for new tasks instead of exiting when queue is empty
-	PollInterval    time.Duration // Interval between polling for new tasks in watch mode (default: 5s)
+	PollInterval    time.Duration // Interval between polling for new tasks when idle (default: 5s)
 }
 
 // RulesOverrides tracks which rules fields were explicitly set via CLI flags.
@@ -109,7 +119,8 @@ type Orchestrator struct {
 	mergeCoordinator *mergecoordinator.MergeCoordinator
 	tempDir          string
 	callbackManager  *CallbackManager
-	failureCounts    map[string]int // Tracks how many times each task has failed
+	failureCountsMu  sync.RWMutex       // Protects failureCounts
+	failureCounts    map[string]int     // Tracks how many times each task has failed
 	sandboxConfig    *sandbox.SandboxConfig
 	taskFilter       *cfgpkg.TaskFilter // Task filter from rules settings (legacy)
 	rulesEngine      *rules.Engine      // Rules engine for per-repo task selection
@@ -122,11 +133,9 @@ type Orchestrator struct {
 	inFlight     map[string]bool   // Tasks currently being executed
 	inFlightTask map[string]*beads.Task // Task objects for in-flight tasks (for concurrency limiting)
 
-	// Watch mode statistics
-	watchStatsMu    sync.RWMutex
-	watchIterations int       // Number of polling iterations in watch mode
-	watchStartTime  time.Time // When watch mode started
-	watchTasksTotal int       // Total tasks processed in watch mode
+	// State transition callbacks
+	stateCallbacks *StateCallbacks
+	wasActive      bool // Track previous state to detect transitions
 }
 
 // New creates a new orchestrator
@@ -276,9 +285,14 @@ func (o *Orchestrator) setupInternalCallbacks() {
 			// Delegate merge to coordinator - it handles queueing, merge, and task completion
 			resp := o.mergeCoordinator.EnqueueMerge(ctx, result)
 
-			// Log merge result if verbose and there was an error
-			if resp != nil && !resp.Success && o.config.Verbose {
-				fmt.Fprintf(os.Stderr, "[%s] merge failed: %s\n", taskID, resp.Error)
+			// If merge failed, mark result as failed so failure count is incremented
+			// and retry limit applies. Without this, merge failures would retry forever.
+			if resp != nil && !resp.Success {
+				result.Success = false
+				result.Error = resp.Error
+				if o.config.Verbose {
+					fmt.Fprintf(os.Stderr, "[%s] merge failed: %s\n", taskID, resp.Error)
+				}
 			}
 		},
 		OnFailFn: func(ctx context.Context, taskID string, result *agent.Result) {
@@ -305,6 +319,16 @@ func (o *Orchestrator) cleanupOverlay(ctx context.Context, result *agent.Result)
 	}
 }
 
+// CleanupOverlayByTaskID explicitly cleans up the overlay for a task by its ID.
+// This can be called as a safety net when a terminal state is reached, ensuring
+// overlay cleanup even if the normal callback chain was bypassed.
+// Safe to call even if no overlay exists for the task ID.
+func (o *Orchestrator) CleanupOverlayByTaskID(taskID string) {
+	if o.scheduler != nil {
+		o.scheduler.CleanupOverlay(taskID)
+	}
+}
+
 // WithCallbacks is a builder-style method to register callbacks
 func (o *Orchestrator) WithCallbacks(callbacks *EventCallbacks) *Orchestrator {
 	o.SetCallbacks(callbacks)
@@ -315,6 +339,20 @@ func (o *Orchestrator) WithCallbacks(callbacks *EventCallbacks) *Orchestrator {
 // This enables sending merge status events and resolver agent tracking.
 func (o *Orchestrator) SetIPCClient(client *ipc.Client) {
 	o.mergeCoordinator.SetIPCClient(client)
+}
+
+// SetMergeStatusCallback sets a callback for merge status events.
+// This is used when running in daemon mode where IPC is not available.
+// The callback is invoked whenever merge status would be sent via IPC.
+func (o *Orchestrator) SetMergeStatusCallback(callback mergequeue.MergeStatusCallback) {
+	o.mergeCoordinator.SetMergeStatusCallback(callback)
+}
+
+// SetCommitCallback sets a callback for commit events.
+// This is used when running in daemon mode where IPC is not available.
+// The callback is invoked for each commit created during merge.
+func (o *Orchestrator) SetCommitCallback(callback mergequeue.CommitCallback) {
+	o.mergeCoordinator.SetCommitCallback(callback)
 }
 
 // SetRepoID sets the repository ID for IPC tracking.
@@ -366,11 +404,57 @@ func (o *Orchestrator) GetAgentID(taskID string) string {
 	return o.mergeCoordinator.GetAgentID(taskID)
 }
 
-// Run executes the orchestration loop until no ready tasks remain.
+// SetStateCallbacks sets callbacks for orchestrator state transitions (Idle/Active).
+// These callbacks are invoked when the orchestrator transitions between having
+// in-flight tasks (Active) and having no work to do (Idle).
+func (o *Orchestrator) SetStateCallbacks(callbacks *StateCallbacks) {
+	o.stateCallbacks = callbacks
+}
+
+// GetTaskAttempt returns the current attempt number for a task (1-indexed).
+// Returns 1 for first attempt, 2 for first retry, etc.
+// The attempt is calculated as: number of previous failures + 1.
+func (o *Orchestrator) GetTaskAttempt(taskID string) int {
+	o.failureCountsMu.RLock()
+	defer o.failureCountsMu.RUnlock()
+	// Attempt = previous failures + 1
+	// If no failures, this is attempt 1 (first try)
+	return o.failureCounts[taskID] + 1
+}
+
+// GetMaxRetries returns the configured maximum retry attempts.
+// Returns 0 = no retries, -1 = infinite, positive = retry limit.
+func (o *Orchestrator) GetMaxRetries() int {
+	return o.config.MaxRetries
+}
+
+// notifyStateChange checks if state has changed and invokes appropriate callback.
+func (o *Orchestrator) notifyStateChange(inFlightCount int) {
+	if o.stateCallbacks == nil {
+		return
+	}
+
+	isActive := inFlightCount > 0
+	if isActive && !o.wasActive {
+		// Transition to Active
+		o.wasActive = true
+		if o.stateCallbacks.OnActive != nil {
+			o.stateCallbacks.OnActive()
+		}
+	} else if !isActive && o.wasActive {
+		// Transition to Idle
+		o.wasActive = false
+		if o.stateCallbacks.OnIdle != nil {
+			o.stateCallbacks.OnIdle()
+		}
+	}
+}
+
+// Run executes the orchestration loop, polling continuously for work until context is cancelled.
 // This uses dynamic task assignment: each worker calls bd ready to get
 // fresh tasks, ensuring newly-unblocked tasks are picked up immediately.
-// In watch mode, the orchestrator polls for new tasks instead of exiting
-// when the queue is empty.
+// The orchestrator polls continuously: when work is available it processes tasks (Active state),
+// when no work is available it sleeps for PollInterval (Idle state).
 func (o *Orchestrator) Run(ctx context.Context) error {
 	// Start the merge coordinator's processor goroutine
 	// It will process merge requests from the queue until context is cancelled
@@ -381,33 +465,20 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		return o.dryRun(ctx)
 	}
 
-	// Set default poll interval for watch mode
+	// Set default poll interval
 	pollInterval := o.config.PollInterval
 	if pollInterval == 0 {
 		pollInterval = 5 * time.Second
 	}
 
-	// Initialize watch mode statistics
-	if o.config.Watch {
-		o.watchStatsMu.Lock()
-		o.watchStartTime = time.Now()
-		o.watchIterations = 0
-		o.watchTasksTotal = 0
-		o.watchStatsMu.Unlock()
-
-		if o.config.Verbose {
-			fmt.Printf("Watch mode enabled, polling every %v\n", pollInterval)
-		}
+	if o.config.Verbose {
+		fmt.Printf("Orchestrator started, polling every %v when idle\n", pollInterval)
 	}
-
-	// Use the slotManager for bounded concurrency (supports dynamic resizing)
 
 	// Track active workers and results
 	var wg sync.WaitGroup
 	var resultsMu sync.Mutex
 	var results []*agent.Result
-	var runError error
-	var runErrorMu sync.Mutex
 
 	// Create a channel to signal when workers should check for new tasks
 	// Workers send on this channel when they complete a task
@@ -419,33 +490,36 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 
 		resultsMu.Lock()
 		results = append(results, result)
+		resultsMu.Unlock()
 
-		// Track success/failure counts
+		// Track success/failure counts (using dedicated mutex)
+		o.failureCountsMu.Lock()
 		if result.Success {
 			delete(o.failureCounts, taskID)
 		} else {
 			o.failureCounts[taskID]++
+			failureCount := o.failureCounts[taskID]
 
 			// Check if retries exhausted
-			if o.config.MaxRetries != -1 && o.failureCounts[taskID] > o.config.MaxRetries {
-				// Mark as permanently failed in beads
-				if err := o.beadsClient.Fail(ctx, taskID, fmt.Sprintf("Task failed after %d attempts", o.failureCounts[taskID])); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: could not mark task %s as failed in beads: %v\n", taskID, err)
+			if o.config.MaxRetries != -1 && failureCount > o.config.MaxRetries {
+				// Mark as permanently failed in beads - closes task and adds needs-investigation label
+				if err := o.beadsClient.FailPermanently(ctx, taskID, fmt.Sprintf("Task failed after %d attempts", failureCount)); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: could not mark task %s as permanently failed in beads: %v\n", taskID, err)
 				}
-				fmt.Fprintf(os.Stderr, "ERROR: Task %s has failed %d times and will not be retried\n", taskID, o.failureCounts[taskID])
-
-				// Signal error but don't stop immediately - let other workers finish
-				// Note: In watch mode, we continue watching even after task failures
-				if !o.config.Watch {
-					runErrorMu.Lock()
-					if runError == nil {
-						runError = fmt.Errorf("task %s failed after %d retry attempts", taskID, o.config.MaxRetries)
-					}
-					runErrorMu.Unlock()
+				fmt.Fprintf(os.Stderr, "ERROR: Task %s has failed %d times and will not be retried\n", taskID, failureCount)
+			} else if o.config.MaxRetries == -1 || failureCount <= o.config.MaxRetries {
+				// Retry will occur - log retry info
+				maxAttempts := o.config.MaxRetries + 1
+				if o.config.MaxRetries == -1 {
+					fmt.Fprintf(os.Stderr, "[%s] Merge failed (attempt %d/∞): %s. Retrying...\n",
+						taskID, failureCount, result.Error)
+				} else {
+					fmt.Fprintf(os.Stderr, "[%s] Merge failed (attempt %d/%d): %s. Retrying...\n",
+						taskID, failureCount, maxAttempts, result.Error)
 				}
 			}
 		}
-		resultsMu.Unlock()
+		o.failureCountsMu.Unlock()
 
 		// Signal that a task completed (non-blocking)
 		select {
@@ -454,117 +528,29 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		}
 	}
 
-	// Initial check for tasks
-	task, shouldStop, err := o.getNextTask(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Handle initial state when no tasks are available
-	if shouldStop || task == nil {
-		if o.config.Watch {
-			// In watch mode, wait for tasks to appear
-			if o.config.Verbose {
-				fmt.Println("No ready tasks, watching for new tasks...")
-			}
-		} else {
-			// Normal mode: exit immediately
-			if o.config.Verbose {
-				if shouldStop {
-					fmt.Println("No tasks to execute, orchestration complete")
-				} else {
-					fmt.Println("No ready tasks, orchestration complete")
-				}
-			}
-			return nil
-		}
-	}
-
-	// Start the first worker with the initial task (if we have one)
-	if task != nil {
-		if o.config.Verbose {
-			fmt.Printf("Starting task: %s: %s\n", task.ID, task.Title)
-		}
-
-		// Track task in watch mode stats
-		if o.config.Watch {
-			o.watchStatsMu.Lock()
-			o.watchTasksTotal++
-			o.watchStatsMu.Unlock()
-		}
-
-		// Acquire slot before spawning worker
-		if err := o.slotManager.Acquire(ctx); err != nil {
-			return err
-		}
-		wg.Add(1)
-		go func(t *beads.Task) {
-			defer wg.Done()
-			defer o.slotManager.Release()
-
-			o.scheduler.ExecuteTask(ctx, t, completionCallback)
-		}(task)
-	}
-
-	// Main loop: keep spawning workers as slots become available
+	// Main loop: poll continuously until context is cancelled
 	for {
 		select {
 		case <-ctx.Done():
 			// Wait for in-flight tasks to complete
 			wg.Wait()
-			if o.config.Watch && o.config.Verbose {
-				o.printWatchStats()
-			}
 			return ctx.Err()
-
-		case <-taskComplete:
-			// A task completed, try to get more work
-
 		default:
-			// Try to acquire a slot (non-blocking check first)
-		}
-
-		// Check if we have an error that should stop us (only in non-watch mode)
-		if !o.config.Watch {
-			runErrorMu.Lock()
-			if runError != nil {
-				runErrorMu.Unlock()
-				// Wait for in-flight tasks
-				wg.Wait()
-				return runError
-			}
-			runErrorMu.Unlock()
 		}
 
 		// Try to acquire a slot
 		if err := o.slotManager.Acquire(ctx); err != nil {
 			// Context cancelled
 			wg.Wait()
-			if o.config.Watch && o.config.Verbose {
-				o.printWatchStats()
-			}
 			return err
 		}
 
 		// Got a slot, get the next task
-		task, shouldStop, err := o.getNextTask(ctx)
+		task, _, err := o.getNextTask(ctx)
 		if err != nil {
 			o.slotManager.Release()
 			wg.Wait()
 			return err
-		}
-
-		if shouldStop {
-			// Stop condition met - release slot and wait for in-flight tasks
-			o.slotManager.Release()
-			wg.Wait()
-			if o.config.Verbose {
-				fmt.Println("Stop condition met, orchestration complete")
-				if o.config.Watch {
-					o.printWatchStats()
-				}
-			}
-			return nil
 		}
 
 		if task == nil {
@@ -577,35 +563,19 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			o.inFlightMu.RUnlock()
 
 			if inFlightCount == 0 {
-				// No in-flight tasks and no ready tasks
-				if o.config.Watch {
-					// Watch mode: poll for new tasks
-					o.watchStatsMu.Lock()
-					o.watchIterations++
-					o.watchStatsMu.Unlock()
+				// No in-flight tasks and no ready tasks - idle state
+				// Poll for new tasks after interval
+				if o.config.Verbose {
+					fmt.Println("Idle, polling for new tasks...")
+				}
 
-					if o.config.Verbose {
-						fmt.Printf("Watching for new tasks (iteration %d)...\n", o.watchIterations)
-					}
-
-					select {
-					case <-ctx.Done():
-						wg.Wait()
-						if o.config.Verbose {
-							o.printWatchStats()
-						}
-						return ctx.Err()
-					case <-time.After(pollInterval):
-						// Poll again
-						continue
-					}
-				} else {
-					// Normal mode: we're done
+				select {
+				case <-ctx.Done():
 					wg.Wait()
-					if o.config.Verbose {
-						fmt.Println("No more tasks, orchestration complete")
-					}
-					return nil
+					return ctx.Err()
+				case <-time.After(pollInterval):
+					// Poll again
+					continue
 				}
 			}
 
@@ -613,9 +583,6 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			select {
 			case <-ctx.Done():
 				wg.Wait()
-				if o.config.Watch && o.config.Verbose {
-					o.printWatchStats()
-				}
 				return ctx.Err()
 			case <-taskComplete:
 				// A task completed, loop back to try again
@@ -628,13 +595,6 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			fmt.Printf("Starting task: %s: %s\n", task.ID, task.Title)
 		}
 
-		// Track task in watch mode stats
-		if o.config.Watch {
-			o.watchStatsMu.Lock()
-			o.watchTasksTotal++
-			o.watchStatsMu.Unlock()
-		}
-
 		wg.Add(1)
 		go func(t *beads.Task) {
 			defer wg.Done()
@@ -643,49 +603,6 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			o.scheduler.ExecuteTask(ctx, t, completionCallback)
 		}(task)
 	}
-}
-
-// printWatchStats prints watch mode statistics to stderr.
-func (o *Orchestrator) printWatchStats() {
-	o.watchStatsMu.RLock()
-	defer o.watchStatsMu.RUnlock()
-
-	duration := time.Since(o.watchStartTime)
-	fmt.Fprintf(os.Stderr, "Watch mode: ran for %v, processed %d tasks across %d iterations\n",
-		duration.Round(time.Second), o.watchTasksTotal, o.watchIterations)
-}
-
-// WatchStats contains statistics for watch mode operation.
-type WatchStats struct {
-	Enabled     bool          `json:"enabled"`
-	StartTime   time.Time     `json:"start_time,omitempty"`
-	Duration    time.Duration `json:"duration,omitempty"`
-	Iterations  int           `json:"iterations"`
-	TasksTotal  int           `json:"tasks_total"`
-}
-
-// GetWatchStats returns current watch mode statistics.
-// Returns nil if watch mode is not enabled.
-func (o *Orchestrator) GetWatchStats() *WatchStats {
-	if !o.config.Watch {
-		return &WatchStats{Enabled: false}
-	}
-
-	o.watchStatsMu.RLock()
-	defer o.watchStatsMu.RUnlock()
-
-	return &WatchStats{
-		Enabled:    true,
-		StartTime:  o.watchStartTime,
-		Duration:   time.Since(o.watchStartTime),
-		Iterations: o.watchIterations,
-		TasksTotal: o.watchTasksTotal,
-	}
-}
-
-// IsWatchMode returns true if the orchestrator is running in watch mode.
-func (o *Orchestrator) IsWatchMode() bool {
-	return o.config.Watch
 }
 
 // dryRun shows what tasks would execute without actually running them
@@ -725,6 +642,18 @@ func (o *Orchestrator) Cleanup() error {
 // GetScheduler returns the underlying scheduler for advanced operations like signal cleanup
 func (o *Orchestrator) GetScheduler() *scheduler.Scheduler {
 	return o.scheduler
+}
+
+// Shutdown gracefully stops the orchestrator and waits for cleanup to complete.
+// This ensures all active overlays are unmounted before returning.
+// The timeout specifies how long to wait for overlay cleanup (not task completion).
+// Returns the number of overlays cleaned and any errors encountered.
+func (o *Orchestrator) Shutdown(timeout time.Duration) (int, error) {
+	// Clean up overlays via the scheduler
+	if o.scheduler != nil {
+		return o.scheduler.CleanupAll(timeout)
+	}
+	return 0, nil
 }
 
 // filterTasksByMaxPriority filters tasks to only include those with priority <= maxPriority.
@@ -790,16 +719,27 @@ func (o *Orchestrator) filterTasksWithEngine(tasks []beads.Task) []beads.Task {
 // markInFlight marks a task as currently in-flight
 func (o *Orchestrator) markInFlight(taskID string) {
 	o.inFlightMu.Lock()
-	defer o.inFlightMu.Unlock()
+	wasEmpty := len(o.inFlight) == 0
 	o.inFlight[taskID] = true
+	count := len(o.inFlight)
+	o.inFlightMu.Unlock()
+
+	// Notify state change if we transitioned from empty to non-empty
+	if wasEmpty {
+		o.notifyStateChange(count)
+	}
 }
 
 // unmarkInFlight removes a task from the in-flight set
 func (o *Orchestrator) unmarkInFlight(taskID string) {
 	o.inFlightMu.Lock()
-	defer o.inFlightMu.Unlock()
 	delete(o.inFlight, taskID)
 	delete(o.inFlightTask, taskID)
+	count := len(o.inFlight)
+	o.inFlightMu.Unlock()
+
+	// Notify state change (might transition to idle if count is 0)
+	o.notifyStateChange(count)
 }
 
 // isInFlight returns whether a task is currently in-flight

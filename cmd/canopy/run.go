@@ -9,18 +9,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sync"
 	"syscall"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
-	"github.com/jzila/canopy/pkg/config"
 	"github.com/jzila/canopy/pkg/ipc"
-	"github.com/jzila/canopy/pkg/orchestrator"
 	"github.com/jzila/canopy/pkg/repository"
 	"github.com/jzila/canopy/pkg/runtime"
 	"github.com/jzila/canopy/pkg/sandbox"
@@ -40,14 +36,17 @@ var (
 	filterLabels     []string
 	excludeLabels    []string
 	filterAssignee   string
-	watchMode        bool
 	pollInterval     time.Duration
 )
 
 var runCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Execute ready tasks from beads",
-	Long: `Executes all ready (unblocked) tasks from beads in parallel.
+	Long: `Executes ready (unblocked) tasks from beads in parallel, polling continuously.
+
+The orchestrator runs continuously until cancelled (Ctrl+C):
+- When work is available: processes tasks (Active state)
+- When no work is available: sleeps for poll interval (Idle state)
 
 Each task runs in an isolated sandbox with its own copy of the working
 directory. Changes are merged back after completion.
@@ -130,10 +129,8 @@ Example:
   # Resume interrupted agents after daemon restart
   canopy run --resume                 # Resume agents that were interrupted
 
-  # Watch mode: keep running and poll for new tasks
-  canopy run --watch                  # Run indefinitely, polling for new tasks
-  canopy run --watch --poll-interval 10s  # Poll every 10 seconds (default: 5s)
-  canopy run -w                       # Short form of --watch`,
+  # Set poll interval for idle state
+  canopy run --poll-interval 10s      # Poll every 10 seconds (default: 5s)`,
 	RunE: runOrchestrator,
 }
 
@@ -154,9 +151,8 @@ func init() {
 	runCmd.Flags().StringSliceVar(&excludeLabels, "exclude-label", nil, "Exclude tasks with these labels (comma-separated)")
 	runCmd.Flags().StringVar(&filterAssignee, "assignee", "", "Filter by assignee (\"\" = unassigned only, \"*\" = any, name = exact match)")
 
-	// Watch mode flags
-	runCmd.Flags().BoolVarP(&watchMode, "watch", "w", false, "Watch mode: keep running and poll for new tasks instead of exiting when queue is empty")
-	runCmd.Flags().DurationVar(&pollInterval, "poll-interval", 5*time.Second, "Interval between polling for new tasks in watch mode")
+	// Poll interval for idle state
+	runCmd.Flags().DurationVar(&pollInterval, "poll-interval", 5*time.Second, "Interval between polling for new tasks when idle")
 
 	rootCmd.AddCommand(runCmd)
 }
@@ -182,39 +178,6 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Orchestrator will be set once created, for signal cleanup
-	var orch *orchestrator.Orchestrator
-
-	// Handle interrupt signals
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigCh
-		fmt.Fprintln(os.Stderr, "\nInterrupted, cleaning up overlays...")
-
-		// Cancel context to stop agents
-		cancel()
-
-		// Synchronously cleanup all active overlays to prevent orphans
-		if orch != nil {
-			sched := orch.GetScheduler()
-			if sched != nil {
-				count, err := sched.CleanupAll(5 * time.Second)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "Warning: overlay cleanup encountered errors: %v\n", err)
-				} else if count > 0 {
-					fmt.Fprintf(os.Stderr, "Cleaned up %d active overlay(s)\n", count)
-				}
-			}
-		}
-
-		// Exit after cleanup completes
-		// We must call os.Exit here because orch.Run returns immediately when
-		// context is cancelled, which would cause the process to exit before
-		// cleanup completes (cleanup goroutine races with process exit)
-		os.Exit(0)
-	}()
-
 	// Resolve working directory
 	absWorkdir, err := filepath.Abs(workdir)
 	if err != nil {
@@ -226,7 +189,7 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		outputDir = absWorkdir
 	}
 
-	// Resolve resolver timeout with precedence: CLI flag > env var > config file > default
+	// Resolve resolver timeout with precedence: CLI flag > env var > default
 	effectiveResolverTimeout := resolverTimeout
 	if effectiveResolverTimeout == 0 {
 		// Try environment variable
@@ -238,18 +201,7 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 			effectiveResolverTimeout = parsed
 		}
 	}
-	if effectiveResolverTimeout == 0 {
-		// Try config file
-		cfg, err := config.LoadConfig(absWorkdir)
-		if err != nil {
-			if verbose {
-				fmt.Fprintf(os.Stderr, "warning: failed to load config: %v\n", err)
-			}
-		} else if cfg != nil {
-			effectiveResolverTimeout = cfg.GetResolverTimeout()
-		}
-	}
-	// Note: if still 0, the processor will use its default of 10 minutes
+	// Note: if still 0, the daemon will use its default of 10 minutes
 
 	// Initialize repository for tracking
 	repo, err := repository.GetOrCreate(absWorkdir)
@@ -259,6 +211,12 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(os.Stderr, "warning: failed to initialize repository: %v\n", err)
 		}
 		repo = nil
+	}
+
+	// Get repo ID for daemon calls
+	repoID := ""
+	if repo != nil {
+		repoID = repo.ID
 	}
 
 	// Connect to daemon (required for canopy run)
@@ -288,137 +246,261 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Build CLI rules overrides (orchestrator loads config.toml and merges these)
-	rules, rulesOverrides := buildCLIRulesOverrides(cmd)
-
-	// Create and run orchestrator
-	orch, err = orchestrator.New(&orchestrator.Config{
-		WorkDir:         absWorkdir,
-		OutputDir:       outputDir,
-		Concurrency:     concurrency,
-		Verbose:         verbose,
-		DryRun:          dryRun,
-		UseBwrap:        useSandbox,
-		MaxRetries:      maxRetries,
-		MaxPriority:     maxPriority,
-		ResolverTimeout: effectiveResolverTimeout,
-		Rules:           rules,
-		RulesOverrides:  rulesOverrides,
-		Watch:           watchMode,
-		PollInterval:    pollInterval,
+	// Start the orchestrator run via daemon HTTP API
+	runID, err := startDaemonRun(ctx, startRunRequest{
+		WorkDir:           absWorkdir,
+		OutputDir:         outputDir,
+		Concurrency:       concurrency,
+		Verbose:           verbose,
+		DryRun:            dryRun,
+		UseBwrap:          useSandbox,
+		MaxRetries:        maxRetries,
+		MaxPriority:       maxPriority,
+		ResolverTimeoutMS: effectiveResolverTimeout.Milliseconds(),
+		RepoID:            repoID,
+		PollIntervalMS:    pollInterval.Milliseconds(),
+		Types:             filterTypes,
+		ExcludeTypes:      excludeTypes,
+		Labels:            filterLabels,
+		ExcludeLabels:     excludeLabels,
+		Assignee:          filterAssignee,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to create orchestrator: %w", err)
+		return fmt.Errorf("failed to start orchestrator run: %w", err)
 	}
 
-	// Always create stats collector for history tracking
-	runID := uuid.New().String()
-	runStats := &runStatsCollector{
-		runID:     runID,
-		workDir:   absWorkdir,
-		startTime: time.Now(),
+	if verbose {
+		fmt.Printf("Started orchestrator run: %s\n", runID)
 	}
 
-	// Get repo ID for IPC calls (empty string if repo is nil)
-	repoID := ""
-	if repo != nil {
-		repoID = repo.ID
-	}
-
-	// Set up callbacks for history tracking and IPC
-	// Note: parentAgentID is empty for top-level orchestrated agents
-	// Child agents (e.g., resolvers) will populate this when spawned
-	callbacks := &orchestrator.EventCallbacks{
-		OnAgentStartFn: func(_ context.Context, taskID string, task *beads.Task) {
-			runStats.recordTaskStart(taskID, task)
-			agentID := makeAgentID(runID, taskID)
-			// Record agent ID for parent-child tracking (resolver agents need this)
-			orch.SetAgentID(taskID, agentID)
-			parentAgentID := "" // Top-level agents have no parent
-			if err := ipcClient.SendAgentStart(agentID, runID, taskID, task.Title, task.Description, parentAgentID, repoID); err != nil && verbose {
-				fmt.Fprintf(os.Stderr, "warning: failed to send agent start: %v\n", err)
-			}
-		},
-		OnOutputFn: func(_ context.Context, taskID string, output string, isError bool) {
-			agentID := makeAgentID(runID, taskID)
-			if err := ipcClient.SendAgentOutput(agentID, output, isError); err != nil && verbose {
-				fmt.Fprintf(os.Stderr, "warning: failed to send agent output: %v\n", err)
-			}
-		},
-		OnLiveFeedFn: func(_ context.Context, taskID string, event *agent.LiveFeedEvent) {
-			agentID := makeAgentID(runID, taskID)
-			if err := ipcClient.SendAgentLiveFeed(agentID, string(event.EventType), event.RawData); err != nil && verbose {
-				fmt.Fprintf(os.Stderr, "warning: failed to send agent live feed: %v\n", err)
-			}
-		},
-		OnDoneFn: func(_ context.Context, taskID string, result *agent.Result) {
-			runStats.recordResult(taskID, result, true)
-			agentID := makeAgentID(runID, taskID)
-			parentAgentID := "" // Top-level agents have no parent
-			// Note: Commit events are sent by the merge processor after merge completes,
-			// using the actual merged commit hashes (not overlay commits which may be destroyed)
-			ipcResult := convertToIPCResult(result)
-			if err := ipcClient.SendAgentDone(agentID, parentAgentID, ipcResult); err != nil && verbose {
-				fmt.Fprintf(os.Stderr, "warning: failed to send agent done: %v\n", err)
-			}
-		},
-		OnFailFn: func(_ context.Context, taskID string, result *agent.Result) {
-			runStats.recordResult(taskID, result, false)
-			agentID := makeAgentID(runID, taskID)
-			parentAgentID := "" // Top-level agents have no parent
-			// Note: Commit events are sent by the merge processor after merge completes,
-			// using the actual merged commit hashes (not overlay commits which may be destroyed)
-			ipcResult := convertToIPCResult(result)
-			execErr := fmt.Errorf("%s", result.Error)
-			if err := ipcClient.SendAgentFail(agentID, parentAgentID, execErr, ipcResult); err != nil && verbose {
-				fmt.Fprintf(os.Stderr, "warning: failed to send agent fail: %v\n", err)
-			}
-		},
-	}
-
-	orch.SetCallbacks(callbacks)
-
-	// Pass IPC client to orchestrator for resolver agent events
-	orch.SetIPCClient(ipcClient)
-
-	// Pass repo ID to orchestrator for resolver agent tracking
-	if repo != nil {
-		orch.SetRepoID(repo.ID)
-	}
-
-	// Pass run ID to orchestrator for unique agent ID generation
-	orch.SetRunID(runID)
-
-	// Get initial ready tasks to send task count
-	beadsClient, err := beads.NewClient(absWorkdir)
-	if err == nil {
-		tasks, err := beadsClient.Ready(ctx)
-		if err == nil && len(tasks) > 0 {
-			if err := ipcClient.SendRunStarted(runID, len(tasks), repo); err != nil && verbose {
-				fmt.Fprintf(os.Stderr, "warning: failed to send run started: %v\n", err)
-			}
+	// Set up signal handler to stop the run on Ctrl+C
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		fmt.Fprintln(os.Stderr, "\nInterrupted, stopping orchestrator run...")
+		if err := stopDaemonRun(runID); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to stop run: %v\n", err)
 		}
-	}
-
-	// Send IPC completion after orchestration finishes
-	// Note: Run persistence is handled by the daemon via the IPC events
-	// (run_started creates the run, run_completed updates it with final stats)
-	defer func() {
-		if dryRun {
-			return
-		}
-
-		// Send IPC completion - daemon will persist the run stats
-		stats := runStats.getStats()
-		if err := ipcClient.SendRunCompleted(runID, stats); err != nil && verbose {
-			fmt.Fprintf(os.Stderr, "warning: failed to send run completed: %v\n", err)
-		}
+		cancel()
 	}()
 
-	return orch.Run(ctx)
+	// Stream events via WebSocket until the run completes
+	return streamRunEvents(ctx, runID, verbose)
+}
+
+// startRunRequest matches the daemon's ExecuteRunRequest
+type startRunRequest struct {
+	WorkDir           string   `json:"work_dir"`
+	OutputDir         string   `json:"output_dir,omitempty"`
+	Concurrency       int      `json:"concurrency,omitempty"`
+	Verbose           bool     `json:"verbose,omitempty"`
+	DryRun            bool     `json:"dry_run,omitempty"`
+	UseBwrap          bool     `json:"use_bwrap,omitempty"`
+	MaxRetries        int      `json:"max_retries,omitempty"`
+	MaxPriority       int      `json:"max_priority,omitempty"`
+	ResolverTimeoutMS int64    `json:"resolver_timeout_ms,omitempty"`
+	RepoID            string   `json:"repo_id,omitempty"`
+	PollIntervalMS    int64    `json:"poll_interval_ms,omitempty"`
+	Types             []string `json:"types,omitempty"`
+	ExcludeTypes      []string `json:"exclude_types,omitempty"`
+	Labels            []string `json:"labels,omitempty"`
+	ExcludeLabels     []string `json:"exclude_labels,omitempty"`
+	Assignee          string   `json:"assignee,omitempty"`
+}
+
+// startRunResponse matches the daemon's ExecuteRunResponse
+type startRunResponse struct {
+	Success bool   `json:"success"`
+	RunID   string `json:"run_id,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+// stopRunRequest matches the daemon's StopRunRequest
+type stopRunRequest struct {
+	RunID string `json:"run_id"`
+}
+
+// stopRunResponse matches the daemon's StopRunResponse
+type stopRunResponse struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}
+
+// startDaemonRun calls the daemon's /api/orchestrator/run endpoint to start a run
+func startDaemonRun(ctx context.Context, req startRunRequest) (string, error) {
+	url := fmt.Sprintf("http://localhost:%d/api/orchestrator/run", runtime.DefaultDaemonPort)
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to encode request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &bodyReader{data: body})
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.ContentLength = int64(len(body))
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("failed to call daemon: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result startRunResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if !result.Success {
+		return "", fmt.Errorf("daemon returned error: %s", result.Error)
+	}
+
+	return result.RunID, nil
+}
+
+// bodyReader wraps a byte slice for use as io.ReadCloser
+type bodyReader struct {
+	data []byte
+	pos  int
+}
+
+func (r *bodyReader) Read(p []byte) (n int, err error) {
+	if r.pos >= len(r.data) {
+		return 0, io.EOF
+	}
+	n = copy(p, r.data[r.pos:])
+	r.pos += n
+	return n, nil
+}
+
+func (r *bodyReader) Close() error {
+	return nil
+}
+
+// stopDaemonRun calls the daemon's /api/orchestrator/run/stop endpoint
+func stopDaemonRun(runID string) error {
+	url := fmt.Sprintf("http://localhost:%d/api/orchestrator/run/stop", runtime.DefaultDaemonPort)
+
+	req := stopRunRequest{RunID: runID}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("failed to encode request: %w", err)
+	}
+
+	httpReq, err := http.NewRequest(http.MethodPost, url, &bodyReader{data: body})
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.ContentLength = int64(len(body))
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("failed to call daemon: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result stopRunResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if !result.Success {
+		return fmt.Errorf("daemon returned error: %s", result.Error)
+	}
+
+	return nil
+}
+
+// streamRunEvents connects to the WebSocket and streams events until the run completes
+func streamRunEvents(ctx context.Context, runID string, verbose bool) error {
+	// For now, just poll the run status until it completes
+	// TODO: Implement WebSocket streaming for real-time output
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			status, err := getRunStatus(runID)
+			if err != nil {
+				if verbose {
+					fmt.Fprintf(os.Stderr, "warning: failed to get run status: %v\n", err)
+				}
+				continue
+			}
+
+			if verbose {
+				fmt.Printf("Run status: %s (tasks: %d/%d, failed: %d)\n",
+					status.Status, status.TasksDone, status.TasksTotal, status.TasksFailed)
+			}
+
+			// Check if run is terminal
+			switch status.Status {
+			case "completed":
+				fmt.Printf("Run completed: %d/%d tasks succeeded\n", status.TasksDone, status.TasksTotal)
+				return nil
+			case "failed":
+				return fmt.Errorf("run failed: %s", status.Error)
+			case "cancelled":
+				return fmt.Errorf("run cancelled")
+			}
+		}
+	}
+}
+
+// runStatus matches the daemon's RunStatusWire
+type runStatus struct {
+	ID          string `json:"id"`
+	RepoPath    string `json:"repo_path"`
+	RepoID      string `json:"repo_id,omitempty"`
+	Status      string `json:"status"`
+	StartTime   int64  `json:"start_time"`
+	EndTime     int64  `json:"end_time,omitempty"`
+	Error       string `json:"error,omitempty"`
+	TasksTotal  int    `json:"tasks_total"`
+	TasksDone   int    `json:"tasks_done"`
+	TasksFailed int    `json:"tasks_failed"`
+}
+
+// runStatusResponse matches the daemon's RunStatusResponse
+type runStatusResponse struct {
+	Success bool       `json:"success"`
+	Run     *runStatus `json:"run,omitempty"`
+	Error   string     `json:"error,omitempty"`
+}
+
+// getRunStatus queries the daemon for run status
+func getRunStatus(runID string) (*runStatus, error) {
+	url := fmt.Sprintf("http://localhost:%d/api/orchestrator/runs/%s", runtime.DefaultDaemonPort, runID)
+
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call daemon: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result runStatusResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	if !result.Success {
+		return nil, fmt.Errorf("daemon returned error: %s", result.Error)
+	}
+
+	return result.Run, nil
 }
 
 // convertToIPCResult converts agent.Result to ipc.AgentResult
+// (kept for resumeInterruptedAgents)
 func convertToIPCResult(result *agent.Result) *ipc.AgentResult {
 	ipcResult := &ipc.AgentResult{
 		ExitCode:        result.ExitCode,
@@ -462,91 +544,6 @@ func convertToIPCResult(result *agent.Result) *ipc.AgentResult {
 	ipcResult.Stderr = result.Stderr
 
 	return ipcResult
-}
-
-// makeAgentID creates a unique agent ID by combining run ID prefix with task ID.
-// Format: agent-{runID[:8]}-{taskID}
-// This ensures agent IDs are unique per run, even when retrying the same task.
-func makeAgentID(runID, taskID string) string {
-	// Use first 8 characters of run ID as prefix for readability
-	prefix := runID
-	if len(prefix) > 8 {
-		prefix = prefix[:8]
-	}
-	return fmt.Sprintf("agent-%s-%s", prefix, taskID)
-}
-
-// runStatsCollector tracks statistics across all agents in a run
-type runStatsCollector struct {
-	runID               string
-	workDir             string
-	startTime           time.Time
-	totalTasks          int
-	succeeded           int
-	failed              int
-	inputTokens         int
-	outputTokens        int
-	cacheCreationTokens int
-	cacheReadTokens     int
-	costUSD             float64
-	totalTurns          int
-	filesChanged        int
-	gitCommits          int
-	conflictsRes        int
-	mu                  sync.Mutex
-}
-
-func (r *runStatsCollector) recordTaskStart(taskID string, task *beads.Task) {
-	// Task start is tracked via IPC to daemon for real-time UI
-	// Individual agent records are persisted by the daemon
-}
-
-func (r *runStatsCollector) recordResult(taskID string, result *agent.Result, success bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	r.totalTasks++
-	if success {
-		r.succeeded++
-	} else {
-		r.failed++
-	}
-
-	if result.Output != nil {
-		r.inputTokens += result.Output.TotalInputTokens
-		r.outputTokens += result.Output.TotalOutputTokens
-		r.cacheCreationTokens += result.Output.CacheCreationInputTokens
-		r.cacheReadTokens += result.Output.CacheReadInputTokens
-		r.costUSD += result.Output.CostUSD
-		r.totalTurns += result.Output.NumTurns
-	}
-
-	r.filesChanged += len(result.Changes)
-
-	if result.GitState != nil {
-		r.gitCommits += len(result.GitState.NewCommits)
-	}
-}
-
-func (r *runStatsCollector) getStats() *ipc.RunStats {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	return &ipc.RunStats{
-		TotalTasks:                   r.totalTasks,
-		SucceededTasks:               r.succeeded,
-		FailedTasks:                  r.failed,
-		TotalDuration:                time.Since(r.startTime).Seconds(),
-		TotalInputTokens:             r.inputTokens,
-		TotalOutputTokens:            r.outputTokens,
-		TotalCacheCreationInputToken: r.cacheCreationTokens,
-		TotalCacheReadInputTokens:    r.cacheReadTokens,
-		TotalCostUSD:                 r.costUSD,
-		TotalTurns:                   r.totalTurns,
-		FilesChanged:                 r.filesChanged,
-		GitCommits:                   r.gitCommits,
-		ConflictsResolved:            r.conflictsRes,
-	}
 }
 
 // resumableAgentInfo is the wire format for resumable agent data from the daemon
@@ -665,57 +662,5 @@ func resumeInterruptedAgents(ctx context.Context, workDir string, useBwrap, verb
 	}
 
 	return resumed, errors
-}
-
-// buildCLIRulesOverrides builds rules settings and override tracking from CLI flags.
-// Returns (nil, nil) if no CLI flags were set (use config.toml as-is).
-func buildCLIRulesOverrides(cmd *cobra.Command) (*config.RulesSettings, *orchestrator.RulesOverrides) {
-	// Check if any CLI flags were set
-	hasOverrides := cmd.Flags().Changed("max-priority") ||
-		cmd.Flags().Changed("type") ||
-		cmd.Flags().Changed("exclude-type") ||
-		cmd.Flags().Changed("label") ||
-		cmd.Flags().Changed("exclude-label") ||
-		cmd.Flags().Changed("assignee")
-
-	if !hasOverrides {
-		return nil, nil // No CLI overrides, orchestrator uses config.toml as-is
-	}
-
-	// Build overrides from CLI flags only
-	rules := config.DefaultRulesSettings()
-	overrides := &orchestrator.RulesOverrides{}
-
-	if cmd.Flags().Changed("max-priority") {
-		rules.PriorityMax = maxPriority
-		overrides.PriorityMax = true
-	}
-
-	if cmd.Flags().Changed("type") {
-		rules.Types = filterTypes
-		overrides.Types = true
-	}
-
-	if cmd.Flags().Changed("exclude-type") {
-		rules.ExcludeTypes = excludeTypes
-		overrides.ExcludeTypes = true
-	}
-
-	if cmd.Flags().Changed("label") {
-		rules.Labels = filterLabels
-		overrides.Labels = true
-	}
-
-	if cmd.Flags().Changed("exclude-label") {
-		rules.ExcludeLabels = excludeLabels
-		overrides.ExcludeLabels = true
-	}
-
-	if cmd.Flags().Changed("assignee") {
-		rules.Assignee = filterAssignee
-		overrides.Assignee = true
-	}
-
-	return &rules, overrides
 }
 

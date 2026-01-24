@@ -124,6 +124,44 @@ func TestMockClient_Fail(t *testing.T) {
 	}
 }
 
+func TestMockClient_FailPermanently(t *testing.T) {
+	ctx := context.Background()
+	mock := NewMockClient()
+	mock.SetTask(&Task{ID: "task-1", Title: "Test", Status: "in_progress", Labels: []string{"bug"}})
+
+	err := mock.FailPermanently(ctx, "task-1", "max retries exceeded")
+	if err != nil {
+		t.Fatalf("FailPermanently() error = %v", err)
+	}
+
+	if len(mock.Calls.FailPermanently) != 1 {
+		t.Fatalf("FailPermanently() calls count = %d, want 1", len(mock.Calls.FailPermanently))
+	}
+	if mock.Calls.FailPermanently[0].TaskID != "task-1" {
+		t.Errorf("FailPermanently() taskID = %s, want task-1", mock.Calls.FailPermanently[0].TaskID)
+	}
+	if mock.Calls.FailPermanently[0].Reason != "max retries exceeded" {
+		t.Errorf("FailPermanently() reason = %s, want 'max retries exceeded'", mock.Calls.FailPermanently[0].Reason)
+	}
+
+	// Verify status is closed (not open)
+	if mock.Tasks["task-1"].Status != "closed" {
+		t.Errorf("Task status = %s, want closed (permanently failed tasks should be closed)", mock.Tasks["task-1"].Status)
+	}
+
+	// Verify needs-investigation label was added
+	hasLabel := false
+	for _, label := range mock.Tasks["task-1"].Labels {
+		if label == "needs-investigation" {
+			hasLabel = true
+			break
+		}
+	}
+	if !hasLabel {
+		t.Error("FailPermanently() should add needs-investigation label")
+	}
+}
+
 func TestMockClient_Create(t *testing.T) {
 	ctx := context.Background()
 	mock := NewMockClient()

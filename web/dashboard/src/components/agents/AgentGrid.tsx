@@ -1,10 +1,9 @@
 import React from 'react';
 import { Activity, X, Filter, ListTodo, CheckCircle, XCircle, Archive } from 'lucide-react';
 import { AgentCardGroup } from './AgentCardGroup';
-import { RunControlBar } from '../runs/RunControlBar';
 import type { AgentGroup } from '../../hooks/useAgentFiltering';
 import type { StatusFilter } from '../../hooks/useAgentFiltering';
-import type { Stats, PauseState } from '../../stores/stateStore';
+import type { Stats } from '../../stores/stateStore';
 
 export interface AgentGridProps {
   /** Grouped agents to display */
@@ -35,32 +34,6 @@ export interface AgentGridProps {
   selectedBeadTitle?: string | undefined;
   /** Called when bead filter should be cleared */
   onClearBeadFilter?: () => void;
-  /** Whether the orchestrator is paused */
-  isPaused: boolean;
-  /** Whether the orchestrator is paused by agent */
-  isPausedByAgent: boolean;
-  /** Current pause state */
-  pauseState: PauseState;
-  /** Whether a pause request is in progress */
-  isPauseLoading: boolean;
-  /** Whether a resume request is in progress */
-  isResumeLoading: boolean;
-  /** Current run ID (empty if no active run) */
-  currentRunId: string;
-  /** Whether connected to the backend */
-  connected: boolean;
-  /** Called when pause is clicked */
-  onPause: () => void;
-  /** Called when resume is clicked */
-  onResume: () => void;
-  /** Whether a start run request is in progress */
-  isStartingRun: boolean;
-  /** Whether a stop run request is in progress */
-  isStoppingRun: boolean;
-  /** Called when start run is clicked (opens config dialog) */
-  onStartRun: () => void;
-  /** Called when stop run is clicked */
-  onStopRun: () => void;
 }
 
 /**
@@ -70,7 +43,6 @@ export interface AgentGridProps {
  * - Responsive grid layout (1-4 columns based on viewport)
  * - Empty state display
  * - Status filter toggles
- * - Pause/Resume controls
  * - Delegation to AgentCardGroup for rendering
  */
 export const AgentGrid: React.FC<AgentGridProps> = ({
@@ -88,19 +60,6 @@ export const AgentGrid: React.FC<AgentGridProps> = ({
   selectedBeadId,
   selectedBeadTitle,
   onClearBeadFilter,
-  isPaused,
-  isPausedByAgent,
-  pauseState,
-  isPauseLoading,
-  isResumeLoading,
-  currentRunId,
-  connected,
-  onPause,
-  onResume,
-  isStartingRun,
-  isStoppingRun,
-  onStartRun,
-  onStopRun,
 }) => {
   const toggleFilter = (filter: StatusFilter) => {
     onStatusFilterChange(statusFilter === filter ? 'all' : filter);
@@ -229,24 +188,6 @@ export const AgentGrid: React.FC<AgentGridProps> = ({
           {archivedAgentCount}
         </span>
       </button>
-
-      {/* Run Control Bar (Start/Stop/Pause/Resume) */}
-      <RunControlBar
-        hasActiveRun={currentRunId !== ''}
-        currentRunId={currentRunId}
-        connected={connected}
-        isPaused={isPaused}
-        isPausedByAgent={isPausedByAgent}
-        pauseState={pauseState}
-        isPauseLoading={isPauseLoading}
-        isResumeLoading={isResumeLoading}
-        isStartingRun={isStartingRun}
-        isStoppingRun={isStoppingRun}
-        onPause={onPause}
-        onResume={onResume}
-        onStartRun={onStartRun}
-        onStopRun={onStopRun}
-      />
     </div>
   );
 

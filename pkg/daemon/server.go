@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -90,7 +91,7 @@ func NewServerWithDaemon(port int, state *RuntimeState, eventBus *EventBus, sche
 	// Create orchestration handler for run control (requires daemon reference)
 	var orchHandler *OrchestrationHandler
 	if daemon != nil {
-		orchHandler = NewOrchestrationHandler(daemon.GetOrchestratorManager())
+		orchHandler = NewOrchestrationHandlerWithDaemon(daemon.GetOrchestratorManager(), daemon, eventBus)
 	}
 
 	// Create rules handler for runtime rule management (requires daemon reference)
@@ -219,6 +220,9 @@ func (s *Server) setupRoutes() *http.ServeMux {
 
 	// REST API routes - beads operations
 	mux.HandleFunc("/api/beads/sync", s.handleBeadsSyncRoute) // Handles POST /api/beads/sync
+
+	// REST API routes - run configuration CRUD
+	mux.HandleFunc("/api/config", s.handleConfigRoute) // Handles GET and PUT /api/config
 
 	// REST API routes - orchestration control (daemon-owned runs)
 	// New: /api/runs/:run_id/... for run-scoped operations
@@ -425,21 +429,48 @@ func (s *Server) handleOrchestratorRoutes(w http.ResponseWriter, r *http.Request
 	s.orchHandler.RouteOrchestrator(w, r)
 }
 
+// handleConfigRoute routes run configuration CRUD requests
+func (s *Server) handleConfigRoute(w http.ResponseWriter, r *http.Request) {
+	if s.orchHandler == nil {
+		http.Error(w, "Configuration not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		s.orchHandler.HandleGetConfig(w, r)
+	case http.MethodPut:
+		s.orchHandler.HandlePutConfig(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 // handleReposRoutes routes repo-scoped requests for rules and config
 // Handles /api/repos/:repo_id/rules/* and /api/repos/:repo_id/config/*
 func (s *Server) handleReposRoutes(w http.ResponseWriter, r *http.Request) {
-	path := r.URL.Path
+	// Use EscapedPath to preserve URL encoding (repo paths may contain slashes)
+	// EscapedPath returns the encoded form, or Path if RawPath is empty
+	path := r.URL.EscapedPath()
 
 	// Parse: /api/repos/:repo_id/...
+	// Note: repo_id may be URL-encoded (e.g., %2Fhome%2Fuser%2Frepo for /home/user/repo)
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) < 4 || parts[0] != "api" || parts[1] != "repos" {
 		http.Error(w, "Invalid path", http.StatusBadRequest)
 		return
 	}
 
-	repoID := parts[2]
-	if repoID == "" {
+	encodedRepoID := parts[2]
+	if encodedRepoID == "" {
 		http.Error(w, "Repository ID required", http.StatusBadRequest)
+		return
+	}
+
+	// Decode the repo ID (which may be a URL-encoded path like %2Fhome%2Fuser%2Frepo)
+	repoID, err := url.PathUnescape(encodedRepoID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Invalid repo ID encoding: %v", err), http.StatusBadRequest)
 		return
 	}
 
@@ -448,20 +479,38 @@ func (s *Server) handleReposRoutes(w http.ResponseWriter, r *http.Request) {
 	q.Set("repo_id", repoID)
 	r.URL.RawQuery = q.Encode()
 
-	resource := parts[3]
+	// Determine the resource and remaining path parts
+	// parts[3] is the resource (rules, config), but it may also be encoded
+	resource, err := url.PathUnescape(parts[3])
+	if err != nil {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+
+	// Decode remaining suffix parts
+	suffix := make([]string, 0, len(parts)-4)
+	for _, p := range parts[4:] {
+		decoded, err := url.PathUnescape(p)
+		if err != nil {
+			http.Error(w, "Invalid path encoding", http.StatusBadRequest)
+			return
+		}
+		suffix = append(suffix, decoded)
+	}
+
 	switch resource {
 	case "rules":
 		if s.rulesHandler == nil {
 			http.Error(w, "Rules management not available", http.StatusServiceUnavailable)
 			return
 		}
-		s.rulesHandler.RouteRepoRules(w, r, parts[4:])
+		s.rulesHandler.RouteRepoRules(w, r, suffix)
 	case "config":
 		if s.configHandler == nil {
 			http.Error(w, "Configuration queries not available", http.StatusServiceUnavailable)
 			return
 		}
-		s.configHandler.RouteRepoConfig(w, r, parts[4:])
+		s.configHandler.RouteRepoConfig(w, r, suffix)
 	default:
 		http.Error(w, "Not found", http.StatusNotFound)
 	}
@@ -610,8 +659,15 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 // sendInitialState sends the current runtime state to a newly connected client
 func (s *Server) sendInitialState(client *Client) {
-	// Get a snapshot of the current state
-	snapshot := s.state.GetSnapshot()
+	// Get a snapshot of the current state.
+	// Use daemon.GetState() if available, as it includes orchestrator state.
+	// Otherwise fall back to direct state snapshot.
+	var snapshot RuntimeStateSnapshot
+	if s.daemon != nil {
+		snapshot = s.daemon.GetState()
+	} else {
+		snapshot = s.state.GetSnapshot()
+	}
 
 	// Create state sync event
 	event := Event{

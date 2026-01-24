@@ -11,11 +11,14 @@ import (
 
 	"github.com/jzila/canopy/pkg/beads"
 	"github.com/jzila/canopy/pkg/persistence"
+	"github.com/jzila/canopy/pkg/repository"
 )
 
 // DaemonInterface abstracts daemon operations for handlers
 type DaemonInterface interface {
 	GetActiveRepositoryID() string
+	GetActiveRepository() *repository.Repository
+	GetOrchestratorManager() *OrchestratorManager
 }
 
 // MergeQueueInterface abstracts merge queue operations for handlers
@@ -53,6 +56,7 @@ type BeadsClientInterface interface {
 	Start(ctx context.Context, taskID string) error
 	Done(ctx context.Context, taskID string) error
 	Fail(ctx context.Context, taskID string, reason string) error
+	FailPermanently(ctx context.Context, taskID string, reason string) error
 	AddDep(ctx context.Context, child, parent string) error
 	List(ctx context.Context) ([]beads.Task, error)
 	Show(ctx context.Context, taskID string) (*beads.Task, error)
@@ -86,7 +90,25 @@ func (h *Handler) SetMergeQueue(mq MergeQueueInterface) {
 // StateResponse wraps RuntimeStateSnapshot with additional daemon-level information
 type StateResponse struct {
 	RuntimeStateSnapshot
-	ActiveRepoID string `json:"active_repo_id,omitempty"`
+	ActiveRepoID   string               `json:"active_repo_id,omitempty"`
+	MergeQueueInfo *MergeQueueSnapshot  `json:"merge_queue,omitempty"`
+}
+
+// MergeQueueSnapshot contains information about the merge queue state for display
+type MergeQueueSnapshot struct {
+	Entries     []MergeQueueEntry `json:"entries"`
+	QueueLength int               `json:"queue_length"`
+	IsPaused    bool              `json:"is_paused"`
+	PauseState  string            `json:"pause_state"`
+}
+
+// MergeQueueEntry represents an item in the merge queue
+type MergeQueueEntry struct {
+	AgentID   string `json:"agent_id"`
+	TaskID    string `json:"task_id"`
+	TaskTitle string `json:"task_title,omitempty"`
+	Status    string `json:"status"` // merging, waiting
+	Position  int    `json:"position"`
 }
 
 // HandleGetState returns the current RuntimeState as JSON
@@ -106,6 +128,29 @@ func (h *Handler) HandleGetState(w http.ResponseWriter, r *http.Request) {
 	// with a different or empty RepoID, and filtering would hide them from the UI)
 	snapshot := h.state.GetSnapshot()
 
+	// Add orchestrator state if available
+	if h.daemon != nil {
+		orchMgr := h.daemon.GetOrchestratorManager()
+		if orchMgr != nil {
+			// Get the active repo and query its orchestrator state
+			activeRepo := h.daemon.GetActiveRepository()
+			if activeRepo != nil {
+				state := orchMgr.GetOrchestratorState(activeRepo.Path)
+				if state != "" {
+					snapshot.OrchestratorState = string(state)
+				}
+			}
+		}
+		// Count active agents (running status)
+		activeCount := 0
+		for _, agent := range snapshot.Agents {
+			if agent.Status == "running" {
+				activeCount++
+			}
+		}
+		snapshot.ActiveAgentCount = activeCount
+	}
+
 	// Wrap snapshot with additional daemon-level state
 	response := StateResponse{
 		RuntimeStateSnapshot: snapshot,
@@ -115,6 +160,9 @@ func (h *Handler) HandleGetState(w http.ResponseWriter, r *http.Request) {
 	if activeRepoID != "" {
 		response.ActiveRepoID = activeRepoID
 	}
+
+	// Build merge queue snapshot from agent states
+	response.MergeQueueInfo = h.buildMergeQueueSnapshot(snapshot)
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(response); err != nil {
@@ -177,12 +225,6 @@ func (h *Handler) HandleKillAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if scheduler is available
-	if h.scheduler == nil {
-		http.Error(w, "Scheduler not available", http.StatusNotImplemented)
-		return
-	}
-
 	// Check if agent exists
 	agent := h.state.GetAgent(agentID)
 	if agent == nil {
@@ -190,9 +232,33 @@ func (h *Handler) HandleKillAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Kill the agent via scheduler
-	if err := h.scheduler.Kill(agentID); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to kill agent: %v", err), http.StatusInternalServerError)
+	// Kill via OrchestratorManager (preferred) or legacy scheduler
+	var killErr error
+	if h.daemon != nil {
+		orchManager := h.daemon.GetOrchestratorManager()
+		if orchManager != nil {
+			killErr = orchManager.KillAgent(agentID)
+		} else if h.scheduler != nil {
+			killErr = h.scheduler.Kill(agentID)
+		} else {
+			http.Error(w, "No kill mechanism available", http.StatusNotImplemented)
+			return
+		}
+	} else if h.scheduler != nil {
+		killErr = h.scheduler.Kill(agentID)
+	} else {
+		http.Error(w, "No kill mechanism available", http.StatusNotImplemented)
+		return
+	}
+
+	if killErr != nil {
+		// Check if error is "agent not found" in scheduler
+		errMsg := killErr.Error()
+		if strings.Contains(errMsg, "not found") {
+			http.Error(w, fmt.Sprintf("Agent %s not found in scheduler", agentID), http.StatusNotFound)
+		} else {
+			http.Error(w, fmt.Sprintf("Failed to kill agent: %v", killErr), http.StatusInternalServerError)
+		}
 		return
 	}
 
@@ -753,4 +819,72 @@ func (h *Handler) HandleGetMergeQueue(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Failed to encode merge queue state: %v", err), http.StatusInternalServerError)
 		return
 	}
+}
+
+// buildMergeQueueSnapshot constructs a merge queue snapshot from agent states.
+// This is used to include queue info in the /api/state response for CLI tools.
+func (h *Handler) buildMergeQueueSnapshot(snapshot RuntimeStateSnapshot) *MergeQueueSnapshot {
+	queueSnapshot := &MergeQueueSnapshot{
+		Entries:    make([]MergeQueueEntry, 0),
+		PauseState: "running",
+	}
+
+	// Get detailed pause state from merge queue if available
+	if h.mergeQueue != nil {
+		queueSnapshot.IsPaused = h.mergeQueue.IsPaused()
+		queueSnapshot.PauseState = h.mergeQueue.PauseStateString()
+	}
+
+	// Collect agents that are in the merge queue (pending or actively merging)
+	for _, agent := range snapshot.Agents {
+		var entry *MergeQueueEntry
+
+		switch agent.MergeStatus {
+		case MergeStatusMerging:
+			// Currently merging - position 1
+			entry = &MergeQueueEntry{
+				AgentID:   agent.ID,
+				TaskID:    agent.TaskID,
+				TaskTitle: agent.TaskTitle,
+				Status:    "merging",
+				Position:  1,
+			}
+		case MergeStatusPending, MergeStatusAcquiring:
+			// Waiting in queue
+			position := agent.MergeQueuePos
+			if position == 0 {
+				// If position not set, estimate from queue length
+				position = len(queueSnapshot.Entries) + 2 // +2 because merging agent is position 1
+			}
+			entry = &MergeQueueEntry{
+				AgentID:   agent.ID,
+				TaskID:    agent.TaskID,
+				TaskTitle: agent.TaskTitle,
+				Status:    "waiting",
+				Position:  position,
+			}
+		}
+
+		if entry != nil {
+			queueSnapshot.Entries = append(queueSnapshot.Entries, *entry)
+		}
+	}
+
+	// Sort entries by position (merging first, then waiting by position)
+	// Simple bubble sort since queue is typically small
+	for i := 0; i < len(queueSnapshot.Entries)-1; i++ {
+		for j := 0; j < len(queueSnapshot.Entries)-i-1; j++ {
+			if queueSnapshot.Entries[j].Position > queueSnapshot.Entries[j+1].Position {
+				queueSnapshot.Entries[j], queueSnapshot.Entries[j+1] = queueSnapshot.Entries[j+1], queueSnapshot.Entries[j]
+			}
+		}
+	}
+
+	// Renumber positions to be sequential (1, 2, 3, ...)
+	for i := range queueSnapshot.Entries {
+		queueSnapshot.Entries[i].Position = i + 1
+	}
+
+	queueSnapshot.QueueLength = len(queueSnapshot.Entries)
+	return queueSnapshot
 }

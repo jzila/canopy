@@ -177,12 +177,14 @@ export const EditRuleModal: React.FC<EditRuleModalProps> = ({
     }
 
     // Create updated rule with persisted=false since this is an in-memory edit
+    // Keep the original source if editing, otherwise default to override
     const updatedRule: Rule = {
       name: rule.name,
       conditions: validConditions,
       action,
       enabled,
       persisted: false,
+      source: rule.source || 'override',
     };
 
     onSave(updatedRule);

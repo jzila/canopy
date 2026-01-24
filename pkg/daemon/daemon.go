@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jzila/canopy/pkg/events"
 	"github.com/jzila/canopy/pkg/logging"
@@ -58,6 +59,9 @@ type Daemon struct {
 	ipcServerFactory IPCServerFactory
 	httpServer       *Server
 	scheduler        SchedulerInterface
+
+	// Subscription cleanup
+	stateUnsubscribe func()
 }
 
 // NewDaemon creates a new daemon instance with the given configuration.
@@ -145,6 +149,14 @@ func (d *Daemon) Init() {
 	}
 	if d.state == nil {
 		d.state = NewRuntimeState()
+	}
+
+	// Subscribe RuntimeState to EventBus early, before state restoration.
+	// This ensures lifecycle callbacks can publish events during restoration.
+	// Without this, agents restored with non-terminal lifecycles would have
+	// callbacks that silently drop events because eventBus is nil.
+	if d.stateUnsubscribe == nil {
+		d.stateUnsubscribe = d.state.SubscribeToEventBus(d.eventBus)
 	}
 
 	// Initialize managers if nil (for backwards compatibility with tests)
@@ -358,11 +370,15 @@ func (d *Daemon) Start() error {
 	d.Init()
 	logging.Debug("eventbus initialized")
 	logging.Debug("runtime state initialized")
-
-	// Subscribe RuntimeState to EventBus to update from IPC events
-	unsubscribeState := d.state.SubscribeToEventBus(d.eventBus)
-	defer unsubscribeState()
 	logging.Debug("runtime state subscribed to eventbus")
+
+	// Ensure cleanup of state subscription when Start() returns
+	defer func() {
+		if d.stateUnsubscribe != nil {
+			d.stateUnsubscribe()
+			d.stateUnsubscribe = nil
+		}
+	}()
 
 	// Initialize HTTP server
 	d.httpServer = NewServerWithDaemon(
@@ -419,6 +435,17 @@ func (d *Daemon) Stop() error {
 		d.periodicSyncMgr.Stop()
 	}
 
+	// Clean up active overlays before stopping orchestrators
+	// This prevents orphaned FUSE mounts and overlay directories
+	if d.orchManager != nil {
+		count, err := d.orchManager.CleanupAllOverlays(30 * time.Second)
+		if err != nil {
+			logging.Warn("overlay cleanup encountered errors", "count", count, "error", err)
+		} else if count > 0 {
+			logging.Info("cleaned up active overlays", "count", count)
+		}
+	}
+
 	// Stop lifecycle-managed components (IPC, HTTP, pidfile)
 	if err := d.lifecycle.Stop(); err != nil && firstErr == nil {
 		firstErr = err
@@ -451,11 +478,33 @@ func (d *Daemon) GetEventBus() *EventBus {
 }
 
 // GetState returns a snapshot of the current runtime state.
+// It includes orchestrator state from the OrchestratorManager if available.
 func (d *Daemon) GetState() RuntimeStateSnapshot {
-	if d.state != nil {
-		return d.state.GetSnapshot()
+	if d.state == nil {
+		return RuntimeStateSnapshot{}
 	}
-	return RuntimeStateSnapshot{}
+
+	snapshot := d.state.GetSnapshot()
+
+	// Populate orchestrator state from OrchestratorManager if available
+	if d.repoManager != nil && d.orchManager != nil {
+		if repo := d.GetActiveRepository(); repo != nil {
+			state := d.orchManager.GetOrchestratorState(repo.Path)
+			if state != "" {
+				snapshot.OrchestratorState = string(state)
+			}
+			// Count active agents from the snapshot we already have
+			activeCount := 0
+			for _, agent := range snapshot.Agents {
+				if agent.Status == "running" {
+					activeCount++
+				}
+			}
+			snapshot.ActiveAgentCount = activeCount
+		}
+	}
+
+	return snapshot
 }
 
 // GetRuntimeState returns the RuntimeState instance for direct access.

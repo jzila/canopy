@@ -7,12 +7,16 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jzila/canopy/pkg/config"
 	"github.com/jzila/canopy/pkg/logging"
+	"github.com/jzila/canopy/pkg/persistence"
 )
 
 // OrchestrationHandler handles HTTP requests for orchestration control.
 type OrchestrationHandler struct {
-	manager *OrchestratorManager
+	manager  *OrchestratorManager
+	daemon   *Daemon
+	eventBus *EventBus
 }
 
 // NewOrchestrationHandler creates a new OrchestrationHandler.
@@ -22,18 +26,44 @@ func NewOrchestrationHandler(manager *OrchestratorManager) *OrchestrationHandler
 	}
 }
 
+// NewOrchestrationHandlerWithDaemon creates a new OrchestrationHandler with daemon access.
+// This allows the handler to access persistence store and event bus for config CRUD.
+func NewOrchestrationHandlerWithDaemon(manager *OrchestratorManager, daemon *Daemon, eventBus *EventBus) *OrchestrationHandler {
+	return &OrchestrationHandler{
+		manager:  manager,
+		daemon:   daemon,
+		eventBus: eventBus,
+	}
+}
+
+// RuleOverrideRequest represents a custom rule in API requests.
+type RuleOverrideRequest struct {
+	Name      string `json:"name"`
+	Condition string `json:"condition"`
+	Action    string `json:"action"`
+	Enabled   *bool  `json:"enabled,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+}
+
 // ExecuteRunRequest is the JSON request body for starting a run.
 type ExecuteRunRequest struct {
-	WorkDir           string `json:"work_dir"`
-	OutputDir         string `json:"output_dir,omitempty"`
-	Concurrency       int    `json:"concurrency,omitempty"`
-	Verbose           bool   `json:"verbose,omitempty"`
-	DryRun            bool   `json:"dry_run,omitempty"`
-	UseBwrap          bool   `json:"use_bwrap,omitempty"`
-	MaxRetries        int    `json:"max_retries,omitempty"`
-	MaxPriority       int    `json:"max_priority,omitempty"`
-	ResolverTimeoutMS int64  `json:"resolver_timeout_ms,omitempty"`
-	RepoID            string `json:"repo_id,omitempty"`
+	WorkDir           string                `json:"work_dir"`
+	OutputDir         string                `json:"output_dir,omitempty"`
+	Concurrency       int                   `json:"concurrency,omitempty"`
+	Verbose           bool                  `json:"verbose,omitempty"`
+	DryRun            bool                  `json:"dry_run,omitempty"`
+	UseBwrap          bool                  `json:"use_bwrap,omitempty"`
+	MaxRetries        int                   `json:"max_retries,omitempty"`
+	MaxPriority       int                   `json:"max_priority,omitempty"`
+	ResolverTimeoutMS int64                 `json:"resolver_timeout_ms,omitempty"`
+	RepoID            string                `json:"repo_id,omitempty"`
+	PollIntervalMS    int64                 `json:"poll_interval_ms,omitempty"`
+	Types             []string              `json:"types,omitempty"`
+	ExcludeTypes      []string              `json:"exclude_types,omitempty"`
+	Labels            []string              `json:"labels,omitempty"`
+	ExcludeLabels     []string              `json:"exclude_labels,omitempty"`
+	Assignee          string                `json:"assignee,omitempty"`
+	RuleOverrides     []RuleOverrideRequest `json:"rule_overrides,omitempty"`
 }
 
 // ExecuteRunResponse is the JSON response for starting a run.
@@ -54,6 +84,22 @@ type StopRunResponse struct {
 	Error   string `json:"error,omitempty"`
 }
 
+// ActivateRequest is the JSON request body for activating an orchestrator.
+// This is the preferred API for the always-active model.
+type ActivateRequest = ExecuteRunRequest
+
+// ActivateResponse is the JSON response for activating an orchestrator.
+type ActivateResponse = ExecuteRunResponse
+
+// DeactivateRequest is the JSON request body for deactivating an orchestrator.
+type DeactivateRequest struct {
+	RunID    string `json:"run_id,omitempty"`
+	RepoPath string `json:"repo_path,omitempty"`
+}
+
+// DeactivateResponse is the JSON response for deactivating an orchestrator.
+type DeactivateResponse = StopRunResponse
+
 // RunStatusResponse is the JSON response for run status queries.
 type RunStatusResponse struct {
 	Success bool            `json:"success"`
@@ -64,10 +110,9 @@ type RunStatusResponse struct {
 
 // UpdateRunConfigRequest is the JSON request body for updating run configuration.
 type UpdateRunConfigRequest struct {
-	Concurrency  *int  `json:"concurrency,omitempty"`
-	MaxPriority  *int  `json:"max_priority,omitempty"`
-	Watch        *bool `json:"watch,omitempty"`
-	PollInterval *int  `json:"poll_interval_ms,omitempty"` // milliseconds
+	Concurrency  *int `json:"concurrency,omitempty"`
+	MaxPriority  *int `json:"max_priority,omitempty"`
+	PollInterval *int `json:"poll_interval_ms,omitempty"` // milliseconds
 }
 
 // UpdateRunConfigResponse is the JSON response for updating run configuration.
@@ -114,8 +159,20 @@ func (h *OrchestrationHandler) HandleExecuteRun(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	// Convert rule overrides to config.CustomRule
+	var ruleOverrides []config.CustomRule
+	for _, r := range req.RuleOverrides {
+		ruleOverrides = append(ruleOverrides, config.CustomRule{
+			Name:      r.Name,
+			Condition: r.Condition,
+			Action:    r.Action,
+			Enabled:   r.Enabled,
+			Reason:    r.Reason,
+		})
+	}
+
 	// Convert request to RunConfig
-	config := RunConfig{
+	runCfg := RunConfig{
 		WorkDir:         req.WorkDir,
 		OutputDir:       req.OutputDir,
 		Concurrency:     req.Concurrency,
@@ -125,11 +182,18 @@ func (h *OrchestrationHandler) HandleExecuteRun(w http.ResponseWriter, r *http.R
 		MaxRetries:      req.MaxRetries,
 		MaxPriority:     req.MaxPriority,
 		ResolverTimeout: time.Duration(req.ResolverTimeoutMS) * time.Millisecond,
+		PollInterval:    time.Duration(req.PollIntervalMS) * time.Millisecond,
 		RepoID:          req.RepoID,
+		Types:           req.Types,
+		ExcludeTypes:    req.ExcludeTypes,
+		Labels:          req.Labels,
+		ExcludeLabels:   req.ExcludeLabels,
+		Assignee:        req.Assignee,
+		RuleOverrides:   ruleOverrides,
 	}
 
 	// Start the run with a background context (not tied to request)
-	runID, err := h.manager.StartRun(context.Background(), config)
+	runID, err := h.manager.StartRun(context.Background(), runCfg)
 	if err != nil {
 		logging.Warn("failed to start orchestration run",
 			"work_dir", req.WorkDir,
@@ -200,6 +264,83 @@ func (h *OrchestrationHandler) HandleStopRun(w http.ResponseWriter, r *http.Requ
 	logging.Info("stopped orchestration run via HTTP", "run_id", req.RunID)
 
 	writeJSON(w, http.StatusOK, StopRunResponse{
+		Success: true,
+	})
+}
+
+// HandleActivate handles POST /api/orchestrator/activate requests.
+// This is the preferred endpoint for the always-active orchestrator model.
+func (h *OrchestrationHandler) HandleActivate(w http.ResponseWriter, r *http.Request) {
+	// Delegate to HandleExecuteRun - they use the same request/response format
+	h.HandleExecuteRun(w, r)
+}
+
+// HandleDeactivate handles POST /api/orchestrator/deactivate requests.
+// This is the preferred endpoint for the always-active orchestrator model.
+// Accepts either run_id or repo_path.
+func (h *OrchestrationHandler) HandleDeactivate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if h.manager == nil {
+		writeJSON(w, http.StatusServiceUnavailable, DeactivateResponse{
+			Success: false,
+			Error:   "orchestration not available",
+		})
+		return
+	}
+
+	var req DeactivateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, DeactivateResponse{
+			Success: false,
+			Error:   "invalid request body: " + err.Error(),
+		})
+		return
+	}
+
+	var err error
+	if req.RunID != "" {
+		// Stop by run ID
+		err = h.manager.StopRun(req.RunID)
+	} else if req.RepoPath != "" {
+		// Stop by repo path - find the active run and stop it
+		runState, getErr := h.manager.GetActiveRunForRepo(req.RepoPath)
+		if getErr != nil {
+			err = getErr
+		} else if runState == nil {
+			err = nil // No active run, treat as success
+		} else {
+			err = h.manager.StopRun(runState.ID)
+		}
+	} else {
+		writeJSON(w, http.StatusBadRequest, DeactivateResponse{
+			Success: false,
+			Error:   "either run_id or repo_path is required",
+		})
+		return
+	}
+
+	if err != nil {
+		logging.Warn("failed to deactivate orchestrator",
+			"run_id", req.RunID,
+			"repo_path", req.RepoPath,
+			"error", err)
+
+		writeJSON(w, http.StatusInternalServerError, DeactivateResponse{
+			Success: false,
+			Error:   err.Error(),
+		})
+		return
+	}
+
+	logging.Info("deactivated orchestrator via HTTP",
+		"run_id", req.RunID,
+		"repo_path", req.RepoPath)
+
+	writeJSON(w, http.StatusOK, DeactivateResponse{
 		Success: true,
 	})
 }
@@ -317,7 +458,7 @@ func (h *OrchestrationHandler) HandleUpdateRunConfig(w http.ResponseWriter, r *h
 		return
 	}
 
-	err := h.manager.UpdateRunConfig(runID, req.Concurrency, req.MaxPriority, req.Watch)
+	err := h.manager.UpdateRunConfig(runID, req.Concurrency, req.MaxPriority)
 	if err != nil {
 		logging.Warn("failed to update run config",
 			"run_id", runID,
@@ -362,6 +503,175 @@ func runStateToWire(rs *RunState) *RunStatusWire {
 	return wire
 }
 
+// RunConfigRequest is the JSON request/response body for run configuration CRUD.
+// This uses the persistence.RunConfig fields but with omitempty for optional updates.
+type RunConfigRequest struct {
+	Concurrency int  `json:"concurrency"`
+	MaxPriority int  `json:"max_priority"`
+	UseBwrap    bool `json:"use_bwrap"`
+	MaxRetries  int  `json:"max_retries"`
+}
+
+// RunConfigResponse is the JSON response for GET /api/config.
+type RunConfigResponse struct {
+	Concurrency int    `json:"concurrency"`
+	MaxPriority int    `json:"max_priority"`
+	UseBwrap    bool   `json:"use_bwrap"`
+	MaxRetries  int    `json:"max_retries"`
+	Error       string `json:"error,omitempty"`
+}
+
+// HandleGetConfig handles GET /api/config requests.
+// Returns the saved run configuration for the current repository, or defaults if none saved.
+func (h *OrchestrationHandler) HandleGetConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Get the repo ID from the current active repository
+	repoID := h.getActiveRepoID()
+	if repoID == "" {
+		writeJSON(w, http.StatusBadRequest, RunConfigResponse{
+			Error: "no active repository",
+		})
+		return
+	}
+
+	// Get the persistence store
+	store := h.getPersistenceStore()
+	if store == nil {
+		// No persistence - return defaults
+		config := persistence.DefaultRunConfig(repoID)
+		writeJSON(w, http.StatusOK, RunConfigResponse{
+			Concurrency: config.Concurrency,
+			MaxPriority: config.MaxPriority,
+			UseBwrap:    config.UseBwrap,
+			MaxRetries:  config.MaxRetries,
+		})
+		return
+	}
+
+	// Load config from persistence (returns defaults if not found)
+	config, err := store.GetRunConfig(repoID)
+	if err != nil {
+		logging.Error("failed to get run config", "repo_id", repoID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, RunConfigResponse{
+			Error: "failed to load configuration: " + err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, RunConfigResponse{
+		Concurrency: config.Concurrency,
+		MaxPriority: config.MaxPriority,
+		UseBwrap:    config.UseBwrap,
+		MaxRetries:  config.MaxRetries,
+	})
+}
+
+// HandlePutConfig handles PUT /api/config requests.
+// Saves run configuration for the current repository, broadcasts config_updated event.
+func (h *OrchestrationHandler) HandlePutConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Get the repo ID from the current active repository
+	repoID := h.getActiveRepoID()
+	if repoID == "" {
+		writeJSON(w, http.StatusBadRequest, RunConfigResponse{
+			Error: "no active repository",
+		})
+		return
+	}
+
+	// Parse request body
+	var req RunConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, RunConfigResponse{
+			Error: "invalid request body: " + err.Error(),
+		})
+		return
+	}
+
+	// Get the persistence store
+	store := h.getPersistenceStore()
+	if store == nil {
+		writeJSON(w, http.StatusServiceUnavailable, RunConfigResponse{
+			Error: "persistence not enabled",
+		})
+		return
+	}
+
+	// Create config from request
+	config := &persistence.RunConfig{
+		RepoID:      repoID,
+		Concurrency: req.Concurrency,
+		MaxPriority: req.MaxPriority,
+		UseBwrap:    req.UseBwrap,
+		MaxRetries:  req.MaxRetries,
+	}
+
+	// Save to persistence
+	if err := store.SaveRunConfig(repoID, config); err != nil {
+		logging.Error("failed to save run config", "repo_id", repoID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, RunConfigResponse{
+			Error: "failed to save configuration: " + err.Error(),
+		})
+		return
+	}
+
+	logging.Info("saved run config via HTTP", "repo_id", repoID,
+		"concurrency", config.Concurrency,
+		"max_priority", config.MaxPriority,
+		"use_bwrap", config.UseBwrap,
+		"max_retries", config.MaxRetries)
+
+	// Broadcast config_updated event via WebSocket
+	if h.eventBus != nil {
+		h.eventBus.Publish(Event{
+			Type:      EventConfigUpdated,
+			Timestamp: time.Now(),
+			Payload: RunConfigResponse{
+				Concurrency: config.Concurrency,
+				MaxPriority: config.MaxPriority,
+				UseBwrap:    config.UseBwrap,
+				MaxRetries:  config.MaxRetries,
+			},
+		})
+	}
+
+	// Return the saved configuration
+	writeJSON(w, http.StatusOK, RunConfigResponse{
+		Concurrency: config.Concurrency,
+		MaxPriority: config.MaxPriority,
+		UseBwrap:    config.UseBwrap,
+		MaxRetries:  config.MaxRetries,
+	})
+}
+
+// getActiveRepoID returns the repository ID for the current active repository.
+func (h *OrchestrationHandler) getActiveRepoID() string {
+	if h.daemon == nil {
+		return ""
+	}
+	return h.daemon.GetWorkDir()
+}
+
+// getPersistenceStore returns the persistence store, or nil if persistence is disabled.
+func (h *OrchestrationHandler) getPersistenceStore() *persistence.Store {
+	if h.daemon == nil {
+		return nil
+	}
+	pm := h.daemon.GetPersistenceStore()
+	if pm == nil {
+		return nil
+	}
+	return pm.GetStore()
+}
+
 // writeJSON writes a JSON response with the given status code.
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
@@ -376,13 +686,25 @@ func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 func (h *OrchestrationHandler) RouteOrchestrator(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 
-	// POST /api/orchestrator/run - start a new run
+	// POST /api/orchestrator/activate - activate orchestrator (preferred)
+	if path == "/api/orchestrator/activate" && r.Method == http.MethodPost {
+		h.HandleActivate(w, r)
+		return
+	}
+
+	// POST /api/orchestrator/deactivate - deactivate orchestrator (preferred)
+	if path == "/api/orchestrator/deactivate" && r.Method == http.MethodPost {
+		h.HandleDeactivate(w, r)
+		return
+	}
+
+	// POST /api/orchestrator/run - start a new run (legacy, calls activate internally)
 	if path == "/api/orchestrator/run" && r.Method == http.MethodPost {
 		h.HandleExecuteRun(w, r)
 		return
 	}
 
-	// POST /api/orchestrator/run/stop - stop a run
+	// POST /api/orchestrator/run/stop - stop a run (legacy, calls deactivate internally)
 	if path == "/api/orchestrator/run/stop" && r.Method == http.MethodPost {
 		h.HandleStopRun(w, r)
 		return

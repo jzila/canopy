@@ -461,6 +461,23 @@ func (o *Overlay) GetChanges() ([]FileChange, error) {
 			return nil
 		}
 
+		// Check for character device whiteout (fuse-overlayfs convention)
+		// fuse-overlayfs marks deletions as char devices with major:minor 0:0
+		info, err := d.Info()
+		if err == nil {
+			if info.Mode()&os.ModeCharDevice != 0 {
+				if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+					if stat.Rdev == 0 { // major:minor 0:0 = whiteout
+						changes = append(changes, FileChange{
+							Path: relPath,
+							Type: ChangeDeleted,
+						})
+						return nil
+					}
+				}
+			}
+		}
+
 		// Check if file exists in lower (original)
 		lowerPath := filepath.Join(o.LowerDir, relPath)
 		_, lowerErr := os.Stat(lowerPath)

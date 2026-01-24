@@ -29,12 +29,14 @@ type RunConfig struct {
 	Concurrency int `json:"concurrency"`
 	// DryRun shows what would execute without running agents
 	DryRun bool `json:"dry_run"`
-	// Watch enables watch mode (poll for new tasks instead of exiting)
-	Watch bool `json:"watch"`
 	// MaxRetries is the maximum retry count for failed tasks (-1 = infinite)
 	MaxRetries int `json:"max_retries"`
 	// MaxPriority filters tasks by priority (only tasks with priority <= this value)
 	MaxPriority int `json:"max_priority"`
+	// RuleOverrides contains custom rules to apply for this run only.
+	// These rules are applied with the highest precedence (above config.toml rules).
+	// When the run ends, these overrides are discarded unless persisted.
+	RuleOverrides []config.CustomRule `json:"rule_overrides,omitempty"`
 }
 
 // RuleUpdate contains fields for updating an existing rule.
@@ -159,6 +161,17 @@ func (r *repoAPIImpl) Start(ctx context.Context, cfg RunConfig) error {
 	if r.state == StatePaused {
 		return fmt.Errorf("orchestrator is paused; use Resume() instead")
 	}
+
+	// Apply rule overrides if provided
+	if len(cfg.RuleOverrides) > 0 {
+		engine := r.orchestrator.GetRulesEngine()
+		if engine != nil {
+			if err := engine.ApplyOverrides(cfg.RuleOverrides); err != nil {
+				return fmt.Errorf("failed to apply rule overrides: %w", err)
+			}
+		}
+	}
+
 	// In the full implementation, this would:
 	// 1. Apply RunConfig to the orchestrator
 	// 2. Start the orchestrator's Run loop in a goroutine
@@ -193,6 +206,13 @@ func (r *repoAPIImpl) Stop(ctx context.Context) error {
 	if r.state == StateIdle {
 		return nil // no-op if already idle
 	}
+
+	// Clear rule overrides when run ends
+	engine := r.orchestrator.GetRulesEngine()
+	if engine != nil {
+		engine.ClearOverrides()
+	}
+
 	// In the full implementation, this would:
 	// 1. Signal the orchestrator to stop
 	// 2. Wait for in-flight tasks to complete

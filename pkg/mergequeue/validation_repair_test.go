@@ -1071,3 +1071,79 @@ func TestValidateOverlayAccessible_UnreadableFile(t *testing.T) {
 		t.Errorf("validateOverlayAccessible() error = %v, want error containing 'cannot access file'", err)
 	}
 }
+
+// TestGetMergeBase tests the getMergeBase function which detects divergent histories.
+func TestGetMergeBase(t *testing.T) {
+	// Create a temporary git repository for testing
+	tmpDir := t.TempDir()
+
+	// Initialize git repo
+	cmd := exec.Command("git", "init")
+	cmd.Dir = tmpDir
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("failed to init git repo: %v", err)
+	}
+
+	// Configure git user for commits
+	_ = exec.Command("git", "-C", tmpDir, "config", "user.name", "Test User").Run()
+	_ = exec.Command("git", "-C", tmpDir, "config", "user.email", "test@example.com").Run()
+
+	// Create initial commit
+	if err := os.WriteFile(tmpDir+"/file1.txt", []byte("initial"), 0644); err != nil {
+		t.Fatalf("failed to create file: %v", err)
+	}
+	_ = exec.Command("git", "-C", tmpDir, "add", ".").Run()
+	_ = exec.Command("git", "-C", tmpDir, "commit", "-m", "initial").Run()
+
+	// Get the initial commit hash (base)
+	baseOutput, err := exec.Command("git", "-C", tmpDir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("failed to get base commit: %v", err)
+	}
+	baseCommit := strings.TrimSpace(string(baseOutput))
+
+	// Create a second commit (current HEAD)
+	if err := os.WriteFile(tmpDir+"/file2.txt", []byte("second"), 0644); err != nil {
+		t.Fatalf("failed to create file2: %v", err)
+	}
+	_ = exec.Command("git", "-C", tmpDir, "add", ".").Run()
+	_ = exec.Command("git", "-C", tmpDir, "commit", "-m", "second").Run()
+
+	// Get current HEAD
+	headOutput, err := exec.Command("git", "-C", tmpDir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("failed to get HEAD: %v", err)
+	}
+	currentHead := strings.TrimSpace(string(headOutput))
+
+	// Create processor
+	p := &Processor{
+		outputDir: tmpDir,
+		verbose:   false,
+	}
+
+	// Test getMergeBase - should return baseCommit since it's the ancestor
+	mergeBase, err := p.getMergeBase(baseCommit, currentHead)
+	if err != nil {
+		t.Fatalf("getMergeBase() unexpected error: %v", err)
+	}
+
+	if mergeBase != baseCommit {
+		t.Errorf("getMergeBase() = %s, want %s (base should be merge-base)", mergeBase[:8], baseCommit[:8])
+	}
+}
+
+// TestGetMergeBase_NonGitDir tests getMergeBase in a non-git directory.
+func TestGetMergeBase_NonGitDir(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	p := &Processor{
+		outputDir: tmpDir,
+		verbose:   false,
+	}
+
+	_, err := p.getMergeBase("abc123", "def456")
+	if err == nil {
+		t.Error("getMergeBase() expected error in non-git directory, got nil")
+	}
+}

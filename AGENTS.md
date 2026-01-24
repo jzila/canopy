@@ -227,6 +227,15 @@ activeCount atomic.Int64
 | `sync.RWMutex` | Structured data, snapshots, iteration | `RuntimeState` |
 | `atomic` | Simple flags, counters | `paused`, `closed` |
 
+## State Machine Patterns
+
+| Complexity | Pattern | Example |
+|------------|---------|---------|
+| ≤5 events | Explicit methods (`UserPause()`, `AgentResume()`) | `pkg/mergequeue/pause_state.go` |
+| >5 events | Event-driven (`Transition(ctx, event)`) | `pkg/lifecycle/state.go` |
+
+**Both patterns require:** mutex-protected state, query methods (`State()`, `IsTerminal()`), `String()` for logging.
+
 ## API Conventions (Go ↔ TypeScript)
 
 **JSON field names use snake_case** throughout the codebase.

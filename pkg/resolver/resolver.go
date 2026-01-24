@@ -189,6 +189,9 @@ func (r *Resolver) Resolve(ctx context.Context, conflict *ConflictContext) (*Res
 	// Execute the resolver agent
 	agentResult := r.executor.Execute(ctx, resolverTask, overlay, nil, nil)
 
+	// Set the original bead ID for commit messages (TaskID is the synthetic resolver agent ID)
+	agentResult.BeadID = conflict.TaskID
+
 	// Cleanup overlay
 	_ = overlay.Unmount()
 	// Don't cleanup directories yet - they're needed for merge

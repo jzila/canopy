@@ -25,6 +25,7 @@ const processGroupGracePeriod = 3 * time.Second
 // Result holds the execution result from an agent
 type Result struct {
 	TaskID       string
+	BeadID       string // Original bead ID for commit messages (set by repair/resolver agents)
 	Success      bool
 	Output       *ClaudeOutput
 	Stdout       string
@@ -237,12 +238,11 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 		cmd.Env = env
 	}
 
-	// Apply resource limits (process groups, death signals) on supported platforms
-	// This is a no-op on non-Linux platforms
-	// When using bwrap, it handles process isolation internally
-	if !useBwrap {
-		setResourceLimits(cmd)
-	}
+	// Apply resource limits (process groups, death signals) on supported platforms.
+	// This is a no-op on non-Linux platforms.
+	// Process group isolation (Setpgid) is needed for killProcessGroup to work
+	// on context cancellation, regardless of whether we use bwrap.
+	setResourceLimits(cmd)
 
 	// Set up streaming stdout/stderr capture
 	var stderr bytes.Buffer

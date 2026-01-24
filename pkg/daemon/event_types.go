@@ -16,6 +16,7 @@ const (
 	EventRunStarted       = events.EventRunStarted
 	EventRunCompleted     = events.EventRunCompleted
 	EventAgentStarted     = events.EventAgentStarted
+	EventAgentRunning     = events.EventAgentRunning
 	EventAgentResumed     = events.EventAgentResumed
 	EventAgentOutput      = events.EventAgentOutput
 	EventAgentLiveFeed    = events.EventAgentLiveFeed
@@ -25,10 +26,12 @@ const (
 	EventAgentDone        = events.EventAgentDone
 	EventAgentFailed      = events.EventAgentFailed
 	EventTaskUpdated      = events.EventTaskUpdated
-	EventOrchPaused       = events.EventOrchPaused
-	EventOrchResumed      = events.EventOrchResumed
-	EventStatsUpdated     = events.EventStatsUpdated
-	EventRulesChanged     = events.EventRulesChanged
+	EventOrchPaused            = events.EventOrchPaused
+	EventOrchResumed           = events.EventOrchResumed
+	EventStatsUpdated          = events.EventStatsUpdated
+	EventRulesChanged          = events.EventRulesChanged
+	EventLifecycleStateChanged = events.EventLifecycleStateChanged
+	EventConfigUpdated         = events.EventConfigUpdated
 )
 
 // NewEventBus creates a new EventBus instance.

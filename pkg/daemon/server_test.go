@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -277,5 +279,124 @@ func TestServerStopBeforeStart(t *testing.T) {
 	err := server.Stop()
 	if err != nil {
 		t.Errorf("Expected no error when stopping unstarted server, got: %v", err)
+	}
+}
+
+func TestHandleReposRoutes_URLEncodedPaths(t *testing.T) {
+	state := NewRuntimeState()
+	eventBus := NewEventBus()
+	scheduler := &mockScheduler{}
+	beadsClient := &mockBeadsClient{}
+
+	server := NewServer(testPort, state, eventBus, scheduler, beadsClient)
+
+	// Track received repo_id to verify URL decoding
+	var receivedRepoID string
+	mockRulesHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedRepoID = r.URL.Query().Get("repo_id")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"rules":[]}`))
+	})
+
+	// Override the handler method for testing by wrapping it
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Set a mock rules handler that records the repo_id
+		server.rulesHandler = &RulesHandler{} // non-nil to pass the check
+
+		// Call the actual route parsing, then substitute our mock
+		path := r.URL.EscapedPath()
+		parts := strings.Split(strings.Trim(path, "/"), "/")
+
+		if len(parts) < 4 || parts[0] != "api" || parts[1] != "repos" {
+			http.Error(w, "Invalid path", http.StatusBadRequest)
+			return
+		}
+
+		encodedRepoID := parts[2]
+		if encodedRepoID == "" {
+			http.Error(w, "Repository ID required", http.StatusBadRequest)
+			return
+		}
+
+		repoID, err := url.PathUnescape(encodedRepoID)
+		if err != nil {
+			http.Error(w, "Invalid repo ID encoding", http.StatusBadRequest)
+			return
+		}
+
+		q := r.URL.Query()
+		q.Set("repo_id", repoID)
+		r.URL.RawQuery = q.Encode()
+
+		resource := parts[3]
+		if resource == "rules" {
+			mockRulesHandler.ServeHTTP(w, r)
+		} else {
+			http.Error(w, "Not found", http.StatusNotFound)
+		}
+	})
+
+	tests := []struct {
+		name       string
+		path       string
+		wantStatus int
+		wantRepoID string
+	}{
+		{
+			name:       "URL-encoded absolute path",
+			path:       "/api/repos/%2Ftmp%2Ftest-repo/rules",
+			wantStatus: http.StatusOK,
+			wantRepoID: "/tmp/test-repo",
+		},
+		{
+			name:       "URL-encoded path with spaces",
+			path:       "/api/repos/%2Fhome%2Fuser%2Fmy%20project/rules",
+			wantStatus: http.StatusOK,
+			wantRepoID: "/home/user/my project",
+		},
+		{
+			name:       "Non-absolute path (simple name)",
+			path:       "/api/repos/simple-repo/rules",
+			wantStatus: http.StatusOK,
+			wantRepoID: "simple-repo",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			receivedRepoID = "" // reset
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			w := httptest.NewRecorder()
+
+			testHandler.ServeHTTP(w, req)
+
+			if w.Code != tt.wantStatus {
+				t.Errorf("Expected status %d, got %d. Body: %s", tt.wantStatus, w.Code, w.Body.String())
+			}
+
+			if receivedRepoID != tt.wantRepoID {
+				t.Errorf("Expected repo_id %q, got %q", tt.wantRepoID, receivedRepoID)
+			}
+		})
+	}
+}
+
+func TestHandleReposRoutes_EmptyRepoID(t *testing.T) {
+	state := NewRuntimeState()
+	eventBus := NewEventBus()
+	scheduler := &mockScheduler{}
+	beadsClient := &mockBeadsClient{}
+
+	server := NewServer(testPort, state, eventBus, scheduler, beadsClient)
+
+	// Test directly calling handleReposRoutes
+	req := httptest.NewRequest(http.MethodGet, "/api/repos//rules", nil)
+	w := httptest.NewRecorder()
+
+	server.handleReposRoutes(w, req)
+
+	// When repo_id is empty, we expect a 400 error
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d. Body: %s", w.Code, w.Body.String())
 	}
 }

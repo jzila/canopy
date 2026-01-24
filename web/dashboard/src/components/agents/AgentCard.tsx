@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Clock, Zap, DollarSign, XCircle, GitCommit, Archive, ExternalLink, GitMerge, AlertTriangle, ChevronDown, ChevronRight } from 'lucide-react';
-import type { AgentState } from '../../stores/stateStore';
+import { Clock, Zap, DollarSign, XCircle, GitCommit, Archive, ExternalLink, GitMerge, AlertTriangle, ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
+import type { AgentState, LifecycleState } from '../../stores/stateStore';
 import { useStateStore } from '../../stores/stateStore';
 import { killAgent, archiveAgent } from '../../api/client';
 import { WorkerChainTimeline } from './WorkerChainTimeline';
@@ -13,13 +13,106 @@ interface AgentCardProps {
   onArchiveToggle?: (agentId: string, archived: boolean) => void;
 }
 
-const STATUS_COLORS: Record<string, string> = {
+// Format retry badge text: "Attempt N of M" or "Retry N" for infinite retries
+const formatRetryBadge = (attempt: number, maxRetries: number): string | null => {
+  // Only show badge if this is a retry (attempt > 1)
+  if (attempt <= 1) return null;
+
+  if (maxRetries === -1) {
+    // Infinite retries: show "Retry N" (attempt 2 = Retry 1, etc.)
+    return `Retry ${attempt - 1}`;
+  }
+
+  // Finite retries: show "Attempt N of M+1" (maxRetries + 1 = total attempts)
+  return `Attempt ${attempt} of ${maxRetries + 1}`;
+};
+
+// Lifecycle state colors - more detailed states from the state machine
+const LIFECYCLE_COLORS: Record<LifecycleState, string> = {
   starting: 'bg-yellow-500',
   running: 'bg-blue-500',
+  queued_for_merge: 'bg-purple-500',
+  merging: 'bg-indigo-500',
+  resolving: 'bg-amber-500',
+  validating: 'bg-cyan-500',
+  repairing: 'bg-orange-500',
+  merge_failed: 'bg-red-500',
   completed: 'bg-green-500',
   failed: 'bg-red-500',
-  timed_out: 'bg-orange-500',
+  needs_attention: 'bg-orange-600',
   cancelled: 'bg-gray-500',
+  timed_out: 'bg-orange-500',
+};
+
+// User-friendly display labels for lifecycle states
+const LIFECYCLE_LABELS: Record<LifecycleState, string> = {
+  starting: 'Starting',
+  running: 'Running',
+  queued_for_merge: 'Queued',
+  merging: 'Merging',
+  resolving: 'Resolving',
+  validating: 'Validating',
+  repairing: 'Repairing',
+  merge_failed: 'Merge Failed',
+  completed: 'Completed',
+  failed: 'Failed',
+  needs_attention: 'Needs Attention',
+  cancelled: 'Cancelled',
+  timed_out: 'Timed Out',
+};
+
+// Get display info for lifecycle state with optional context (queue pos, repair attempt)
+const getLifecycleDisplay = (
+  state: LifecycleState,
+  queuePos?: number,
+  repairAttempts?: number,
+  maxRepairAttempts?: number
+): { label: string; color: string } => {
+  const baseLabel = LIFECYCLE_LABELS[state];
+  const color = LIFECYCLE_COLORS[state];
+
+  // Add context for specific states
+  if (state === 'queued_for_merge' && queuePos !== undefined && queuePos > 0) {
+    return { label: `Queued (#${queuePos})`, color };
+  }
+
+  if (state === 'repairing' && repairAttempts !== undefined) {
+    const maxAttempts = maxRepairAttempts ?? 3;
+    return { label: `Repairing (${repairAttempts}/${maxAttempts})`, color };
+  }
+
+  return { label: baseLabel, color };
+};
+
+// Derive lifecycle state from legacy fields for backwards compatibility
+// Used when lifecycle_state is not present (older backend versions)
+const deriveLifecycleState = (agent: AgentState): LifecycleState => {
+  // First check validation/repair status if merge is complete
+  if (agent.merge_status === 'merged' || agent.merge_status === 'merged_needs_repair') {
+    if (agent.validation_status === 'running') return 'validating';
+    if (agent.validation_status === 'repairing') return 'repairing';
+    if (agent.validation_status === 'failed') return 'needs_attention';
+    // If validation passed or not present, fall through
+  }
+
+  // Check merge status
+  if (agent.merge_status === 'pending') return 'queued_for_merge';
+  if (agent.merge_status === 'acquiring' || agent.merge_status === 'merging') return 'merging';
+  if (agent.merge_status === 'resolving') return 'resolving';
+  if (agent.merge_status === 'failed') return 'merge_failed';
+
+  // Check agent status
+  switch (agent.status) {
+    case 'starting': return 'starting';
+    case 'running': return 'running';
+    case 'completed': return 'completed';
+    case 'failed': return 'failed';
+    case 'cancelled': return 'cancelled';
+    case 'timed_out': return 'timed_out';
+  }
+
+  // Default fallback
+  return 'running';
 };
 
 const formatElapsedTime = (startTime: string, endTime: string | null): string => {
@@ -73,6 +166,13 @@ export const AgentCard: React.FC<AgentCardProps> = ({
   const childAgents = Object.values(agents).filter(
     a => a.parent_agent_id === agent.id
   );
+
+  // Check if there's an active resolver for this agent's task
+  const activeResolver = childAgents.find(
+    child => (child.status === 'running' || child.status === 'starting') &&
+             !child.task_id.includes('repair')
+  );
+  const hasActiveResolver = Boolean(activeResolver);
 
   // Update elapsed time every second for running agents
   useEffect(() => {
@@ -149,9 +249,17 @@ export const AgentCard: React.FC<AgentCardProps> = ({
     step => step.status === 'failed'
   )?.name;
 
+  // Use lifecycle_state if available, otherwise derive from legacy fields
+  const lifecycleState = agent.lifecycle_state ?? deriveLifecycleState(agent);
+  const lifecycleDisplay = getLifecycleDisplay(
+    lifecycleState,
+    agent.merge_queue_pos,
+    agent.repair_attempts,
+    3 // Default max repair attempts
+  );
+
   const isRunning = agent.status === 'running' || agent.status === 'starting';
   const isFinished = agent.status === 'completed' || agent.status === 'failed' || agent.status === 'timed_out' || agent.status === 'cancelled';
-  const statusColor = STATUS_COLORS[agent.status] || 'bg-gray-500';
 
   return (
     <div
@@ -188,9 +296,19 @@ export const AgentCard: React.FC<AgentCardProps> = ({
                 {agent.task_id}
               </code>
             )}
-            <span className={`inline-flex items-center px-2.5 py-1 rounded text-xs font-medium tracking-wider text-white ${statusColor}`}>
-              {agent.status}
+            <span className={`inline-flex items-center px-2.5 py-1 rounded text-xs font-medium tracking-wider text-white ${hasActiveResolver ? 'bg-amber-500' : lifecycleDisplay.color}`}>
+              {hasActiveResolver ? 'Resolving' : lifecycleDisplay.label}
             </span>
+            {/* Retry indicator badge - only shown for retried tasks */}
+            {agent.attempt !== undefined && agent.max_retries !== undefined && formatRetryBadge(agent.attempt, agent.max_retries) && (
+              <span
+                className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium tracking-wider bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200"
+                title={`This is attempt ${agent.attempt}${agent.max_retries === -1 ? ' (infinite retries)' : ` of ${agent.max_retries + 1}`}`}
+              >
+                <RefreshCw className="w-3 h-3" />
+                {formatRetryBadge(agent.attempt, agent.max_retries)}
+              </span>
+            )}
           </div>
           <h3 className={`text-sm font-medium tracking-wide leading-relaxed truncate ${agent.archived ? 'text-gray-500 dark:text-gray-400 line-through' : 'text-gray-900 dark:text-gray-100'}`}>
             {agent.task_title}
@@ -247,12 +365,18 @@ export const AgentCard: React.FC<AgentCardProps> = ({
           <span className="font-mono tabular-nums tracking-mono-normal">{formatCost(agent.token_usage.cost_usd)}</span>
         </div>
 
-        {agent.commits > 0 && (
-          <div className="flex items-center gap-2.5 text-blue-400" title={`${agent.commits} git commit${agent.commits !== 1 ? 's' : ''}`}>
-            <GitCommit className="w-4 h-4 flex-shrink-0" />
-            <span className="font-mono tabular-nums tracking-mono-normal">{agent.commits}</span>
-          </div>
-        )}
+        {/* Show merge_commits_applied for merged tasks (most accurate), fall back to agent.commits */}
+        {(() => {
+          const commitCount = (agent.merge_status === 'merged' || agent.merge_status === 'merged_needs_repair')
+            ? (agent.merge_commits_applied ?? agent.commits)
+            : agent.commits;
+          return commitCount > 0 ? (
+            <div className="flex items-center gap-2.5 text-blue-400" title={`${commitCount} git commit${commitCount !== 1 ? 's' : ''}`}>
+              <GitCommit className="w-4 h-4 flex-shrink-0" />
+              <span className="font-mono tabular-nums tracking-mono-normal">{commitCount}</span>
+            </div>
+          ) : null;
+        })()}
       </div>
 
       {/* Merge and validation status indicators */}

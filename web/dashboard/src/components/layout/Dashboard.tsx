@@ -3,7 +3,8 @@ import { useStateStore } from '../../stores/stateStore';
 import type { RunConfig } from '../../stores/stateStore';
 import { useWebSocket, useAgentFiltering, useResizablePane, useResizableWidth } from '../../hooks';
 import type { StatusFilter } from '../../hooks';
-import { pauseOrch, resumeOrch, getState, getRepositories, activateRepository, getRuns, startRun, stopRun } from '../../api/client';
+import { pauseOrch, resumeOrch, getState, getRepositories, activateRepository, getRuns, startRun, stopRun, saveRunConfig, getRules } from '../../api/client';
+import type { Rule } from '../../api/client';
 import { BeadsPane } from '../beads/BeadsPane';
 import { DashboardHeader } from './DashboardHeader';
 import { TerminalPanel } from './TerminalPanel';
@@ -22,6 +23,11 @@ export const Dashboard: React.FC = () => {
   // Orchestrator control state
   const [isPauseLoading, setIsPauseLoading] = useState(false);
   const [isResumeLoading, setIsResumeLoading] = useState(false);
+  const [isSavingConfig, setIsSavingConfig] = useState(false);
+  const [configDialogMode, setConfigDialogMode] = useState<'start' | 'configure'>('start');
+  // Rules state for run config dialog
+  const [configRulesForDialog, setConfigRulesForDialog] = useState<Rule[]>([]);
+  const [isLoadingConfigRules, setIsLoadingConfigRules] = useState(false);
 
   // Theme state
   const [isDark, setIsDark] = useState(() => {
@@ -117,8 +123,6 @@ export const Dashboard: React.FC = () => {
   // State from store
   const agents = useStateStore((state) => state.agents);
   const stats = useStateStore((state) => state.stats);
-  const isPaused = useStateStore((state) => state.isPaused);
-  const isPausedByAgent = useStateStore((state) => state.isPausedByAgent);
   const pauseState = useStateStore((state) => state.pauseState);
   const selectedAgentId = useStateStore((state) => state.selectedAgentId);
   const setSelectedAgent = useStateStore((state) => state.setSelectedAgent);
@@ -134,20 +138,34 @@ export const Dashboard: React.FC = () => {
   const activeRunId = useStateStore((state) => state.activeRunId);
   const isRunsLoading = useStateStore((state) => state.isRunsLoading);
   const setRuns = useStateStore((state) => state.setRuns);
+  const mergeRuns = useStateStore((state) => state.mergeRuns);
   const setActiveRunId = useStateStore((state) => state.setActiveRunId);
   const setRunsLoading = useStateStore((state) => state.setRunsLoading);
   const selectedBeadId = useStateStore((state) => state.selectedBeadId);
   const setSelectedBead = useStateStore((state) => state.setSelectedBead);
   const tasks = useStateStore((state) => state.tasks);
+  // Orchestrator state
+  const orchestratorState = useStateStore((state) => state.orchestratorState);
+  const activeAgentCount = useStateStore((state) => state.activeAgentCount);
   // Run control state
   const isStartingRun = useStateStore((state) => state.isStartingRun);
   const isStoppingRun = useStateStore((state) => state.isStoppingRun);
   const runConfig = useStateStore((state) => state.runConfig);
   const showRunConfigDialog = useStateStore((state) => state.showRunConfigDialog);
-  const setStartingRun = useStateStore((state) => state.setStartingRun);
-  const setStoppingRun = useStateStore((state) => state.setStoppingRun);
   const setShowRunConfigDialog = useStateStore((state) => state.setShowRunConfigDialog);
-  const setCurrentRunId = useStateStore((state) => state.setCurrentRunId);
+  const setRunConfig = useStateStore((state) => state.setRunConfig);
+  const loadSavedConfig = useStateStore((state) => state.loadSavedConfig);
+  // Optimistic update actions
+  const startOptimisticRun = useStateStore((state) => state.startOptimisticRun);
+  const confirmRunStarted = useStateStore((state) => state.confirmRunStarted);
+  const rollbackRunStart = useStateStore((state) => state.rollbackRunStart);
+  const startOptimisticStop = useStateStore((state) => state.startOptimisticStop);
+  const confirmRunStopped = useStateStore((state) => state.confirmRunStopped);
+  const rollbackRunStop = useStateStore((state) => state.rollbackRunStop);
+  const startOptimisticPause = useStateStore((state) => state.startOptimisticPause);
+  const rollbackPause = useStateStore((state) => state.rollbackPause);
+  const startOptimisticResume = useStateStore((state) => state.startOptimisticResume);
+  const rollbackResume = useStateStore((state) => state.rollbackResume);
 
   // Use the agent filtering hook
   const { groupedAgents, archivedCount } = useAgentFiltering({
@@ -182,6 +200,9 @@ export const Dashboard: React.FC = () => {
         }
 
         setRepositories(repoResponse.repositories, activeId);
+
+        // Load saved run configuration
+        await loadSavedConfig();
       } catch (error) {
         console.error('Failed to load initial state:', error);
         // Attempt to load repositories separately if combined fetch failed
@@ -199,7 +220,7 @@ export const Dashboard: React.FC = () => {
     };
 
     loadInitialState();
-  }, [syncState, setRepositories]);
+  }, [syncState, setRepositories, loadSavedConfig]);
 
   // Load runs when activeRepoId changes
   useEffect(() => {
@@ -209,7 +230,10 @@ export const Dashboard: React.FC = () => {
       try {
         setRunsLoading(true);
         const response = await getRuns({ repo_id: activeRepoId, limit: 50 });
-        setRuns(response.runs);
+        // Use mergeRuns instead of setRuns to avoid race condition where
+        // a WebSocket run:started event adds a run before this API call completes.
+        // mergeRuns preserves any runs added via WebSocket that aren't yet in the API response.
+        mergeRuns(response.runs);
         setActiveRunId('');
       } catch (error) {
         console.error('Failed to load runs:', error);
@@ -220,18 +244,23 @@ export const Dashboard: React.FC = () => {
     };
 
     loadRuns();
-  }, [activeRepoId, setRuns, setActiveRunId, setRunsLoading]);
+  }, [activeRepoId, mergeRuns, setRuns, setActiveRunId, setRunsLoading]);
 
-  // Event handlers
+  // Event handlers - using optimistic updates
   const handlePause = async () => {
     if (isPauseLoading) return;
 
+    // Optimistic update - immediately show paused state
+    startOptimisticPause();
+    setIsPauseLoading(true);
+
     try {
-      setIsPauseLoading(true);
       await pauseOrch();
-      // State update comes from WebSocket event
+      // WebSocket event will confirm the pause with final state
     } catch (error) {
       console.error('Failed to pause orchestration:', error);
+      // Rollback to previous state on error
+      rollbackPause(error instanceof Error ? error.message : 'Failed to pause');
     } finally {
       setIsPauseLoading(false);
     }
@@ -240,12 +269,17 @@ export const Dashboard: React.FC = () => {
   const handleResume = async () => {
     if (isResumeLoading) return;
 
+    // Optimistic update - immediately show resumed state
+    startOptimisticResume();
+    setIsResumeLoading(true);
+
     try {
-      setIsResumeLoading(true);
       await resumeOrch();
-      // State update comes from WebSocket event
+      // WebSocket event will confirm the resume with final state
     } catch (error) {
       console.error('Failed to resume orchestration:', error);
+      // Rollback to previous state on error
+      rollbackResume(error instanceof Error ? error.message : 'Failed to resume');
     } finally {
       setIsResumeLoading(false);
     }
@@ -284,14 +318,59 @@ export const Dashboard: React.FC = () => {
     }
   }, [agents, handleSelectAgent]);
 
-  // Run control handlers
-  const handleOpenRunConfig = useCallback(() => {
-    setShowRunConfigDialog(true);
-  }, [setShowRunConfigDialog]);
+  // Load rules for the run config dialog
+  const loadRulesForDialog = useCallback(async () => {
+    const activeRepo = repositories.find((r) => r.id === activeRepoId);
+    if (!activeRepo?.path) return;
 
+    setIsLoadingConfigRules(true);
+    try {
+      const response = await getRules(activeRepo.path);
+      setConfigRulesForDialog(response.rules);
+    } catch (error) {
+      console.error('Failed to load rules for dialog:', error);
+      setConfigRulesForDialog([]);
+    } finally {
+      setIsLoadingConfigRules(false);
+    }
+  }, [repositories, activeRepoId]);
+
+  // Run control handlers
   const handleCloseRunConfig = useCallback(() => {
     setShowRunConfigDialog(false);
+    setConfigDialogMode('start');
   }, [setShowRunConfigDialog]);
+
+  const handleConfigure = useCallback(() => {
+    setConfigDialogMode('configure');
+    loadRulesForDialog();
+    setShowRunConfigDialog(true);
+  }, [setShowRunConfigDialog, loadRulesForDialog]);
+
+  const handleSaveConfig = useCallback(async (config: RunConfig) => {
+    setIsSavingConfig(true);
+    try {
+      const response = await saveRunConfig({
+        concurrency: config.concurrency,
+        max_priority: config.max_priority,
+        use_bwrap: config.use_bwrap,
+        max_retries: config.max_retries,
+      });
+
+      if (!response.error) {
+        // Update local state (WebSocket event will also update it for cross-tab sync)
+        setRunConfig(config);
+        setShowRunConfigDialog(false);
+        setConfigDialogMode('start');
+      } else {
+        console.error('Failed to save config:', response.error);
+      }
+    } catch (error) {
+      console.error('Failed to save config:', error);
+    } finally {
+      setIsSavingConfig(false);
+    }
+  }, [setRunConfig, setShowRunConfigDialog]);
 
   const handleStartRun = useCallback(async (config: RunConfig) => {
     const activeRepo = repositories.find((repo) => repo.id === activeRepoId);
@@ -300,8 +379,13 @@ export const Dashboard: React.FC = () => {
       return;
     }
 
+    // Generate a temporary run ID for optimistic update
+    const tempRunId = `temp-${Date.now()}`;
+
+    // Optimistic update - immediately show starting state
+    startOptimisticRun(tempRunId);
+
     try {
-      setStartingRun(true);
       const response = await startRun({
         work_dir: activeRepo.path,
         repo_id: activeRepo.id,
@@ -312,20 +396,22 @@ export const Dashboard: React.FC = () => {
       });
 
       if (response.success && response.run_id) {
-        setCurrentRunId(response.run_id);
+        // Confirm with the actual run ID
+        confirmRunStarted(response.run_id);
         setShowRunConfigDialog(false);
         // Refresh state after starting run
         const state = await getState();
         syncState(state);
       } else {
-        console.error('Failed to start run:', response.error);
+        // Rollback on failure response
+        rollbackRunStart(response.error || 'Failed to start run');
       }
     } catch (error) {
       console.error('Failed to start run:', error);
-    } finally {
-      setStartingRun(false);
+      // Rollback on exception
+      rollbackRunStart(error instanceof Error ? error.message : 'Failed to start run');
     }
-  }, [activeRepoId, repositories, setStartingRun, setCurrentRunId, setShowRunConfigDialog, syncState]);
+  }, [activeRepoId, repositories, startOptimisticRun, confirmRunStarted, rollbackRunStart, setShowRunConfigDialog, syncState]);
 
   const handleStopRun = useCallback(async () => {
     const runId = useStateStore.getState().currentRunId;
@@ -334,28 +420,76 @@ export const Dashboard: React.FC = () => {
       return;
     }
 
+    // Optimistic update - immediately show stopping state
+    startOptimisticStop();
+
     try {
-      setStoppingRun(true);
       const response = await stopRun(runId);
 
       if (response.success) {
-        // The currentRunId will be cleared by run:completed WebSocket event
+        // Confirm the stop
+        confirmRunStopped();
         // Refresh state after stopping run
         const state = await getState();
         syncState(state);
       } else {
-        console.error('Failed to stop run:', response.error);
+        // Rollback on failure response
+        rollbackRunStop(response.error || 'Failed to stop run');
       }
     } catch (error) {
       console.error('Failed to stop run:', error);
-    } finally {
-      setStoppingRun(false);
+      // Rollback on exception
+      rollbackRunStop(error instanceof Error ? error.message : 'Failed to stop run');
     }
-  }, [setStoppingRun, syncState]);
+  }, [startOptimisticStop, confirmRunStopped, rollbackRunStop, syncState]);
+
+  // Activate orchestrator - starts with current run config
+  const handleActivate = useCallback(async () => {
+    const activeRepo = repositories.find((repo) => repo.id === activeRepoId);
+    if (!activeRepo) {
+      console.error('No active repository selected');
+      return;
+    }
+
+    // Generate a temporary run ID for optimistic update
+    const tempRunId = `temp-${Date.now()}`;
+
+    // Optimistic update - immediately show activating state
+    startOptimisticRun(tempRunId);
+
+    try {
+      const config = useStateStore.getState().runConfig;
+      const response = await startRun({
+        work_dir: activeRepo.path,
+        repo_id: activeRepo.id,
+        concurrency: config.concurrency,
+        max_priority: config.max_priority,
+        use_bwrap: config.use_bwrap,
+        max_retries: config.max_retries,
+      });
+
+      if (response.success && response.run_id) {
+        // Confirm with the actual run ID
+        confirmRunStarted(response.run_id);
+        // Refresh state after activating
+        const state = await getState();
+        syncState(state);
+      } else {
+        // Rollback on failure response
+        rollbackRunStart(response.error || 'Failed to activate orchestrator');
+      }
+    } catch (error) {
+      console.error('Failed to activate orchestrator:', error);
+      // Rollback on exception
+      rollbackRunStart(error instanceof Error ? error.message : 'Failed to activate orchestrator');
+    }
+  }, [activeRepoId, repositories, startOptimisticRun, confirmRunStarted, rollbackRunStart, syncState]);
+
+  // Deactivate orchestrator - same as stop run
+  const handleDeactivate = handleStopRun;
 
   const selectedAgent = selectedAgentId ? agents[selectedAgentId] : null;
   const totalAgentCount = Object.keys(agents).length;
-  const currentRunId = useStateStore((state) => state.currentRunId);
 
   return (
     <div className="flex flex-col h-screen bg-gray-50 dark:bg-gray-900">
@@ -371,6 +505,18 @@ export const Dashboard: React.FC = () => {
         activeRunId={activeRunId}
         isRunsLoading={isRunsLoading}
         onRunSelect={setActiveRunId}
+        orchestratorState={orchestratorState}
+        activeAgentCount={activeAgentCount}
+        pauseState={pauseState}
+        isActivating={isStartingRun}
+        isDeactivating={isStoppingRun}
+        isPauseLoading={isPauseLoading}
+        isResumeLoading={isResumeLoading}
+        onActivate={handleActivate}
+        onDeactivate={handleDeactivate}
+        onPause={handlePause}
+        onResume={handleResume}
+        onConfigure={handleConfigure}
         stats={stats}
       />
 
@@ -410,19 +556,6 @@ export const Dashboard: React.FC = () => {
                 selectedBeadId={selectedBeadId}
                 selectedBeadTitle={selectedBeadId ? tasks[selectedBeadId]?.title : undefined}
                 onClearBeadFilter={() => setSelectedBead(null)}
-                isPaused={isPaused}
-                isPausedByAgent={isPausedByAgent}
-                pauseState={pauseState}
-                isPauseLoading={isPauseLoading}
-                isResumeLoading={isResumeLoading}
-                currentRunId={currentRunId}
-                connected={connected}
-                onPause={handlePause}
-                onResume={handleResume}
-                isStartingRun={isStartingRun}
-                isStoppingRun={isStoppingRun}
-                onStartRun={handleOpenRunConfig}
-                onStopRun={handleStopRun}
               />
             </div>
 
@@ -444,6 +577,7 @@ export const Dashboard: React.FC = () => {
               isResizing={isResizing}
               onResizeStart={handleResizeStart}
               onClose={() => setSelectedAgent(null)}
+              onSelectAgent={handleSelectAgent}
             />
           )}
         </main>
@@ -454,9 +588,14 @@ export const Dashboard: React.FC = () => {
         isOpen={showRunConfigDialog}
         onClose={handleCloseRunConfig}
         onStart={handleStartRun}
+        onSave={handleSaveConfig}
         isStarting={isStartingRun}
+        isSaving={isSavingConfig}
         initialConfig={runConfig}
         repoName={repositories.find((r) => r.id === activeRepoId)?.name}
+        mode={configDialogMode}
+        configRules={configRulesForDialog}
+        isLoadingRules={isLoadingConfigRules}
       />
     </div>
   );

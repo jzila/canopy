@@ -44,7 +44,7 @@ type RulesSettings struct {
 	Assignee string `toml:"assignee"`
 
 	// Behavior
-	// StopWhenEmpty stops the run when no tasks match (for watch mode)
+	// StopWhenEmpty stops the orchestrator when no tasks match rules
 	StopWhenEmpty bool `toml:"stop_when_empty"`
 
 	// Concurrency limits
@@ -58,6 +58,18 @@ type RulesSettings struct {
 	// Custom rules for complex conditions (loaded from config file)
 	Custom []CustomRule `toml:"custom"`
 }
+
+// RuleSource indicates where a rule comes from in the precedence hierarchy.
+type RuleSource string
+
+const (
+	// RuleSourceDefault indicates a built-in default rule.
+	RuleSourceDefault RuleSource = "default"
+	// RuleSourceConfig indicates a rule loaded from .canopy/config.toml.
+	RuleSourceConfig RuleSource = "config"
+	// RuleSourceOverride indicates a run-time override set via the Configure dialog.
+	RuleSourceOverride RuleSource = "override"
+)
 
 // CustomRule defines a named rule with a condition and action.
 // This allows for more complex filtering logic beyond simple whitelists/blacklists.

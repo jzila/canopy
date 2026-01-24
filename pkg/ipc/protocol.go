@@ -140,6 +140,8 @@ type AgentStartPayload struct {
 	IsResume        bool   `json:"is_resume,omitempty"`         // True if this agent is being resumed after daemon restart
 	ResumeCount     int    `json:"resume_count,omitempty"`      // Number of times this agent has been resumed
 	SessionID       string `json:"session_id,omitempty"`        // Claude CLI session ID being resumed
+	Attempt         int    `json:"attempt,omitempty"`           // Current attempt number (1-indexed, 0 means not a retry)
+	MaxRetries      int    `json:"max_retries,omitempty"`       // Maximum retry attempts configured (0 = no retries, -1 = infinite)
 }
 
 // AgentResumedPayload is sent when an agent is resumed after daemon restart

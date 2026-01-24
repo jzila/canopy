@@ -318,12 +318,24 @@ func (c *Client) flushQueueLocked() {
 	}
 }
 
+// AgentStartOptions contains optional parameters for SendAgentStart
+type AgentStartOptions struct {
+	Attempt    int // Current attempt number (1-indexed, 0 means first attempt)
+	MaxRetries int // Maximum retry attempts configured (0 = no retries, -1 = infinite)
+}
+
 // SendAgentStart notifies the daemon that an agent has started executing a task
 // runID is the ID of the run this agent belongs to (for historical filtering)
 // taskDescription is optional and provides the full task description
 // parentAgentID is optional and specifies the ID of the parent agent if this agent was spawned by another
 // repoID is optional and specifies the repository ID for tracking
 func (c *Client) SendAgentStart(agentID, runID, taskID, taskTitle, taskDescription, parentAgentID, repoID string) error {
+	return c.SendAgentStartWithOptions(agentID, runID, taskID, taskTitle, taskDescription, parentAgentID, repoID, nil)
+}
+
+// SendAgentStartWithOptions notifies the daemon that an agent has started executing a task with additional options.
+// opts can be nil for default behavior (no retry information).
+func (c *Client) SendAgentStartWithOptions(agentID, runID, taskID, taskTitle, taskDescription, parentAgentID, repoID string, opts *AgentStartOptions) error {
 	payload := AgentStartPayload{
 		AgentID:         agentID,
 		RunID:           runID,
@@ -332,6 +344,11 @@ func (c *Client) SendAgentStart(agentID, runID, taskID, taskTitle, taskDescripti
 		TaskDescription: taskDescription,
 		ParentAgentID:   parentAgentID,
 		RepoID:          repoID,
+	}
+
+	if opts != nil {
+		payload.Attempt = opts.Attempt
+		payload.MaxRetries = opts.MaxRetries
 	}
 
 	return c.sendMessage(MessageTypeAgentStart, payload)

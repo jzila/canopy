@@ -94,6 +94,18 @@ var (
 		},
 		[]string{"type"},
 	)
+
+	// LifecycleDivergenceTotal tracks the total number of times the lifecycle state
+	// machine diverged from the legacy status fields. Used during the parallel
+	// rollout phase to detect and monitor inconsistencies.
+	LifecycleDivergenceTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "lifecycle_divergence_total",
+			Help:      "Total number of lifecycle state machine divergences from legacy fields",
+		},
+		[]string{"legacy_status", "lifecycle_state", "event"},
+	)
 )
 
 // RecordTaskDuration records a task duration with the given status.
@@ -154,4 +166,10 @@ func ObserveResolverDuration(durationSeconds float64) {
 // IncIPCMessages increments the IPC messages counter for the given message type.
 func IncIPCMessages(msgType string) {
 	IPCMessagesTotal.WithLabelValues(msgType).Inc()
+}
+
+// RecordLifecycleDivergence records a divergence between the lifecycle state machine
+// and legacy status fields. Used during the parallel rollout phase.
+func RecordLifecycleDivergence(legacyStatus, lifecycleState, event string) {
+	LifecycleDivergenceTotal.WithLabelValues(legacyStatus, lifecycleState, event).Inc()
 }

@@ -1,11 +1,12 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useStateStore } from '../stores/stateStore';
 // Event types that match the Go backend (wire_events.go)
-// Backend sends: { type, timestamp, payload }
+// Backend sends: { type, timestamp, payload, sequence }
 interface WebSocketEvent {
   type: string;
   timestamp: string;
   payload: unknown;
+  sequence?: number; // Monotonic sequence number for event ordering
 }
 interface AgentStartedEvent {
   type: 'agent:started';
@@ -17,6 +18,15 @@ interface AgentStartedEvent {
     task_title: string;
     task_description?: string;
     parent_agent_id?: string;
+    attempt?: number;      // Current attempt number (1 = first try, 2 = first retry, etc.)
+    max_retries?: number;  // Maximum retry attempts configured (0 = no retries, -1 = infinite)
+  };
+}
+interface AgentRunningEvent {
+  type: 'agent:running';
+  timestamp: string;
+  payload: {
+    agent_id: string;
   };
 }
 interface AgentOutputEvent {
@@ -68,8 +78,8 @@ interface AgentCompletedEvent {
     duration: number;
     input_tokens: number;
     output_tokens: number;
-    cache_creation_tokens?: number;
-    cache_read_tokens?: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
     cost_usd: number;
     files_changed: number;
     commits_created: number;
@@ -91,7 +101,10 @@ interface TaskUpdatedEvent {
 // Merge status types matching Go backend (ipc/protocol.go)
 type MergeStatus = 'pending' | 'acquiring' | 'merging' | 'resolving' | 'merged' | 'failed' | 'skipped' | 'merged_needs_repair';
 // Validation status types matching Go backend (validation/executor.go)
-type ValidationStatus = 'pending' | 'running' | 'passed' | 'failed' | 'skipped' | 'repairing';
+// Includes repair-related intermediate states: pending_repair (deciding to spawn), spawning_repair (creating agent), repairing (agent executing)
+type ValidationStatus = 'pending' | 'running' | 'passed' | 'failed' | 'skipped' | 'pending_repair' | 'spawning_repair' | 'repairing';
+// Lifecycle state types matching Go backend (lifecycle/state.go)
+type LifecycleState = 'starting' | 'running' | 'queued_for_merge' | 'merging' | 'resolving' | 'validating' | 'repairing' | 'merge_failed' | 'completed' | 'failed' | 'needs_attention' | 'cancelled' | 'timed_out';
 // Validation step result matching Go backend (ipc/protocol.go)
 interface ValidationStep {
   name: string;
@@ -107,6 +120,7 @@ interface AgentMergeStatusEvent {
     merge_status: MergeStatus;
     queue_pos?: number;
     error?: string;
+    commits_applied?: number;
     // Validation results
     validation_status?: ValidationStatus;
     validation_steps?: ValidationStep[];
@@ -169,6 +183,26 @@ interface RulesChangedEvent {
     rule?: Rule;
   };
 }
+interface ConfigUpdatedEvent {
+  type: 'config:updated';
+  timestamp: string;
+  payload: {
+    concurrency: number;
+    max_priority: number;
+    use_bwrap: boolean;
+    max_retries: number;
+  };
+}
+interface LifecycleStateChangedEvent {
+  type: 'lifecycle:state_changed';
+  timestamp: string;
+  payload: {
+    agent_id: string;
+    lifecycle_state: LifecycleState;
+    previous_state: LifecycleState;
+    event: string;
+  };
+}
 // Backend git commit format
 interface BackendGitCommit {
   hash: string;
@@ -187,6 +221,7 @@ interface BackendAgentState {
   task_title: string;
   task_description?: string;
   status: string;
+  lifecycle_state?: string; // New unified lifecycle state
   start_time: string;
   end_time: string | null;
   duration: number;
@@ -226,6 +261,9 @@ interface BackendAgentState {
   validation_error?: string;
   repair_attempts?: number;
   last_repair_output?: string;
+  // Retry information
+  attempt?: number;      // Current attempt number (1 = first try, 2 = first retry, etc.)
+  max_retries?: number;  // Maximum retry attempts configured (0 = no retries, -1 = infinite)
 }
 // Backend task state format
 interface BackendTaskState {
@@ -251,6 +289,10 @@ interface BackendRuntimeState {
     completed_tasks: number;
     failed_tasks: number;
     running_tasks: number;
+    total_input_tokens: number;
+    total_output_tokens: number;
+    total_cache_creation_tokens: number;
+    total_cache_read_tokens: number;
     total_tokens: number;
     total_cost_usd: number;
     total_duration: number;
@@ -265,9 +307,16 @@ interface BackendRuntimeState {
   pause_state: PauseState;
   start_time: string;
   current_run_id: string;
+  orchestrator_state?: OrchestratorState;
+  active_agent_count?: number;
+  // Event sequence number - events with sequence <= this are already reflected
+  // in the snapshot state and should be discarded by the client
+  event_sequence?: number;
 }
 // Pause state enum matching Go backend (ipc/protocol.go)
 type PauseState = 'running' | 'paused_user' | 'paused_agent' | 'paused_both';
+// Orchestrator state enum matching Go backend (daemon/orchestrator_manager.go)
+type OrchestratorState = 'off' | 'idle' | 'active' | 'paused';
 interface StateSyncEvent {
   type: 'state:sync';
   timestamp: string;
@@ -295,9 +344,19 @@ interface OrchResumedEvent {
   timestamp: string;
   payload: OrchPauseStatusPayload;
 }
+interface OrchStateChangedPayload {
+  state: OrchestratorState;
+  active_agent_count: number;
+}
+interface OrchStateChangedEvent {
+  type: 'orch:state_changed';
+  timestamp: string;
+  payload: OrchStateChangedPayload;
+}
 type EventType =
   | StateSyncEvent
   | AgentStartedEvent
+  | AgentRunningEvent
   | AgentOutputEvent
   | AgentOutputClearEvent
   | AgentLiveFeedEvent
@@ -308,9 +367,12 @@ type EventType =
   | StatsUpdatedEvent
   | OrchPausedEvent
   | OrchResumedEvent
+  | OrchStateChangedEvent
   | RunStartedEvent
   | RunCompletedEvent
-  | RulesChangedEvent;
+  | RulesChangedEvent
+  | LifecycleStateChangedEvent
+  | ConfigUpdatedEvent;
 const MAX_BACKOFF = 30000; // 30 seconds
 const INITIAL_BACKOFF = 1000; // 1 second
 function getWebSocketURL(): string {
@@ -342,7 +404,28 @@ export function useWebSocket() {
     addRun,
     updateRun,
     setCurrentRunId,
+    setOrchestratorState,
+    // Optimistic update confirmations
+    confirmPause,
+    confirmResume,
+    // Config updates
+    updateRunConfigFromServer,
   } = useStateStore();
+
+  // Helper to check if an event is stale (occurred before the last state:sync snapshot)
+  // Events with sequence <= the snapshot's eventSequence are already reflected in the state
+  const isStaleEvent = useCallback((eventSequence: number | undefined): boolean => {
+    if (eventSequence === undefined || eventSequence === 0) {
+      // No sequence number - process the event (backwards compatibility)
+      return false;
+    }
+    const snapshotSequence = useStateStore.getState().eventSequence;
+    if (snapshotSequence === 0) {
+      // No snapshot sequence yet - process the event
+      return false;
+    }
+    return eventSequence <= snapshotSequence;
+  }, []);
   const connect = useCallback(() => {
     // Don't reconnect if manually closed
     if (isManuallyClosedRef.current) {
@@ -365,8 +448,18 @@ export function useWebSocket() {
       };
       ws.onmessage = (event) => {
         try {
-          const message: EventType = JSON.parse(event.data);
-          console.log('[WebSocket] Received:', message.type, message);
+          // Parse as WebSocketEvent first to get the sequence number
+          const rawMessage: WebSocketEvent = JSON.parse(event.data);
+          const message: EventType = rawMessage as unknown as EventType;
+          console.log('[WebSocket] Received:', message.type, 'seq:', rawMessage.sequence ?? 'none');
+
+          // For events other than state:sync, check if the event is stale
+          // (occurred before the last snapshot we received)
+          if (message.type !== 'state:sync' && isStaleEvent(rawMessage.sequence)) {
+            console.log('[WebSocket] Discarding stale event:', message.type, 'seq:', rawMessage.sequence, '<= snapshot seq:', useStateStore.getState().eventSequence);
+            return;
+          }
+
           switch (message.type) {
             case 'state:sync': {
               // Check if this is a repo switch event (partial sync)
@@ -426,6 +519,11 @@ export function useWebSocket() {
                   ...(agent.validation_error && { validation_error: agent.validation_error }),
                   ...(agent.repair_attempts !== undefined && { repair_attempts: agent.repair_attempts }),
                   ...(agent.last_repair_output && { last_repair_output: agent.last_repair_output }),
+                  // Lifecycle state (new unified state machine)
+                  ...(agent.lifecycle_state && { lifecycle_state: agent.lifecycle_state as import('../stores/stateStore').LifecycleState }),
+                  // Retry information
+                  ...(agent.attempt !== undefined && agent.attempt > 0 && { attempt: agent.attempt }),
+                  ...(agent.max_retries !== undefined && { max_retries: agent.max_retries }),
                 };
               }
               // Merge dual-source tasks: runtime overlays persistent for display
@@ -484,6 +582,10 @@ export function useWebSocket() {
                   completed_tasks: 0,
                   failed_tasks: 0,
                   running_tasks: 0,
+                  total_input_tokens: 0,
+                  total_output_tokens: 0,
+                  total_cache_creation_tokens: 0,
+                  total_cache_read_tokens: 0,
                   total_tokens: 0,
                   total_cost_usd: 0,
                   total_duration: 0,
@@ -498,18 +600,22 @@ export function useWebSocket() {
                 pause_state: backendState.pause_state ?? 'running',
                 start_time: backendState.start_time,
                 current_run_id: backendState.current_run_id ?? '',
+                orchestrator_state: backendState.orchestrator_state ?? 'off',
+                active_agent_count: backendState.active_agent_count ?? 0,
+                // Event sequence for discarding stale events
+                event_sequence: backendState.event_sequence ?? 0,
               });
-              console.log('[WebSocket] State synced with', Object.keys(transformedAgents).length, 'agents');
+              console.log('[WebSocket] State synced with', Object.keys(transformedAgents).length, 'agents, event_sequence:', backendState.event_sequence ?? 0);
               break;
             }
             case 'agent:started': {
-              const { agent_id, run_id, task_id, task_title, task_description, parent_agent_id } = message.payload;
-              // Create new agent entry
+              const { agent_id, run_id, task_id, task_title, task_description, parent_agent_id, attempt, max_retries } = message.payload;
+              // Create new agent entry with starting status
               updateAgent(agent_id, {
                 id: agent_id,
                 task_id,
                 task_title,
-                status: 'running',
+                status: 'starting',
                 start_time: message.timestamp,
                 end_time: null,
                 duration: 0,
@@ -530,6 +636,25 @@ export function useWebSocket() {
                 ...(run_id && { run_id }),
                 ...(task_description && { task_description }),
                 ...(parent_agent_id && { parent_agent_id }),
+                // Retry information
+                ...(attempt !== undefined && { attempt }),
+                ...(max_retries !== undefined && { max_retries }),
+              });
+              break;
+            }
+            case 'agent:running': {
+              const payload = message.payload as {
+                agent_id: string;
+                lifecycle_state?: string;
+                previous_state?: string;
+                event?: string;
+              };
+              const { agent_id, lifecycle_state } = payload;
+              // Transition agent from starting to running, include lifecycle_state if present
+              // The lifecycle_state field comes from lifecycle transition callbacks
+              updateAgent(agent_id, {
+                status: 'running',
+                ...(lifecycle_state && { lifecycle_state: lifecycle_state as import('../stores/stateStore').LifecycleState }),
               });
               break;
             }
@@ -570,7 +695,7 @@ export function useWebSocket() {
               break;
             }
             case 'agent:completed': {
-              const { agent_id, error, exit_code, duration, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, commits_created } = message.payload;
+              const { agent_id, error, exit_code, duration, input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, cost_usd, files_changed, commits_created } = message.payload;
               updateAgent(agent_id, {
                 status: error ? 'failed' : 'completed',
                 end_time: message.timestamp,
@@ -585,8 +710,8 @@ export function useWebSocket() {
                   total_tokens: input_tokens + output_tokens,
                   cost_usd,
                   // Optional cache token fields - only set if defined (exactOptionalPropertyTypes compliance)
-                  ...(cache_creation_tokens !== undefined && { cache_creation_input_tokens: cache_creation_tokens }),
-                  ...(cache_read_tokens !== undefined && { cache_read_input_tokens: cache_read_tokens }),
+                  ...(cache_creation_input_tokens !== undefined && { cache_creation_input_tokens }),
+                  ...(cache_read_input_tokens !== undefined && { cache_read_input_tokens }),
                 },
               });
               break;
@@ -597,6 +722,7 @@ export function useWebSocket() {
                 merge_status,
                 queue_pos,
                 error,
+                commits_applied,
                 validation_status,
                 validation_steps,
                 validation_duration_ms,
@@ -604,12 +730,13 @@ export function useWebSocket() {
                 repair_attempts,
                 last_repair_output,
               } = message.payload;
-              console.log('[WebSocket] Agent merge status:', agent_id, merge_status, 'pos:', queue_pos, 'validation:', validation_status);
+              console.log('[WebSocket] Agent merge status:', agent_id, merge_status, 'pos:', queue_pos, 'commits:', commits_applied, 'validation:', validation_status);
               updateAgentMergeStatus(
                 agent_id,
                 merge_status,
                 queue_pos,
                 error,
+                commits_applied,
                 validation_status as import('../stores/stateStore').ValidationStatus | undefined,
                 validation_steps as import('../stores/stateStore').ValidationStep[] | undefined,
                 validation_duration_ms,
@@ -639,13 +766,25 @@ export function useWebSocket() {
             case 'orch:paused': {
               const { is_paused, is_paused_by_user, is_paused_by_agent, pause_state } = message.payload;
               console.log('[WebSocket] Orchestrator paused:', pause_state);
+              // Use confirmPause to reconcile optimistic update with actual state
+              confirmPause(pause_state);
+              // Also set the full pause state for cases where we didn't have an optimistic update
               setPauseState(is_paused, is_paused_by_user, is_paused_by_agent, pause_state);
               break;
             }
             case 'orch:resumed': {
               const { is_paused, is_paused_by_user, is_paused_by_agent, pause_state } = message.payload;
               console.log('[WebSocket] Orchestrator resumed:', pause_state);
+              // Use confirmResume to reconcile optimistic update with actual state
+              confirmResume(pause_state);
+              // Also set the full pause state for cases where we didn't have an optimistic update
               setPauseState(is_paused, is_paused_by_user, is_paused_by_agent, pause_state);
+              break;
+            }
+            case 'orch:state_changed': {
+              const { state, active_agent_count } = message.payload;
+              console.log('[WebSocket] Orchestrator state changed:', state, 'agents:', active_agent_count);
+              setOrchestratorState(state, active_agent_count);
               break;
             }
             case 'run:started': {
@@ -700,6 +839,21 @@ export function useWebSocket() {
               // Rules changes are informational for now - UI can fetch updated rules if needed
               break;
             }
+            case 'config:updated': {
+              const { concurrency, max_priority, use_bwrap, max_retries } = message.payload;
+              console.log('[WebSocket] Config updated:', concurrency, max_priority, use_bwrap, max_retries);
+              updateRunConfigFromServer({ concurrency, max_priority, use_bwrap, max_retries });
+              break;
+            }
+            case 'lifecycle:state_changed': {
+              const { agent_id, lifecycle_state, previous_state } = message.payload;
+              console.log('[WebSocket] Lifecycle state changed:', agent_id, previous_state, '->', lifecycle_state);
+              // Update the agent's lifecycle_state for real-time UI updates
+              updateAgent(agent_id, {
+                lifecycle_state: lifecycle_state as import('../stores/stateStore').LifecycleState,
+              });
+              break;
+            }
             default:
               console.warn('[WebSocket] Unknown event type:', (message as WebSocketEvent).type);
           }
@@ -737,7 +891,7 @@ export function useWebSocket() {
         }, backoffTime);
       }
     }
-  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, appendGitCommit, syncState, setPauseState, setActiveRepo, updateAgentMergeStatus, addRun, updateRun, clearOutput, setCurrentRunId]);
+  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, appendGitCommit, syncState, setPauseState, setActiveRepo, updateAgentMergeStatus, addRun, updateRun, clearOutput, setCurrentRunId, setOrchestratorState, confirmPause, confirmResume, isStaleEvent, updateRunConfigFromServer]);
   const disconnect = useCallback(() => {
     isManuallyClosedRef.current = true;
     if (reconnectTimeoutRef.current !== null) {

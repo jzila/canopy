@@ -29,6 +29,10 @@ type MockClient struct {
 			TaskID string
 			Reason string
 		}
+		FailPermanently []struct {
+			TaskID string
+			Reason string
+		}
 		NeedsInput []struct {
 			TaskID    string
 			SessionID string
@@ -64,6 +68,7 @@ type MockClient struct {
 		Start                 error
 		Done                  error
 		Fail                  error
+		FailPermanently       error
 		NeedsInput            error
 		Create                error
 		CreateWithDescription error
@@ -213,6 +218,39 @@ func (m *MockClient) Fail(_ context.Context, taskID string, reason string) error
 
 	if task, ok := m.Tasks[taskID]; ok {
 		task.Status = "open"
+	}
+	return nil
+}
+
+// FailPermanently marks a task as permanently failed by closing it and adding needs-investigation label
+func (m *MockClient) FailPermanently(_ context.Context, taskID string, reason string) error {
+	m.mu.Lock()
+	m.Calls.FailPermanently = append(m.Calls.FailPermanently, struct {
+		TaskID string
+		Reason string
+	}{taskID, reason})
+	m.mu.Unlock()
+
+	if m.Errors.FailPermanently != nil {
+		return m.Errors.FailPermanently
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if task, ok := m.Tasks[taskID]; ok {
+		task.Status = "closed"
+		// Add needs-investigation label if not already present
+		hasLabel := false
+		for _, label := range task.Labels {
+			if label == "needs-investigation" {
+				hasLabel = true
+				break
+			}
+		}
+		if !hasLabel {
+			task.Labels = append(task.Labels, "needs-investigation")
+		}
 	}
 	return nil
 }
@@ -386,6 +424,7 @@ func (m *MockClient) Reset() {
 	m.Calls.Start = nil
 	m.Calls.Done = nil
 	m.Calls.Fail = nil
+	m.Calls.FailPermanently = nil
 	m.Calls.NeedsInput = nil
 	m.Calls.Create = nil
 	m.Calls.CreateWithDescription = nil
@@ -401,6 +440,7 @@ func (m *MockClient) Reset() {
 	m.Errors.Start = nil
 	m.Errors.Done = nil
 	m.Errors.Fail = nil
+	m.Errors.FailPermanently = nil
 	m.Errors.NeedsInput = nil
 	m.Errors.Create = nil
 	m.Errors.CreateWithDescription = nil

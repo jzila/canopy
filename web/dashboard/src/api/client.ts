@@ -278,6 +278,15 @@ export async function getRuns(filter?: RunListFilter): Promise<RunListResponse> 
   return fetchJson<RunListResponse>(endpoint);
 }
 
+// RuleOverride for run-configured rules
+export interface RuleOverride {
+  name: string;
+  condition: string;
+  action: 'deny' | 'allow';
+  enabled?: boolean;
+  reason?: string;
+}
+
 // Orchestration types - matches Go backend (pkg/daemon/orchestration_handler.go)
 export interface StartRunRequest {
   work_dir: string;
@@ -286,6 +295,7 @@ export interface StartRunRequest {
   max_priority?: number;
   use_bwrap?: boolean;
   max_retries?: number;
+  rule_overrides?: RuleOverride[];
 }
 
 export interface StartRunResponse {
@@ -333,6 +343,56 @@ export async function stopRun(runId: string): Promise<StopRunResponse> {
   });
 }
 
+// Activate/Deactivate API - preferred endpoints for always-active orchestrator model
+
+export interface ActivateRequest {
+  work_dir: string;
+  repo_id?: string;
+  concurrency?: number;
+  max_priority?: number;
+  use_bwrap?: boolean;
+  max_retries?: number;
+  rule_overrides?: RuleOverride[];
+}
+
+export interface ActivateResponse {
+  success: boolean;
+  run_id?: string;
+  error?: string;
+}
+
+export interface DeactivateRequest {
+  run_id?: string;
+  repo_path?: string;
+}
+
+export interface DeactivateResponse {
+  success: boolean;
+  error?: string;
+}
+
+/**
+ * Activate the orchestrator for a repository.
+ * This is the preferred API for the always-active orchestrator model.
+ */
+export async function activate(request: ActivateRequest): Promise<ActivateResponse> {
+  return fetchJson<ActivateResponse>('/api/orchestrator/activate', {
+    method: 'POST',
+    body: JSON.stringify(request),
+  });
+}
+
+/**
+ * Deactivate the orchestrator.
+ * Can specify either run_id or repo_path.
+ */
+export async function deactivate(request: DeactivateRequest): Promise<DeactivateResponse> {
+  return fetchJson<DeactivateResponse>('/api/orchestrator/deactivate', {
+    method: 'POST',
+    body: JSON.stringify(request),
+  });
+}
+
 export async function getRunStatus(runId?: string): Promise<RunStatusResponse> {
   const endpoint = runId ? `/api/orchestrator/run?id=${runId}` : '/api/orchestrator/run';
   return fetchJson<RunStatusResponse>(endpoint);
@@ -361,6 +421,9 @@ export interface UpdateConfigRequest {
   assignee?: string;
 }
 
+// RuleSource indicates where a rule comes from in the precedence hierarchy
+export type RuleSource = 'default' | 'config' | 'override';
+
 // Unified Rule interface - single format for all rules
 export interface Rule {
   name: string;
@@ -368,6 +431,7 @@ export interface Rule {
   action: 'deny' | 'allow';
   enabled: boolean;
   persisted: boolean;
+  source: RuleSource;
 }
 
 // RulesState contains the unified rules list with list-level persisted flag
@@ -576,6 +640,42 @@ export async function getValidationConfig(repoPath: string): Promise<ValidationC
 
 export async function getRulesSettings(repoPath: string): Promise<RulesSettingsResponse> {
   return fetchJson<RulesSettingsResponse>(`/api/repos/${encodeURIComponent(repoPath)}/config/rules`);
+}
+
+// Run configuration API types - matches Go backend (pkg/daemon/orchestration_handler.go)
+
+export interface RunConfigApiResponse {
+  concurrency: number;
+  max_priority: number;
+  use_bwrap: boolean;
+  max_retries: number;
+  error?: string;
+}
+
+export interface RunConfigApiRequest {
+  concurrency: number;
+  max_priority: number;
+  use_bwrap: boolean;
+  max_retries: number;
+}
+
+/**
+ * Get the saved run configuration for the current repository.
+ * Returns defaults if no configuration has been saved.
+ */
+export async function getRunConfig(): Promise<RunConfigApiResponse> {
+  return fetchJson<RunConfigApiResponse>('/api/config');
+}
+
+/**
+ * Save run configuration for the current repository.
+ * Broadcasts config_updated WebSocket event to sync across tabs.
+ */
+export async function saveRunConfig(config: RunConfigApiRequest): Promise<RunConfigApiResponse> {
+  return fetchJson<RunConfigApiResponse>('/api/config', {
+    method: 'PUT',
+    body: JSON.stringify(config),
+  });
 }
 
 export { ApiError };

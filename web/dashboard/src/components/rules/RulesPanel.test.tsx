@@ -32,6 +32,7 @@ const createMockRule = (overrides: Partial<Rule> = {}): Rule => ({
   action: 'deny',
   enabled: true,
   persisted: true,
+  source: 'config',
   ...overrides,
 });
 

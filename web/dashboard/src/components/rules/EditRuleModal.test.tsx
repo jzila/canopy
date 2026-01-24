@@ -16,6 +16,7 @@ const createMockRule = (overrides: Partial<Rule> = {}): Rule => ({
   action: 'deny',
   enabled: true,
   persisted: true,
+  source: 'config',
   ...overrides,
 });
 
@@ -415,6 +416,7 @@ describe('EditRuleModal', () => {
         action: 'deny',
         enabled: true,
         persisted: false, // Always false after edit
+        source: 'config',
       });
     });
 

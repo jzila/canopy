@@ -8,9 +8,10 @@ import {
   Moon,
 } from 'lucide-react';
 import type { Repository, Run } from '../../api/client';
-import type { Stats } from '../../stores/stateStore';
+import type { Stats, OrchestratorState, PauseState } from '../../stores/stateStore';
 import { RepoSelector } from './RepoSelector';
 import { RunSelector } from './RunSelector';
+import { OrchestratorStateIndicator } from './OrchestratorStateIndicator';
 
 export interface DashboardHeaderProps {
   // Connection & state
@@ -31,6 +32,20 @@ export interface DashboardHeaderProps {
   activeRunId: string;
   isRunsLoading: boolean;
   onRunSelect: (runId: string) => void;
+
+  // Orchestrator state
+  orchestratorState: OrchestratorState;
+  activeAgentCount: number;
+  pauseState: PauseState;
+  isActivating: boolean;
+  isDeactivating: boolean;
+  isPauseLoading: boolean;
+  isResumeLoading: boolean;
+  onActivate: () => void;
+  onDeactivate: () => void;
+  onPause: () => void;
+  onResume: () => void;
+  onConfigure: () => void;
 
   // Stats
   stats: Stats;
@@ -69,6 +84,18 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
   activeRunId,
   isRunsLoading,
   onRunSelect,
+  orchestratorState,
+  activeAgentCount,
+  pauseState,
+  isActivating,
+  isDeactivating,
+  isPauseLoading,
+  isResumeLoading,
+  onActivate,
+  onDeactivate,
+  onPause,
+  onResume,
+  onConfigure,
   stats,
 }) => {
   return (
@@ -88,6 +115,30 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
             isLoading={isRepoSwitching}
             disabled={!connected}
           />
+
+          {/* Separator */}
+          <div className="w-px h-8 bg-gray-300 dark:bg-gray-600" />
+
+          {/* Orchestrator State Indicator */}
+          <OrchestratorStateIndicator
+            orchestratorState={orchestratorState}
+            activeAgentCount={activeAgentCount}
+            connected={connected}
+            pauseState={pauseState}
+            isActivating={isActivating}
+            isDeactivating={isDeactivating}
+            isPauseLoading={isPauseLoading}
+            isResumeLoading={isResumeLoading}
+            onActivate={onActivate}
+            onDeactivate={onDeactivate}
+            onPause={onPause}
+            onResume={onResume}
+            onConfigure={onConfigure}
+          />
+
+          {/* Separator */}
+          <div className="w-px h-8 bg-gray-300 dark:bg-gray-600" />
+
           <RunSelector
             runs={runs}
             activeRunId={activeRunId}
@@ -95,16 +146,6 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
             isLoading={isRunsLoading}
             disabled={!connected || isRepoSwitching}
           />
-          <div className="header-control gap-2 px-4 bg-gray-100 dark:bg-gray-700 rounded-lg">
-            <div
-              className={`w-2 h-2 rounded-full ${
-                connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'
-              }`}
-            />
-            <span className="text-sm font-medium tracking-wide text-gray-700 dark:text-gray-300">
-              {connected ? 'Connected' : 'Disconnected'}
-            </span>
-          </div>
           <button
             onClick={onToggleTheme}
             className="header-control justify-center w-12 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"

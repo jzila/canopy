@@ -52,6 +52,20 @@ const STATUS_CONFIG: Record<ValidationStatus, {
     textColor: 'text-gray-500 dark:text-gray-400',
     borderColor: 'border-gray-200 dark:border-gray-700',
   },
+  pending_repair: {
+    icon: <Clock className="w-3 h-3" />,
+    label: 'Preparing repair',
+    bgColor: 'bg-orange-50 dark:bg-orange-900/20',
+    textColor: 'text-orange-600 dark:text-orange-400',
+    borderColor: 'border-orange-200 dark:border-orange-800',
+  },
+  spawning_repair: {
+    icon: <Loader2 className="w-3 h-3 animate-spin" />,
+    label: 'Spawning repair agent',
+    bgColor: 'bg-orange-50 dark:bg-orange-900/20',
+    textColor: 'text-orange-600 dark:text-orange-400',
+    borderColor: 'border-orange-200 dark:border-orange-800',
+  },
   repairing: {
     icon: <Wrench className="w-3 h-3 animate-pulse" />,
     label: 'Repair in progress',
@@ -81,6 +95,12 @@ export const ValidationStatusBadge: React.FC<ValidationStatusBadgeProps> = ({
   let label = config.label;
   if (status === 'failed' && failedStep) {
     label = `Validation failed (${failedStep})`;
+  }
+  if (status === 'pending_repair' && repairAttempts !== undefined) {
+    label = `Preparing repair (${repairAttempts}/${maxRepairAttempts})`;
+  }
+  if (status === 'spawning_repair' && repairAttempts !== undefined) {
+    label = `Spawning repair agent (${repairAttempts}/${maxRepairAttempts})`;
   }
   if (status === 'repairing' && repairAttempts !== undefined) {
     label = `Repair in progress (${repairAttempts}/${maxRepairAttempts})`;

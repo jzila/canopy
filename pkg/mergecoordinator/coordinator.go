@@ -165,6 +165,22 @@ func (mc *MergeCoordinator) SetCleanupCallback(callback func(ctx context.Context
 	mc.cleanupCallback = callback
 }
 
+// SetMergeStatusCallback sets a callback for merge status events.
+// This is used when running in daemon mode where IPC is not available.
+func (mc *MergeCoordinator) SetMergeStatusCallback(callback mergequeue.MergeStatusCallback) {
+	if mc.processor != nil {
+		mc.processor.SetMergeStatusCallback(callback)
+	}
+}
+
+// SetCommitCallback sets a callback for commit events.
+// This is used when running in daemon mode where IPC is not available.
+func (mc *MergeCoordinator) SetCommitCallback(callback mergequeue.CommitCallback) {
+	if mc.processor != nil {
+		mc.processor.SetCommitCallback(callback)
+	}
+}
+
 // SetAgentID records the agentID for a taskID, enabling parent-child tracking.
 func (mc *MergeCoordinator) SetAgentID(taskID, agentID string) {
 	mc.agentIDMap.Store(taskID, agentID)
@@ -237,6 +253,9 @@ func (mc *MergeCoordinator) HandleFailure(ctx context.Context, taskID string, re
 	// Clean up overlay for failed task
 	mc.cleanup(ctx, result)
 
+	// Get agent ID for this task (needed for merge status)
+	agentID := mc.GetAgentID(taskID)
+
 	// Check if this is an input-blocked failure (agent paused waiting for user input)
 	if result != nil && result.InputBlocked {
 		// Get session ID for resume support
@@ -260,8 +279,24 @@ func (mc *MergeCoordinator) HandleFailure(ctx context.Context, taskID string, re
 		fmt.Fprintf(os.Stderr, "ERROR: failed to mark task %s as failed: %v\n", taskID, err)
 	}
 
+	// Send merge status as failed for agents that never entered the merge queue
+	// This ensures the UI can display the Details button (which requires merge_status)
+	mc.sendMergeStatusFailed(agentID, errMsg)
+
 	// Send task status update via IPC
 	mc.SendTaskUpdated(taskID, taskTitle, "failed")
+}
+
+// sendMergeStatusFailed sends a merge status failed event via IPC if client is connected.
+// This is used for agents that fail before entering the merge queue.
+func (mc *MergeCoordinator) sendMergeStatusFailed(agentID, errMsg string) {
+	if mc.ipcClient == nil || agentID == "" {
+		return
+	}
+
+	if err := mc.ipcClient.SendAgentMergeStatusFull(agentID, ipc.MergeStatusFailed, 0, errMsg, 0, false, false); err != nil && mc.config.Verbose {
+		fmt.Fprintf(os.Stderr, "warning: failed to send merge status for %s: %v\n", agentID, err)
+	}
 }
 
 // SendTaskUpdated sends a task status update via IPC if client is connected.

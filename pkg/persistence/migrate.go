@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-const currentSchemaVersion = 14
+const currentSchemaVersion = 17
 
 // migrate runs all pending database migrations
 func (s *Store) migrate() error {
@@ -99,6 +99,18 @@ func (s *Store) runMigration(version int) error {
 		}
 	case 14:
 		if err := s.migrateV14(tx); err != nil {
+			return err
+		}
+	case 15:
+		if err := s.migrateV15(tx); err != nil {
+			return err
+		}
+	case 16:
+		if err := s.migrateV16(tx); err != nil {
+			return err
+		}
+	case 17:
+		if err := s.migrateV17(tx); err != nil {
 			return err
 		}
 	default:
@@ -434,4 +446,65 @@ func (s *Store) migrateV14(tx *sql.Tx) error {
 	`
 	_, err := tx.Exec(schema)
 	return err
+}
+
+// migrateV15 adds lifecycle_state column to agents table for unified state machine tracking.
+// Existing agents will have NULL lifecycle_state, which is handled by deriving it from
+// legacy fields (status, merge_status, validation_status) on first read.
+func (s *Store) migrateV15(tx *sql.Tx) error {
+	migrations := []string{
+		// Add lifecycle_state column (nullable for migration compatibility)
+		// Valid values match lifecycle.AgentLifecycleState: starting, running, queued_for_merge,
+		// merging, resolving, validating, repairing, merge_failed, completed, failed,
+		// needs_attention, cancelled, timed_out
+		`ALTER TABLE agents ADD COLUMN lifecycle_state TEXT`,
+	}
+
+	for _, m := range migrations {
+		if _, err := tx.Exec(m); err != nil {
+			return fmt.Errorf("failed to execute migration: %s: %w", m, err)
+		}
+	}
+
+	return nil
+}
+
+// migrateV16 creates the run_configs table for persisting per-repository orchestrator settings
+func (s *Store) migrateV16(tx *sql.Tx) error {
+	schema := `
+		CREATE TABLE IF NOT EXISTS run_configs (
+			repo_id TEXT PRIMARY KEY,
+			concurrency INTEGER NOT NULL DEFAULT 4,
+			max_priority INTEGER NOT NULL DEFAULT 4,
+			use_bwrap INTEGER NOT NULL DEFAULT 1,
+			max_retries INTEGER NOT NULL DEFAULT 3,
+			updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+		);
+	`
+
+	_, err := tx.Exec(schema)
+	if err != nil {
+		return fmt.Errorf("failed to create run_configs table: %w", err)
+	}
+
+	return nil
+}
+
+// migrateV17 adds task retry tracking fields (attempt and max_retries) to agents table.
+// These are separate from RepairAttempts which tracks validation repair attempts.
+func (s *Store) migrateV17(tx *sql.Tx) error {
+	migrations := []string{
+		// Add attempt column (1 = first try, 2 = first retry, etc.)
+		`ALTER TABLE agents ADD COLUMN attempt INTEGER DEFAULT 1`,
+		// Add max_retries column (how many retries are allowed)
+		`ALTER TABLE agents ADD COLUMN max_retries INTEGER DEFAULT 3`,
+	}
+
+	for _, m := range migrations {
+		if _, err := tx.Exec(m); err != nil {
+			return fmt.Errorf("failed to execute migration: %s: %w", m, err)
+		}
+	}
+
+	return nil
 }
