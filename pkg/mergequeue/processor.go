@@ -222,18 +222,58 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 		// Continue anyway - we just won't be able to revert in strict mode
 	}
 
-	// Apply merge via merger.MergeSingle()
-	// Pass task title for commit message generation if agent didn't make commits
+	// Check if HEAD has moved ahead of the overlay's base commit
+	// If so, we need a 3-way merge via resolver instead of direct patch application
+	needsResolver := false
+	resolverReason := ""
+	if req.Result.GitState != nil && req.Result.GitState.BaseCommit != "" {
+		baseCommit := req.Result.GitState.BaseCommit
+		if preMergeCommit != "" && baseCommit != preMergeCommit {
+			// HEAD has moved - check if it's ahead of base
+			mergeBase, err := p.getMergeBase(baseCommit, preMergeCommit)
+			if err != nil {
+				if p.verbose {
+					fmt.Fprintf(os.Stderr, "warning: failed to get merge-base for %s: %v\n", taskID, err)
+				}
+			} else if mergeBase == baseCommit {
+				// HEAD is ahead of the overlay's base - must use resolver for 3-way merge
+				needsResolver = true
+				resolverReason = fmt.Sprintf("overlay stale (base %s, HEAD now %s)", baseCommit[:8], preMergeCommit[:8])
+				if p.verbose {
+					fmt.Printf("[%s] Detected stale overlay: base=%s, current HEAD=%s, merge-base=%s\n",
+						taskID, baseCommit[:8], preMergeCommit[:8], mergeBase[:8])
+				}
+			}
+		}
+	}
+
+	// Prepare merge options for later use
 	mergeOpts := &merge.MergeOptions{
 		TaskTitle: req.Task.Title,
 	}
-	mergeResult, err := p.merger.MergeSingle(req.Result, mergeOpts)
-	if err != nil {
-		resp.Error = fmt.Sprintf("merge failed: %v", err)
-		p.markTaskFailed(ctx, taskID, resp.Error)
-		p.sendTaskUpdated(taskID, req.Task.Title, "failed")
-		p.sendMergeStatusFull(taskID, ipc.MergeStatusFailed, resp.Error, 0, false, false)
-		return resp
+
+	// If overlay is stale, skip direct merge and go straight to resolver
+	var mergeResult *merge.Result
+	if needsResolver {
+		// Create empty merge result to trigger resolver flow
+		mergeResult = &merge.Result{
+			Errors:      []string{resolverReason},
+			PatchFailed: make(map[string]bool),
+		}
+		if p.verbose {
+			fmt.Printf("[%s] Skipping direct merge due to stale overlay, will spawn resolver\n", taskID)
+		}
+	} else {
+		// Apply merge via merger.MergeSingle()
+		// Pass task title for commit message generation if agent didn't make commits
+		mergeResult, err = p.merger.MergeSingle(req.Result, mergeOpts)
+		if err != nil {
+			resp.Error = fmt.Sprintf("merge failed: %v", err)
+			p.markTaskFailed(ctx, taskID, resp.Error)
+			p.sendTaskUpdated(taskID, req.Task.Title, "failed")
+			p.sendMergeStatusFull(taskID, ipc.MergeStatusFailed, resp.Error, 0, false, false)
+			return resp
+		}
 	}
 
 	resp.CommitsApplied = mergeResult.CommitsApplied
@@ -321,11 +361,11 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 	}
 
 	// Determine if we need to spawn a resolver agent
-	needsResolver := false
-	resolverReason := ""
+	// Note: needsResolver may already be true if we detected a stale overlay above
+	// In that case, resolverReason is already set
 
-	// Case 1: Merge had errors (git add/commit failed)
-	if len(mergeResult.Errors) > 0 {
+	// Case 1: Merge had errors (git add/commit failed, or stale overlay detected)
+	if !needsResolver && len(mergeResult.Errors) > 0 {
 		needsResolver = true
 		resolverReason = "merge errors: " + strings.Join(mergeResult.Errors, "; ")
 	}
@@ -1152,6 +1192,17 @@ func (p *Processor) getCurrentHead() (string, error) {
 	output, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("git rev-parse HEAD failed: %w", err)
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+// getMergeBase returns the best common ancestor between two commits.
+// This is used to detect if HEAD has moved ahead of an overlay's base commit.
+func (p *Processor) getMergeBase(commit1, commit2 string) (string, error) {
+	cmd := exec.Command("git", "-C", p.outputDir, "merge-base", commit1, commit2)
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git merge-base failed: %w", err)
 	}
 	return strings.TrimSpace(string(output)), nil
 }
