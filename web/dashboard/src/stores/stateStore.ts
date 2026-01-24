@@ -286,6 +286,7 @@ interface StateStore {
     mergeStatus: MergeStatus,
     queuePos?: number,
     error?: string,
+    commitsApplied?: number,
     validationStatus?: ValidationStatus,
     validationSteps?: ValidationStep[],
     validationDurationMs?: number,
@@ -633,7 +634,7 @@ export const useStateStore = create<StateStore>((set) => ({
 
   setMergeQueue: (mergeQueue) => set({ mergeQueue }),
 
-  updateAgentMergeStatus: (agentId, mergeStatus, queuePos, error, validationStatus, validationSteps, validationDurationMs, validationError, repairAttempts, lastRepairOutput) =>
+  updateAgentMergeStatus: (agentId, mergeStatus, queuePos, error, commitsApplied, validationStatus, validationSteps, validationDurationMs, validationError, repairAttempts, lastRepairOutput) =>
     set((state) => {
       const agent = state.agents[agentId];
       if (!agent) {
@@ -655,6 +656,9 @@ export const useStateStore = create<StateStore>((set) => ({
       }
       if (error !== undefined) {
         updatedAgent.merge_error = error;
+      }
+      if (commitsApplied !== undefined) {
+        updatedAgent.merge_commits_applied = commitsApplied;
       }
       if (validationStatus !== undefined) {
         updatedAgent.validation_status = validationStatus;

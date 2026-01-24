@@ -367,12 +367,18 @@ export const AgentCard: React.FC<AgentCardProps> = ({
           <span className="font-mono tabular-nums tracking-mono-normal">{formatCost(agent.token_usage.cost_usd)}</span>
         </div>
 
-        {agent.commits > 0 && (
-          <div className="flex items-center gap-2.5 text-blue-400" title={`${agent.commits} git commit${agent.commits !== 1 ? 's' : ''}`}>
-            <GitCommit className="w-4 h-4 flex-shrink-0" />
-            <span className="font-mono tabular-nums tracking-mono-normal">{agent.commits}</span>
-          </div>
-        )}
+        {/* Show merge_commits_applied for merged tasks (most accurate), fall back to agent.commits */}
+        {(() => {
+          const commitCount = (agent.merge_status === 'merged' || agent.merge_status === 'merged_needs_repair')
+            ? (agent.merge_commits_applied ?? agent.commits)
+            : agent.commits;
+          return commitCount > 0 ? (
+            <div className="flex items-center gap-2.5 text-blue-400" title={`${commitCount} git commit${commitCount !== 1 ? 's' : ''}`}>
+              <GitCommit className="w-4 h-4 flex-shrink-0" />
+              <span className="font-mono tabular-nums tracking-mono-normal">{commitCount}</span>
+            </div>
+          ) : null;
+        })()}
       </div>
 
       {/* Merge and validation status indicators */}

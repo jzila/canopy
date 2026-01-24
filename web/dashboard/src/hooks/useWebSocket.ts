@@ -119,6 +119,7 @@ interface AgentMergeStatusEvent {
     merge_status: MergeStatus;
     queue_pos?: number;
     error?: string;
+    commits_applied?: number;
     // Validation results
     validation_status?: ValidationStatus;
     validation_steps?: ValidationStep[];
@@ -671,6 +672,7 @@ export function useWebSocket() {
                 merge_status,
                 queue_pos,
                 error,
+                commits_applied,
                 validation_status,
                 validation_steps,
                 validation_duration_ms,
@@ -678,12 +680,13 @@ export function useWebSocket() {
                 repair_attempts,
                 last_repair_output,
               } = message.payload;
-              console.log('[WebSocket] Agent merge status:', agent_id, merge_status, 'pos:', queue_pos, 'validation:', validation_status);
+              console.log('[WebSocket] Agent merge status:', agent_id, merge_status, 'pos:', queue_pos, 'commits:', commits_applied, 'validation:', validation_status);
               updateAgentMergeStatus(
                 agent_id,
                 merge_status,
                 queue_pos,
                 error,
+                commits_applied,
                 validation_status as import('../stores/stateStore').ValidationStatus | undefined,
                 validation_steps as import('../stores/stateStore').ValidationStep[] | undefined,
                 validation_duration_ms,
