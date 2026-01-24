@@ -11,7 +11,7 @@ import (
 
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
-	"github.com/jzila/canopy/pkg/config"
+	cfgpkg "github.com/jzila/canopy/pkg/config"
 	canopyerrors "github.com/jzila/canopy/pkg/errors"
 	"github.com/jzila/canopy/pkg/events"
 	"github.com/jzila/canopy/pkg/lifecycle"
@@ -32,7 +32,13 @@ type RunConfig struct {
 	MaxRetries      int           `json:"max_retries,omitempty"`
 	MaxPriority     int           `json:"max_priority,omitempty"`
 	ResolverTimeout time.Duration `json:"resolver_timeout,omitempty"`
+	PollInterval    time.Duration `json:"poll_interval,omitempty"`
 	RepoID          string        `json:"repo_id,omitempty"`
+	Types           []string      `json:"types,omitempty"`
+	ExcludeTypes    []string      `json:"exclude_types,omitempty"`
+	Labels          []string      `json:"labels,omitempty"`
+	ExcludeLabels   []string      `json:"exclude_labels,omitempty"`
+	Assignee        string        `json:"assignee,omitempty"`
 }
 
 // RunStatus represents the current status of an orchestration run.
@@ -156,12 +162,12 @@ func (m *OrchestratorManager) RegisterRepo(repoPath string, repoID string) (*Orc
 	}
 
 	// Load config to create rules engine
-	cfg, err := config.LoadConfig(repoPath)
+	cfg, err := cfgpkg.LoadConfig(repoPath)
 	if err != nil {
 		// Log warning but continue with defaults - config loading should not fail registration
 		logging.Warn("failed to load config.toml for repo, using defaults",
 			"repo_path", repoPath, "error", err)
-		cfg = config.DefaultConfig()
+		cfg = cfgpkg.DefaultConfig()
 	}
 
 	// Create rules engine from config
@@ -321,7 +327,7 @@ func (m *OrchestratorManager) GetOrCreateRulesEngineForRepo(repoPath string) (*r
 		}
 
 		// Create engine for the registered orchestrator
-		cfg, err := config.LoadConfig(repoPath)
+		cfg, err := cfgpkg.LoadConfig(repoPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load config for %s: %w", repoPath, err)
 		}
@@ -350,7 +356,7 @@ func (m *OrchestratorManager) InvalidateRulesEngine(repoPath string) {
 		defer lifecycle.mu.Unlock()
 
 		// Reload config and create new engine
-		cfg, err := config.LoadConfig(repoPath)
+		cfg, err := cfgpkg.LoadConfig(repoPath)
 		if err != nil {
 			logging.Warn("failed to reload config for rules invalidation",
 				"repo_path", repoPath, "error", err)
@@ -505,6 +511,25 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 		MaxRetries:      config.MaxRetries,
 		MaxPriority:     config.MaxPriority,
 		ResolverTimeout: config.ResolverTimeout,
+		PollInterval:    config.PollInterval,
+	}
+
+	// Apply CLI rules overrides if any were provided
+	if hasRulesOverrides(&config) {
+		orchConfig.Rules = &cfgpkg.RulesSettings{
+			Types:         config.Types,
+			ExcludeTypes:  config.ExcludeTypes,
+			Labels:        config.Labels,
+			ExcludeLabels: config.ExcludeLabels,
+			Assignee:      config.Assignee,
+		}
+		orchConfig.RulesOverrides = &orchestrator.RulesOverrides{
+			Types:         len(config.Types) > 0,
+			ExcludeTypes:  len(config.ExcludeTypes) > 0,
+			Labels:        len(config.Labels) > 0,
+			ExcludeLabels: len(config.ExcludeLabels) > 0,
+			Assignee:      config.Assignee != "",
+		}
 	}
 
 	// Create orchestrator
@@ -813,7 +838,7 @@ func (m *OrchestratorManager) runOrchestrator(ctx context.Context, runState *Run
 		lifecycle.cancel = nil
 		// Keep rulesEngine for continued rules access in OFF state
 		// Reload from config to ensure fresh state
-		if cfg, err := config.LoadConfig(lifecycle.RepoPath); err == nil {
+		if cfg, err := cfgpkg.LoadConfig(lifecycle.RepoPath); err == nil {
 			lifecycle.rulesEngine = rules.NewEngine(&cfg.Rules)
 		}
 		lifecycle.mu.Unlock()
@@ -1224,4 +1249,13 @@ func (m *OrchestratorManager) KillAgent(agentID string) error {
 	// Extract task ID from parts (taskID is parts[2])
 	taskID := parts[2]
 	return sched.Kill(taskID)
+}
+
+// hasRulesOverrides checks if any CLI rules overrides were provided in the RunConfig.
+func hasRulesOverrides(cfg *RunConfig) bool {
+	return len(cfg.Types) > 0 ||
+		len(cfg.ExcludeTypes) > 0 ||
+		len(cfg.Labels) > 0 ||
+		len(cfg.ExcludeLabels) > 0 ||
+		cfg.Assignee != ""
 }

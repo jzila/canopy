@@ -24,16 +24,22 @@ func NewOrchestrationHandler(manager *OrchestratorManager) *OrchestrationHandler
 
 // ExecuteRunRequest is the JSON request body for starting a run.
 type ExecuteRunRequest struct {
-	WorkDir           string `json:"work_dir"`
-	OutputDir         string `json:"output_dir,omitempty"`
-	Concurrency       int    `json:"concurrency,omitempty"`
-	Verbose           bool   `json:"verbose,omitempty"`
-	DryRun            bool   `json:"dry_run,omitempty"`
-	UseBwrap          bool   `json:"use_bwrap,omitempty"`
-	MaxRetries        int    `json:"max_retries,omitempty"`
-	MaxPriority       int    `json:"max_priority,omitempty"`
-	ResolverTimeoutMS int64  `json:"resolver_timeout_ms,omitempty"`
-	RepoID            string `json:"repo_id,omitempty"`
+	WorkDir           string   `json:"work_dir"`
+	OutputDir         string   `json:"output_dir,omitempty"`
+	Concurrency       int      `json:"concurrency,omitempty"`
+	Verbose           bool     `json:"verbose,omitempty"`
+	DryRun            bool     `json:"dry_run,omitempty"`
+	UseBwrap          bool     `json:"use_bwrap,omitempty"`
+	MaxRetries        int      `json:"max_retries,omitempty"`
+	MaxPriority       int      `json:"max_priority,omitempty"`
+	ResolverTimeoutMS int64    `json:"resolver_timeout_ms,omitempty"`
+	RepoID            string   `json:"repo_id,omitempty"`
+	PollIntervalMS    int64    `json:"poll_interval_ms,omitempty"`
+	Types             []string `json:"types,omitempty"`
+	ExcludeTypes      []string `json:"exclude_types,omitempty"`
+	Labels            []string `json:"labels,omitempty"`
+	ExcludeLabels     []string `json:"exclude_labels,omitempty"`
+	Assignee          string   `json:"assignee,omitempty"`
 }
 
 // ExecuteRunResponse is the JSON response for starting a run.
@@ -140,7 +146,13 @@ func (h *OrchestrationHandler) HandleExecuteRun(w http.ResponseWriter, r *http.R
 		MaxRetries:      req.MaxRetries,
 		MaxPriority:     req.MaxPriority,
 		ResolverTimeout: time.Duration(req.ResolverTimeoutMS) * time.Millisecond,
+		PollInterval:    time.Duration(req.PollIntervalMS) * time.Millisecond,
 		RepoID:          req.RepoID,
+		Types:           req.Types,
+		ExcludeTypes:    req.ExcludeTypes,
+		Labels:          req.Labels,
+		ExcludeLabels:   req.ExcludeLabels,
+		Assignee:        req.Assignee,
 	}
 
 	// Start the run with a background context (not tied to request)
