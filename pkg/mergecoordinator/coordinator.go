@@ -173,6 +173,14 @@ func (mc *MergeCoordinator) SetMergeStatusCallback(callback mergequeue.MergeStat
 	}
 }
 
+// SetCommitCallback sets a callback for commit events.
+// This is used when running in daemon mode where IPC is not available.
+func (mc *MergeCoordinator) SetCommitCallback(callback mergequeue.CommitCallback) {
+	if mc.processor != nil {
+		mc.processor.SetCommitCallback(callback)
+	}
+}
+
 // SetAgentID records the agentID for a taskID, enabling parent-child tracking.
 func (mc *MergeCoordinator) SetAgentID(taskID, agentID string) {
 	mc.agentIDMap.Store(taskID, agentID)

@@ -348,6 +348,13 @@ func (o *Orchestrator) SetMergeStatusCallback(callback mergequeue.MergeStatusCal
 	o.mergeCoordinator.SetMergeStatusCallback(callback)
 }
 
+// SetCommitCallback sets a callback for commit events.
+// This is used when running in daemon mode where IPC is not available.
+// The callback is invoked for each commit created during merge.
+func (o *Orchestrator) SetCommitCallback(callback mergequeue.CommitCallback) {
+	o.mergeCoordinator.SetCommitCallback(callback)
+}
+
 // SetRepoID sets the repository ID for IPC tracking.
 // This ID is passed to resolver agents for parent-child tracking.
 func (o *Orchestrator) SetRepoID(repoID string) {

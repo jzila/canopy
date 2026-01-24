@@ -600,6 +600,10 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 	// This replaces the IPC-based merge status when running in daemon mode
 	orch.SetMergeStatusCallback(m.createMergeStatusCallback())
 
+	// Register commit callback to publish commit events to EventBus
+	// This replaces the IPC-based commit events when running in daemon mode
+	orch.SetCommitCallback(m.createCommitCallback())
+
 	// Register state callbacks to track Idle/Active transitions
 	orch.SetStateCallbacks(m.createStateCallbacks(lifecycle))
 
@@ -1185,6 +1189,33 @@ func (m *OrchestratorManager) createMergeStatusCallback() mergequeue.MergeStatus
 				}
 			}
 		}
+	}
+}
+
+// createCommitCallback creates a callback that publishes commit events to the EventBus.
+// This replaces the IPC-based commit events when the orchestrator runs in daemon mode.
+func (m *OrchestratorManager) createCommitCallback() mergequeue.CommitCallback {
+	return func(event mergequeue.CommitEvent) {
+		if m.eventBus == nil {
+			return
+		}
+
+		payload := map[string]interface{}{
+			"agent_id":      event.AgentID,
+			"hash":          event.Hash,
+			"short_hash":    event.ShortHash,
+			"message":       event.Message,
+			"author":        event.Author,
+			"author_email":  event.AuthorEmail,
+			"timestamp":     event.Timestamp,
+			"files_changed": event.FilesChanged,
+		}
+
+		m.eventBus.Publish(events.Event{
+			Type:      events.EventAgentCommit,
+			Timestamp: time.Now(),
+			Payload:   payload,
+		})
 	}
 }
 

@@ -36,6 +36,23 @@ type MergeStatusEvent struct {
 // This provides an alternative to IPC for daemon-mode operation.
 type MergeStatusCallback func(event MergeStatusEvent)
 
+// CommitEvent contains git commit information from a merge.
+// This allows the daemon to receive commit events without requiring an IPC client.
+type CommitEvent struct {
+	AgentID      string
+	Hash         string
+	ShortHash    string
+	Message      string
+	Author       string
+	AuthorEmail  string
+	Timestamp    string
+	FilesChanged []string
+}
+
+// CommitCallback is called when a commit is created during merge.
+// This provides an alternative to IPC for daemon-mode operation.
+type CommitCallback func(event CommitEvent)
+
 // Processor handles merge operations from the queue.
 // It processes merge requests sequentially, spawning resolver agents when conflicts occur.
 type Processor struct {
@@ -52,6 +69,9 @@ type Processor struct {
 
 	// Callback for merge status events (alternative to IPC for daemon mode)
 	mergeStatusCallback MergeStatusCallback
+
+	// Callback for commit events (alternative to IPC for daemon mode)
+	commitCallback CommitCallback
 
 	// Validation and repair fields
 	validationConfig *validation.ValidationConfig // Validation configuration (nil = disabled)
@@ -109,6 +129,13 @@ func (p *Processor) SetRepoID(repoID string) {
 // The callback is invoked whenever merge status would be sent via IPC.
 func (p *Processor) SetMergeStatusCallback(callback MergeStatusCallback) {
 	p.mergeStatusCallback = callback
+}
+
+// SetCommitCallback sets a callback for commit events.
+// This is used when running in daemon mode where IPC is not available.
+// The callback is invoked for each commit created during merge.
+func (p *Processor) SetCommitCallback(callback CommitCallback) {
+	p.commitCallback = callback
 }
 
 // SetValidationConfig sets the validation configuration.
@@ -803,13 +830,34 @@ func (p *Processor) markTaskFailed(ctx context.Context, taskID string, reason st
 
 // sendMergedCommits sends commit events for each commit created during merge.
 // This sends the actual merged commits (with repo hashes) instead of overlay commits.
+// Uses callback in daemon mode, IPC client in CLI mode.
 func (p *Processor) sendMergedCommits(taskID string, mergeResult *merge.Result) {
-	if p.ipcClient == nil || mergeResult == nil {
+	if mergeResult == nil {
 		return
 	}
 
 	agentID := p.makeAgentID(taskID)
 	for _, commitInfo := range mergeResult.MergedCommits {
+		// Try callback first (daemon mode)
+		if p.commitCallback != nil {
+			p.commitCallback(CommitEvent{
+				AgentID:      agentID,
+				Hash:         commitInfo.Hash,
+				ShortHash:    commitInfo.ShortHash,
+				Message:      commitInfo.Message,
+				Author:       commitInfo.Author,
+				AuthorEmail:  commitInfo.AuthorEmail,
+				Timestamp:    commitInfo.Timestamp,
+				FilesChanged: commitInfo.FilesChanged,
+			})
+			continue
+		}
+
+		// Fall back to IPC (CLI mode)
+		if p.ipcClient == nil {
+			continue
+		}
+
 		commit := &ipc.AgentCommitPayload{
 			Hash:         commitInfo.Hash,
 			ShortHash:    commitInfo.ShortHash,
