@@ -1,9 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Settings, Loader2, ChevronDown, ChevronUp, Plus, Trash2 } from 'lucide-react';
+import { X, Settings, Loader2, ChevronDown, ChevronUp, Plus, Trash2, FileText, Zap } from 'lucide-react';
 import type { RunConfig, RuleOverride } from '../../stores/stateStore';
 import { DEFAULT_RUN_CONFIG } from '../../stores/stateStore';
+import type { Rule } from '../../api/client';
 
 type DialogMode = 'start' | 'configure';
+
+// Extended rule for the dialog that tracks config rules and their override state
+interface DialogRule {
+  name: string;
+  conditions: string[];
+  action: 'deny' | 'allow';
+  enabled: boolean;
+  source: 'config' | 'override'; // Where the rule came from
+  modified: boolean; // Whether it's been modified from config
+}
 
 interface RunConfigDialogProps {
   isOpen: boolean;
@@ -15,6 +26,8 @@ interface RunConfigDialogProps {
   initialConfig?: RunConfig;
   repoName?: string | undefined;
   mode?: DialogMode;
+  configRules?: Rule[]; // Rules loaded from config file
+  isLoadingRules?: boolean;
 }
 
 // Default empty rule for new rule creation
@@ -24,6 +37,64 @@ const DEFAULT_RULE: RuleOverride = {
   action: 'deny',
   enabled: true,
 };
+
+// Helper to convert config rules to dialog rules
+function configRulesToDialogRules(configRules: Rule[]): DialogRule[] {
+  return configRules.map((rule) => ({
+    name: rule.name,
+    conditions: rule.conditions,
+    action: rule.action,
+    enabled: rule.enabled,
+    source: 'config' as const,
+    modified: false,
+  }));
+}
+
+// Helper to convert rule overrides to dialog rules
+function overridesToDialogRules(overrides: RuleOverride[]): DialogRule[] {
+  return overrides.map((override) => ({
+    name: override.name,
+    conditions: [override.condition],
+    action: override.action,
+    enabled: override.enabled !== false,
+    source: 'override' as const,
+    modified: false,
+  }));
+}
+
+// Helper to convert dialog rules back to rule overrides for the config
+function dialogRulesToOverrides(dialogRules: DialogRule[], originalConfigRules: Rule[]): RuleOverride[] {
+  const overrides: RuleOverride[] = [];
+
+  for (const dialogRule of dialogRules) {
+    if (dialogRule.source === 'override') {
+      // Runtime-only rules always get included
+      overrides.push({
+        name: dialogRule.name,
+        condition: dialogRule.conditions.join(' AND '),
+        action: dialogRule.action,
+        enabled: dialogRule.enabled,
+      });
+    } else if (dialogRule.modified) {
+      // Config rules that were modified become overrides
+      const originalRule = originalConfigRules.find((r) => r.name === dialogRule.name);
+      if (originalRule) {
+        // Only include if actually different from config
+        if (originalRule.enabled !== dialogRule.enabled ||
+            originalRule.action !== dialogRule.action) {
+          overrides.push({
+            name: dialogRule.name,
+            condition: dialogRule.conditions.join(' AND '),
+            action: dialogRule.action,
+            enabled: dialogRule.enabled,
+          });
+        }
+      }
+    }
+  }
+
+  return overrides;
+}
 
 export const RunConfigDialog: React.FC<RunConfigDialogProps> = ({
   isOpen,
@@ -35,48 +106,107 @@ export const RunConfigDialog: React.FC<RunConfigDialogProps> = ({
   initialConfig = DEFAULT_RUN_CONFIG,
   repoName,
   mode = 'start',
+  configRules = [],
+  isLoadingRules = false,
 }) => {
   const [config, setConfig] = useState<RunConfig>(initialConfig);
+  const [dialogRules, setDialogRules] = useState<DialogRule[]>([]);
   const [rulesExpanded, setRulesExpanded] = useState(false);
   const [newRule, setNewRule] = useState<RuleOverride>(DEFAULT_RULE);
   const [showAddRule, setShowAddRule] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
 
-  // Reset config when dialog opens
+  // Reset config and merge rules when dialog opens
   useEffect(() => {
     if (isOpen) {
       setConfig(initialConfig);
-      setRulesExpanded(false);
+
+      // Merge config rules with any existing overrides
+      const configDialogRules = configRulesToDialogRules(configRules);
+      const overrideDialogRules = overridesToDialogRules(initialConfig.rule_overrides || []);
+
+      // Apply overrides to config rules
+      const mergedRules = configDialogRules.map((configRule) => {
+        const override = overrideDialogRules.find((o) => o.name === configRule.name);
+        if (override) {
+          return {
+            ...configRule,
+            enabled: override.enabled,
+            action: override.action,
+            modified: true,
+          };
+        }
+        return configRule;
+      });
+
+      // Add any override-only rules (not in config)
+      const configRuleNames = new Set(configDialogRules.map((r) => r.name));
+      const additionalOverrides = overrideDialogRules.filter((o) => !configRuleNames.has(o.name));
+
+      setDialogRules([...mergedRules, ...additionalOverrides]);
+      setRulesExpanded(configRules.length > 0 || (initialConfig.rule_overrides?.length ?? 0) > 0);
       setShowAddRule(false);
       setNewRule(DEFAULT_RULE);
     }
-  }, [isOpen, initialConfig]);
+  }, [isOpen, initialConfig, configRules]);
 
   // Helper to add a new rule
   const handleAddRule = () => {
     if (!newRule.name || !newRule.condition) return;
-    setConfig({
-      ...config,
-      rule_overrides: [...(config.rule_overrides || []), { ...newRule }],
-    });
+    const newDialogRule: DialogRule = {
+      name: newRule.name,
+      conditions: [newRule.condition],
+      action: newRule.action,
+      enabled: newRule.enabled !== false,
+      source: 'override',
+      modified: false,
+    };
+    setDialogRules([...dialogRules, newDialogRule]);
     setNewRule(DEFAULT_RULE);
     setShowAddRule(false);
   };
 
-  // Helper to remove a rule
+  // Helper to remove a rule (only for override/runtime rules)
   const handleRemoveRule = (index: number) => {
-    const rules = [...(config.rule_overrides || [])];
-    rules.splice(index, 1);
-    setConfig({ ...config, rule_overrides: rules });
+    const rule = dialogRules[index];
+    if (rule && rule.source === 'override') {
+      const newRules = [...dialogRules];
+      newRules.splice(index, 1);
+      setDialogRules(newRules);
+    }
   };
 
   // Helper to toggle a rule's enabled state
   const handleToggleRule = (index: number) => {
-    const rules = [...(config.rule_overrides || [])];
-    const currentRule = rules[index];
+    const newRules = [...dialogRules];
+    const currentRule = newRules[index];
     if (currentRule) {
-      rules[index] = { ...currentRule, enabled: currentRule.enabled !== false ? false : true };
-      setConfig({ ...config, rule_overrides: rules });
+      newRules[index] = {
+        ...currentRule,
+        enabled: !currentRule.enabled,
+        modified: currentRule.source === 'config' ? true : currentRule.modified,
+      };
+      setDialogRules(newRules);
+    }
+  };
+
+  // Helper to reset a config rule to its original state
+  const handleResetRule = (index: number) => {
+    const rule = dialogRules[index];
+    if (rule && rule.source === 'config') {
+      const originalRule = configRules.find((r) => r.name === rule.name);
+      if (originalRule) {
+        const newRules = [...dialogRules];
+        newRules[index] = {
+          name: originalRule.name,
+          conditions: originalRule.conditions,
+          action: originalRule.action,
+          enabled: originalRule.enabled,
+          source: 'config',
+          modified: false,
+        };
+        setDialogRules(newRules);
+      }
     }
   };
 
@@ -113,15 +243,30 @@ export const RunConfigDialog: React.FC<RunConfigDialogProps> = ({
 
   if (!isOpen) return null;
 
+  // Build the final config with rule overrides
+  const buildFinalConfig = (): RunConfig => {
+    const ruleOverrides = dialogRulesToOverrides(dialogRules, configRules);
+    return {
+      ...config,
+      rule_overrides: ruleOverrides,
+    };
+  };
+
   const handleStart = () => {
-    onStart(config);
+    onStart(buildFinalConfig());
   };
 
   const handleSave = () => {
     if (onSave) {
-      onSave(config);
+      onSave(buildFinalConfig());
     }
   };
+
+  // Count active rules and modified rules
+  const activeRuleCount = dialogRules.filter((r) => r.enabled).length;
+  const configRuleCount = dialogRules.filter((r) => r.source === 'config').length;
+  const overrideRuleCount = dialogRules.filter((r) => r.source === 'override').length;
+  const modifiedRuleCount = dialogRules.filter((r) => r.source === 'config' && r.modified).length;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -254,7 +399,7 @@ export const RunConfigDialog: React.FC<RunConfigDialogProps> = ({
             </button>
           </div>
 
-          {/* Rules Overrides Section */}
+          {/* Rules Section */}
           <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
             <button
               type="button"
@@ -263,15 +408,20 @@ export const RunConfigDialog: React.FC<RunConfigDialogProps> = ({
             >
               <div>
                 <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                  Rule Overrides
+                  Rules
                 </span>
-                {(config.rule_overrides?.length ?? 0) > 0 && (
+                {dialogRules.length > 0 && (
                   <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">
-                    ({config.rule_overrides?.length} rule{config.rule_overrides?.length !== 1 ? 's' : ''})
+                    ({activeRuleCount}/{dialogRules.length} active)
+                  </span>
+                )}
+                {modifiedRuleCount > 0 && (
+                  <span className="ml-1 text-xs text-yellow-600 dark:text-yellow-400">
+                    ({modifiedRuleCount} modified)
                   </span>
                 )}
                 <p className="text-xs text-gray-500 dark:text-gray-400">
-                  Custom rules for this run only (highest precedence)
+                  Configure which rules apply to this run
                 </p>
               </div>
               {rulesExpanded ? (
@@ -283,53 +433,155 @@ export const RunConfigDialog: React.FC<RunConfigDialogProps> = ({
 
             {rulesExpanded && (
               <div className="mt-3 space-y-3">
-                {/* Existing rules */}
-                {(config.rule_overrides || []).map((rule, index) => (
-                  <div
-                    key={index}
-                    className={`p-3 rounded-lg border ${
-                      rule.enabled !== false
-                        ? 'border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700'
-                        : 'border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-800 opacity-60'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                        {rule.name}
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleToggleRule(index)}
-                          className={`px-2 py-0.5 text-xs rounded ${
-                            rule.enabled !== false
-                              ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300'
-                              : 'bg-gray-200 text-gray-600 dark:bg-gray-600 dark:text-gray-400'
+                {/* Loading state */}
+                {isLoadingRules && dialogRules.length === 0 && (
+                  <div className="flex items-center justify-center py-4 text-gray-500 dark:text-gray-400">
+                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                    <span className="text-sm">Loading rules...</span>
+                  </div>
+                )}
+
+                {/* Config rules section */}
+                {configRuleCount > 0 && (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                      <FileText className="w-3.5 h-3.5" />
+                      <span>From Config ({configRuleCount})</span>
+                    </div>
+                    {dialogRules.filter((r) => r.source === 'config').map((rule, filteredIndex) => {
+                      const originalIndex = dialogRules.findIndex((r) => r.name === rule.name);
+                      return (
+                        <div
+                          key={rule.name}
+                          className={`p-3 rounded-lg border ${
+                            rule.enabled
+                              ? rule.modified
+                                ? 'border-yellow-200 dark:border-yellow-800 bg-yellow-50 dark:bg-yellow-900/20'
+                                : 'border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700'
+                              : 'border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-800 opacity-60'
                           }`}
                         >
-                          {rule.enabled !== false ? 'Enabled' : 'Disabled'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveRule(index)}
-                          className="p-1 text-red-500 hover:text-red-700 dark:hover:text-red-400"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-                    <div className="text-xs text-gray-600 dark:text-gray-400">
-                      <span className={`inline-block px-1.5 py-0.5 rounded mr-2 ${
-                        rule.action === 'deny'
-                          ? 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300'
-                          : 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300'
-                      }`}>
-                        {rule.action.toUpperCase()}
-                      </span>
-                      <code className="bg-gray-200 dark:bg-gray-600 px-1 rounded">{rule.condition}</code>
-                    </div>
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                                {rule.name}
+                              </span>
+                              {rule.modified && (
+                                <span className="text-xs px-1.5 py-0.5 bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300 rounded">
+                                  modified
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {rule.modified && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleResetRule(originalIndex)}
+                                  className="text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+                                  title="Reset to config value"
+                                >
+                                  Reset
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleToggleRule(originalIndex)}
+                                className={`px-2 py-0.5 text-xs rounded transition-colors ${
+                                  rule.enabled
+                                    ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300'
+                                    : 'bg-gray-200 text-gray-600 dark:bg-gray-600 dark:text-gray-400'
+                                }`}
+                              >
+                                {rule.enabled ? 'Enabled' : 'Disabled'}
+                              </button>
+                            </div>
+                          </div>
+                          <div className="text-xs text-gray-600 dark:text-gray-400">
+                            <span className={`inline-block px-1.5 py-0.5 rounded mr-2 ${
+                              rule.action === 'deny'
+                                ? 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300'
+                                : 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300'
+                            }`}>
+                              {rule.action.toUpperCase()}
+                            </span>
+                            <code className="bg-gray-200 dark:bg-gray-600 px-1 rounded">
+                              {rule.conditions.join(' AND ')}
+                            </code>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
-                ))}
+                )}
+
+                {/* Runtime override rules section */}
+                {overrideRuleCount > 0 && (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                      <Zap className="w-3.5 h-3.5" />
+                      <span>Runtime Only ({overrideRuleCount})</span>
+                    </div>
+                    {dialogRules.filter((r) => r.source === 'override').map((rule) => {
+                      const originalIndex = dialogRules.findIndex((r) => r.name === rule.name);
+                      return (
+                        <div
+                          key={rule.name}
+                          className={`p-3 rounded-lg border ${
+                            rule.enabled
+                              ? 'border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20'
+                              : 'border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-800 opacity-60'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                              {rule.name}
+                            </span>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleToggleRule(originalIndex)}
+                                className={`px-2 py-0.5 text-xs rounded transition-colors ${
+                                  rule.enabled
+                                    ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300'
+                                    : 'bg-gray-200 text-gray-600 dark:bg-gray-600 dark:text-gray-400'
+                                }`}
+                              >
+                                {rule.enabled ? 'Enabled' : 'Disabled'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveRule(originalIndex)}
+                                className="p-1 text-red-500 hover:text-red-700 dark:hover:text-red-400"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+                          <div className="text-xs text-gray-600 dark:text-gray-400">
+                            <span className={`inline-block px-1.5 py-0.5 rounded mr-2 ${
+                              rule.action === 'deny'
+                                ? 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300'
+                                : 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300'
+                            }`}>
+                              {rule.action.toUpperCase()}
+                            </span>
+                            <code className="bg-gray-200 dark:bg-gray-600 px-1 rounded">
+                              {rule.conditions.join(' AND ')}
+                            </code>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Empty state */}
+                {!isLoadingRules && dialogRules.length === 0 && (
+                  <div className="text-center py-4 text-gray-500 dark:text-gray-400">
+                    <p className="text-sm">No rules configured</p>
+                    <p className="text-xs mt-1">Add rules below to filter tasks for this run</p>
+                  </div>
+                )}
 
                 {/* Add new rule form */}
                 {showAddRule ? (

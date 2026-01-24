@@ -3,7 +3,8 @@ import { useStateStore } from '../../stores/stateStore';
 import type { RunConfig } from '../../stores/stateStore';
 import { useWebSocket, useAgentFiltering, useResizablePane, useResizableWidth } from '../../hooks';
 import type { StatusFilter } from '../../hooks';
-import { pauseOrch, resumeOrch, getState, getRepositories, activateRepository, getRuns, startRun, stopRun, saveRunConfig } from '../../api/client';
+import { pauseOrch, resumeOrch, getState, getRepositories, activateRepository, getRuns, startRun, stopRun, saveRunConfig, getRules } from '../../api/client';
+import type { Rule } from '../../api/client';
 import { BeadsPane } from '../beads/BeadsPane';
 import { DashboardHeader } from './DashboardHeader';
 import { TerminalPanel } from './TerminalPanel';
@@ -24,6 +25,9 @@ export const Dashboard: React.FC = () => {
   const [isResumeLoading, setIsResumeLoading] = useState(false);
   const [isSavingConfig, setIsSavingConfig] = useState(false);
   const [configDialogMode, setConfigDialogMode] = useState<'start' | 'configure'>('start');
+  // Rules state for run config dialog
+  const [configRulesForDialog, setConfigRulesForDialog] = useState<Rule[]>([]);
+  const [isLoadingConfigRules, setIsLoadingConfigRules] = useState(false);
 
   // Theme state
   const [isDark, setIsDark] = useState(() => {
@@ -314,6 +318,23 @@ export const Dashboard: React.FC = () => {
     }
   }, [agents, handleSelectAgent]);
 
+  // Load rules for the run config dialog
+  const loadRulesForDialog = useCallback(async () => {
+    const activeRepo = repositories.find((r) => r.id === activeRepoId);
+    if (!activeRepo?.path) return;
+
+    setIsLoadingConfigRules(true);
+    try {
+      const response = await getRules(activeRepo.path);
+      setConfigRulesForDialog(response.rules);
+    } catch (error) {
+      console.error('Failed to load rules for dialog:', error);
+      setConfigRulesForDialog([]);
+    } finally {
+      setIsLoadingConfigRules(false);
+    }
+  }, [repositories, activeRepoId]);
+
   // Run control handlers
   const handleCloseRunConfig = useCallback(() => {
     setShowRunConfigDialog(false);
@@ -322,8 +343,9 @@ export const Dashboard: React.FC = () => {
 
   const handleConfigure = useCallback(() => {
     setConfigDialogMode('configure');
+    loadRulesForDialog();
     setShowRunConfigDialog(true);
-  }, [setShowRunConfigDialog]);
+  }, [setShowRunConfigDialog, loadRulesForDialog]);
 
   const handleSaveConfig = useCallback(async (config: RunConfig) => {
     setIsSavingConfig(true);
@@ -573,6 +595,8 @@ export const Dashboard: React.FC = () => {
         initialConfig={runConfig}
         repoName={repositories.find((r) => r.id === activeRepoId)?.name}
         mode={configDialogMode}
+        configRules={configRulesForDialog}
+        isLoadingRules={isLoadingConfigRules}
       />
     </div>
   );

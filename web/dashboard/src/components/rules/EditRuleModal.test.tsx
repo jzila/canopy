@@ -416,6 +416,7 @@ describe('EditRuleModal', () => {
         action: 'deny',
         enabled: true,
         persisted: false, // Always false after edit
+        source: 'config',
       });
     });
 
