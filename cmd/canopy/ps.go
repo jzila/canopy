@@ -83,13 +83,15 @@ type StatsInfo struct {
 
 // WorkerInfo contains information about a worker agent
 type WorkerInfo struct {
-	AgentID     string `json:"agentId"`
-	TaskID      string `json:"taskId"`
-	TaskTitle   string `json:"taskTitle,omitempty"`
-	Status      string `json:"status"`
-	MergeStatus string `json:"mergeStatus,omitempty"`
-	Duration    string `json:"duration"`
-	StartTime   string `json:"startTime,omitempty"`
+	AgentID          string `json:"agentId"`
+	TaskID           string `json:"taskId"`
+	TaskTitle        string `json:"taskTitle,omitempty"`
+	Status           string `json:"status"`
+	MergeStatus      string `json:"mergeStatus,omitempty"`
+	ValidationStatus string `json:"validationStatus,omitempty"`
+	RepairAttempts   int    `json:"repairAttempts,omitempty"`
+	Duration         string `json:"duration"`
+	StartTime        string `json:"startTime,omitempty"`
 }
 
 func runPs(cmd *cobra.Command, args []string) error {
@@ -182,14 +184,16 @@ type StateResponse struct {
 
 // AgentInfo matches the daemon's agent state structure
 type AgentInfo struct {
-	ID          string    `json:"id"`
-	TaskID      string    `json:"task_id"`
-	TaskTitle   string    `json:"task_title"`
-	Status      string    `json:"status"`
-	MergeStatus string    `json:"merge_status"`
-	StartTime   time.Time `json:"start_time"`
-	Duration    float64   `json:"duration"`
-	Archived    bool      `json:"archived"`
+	ID               string    `json:"id"`
+	TaskID           string    `json:"task_id"`
+	TaskTitle        string    `json:"task_title"`
+	Status           string    `json:"status"`
+	MergeStatus      string    `json:"merge_status"`
+	ValidationStatus string    `json:"validation_status"`
+	RepairAttempts   int       `json:"repair_attempts"`
+	StartTime        time.Time `json:"start_time"`
+	Duration         float64   `json:"duration"`
+	Archived         bool      `json:"archived"`
 }
 
 // TaskInfo matches the daemon's task state structure
@@ -279,13 +283,15 @@ func getWorkerInfo() ([]WorkerInfo, error) {
 		}
 
 		workers = append(workers, WorkerInfo{
-			AgentID:     agent.ID,
-			TaskID:      agent.TaskID,
-			TaskTitle:   agent.TaskTitle,
-			Status:      agent.Status,
-			MergeStatus: agent.MergeStatus,
-			Duration:    duration,
-			StartTime:   agent.StartTime.Format("15:04:05"),
+			AgentID:          agent.ID,
+			TaskID:           agent.TaskID,
+			TaskTitle:        agent.TaskTitle,
+			Status:           agent.Status,
+			MergeStatus:      agent.MergeStatus,
+			ValidationStatus: agent.ValidationStatus,
+			RepairAttempts:   agent.RepairAttempts,
+			Duration:         duration,
+			StartTime:        agent.StartTime.Format("15:04:05"),
 		})
 	}
 
@@ -349,7 +355,14 @@ func outputPsTable(info ProcessInfo) error {
 				}
 
 				status := w.Status
-				if w.MergeStatus != "" && w.MergeStatus != "none" {
+				// Show validation status when repairing (takes precedence)
+				if w.ValidationStatus == "repairing" {
+					if w.RepairAttempts > 0 {
+						status = fmt.Sprintf("repairing (%d)", w.RepairAttempts)
+					} else {
+						status = "repairing"
+					}
+				} else if w.MergeStatus != "" && w.MergeStatus != "none" {
 					status = w.MergeStatus
 				}
 
