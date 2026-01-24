@@ -436,6 +436,8 @@ type AgentState struct {
 	TaskTitle       string          `json:"task_title"`                 // Task title for display
 	TaskDescription string          `json:"task_description,omitempty"` // Task description for display
 	RepoID          string          `json:"repo_id,omitempty"`          // Repository this agent is working in
+	Attempt         int             `json:"attempt,omitempty"`          // Current attempt number (1-indexed, 0 means first attempt)
+	MaxRetries      int             `json:"max_retries,omitempty"`      // Maximum retry attempts configured (0 = no retries, -1 = infinite)
 	ParentAgentID   string          `json:"parent_agent_id,omitempty"`  // ID of parent agent if spawned by another agent
 	ChildAgentIDs   []string        `json:"child_agent_ids,omitempty"`  // IDs of child agents spawned by this agent
 	Status          AgentStatus     `json:"status"`                     // Current agent status (legacy)
@@ -1312,6 +1314,15 @@ func (r *RuntimeState) handleAgentStarted(payload map[string]interface{}, timest
 	parentAgentID, _ := payload["parent_agent_id"].(string)
 	repoID, _ := payload["repo_id"].(string)
 
+	// Extract retry information (JSON numbers are float64)
+	var attempt, maxRetries int
+	if attemptF, ok := payload["attempt"].(float64); ok {
+		attempt = int(attemptF)
+	}
+	if maxRetriesF, ok := payload["max_retries"].(float64); ok {
+		maxRetries = int(maxRetriesF)
+	}
+
 	if agentID == "" {
 		return
 	}
@@ -1335,6 +1346,8 @@ func (r *RuntimeState) handleAgentStarted(payload map[string]interface{}, timest
 		TaskTitle:       taskTitle,
 		TaskDescription: taskDescription,
 		RepoID:          repoID,
+		Attempt:         attempt,
+		MaxRetries:      maxRetries,
 		ParentAgentID:   parentAgentID,
 		Status:          AgentStatusRunning,
 		StartTime:       timestamp,

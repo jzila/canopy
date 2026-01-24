@@ -473,14 +473,25 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			delete(o.failureCounts, taskID)
 		} else {
 			o.failureCounts[taskID]++
+			failureCount := o.failureCounts[taskID]
 
 			// Check if retries exhausted
-			if o.config.MaxRetries != -1 && o.failureCounts[taskID] > o.config.MaxRetries {
+			if o.config.MaxRetries != -1 && failureCount > o.config.MaxRetries {
 				// Mark as permanently failed in beads
-				if err := o.beadsClient.Fail(ctx, taskID, fmt.Sprintf("Task failed after %d attempts", o.failureCounts[taskID])); err != nil {
+				if err := o.beadsClient.Fail(ctx, taskID, fmt.Sprintf("Task failed after %d attempts", failureCount)); err != nil {
 					fmt.Fprintf(os.Stderr, "warning: could not mark task %s as failed in beads: %v\n", taskID, err)
 				}
-				fmt.Fprintf(os.Stderr, "ERROR: Task %s has failed %d times and will not be retried\n", taskID, o.failureCounts[taskID])
+				fmt.Fprintf(os.Stderr, "ERROR: Task %s has failed %d times and will not be retried\n", taskID, failureCount)
+			} else if o.config.MaxRetries == -1 || failureCount <= o.config.MaxRetries {
+				// Retry will occur - log retry info
+				maxAttempts := o.config.MaxRetries + 1
+				if o.config.MaxRetries == -1 {
+					fmt.Fprintf(os.Stderr, "[%s] Merge failed (attempt %d/∞): %s. Retrying...\n",
+						taskID, failureCount, result.Error)
+				} else {
+					fmt.Fprintf(os.Stderr, "[%s] Merge failed (attempt %d/%d): %s. Retrying...\n",
+						taskID, failureCount, maxAttempts, result.Error)
+				}
 			}
 		}
 		o.failureCountsMu.Unlock()

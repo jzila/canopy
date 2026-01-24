@@ -540,7 +540,7 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 	}
 
 	// Register callbacks that publish directly to EventBus
-	callbacks := m.createEventCallbacks(runID, config.RepoID)
+	callbacks := m.createEventCallbacks(runID, config.RepoID, orch)
 	orch.SetCallbacks(callbacks)
 
 	// Register state callbacks to track Idle/Active transitions
@@ -837,27 +837,39 @@ func (m *OrchestratorManager) runOrchestrator(ctx context.Context, runState *Run
 
 // createEventCallbacks creates orchestrator event callbacks that publish to the EventBus.
 // These callbacks replace the IPC-based callbacks when the orchestrator runs in the daemon.
-func (m *OrchestratorManager) createEventCallbacks(runID, repoID string) *orchestrator.EventCallbacks {
+func (m *OrchestratorManager) createEventCallbacks(runID, repoID string, orch *orchestrator.Orchestrator) *orchestrator.EventCallbacks {
 	return &orchestrator.EventCallbacks{
 		OnAgentStartFn: func(ctx context.Context, taskID string, task *beads.Task) {
 			agentID := makeAgentID(runID, taskID)
+
+			// Get retry information from orchestrator
+			attempt := orch.GetTaskAttempt(taskID)
+			maxRetries := orch.GetMaxRetries()
 
 			// Record agent ID for parent-child tracking
 			// The orchestrator instance manages this via SetAgentID
 
 			// Publish agent started event - this synchronously creates the agent in RuntimeState
+			payload := map[string]interface{}{
+				"agent_id":         agentID,
+				"run_id":           runID,
+				"task_id":          taskID,
+				"task_title":       task.Title,
+				"task_description": task.Description,
+				"parent_agent_id":  "", // Top-level agents have no parent
+				"repo_id":          repoID,
+			}
+			// Include retry information for UI display
+			if attempt > 0 {
+				payload["attempt"] = attempt
+			}
+			if maxRetries != 0 {
+				payload["max_retries"] = maxRetries
+			}
 			m.eventBus.Publish(events.Event{
 				Type:      events.EventAgentStarted,
 				Timestamp: time.Now(),
-				Payload: map[string]interface{}{
-					"agent_id":         agentID,
-					"run_id":           runID,
-					"task_id":          taskID,
-					"task_title":       task.Title,
-					"task_description": task.Description,
-					"parent_agent_id":  "", // Top-level agents have no parent
-					"repo_id":          repoID,
-				},
+				Payload:   payload,
 			})
 
 			// Transition lifecycle to running state (agent was created by event handler above)
@@ -1209,8 +1221,5 @@ func (m *OrchestratorManager) KillAgent(agentID string) error {
 		return fmt.Errorf("scheduler not available for agent %s", agentID)
 	}
 
-	// Kill expects task ID, not full agent ID
-	// Agent ID format: agent-{runID[:8]}-{taskID}, so parts[2] is the taskID
-	taskID := parts[2]
-	return sched.Kill(taskID)
+	return sched.Kill(agentID)
 }
