@@ -48,11 +48,13 @@ const (
 type OrchestratorState string
 
 const (
-	// OrchestratorIdle means the orchestrator is running but not processing tasks.
+	// OrchestratorOff means no orchestrator instance exists (not activated, not watching).
+	OrchestratorOff OrchestratorState = "off"
+	// OrchestratorIdle means the orchestrator is running, polling for work, but none available.
 	OrchestratorIdle OrchestratorState = "idle"
 	// OrchestratorActive means the orchestrator is actively processing tasks.
 	OrchestratorActive OrchestratorState = "active"
-	// OrchestratorPaused means the orchestrator is paused (tasks queued but not processed).
+	// OrchestratorPaused means the orchestrator is running but scheduler is paused.
 	OrchestratorPaused OrchestratorState = "paused"
 )
 
@@ -155,11 +157,11 @@ func (m *OrchestratorManager) RegisterRepo(repoPath string, repoID string) (*Rep
 	// Create rules engine from config
 	rulesEngine := rules.NewEngine(&cfg.Rules)
 
-	// Create the RepoOrchestrator in IDLE state
+	// Create the RepoOrchestrator in OFF state (registered but not activated)
 	repoOrch := &RepoOrchestrator{
 		RepoPath:    repoPath,
 		RepoID:      repoID,
-		State:       OrchestratorIdle,
+		State:       OrchestratorOff,
 		rulesEngine: rulesEngine,
 	}
 
@@ -168,7 +170,7 @@ func (m *OrchestratorManager) RegisterRepo(repoPath string, repoID string) (*Rep
 		return existing.(*RepoOrchestrator), nil
 	}
 
-	logging.Info("registered repo orchestrator", "repo_path", repoPath, "state", OrchestratorIdle)
+	logging.Info("registered repo orchestrator", "repo_path", repoPath, "state", OrchestratorOff)
 
 	return repoOrch, nil
 }
@@ -450,7 +452,7 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 		if cleanupOnError {
 			m.runsByRepo.Delete(config.WorkDir)
 			repoOrch.mu.Lock()
-			repoOrch.State = OrchestratorIdle
+			repoOrch.State = OrchestratorOff
 			repoOrch.RunID = ""
 			repoOrch.mu.Unlock()
 		}
@@ -599,10 +601,10 @@ func (m *OrchestratorManager) StopRun(runID string) error {
 	now := time.Now()
 	runState.EndTime = &now
 
-	// Also update the RepoOrchestrator state
+	// Also update the RepoOrchestrator state (back to off since orchestrator stopped)
 	if repoOrch := m.GetRepoOrchestrator(runState.RepoPath); repoOrch != nil {
 		repoOrch.mu.Lock()
-		repoOrch.State = OrchestratorIdle
+		repoOrch.State = OrchestratorOff
 		repoOrch.orch = nil
 		repoOrch.cancel = nil
 		repoOrch.mu.Unlock()
@@ -760,13 +762,13 @@ func (m *OrchestratorManager) runOrchestrator(ctx context.Context, runState *Run
 	}
 	runState.mu.Unlock()
 
-	// Transition RepoOrchestrator back to IDLE state
+	// Transition RepoOrchestrator back to OFF state (orchestrator stopped)
 	if repoOrch != nil {
 		repoOrch.mu.Lock()
-		repoOrch.State = OrchestratorIdle
+		repoOrch.State = OrchestratorOff
 		repoOrch.orch = nil
 		repoOrch.cancel = nil
-		// Keep rulesEngine for continued rules access in IDLE state
+		// Keep rulesEngine for continued rules access in OFF state
 		// Reload from config to ensure fresh state
 		if cfg, err := config.LoadConfig(repoOrch.RepoPath); err == nil {
 			repoOrch.rulesEngine = rules.NewEngine(&cfg.Rules)
