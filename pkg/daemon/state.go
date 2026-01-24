@@ -1223,8 +1223,9 @@ func checkLifecycleDivergence(agent *AgentState, event string) {
 
 // makeLifecycleCallback creates a callback that publishes lifecycle state transitions
 // to the EventBus for real-time UI updates. All lifecycle state changes are published
-// via EventLifecycleStateChanged, with EventAgentRunning as an additional event for
-// backwards compatibility when transitioning to the running state.
+// via EventLifecycleStateChanged, including terminal states (completed, failed, etc.).
+// EventAgentRunning is also published for backwards compatibility when transitioning
+// to the running state.
 func (r *RuntimeState) makeLifecycleCallback(agentID string) lifecycle.TransitionCallback {
 	return func(from, to lifecycle.AgentLifecycleState, event lifecycle.AgentEvent) {
 		r.mu.RLock()
@@ -1235,13 +1236,11 @@ func (r *RuntimeState) makeLifecycleCallback(agentID string) lifecycle.Transitio
 			return
 		}
 
-		// Skip publishing for terminal states that are already handled elsewhere
-		// (EventAgentCompleted/EventAgentFailed are sent with full result data)
-		if to == lifecycle.StateCompleted || to == lifecycle.StateFailed {
-			return
-		}
-
-		// Publish the lifecycle state change event for all intermediate states
+		// Publish the lifecycle state change event for all states including terminal states.
+		// This ensures the dashboard receives real-time updates for all state transitions.
+		// Terminal states (completed, failed, etc.) are published here even though
+		// EventAgentCompleted/EventAgentFailed also fire - the dashboard needs both
+		// for full state updates (lifecycle_state from this event, result data from completion).
 		eventBus.Publish(Event{
 			Type:      EventLifecycleStateChanged,
 			Timestamp: time.Now(),

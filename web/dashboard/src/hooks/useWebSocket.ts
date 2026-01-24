@@ -696,8 +696,12 @@ export function useWebSocket() {
             }
             case 'agent:completed': {
               const { agent_id, error, exit_code, duration, input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, cost_usd, files_changed, commits_created } = message.payload;
+              // Determine status and corresponding lifecycle state
+              const status = error ? 'failed' : 'completed';
+              const lifecycle_state = status as import('../stores/stateStore').LifecycleState;
               updateAgent(agent_id, {
-                status: error ? 'failed' : 'completed',
+                status,
+                lifecycle_state,  // Also update lifecycle_state for consistency
                 end_time: message.timestamp,
                 duration,
                 exit_code,
