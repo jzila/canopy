@@ -181,6 +181,16 @@ interface RulesChangedEvent {
     rule?: Rule;
   };
 }
+interface LifecycleStateChangedEvent {
+  type: 'lifecycle:state_changed';
+  timestamp: string;
+  payload: {
+    agent_id: string;
+    lifecycle_state: LifecycleState;
+    previous_state: LifecycleState;
+    event: string;
+  };
+}
 // Backend git commit format
 interface BackendGitCommit {
   hash: string;
@@ -342,7 +352,8 @@ type EventType =
   | OrchStateChangedEvent
   | RunStartedEvent
   | RunCompletedEvent
-  | RulesChangedEvent;
+  | RulesChangedEvent
+  | LifecycleStateChangedEvent;
 const MAX_BACKOFF = 30000; // 30 seconds
 const INITIAL_BACKOFF = 1000; // 1 second
 function getWebSocketURL(): string {
@@ -773,6 +784,15 @@ export function useWebSocket() {
               const { action, rule } = message.payload;
               console.log('[WebSocket] Rules changed:', action, rule?.name);
               // Rules changes are informational for now - UI can fetch updated rules if needed
+              break;
+            }
+            case 'lifecycle:state_changed': {
+              const { agent_id, lifecycle_state, previous_state } = message.payload;
+              console.log('[WebSocket] Lifecycle state changed:', agent_id, previous_state, '->', lifecycle_state);
+              // Update the agent's lifecycle_state for real-time UI updates
+              updateAgent(agent_id, {
+                lifecycle_state: lifecycle_state as import('../stores/stateStore').LifecycleState,
+              });
               break;
             }
             default:

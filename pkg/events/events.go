@@ -34,7 +34,8 @@ const (
 	EventOrchResumed        EventType = "orch:resumed"
 	EventOrchStateChanged   EventType = "orch:state_changed" // Orchestrator state changed (off/idle/active/paused)
 	EventStatsUpdated       EventType = "stats:updated"
-	EventRulesChanged       EventType = "rules:changed" // Rules configuration changed at runtime
+	EventRulesChanged            EventType = "rules:changed"             // Rules configuration changed at runtime
+	EventLifecycleStateChanged   EventType = "lifecycle:state_changed"   // Agent lifecycle state transition
 )
 
 // IsCritical returns true if this event type must never be dropped.
@@ -47,7 +48,8 @@ func (et EventType) IsCritical() bool {
 		EventAgentDone, EventAgentFailed,
 		EventAgentMergeStatus,
 		EventOrchPaused, EventOrchResumed, EventOrchStateChanged,
-		EventTaskUpdated:
+		EventTaskUpdated,
+		EventLifecycleStateChanged:
 		return true
 	default:
 		return false

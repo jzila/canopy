@@ -1198,8 +1198,9 @@ func checkLifecycleDivergence(agent *AgentState, event string) {
 }
 
 // makeLifecycleCallback creates a callback that publishes lifecycle state transitions
-// to the EventBus for real-time UI updates. The callback maps lifecycle state changes
-// to the appropriate event types (e.g., starting→running publishes EventAgentRunning).
+// to the EventBus for real-time UI updates. All lifecycle state changes are published
+// via EventLifecycleStateChanged, with EventAgentRunning as an additional event for
+// backwards compatibility when transitioning to the running state.
 func (r *RuntimeState) makeLifecycleCallback(agentID string) lifecycle.TransitionCallback {
 	return func(from, to lifecycle.AgentLifecycleState, event lifecycle.AgentEvent) {
 		r.mu.RLock()
@@ -1210,34 +1211,38 @@ func (r *RuntimeState) makeLifecycleCallback(agentID string) lifecycle.Transitio
 			return
 		}
 
-		// Map lifecycle transitions to event types
-		var eventType EventType
-		switch to {
-		case lifecycle.StateRunning:
-			// starting → running
-			eventType = EventAgentRunning
-		case lifecycle.StateCompleted:
-			// Various states → completed (already handled by EventAgentCompleted elsewhere)
-			return
-		case lifecycle.StateFailed:
-			// Various states → failed (already handled by EventAgentFailed elsewhere)
-			return
-		default:
-			// For other state transitions, we don't have specific event types yet.
-			// The dashboard receives these via periodic state:sync.
+		// Skip publishing for terminal states that are already handled elsewhere
+		// (EventAgentCompleted/EventAgentFailed are sent with full result data)
+		if to == lifecycle.StateCompleted || to == lifecycle.StateFailed {
 			return
 		}
 
+		// Publish the lifecycle state change event for all intermediate states
 		eventBus.Publish(Event{
-			Type:      eventType,
+			Type:      EventLifecycleStateChanged,
 			Timestamp: time.Now(),
 			Payload: map[string]interface{}{
-				"agent_id":       agentID,
+				"agent_id":        agentID,
 				"lifecycle_state": to.String(),
-				"previous_state": from.String(),
-				"event":          event.String(),
+				"previous_state":  from.String(),
+				"event":           event.String(),
 			},
 		})
+
+		// Also publish EventAgentRunning for backwards compatibility
+		// This ensures existing code that listens for agent:running still works
+		if to == lifecycle.StateRunning {
+			eventBus.Publish(Event{
+				Type:      EventAgentRunning,
+				Timestamp: time.Now(),
+				Payload: map[string]interface{}{
+					"agent_id":        agentID,
+					"lifecycle_state": to.String(),
+					"previous_state":  from.String(),
+					"event":           event.String(),
+				},
+			})
+		}
 	}
 }
 
@@ -1282,6 +1287,8 @@ func (r *RuntimeState) handleEvent(event Event) {
 	case EventStatsUpdated:
 		// Stats updates are informational, we recalculate from agents
 		r.UpdateStats()
+	case EventLifecycleStateChanged:
+		r.handleLifecycleStateChanged(payload)
 	}
 }
 
@@ -1758,69 +1765,31 @@ func transitionLifecycleForMergeStatus(agent *AgentState, mergeStatus string, ha
 				"error", err,
 			)
 		}
+	}
+}
+
+// handleLifecycleStateChanged updates the agent's lifecycle state when notified
+// of a lifecycle state transition. This keeps the RuntimeState in sync with
+// the lifecycle state machine's transitions for real-time UI updates.
+func (r *RuntimeState) handleLifecycleStateChanged(payload map[string]interface{}) {
+	agentID, _ := payload["agent_id"].(string)
+	if agentID == "" {
 		return
 	}
 
-	// Recovery: When merge status is terminal but lifecycle is stuck in an intermediate state,
-	// force-transition to the correct terminal state. This handles cases where events arrive
-	// out of order or intermediate statuses were missed (e.g., MergeStatusMerging never received).
-	currentState := lc.State()
-	if currentState.IsTerminal() {
-		return // Already in a terminal state, no recovery needed
-	}
-
-	var targetState lifecycle.AgentLifecycleState
-	var recoveryEvent lifecycle.AgentEvent
-
-	switch MergeStatus(mergeStatus) {
-	case MergeStatusMerged, MergeStatusResolved, MergeStatusSkipped:
-		// Merge succeeded - determine final state based on validation
-		switch validationStatus {
-		case "", "skipped", "passed":
-			targetState = lifecycle.StateCompleted
-			recoveryEvent = lifecycle.EventMergeSuccess
-		case "failed":
-			targetState = lifecycle.StateNeedsAttention
-			recoveryEvent = lifecycle.EventValidationFailed
-		case "running", "pending":
-			// Validation in progress - force to validating state
-			targetState = lifecycle.StateValidating
-			recoveryEvent = lifecycle.EventMergeSuccess
-			ctx.ValidationEnabled = true
-		case "repairing":
-			targetState = lifecycle.StateRepairing
-			recoveryEvent = lifecycle.EventValidationFailed
-			ctx.RepairEnabled = true
-		default:
-			targetState = lifecycle.StateCompleted
-			recoveryEvent = lifecycle.EventMergeSuccess
-		}
-
-	case MergeStatusMergedNeedsRepair:
-		// Merge succeeded but validation failed and repair exhausted
-		targetState = lifecycle.StateNeedsAttention
-		recoveryEvent = lifecycle.EventValidationFailed
-
-	case MergeStatusFailed:
-		// Merge failed
-		targetState = lifecycle.StateFailed
-		recoveryEvent = lifecycle.EventMergeFailed
-
-	default:
-		// Non-terminal merge status, no recovery needed
+	lifecycleState, _ := payload["lifecycle_state"].(string)
+	if lifecycleState == "" {
 		return
 	}
 
-	if targetState != "" && targetState != currentState {
-		oldState := lc.SetState(targetState, recoveryEvent, ctx)
-		logging.Warn("lifecycle state recovered from mismatch",
-			"agent_id", agentID,
-			"old_state", oldState,
-			"new_state", targetState,
-			"merge_status", mergeStatus,
-			"validation_status", validationStatus,
-		)
+	agent := r.GetAgent(agentID)
+	if agent == nil {
+		return
 	}
+
+	agent.Update(func(a *AgentState) {
+		a.LifecycleState = lifecycleState
+	})
 }
 
 func (r *RuntimeState) handleAgentCompleted(payload map[string]interface{}, timestamp time.Time) {
