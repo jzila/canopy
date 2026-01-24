@@ -61,8 +61,9 @@ func init() {
 
 // ProcessInfo contains information about canopy processes
 type ProcessInfo struct {
-	Daemon  *DaemonInfo  `json:"daemon,omitempty"`
-	Workers []WorkerInfo `json:"workers,omitempty"`
+	Daemon     *DaemonInfo     `json:"daemon,omitempty"`
+	Workers    []WorkerInfo    `json:"workers,omitempty"`
+	MergeQueue *MergeQueueInfo `json:"merge_queue,omitempty"`
 }
 
 // DaemonInfo contains information about the daemon process
@@ -113,6 +114,23 @@ type LifecycleHistoryEntry struct {
 	Timestamp string `json:"timestamp"`
 }
 
+// MergeQueueInfo contains the merge queue state
+type MergeQueueInfo struct {
+	Entries     []MergeQueueEntry `json:"entries"`
+	QueueLength int               `json:"queue_length"`
+	IsPaused    bool              `json:"is_paused"`
+	PauseState  string            `json:"pause_state"`
+}
+
+// MergeQueueEntry represents an item in the merge queue
+type MergeQueueEntry struct {
+	AgentID   string `json:"agent_id"`
+	TaskID    string `json:"task_id"`
+	TaskTitle string `json:"task_title,omitempty"`
+	Status    string `json:"status"` // merging, waiting
+	Position  int    `json:"position"`
+}
+
 func runPs(cmd *cobra.Command, args []string) error {
 	info := ProcessInfo{}
 
@@ -127,12 +145,13 @@ func runPs(cmd *cobra.Command, args []string) error {
 
 	// Get worker info unless daemon-only is specified
 	if !psDaemonOnly {
-		workers, err := getWorkerInfo()
+		workers, mergeQueue, err := getWorkerInfo()
 		if err != nil && info.Daemon != nil && info.Daemon.Running {
 			// Only report error if daemon is running but we failed to get workers
 			return fmt.Errorf("failed to get worker info: %w", err)
 		}
 		info.Workers = workers
+		info.MergeQueue = mergeQueue
 	}
 
 	if psJSON {
@@ -209,6 +228,7 @@ type StateResponse struct {
 	StartTime         time.Time              `json:"start_time"`
 	OrchestratorState string                 `json:"orchestrator_state,omitempty"`
 	ActiveAgentCount  int                    `json:"active_agent_count,omitempty"`
+	MergeQueue        *MergeQueueInfo        `json:"merge_queue,omitempty"`
 	Extra             map[string]interface{} `json:"-"` // For capturing additional fields like active_repo_id
 }
 
@@ -291,17 +311,17 @@ func queryDaemonState(port int) (*StateResponse, error) {
 	return &state, nil
 }
 
-func getWorkerInfo() ([]WorkerInfo, error) {
+func getWorkerInfo() ([]WorkerInfo, *MergeQueueInfo, error) {
 	// Check if daemon is running
 	running, _, err := daemon.IsRunning()
 	if err != nil || !running {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	// Query daemon for agent info
 	state, err := queryDaemonState(8080)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var workers []WorkerInfo
@@ -350,7 +370,7 @@ func getWorkerInfo() ([]WorkerInfo, error) {
 		})
 	}
 
-	return workers, nil
+	return workers, state.MergeQueue, nil
 }
 
 func outputPsJSON(info ProcessInfo) error {
@@ -441,7 +461,33 @@ func outputPsTable(info ProcessInfo) error {
 		fmt.Println()
 	}
 
+	// Show merge queue section unless daemon-only
+	if !psDaemonOnly {
+		outputMergeQueue(info.MergeQueue)
+	}
+
 	return nil
+}
+
+// outputMergeQueue displays the merge queue state
+func outputMergeQueue(mq *MergeQueueInfo) {
+	if mq == nil || len(mq.Entries) == 0 {
+		fmt.Println("Merge Queue: empty")
+		fmt.Println()
+		return
+	}
+
+	fmt.Println("Merge Queue:")
+	for _, entry := range mq.Entries {
+		// Format: Position N: agent-id (task-id) - status
+		fmt.Printf("  Position %d: %s (%s) - %s\n",
+			entry.Position,
+			truncateID(entry.AgentID, 20),
+			truncateID(entry.TaskID, 16),
+			entry.Status,
+		)
+	}
+	fmt.Println()
 }
 
 // formatLifecycleStatus returns a display string for the agent's status.
