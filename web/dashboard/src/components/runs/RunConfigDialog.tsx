@@ -448,7 +448,7 @@ export const RunConfigDialog: React.FC<RunConfigDialogProps> = ({
                       <FileText className="w-3.5 h-3.5" />
                       <span>From Config ({configRuleCount})</span>
                     </div>
-                    {dialogRules.filter((r) => r.source === 'config').map((rule, filteredIndex) => {
+                    {dialogRules.filter((r) => r.source === 'config').map((rule) => {
                       const originalIndex = dialogRules.findIndex((r) => r.name === rule.name);
                       return (
                         <div

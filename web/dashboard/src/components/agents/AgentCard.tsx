@@ -27,15 +27,6 @@ const formatRetryBadge = (attempt: number, maxRetries: number): string | null =>
   return `Attempt ${attempt} of ${maxRetries + 1}`;
 };
 
-const STATUS_COLORS: Record<string, string> = {
-  starting: 'bg-yellow-500',
-  running: 'bg-blue-500',
-  completed: 'bg-green-500',
-  failed: 'bg-red-500',
-  timed_out: 'bg-orange-500',
-  cancelled: 'bg-gray-500',
-};
-
 // Lifecycle state colors - more detailed states from the state machine
 const LIFECYCLE_COLORS: Record<LifecycleState, string> = {
   starting: 'bg-yellow-500',

@@ -490,7 +490,6 @@ export const Dashboard: React.FC = () => {
 
   const selectedAgent = selectedAgentId ? agents[selectedAgentId] : null;
   const totalAgentCount = Object.keys(agents).length;
-  const currentRunId = useStateStore((state) => state.currentRunId);
 
   return (
     <div className="flex flex-col h-screen bg-gray-50 dark:bg-gray-900">
