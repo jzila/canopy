@@ -284,9 +284,14 @@ func (o *Orchestrator) setupInternalCallbacks() {
 			// Delegate merge to coordinator - it handles queueing, merge, and task completion
 			resp := o.mergeCoordinator.EnqueueMerge(ctx, result)
 
-			// Log merge result if verbose and there was an error
-			if resp != nil && !resp.Success && o.config.Verbose {
-				fmt.Fprintf(os.Stderr, "[%s] merge failed: %s\n", taskID, resp.Error)
+			// If merge failed, mark result as failed so failure count is incremented
+			// and retry limit applies. Without this, merge failures would retry forever.
+			if resp != nil && !resp.Success {
+				result.Success = false
+				result.Error = resp.Error
+				if o.config.Verbose {
+					fmt.Fprintf(os.Stderr, "[%s] merge failed: %s\n", taskID, resp.Error)
+				}
 			}
 		},
 		OnFailFn: func(ctx context.Context, taskID string, result *agent.Result) {
