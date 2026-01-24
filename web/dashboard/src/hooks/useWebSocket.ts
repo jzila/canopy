@@ -183,6 +183,16 @@ interface RulesChangedEvent {
     rule?: Rule;
   };
 }
+interface ConfigUpdatedEvent {
+  type: 'config:updated';
+  timestamp: string;
+  payload: {
+    concurrency: number;
+    max_priority: number;
+    use_bwrap: boolean;
+    max_retries: number;
+  };
+}
 interface LifecycleStateChangedEvent {
   type: 'lifecycle:state_changed';
   timestamp: string;
@@ -358,7 +368,8 @@ type EventType =
   | RunStartedEvent
   | RunCompletedEvent
   | RulesChangedEvent
-  | LifecycleStateChangedEvent;
+  | LifecycleStateChangedEvent
+  | ConfigUpdatedEvent;
 const MAX_BACKOFF = 30000; // 30 seconds
 const INITIAL_BACKOFF = 1000; // 1 second
 function getWebSocketURL(): string {
@@ -394,6 +405,8 @@ export function useWebSocket() {
     // Optimistic update confirmations
     confirmPause,
     confirmResume,
+    // Config updates
+    updateRunConfigFromServer,
   } = useStateStore();
 
   // Helper to check if an event is stale (occurred before the last state:sync snapshot)
@@ -820,6 +833,12 @@ export function useWebSocket() {
               // Rules changes are informational for now - UI can fetch updated rules if needed
               break;
             }
+            case 'config:updated': {
+              const { concurrency, max_priority, use_bwrap, max_retries } = message.payload;
+              console.log('[WebSocket] Config updated:', concurrency, max_priority, use_bwrap, max_retries);
+              updateRunConfigFromServer({ concurrency, max_priority, use_bwrap, max_retries });
+              break;
+            }
             case 'lifecycle:state_changed': {
               const { agent_id, lifecycle_state, previous_state } = message.payload;
               console.log('[WebSocket] Lifecycle state changed:', agent_id, previous_state, '->', lifecycle_state);
@@ -866,7 +885,7 @@ export function useWebSocket() {
         }, backoffTime);
       }
     }
-  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, appendGitCommit, syncState, setPauseState, setActiveRepo, updateAgentMergeStatus, addRun, updateRun, clearOutput, setCurrentRunId, setOrchestratorState, confirmPause, confirmResume, isStaleEvent]);
+  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, appendGitCommit, syncState, setPauseState, setActiveRepo, updateAgentMergeStatus, addRun, updateRun, clearOutput, setCurrentRunId, setOrchestratorState, confirmPause, confirmResume, isStaleEvent, updateRunConfigFromServer]);
   const disconnect = useCallback(() => {
     isManuallyClosedRef.current = true;
     if (reconnectTimeoutRef.current !== null) {

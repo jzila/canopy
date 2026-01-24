@@ -3,22 +3,30 @@ import { X, Settings, Loader2 } from 'lucide-react';
 import type { RunConfig } from '../../stores/stateStore';
 import { DEFAULT_RUN_CONFIG } from '../../stores/stateStore';
 
+type DialogMode = 'start' | 'configure';
+
 interface RunConfigDialogProps {
   isOpen: boolean;
   onClose: () => void;
   onStart: (config: RunConfig) => void;
+  onSave?: (config: RunConfig) => void;
   isStarting: boolean;
+  isSaving?: boolean;
   initialConfig?: RunConfig;
   repoName?: string | undefined;
+  mode?: DialogMode;
 }
 
 export const RunConfigDialog: React.FC<RunConfigDialogProps> = ({
   isOpen,
   onClose,
   onStart,
+  onSave,
   isStarting,
+  isSaving = false,
   initialConfig = DEFAULT_RUN_CONFIG,
   repoName,
+  mode = 'start',
 }) => {
   const [config, setConfig] = useState<RunConfig>(initialConfig);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -30,16 +38,18 @@ export const RunConfigDialog: React.FC<RunConfigDialogProps> = ({
     }
   }, [isOpen, initialConfig]);
 
+  const isProcessing = isStarting || isSaving;
+
   // Handle escape key
   useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && isOpen && !isStarting) {
+      if (event.key === 'Escape' && isOpen && !isProcessing) {
         onClose();
       }
     };
     document.addEventListener('keydown', handleEscape);
     return () => document.removeEventListener('keydown', handleEscape);
-  }, [isOpen, isStarting, onClose]);
+  }, [isOpen, isProcessing, onClose]);
 
   // Handle click outside
   useEffect(() => {
@@ -47,7 +57,7 @@ export const RunConfigDialog: React.FC<RunConfigDialogProps> = ({
       if (
         dialogRef.current &&
         !dialogRef.current.contains(event.target as Node) &&
-        !isStarting
+        !isProcessing
       ) {
         onClose();
       }
@@ -57,12 +67,18 @@ export const RunConfigDialog: React.FC<RunConfigDialogProps> = ({
       document.addEventListener('mousedown', handleClickOutside);
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
-  }, [isOpen, isStarting, onClose]);
+  }, [isOpen, isProcessing, onClose]);
 
   if (!isOpen) return null;
 
   const handleStart = () => {
     onStart(config);
+  };
+
+  const handleSave = () => {
+    if (onSave) {
+      onSave(config);
+    }
   };
 
   return (
@@ -76,12 +92,12 @@ export const RunConfigDialog: React.FC<RunConfigDialogProps> = ({
           <div className="flex items-center gap-3">
             <Settings className="w-5 h-5 text-gray-600 dark:text-gray-400" />
             <h2 className="text-lg font-medium text-gray-900 dark:text-gray-100">
-              Start Run
+              {mode === 'configure' ? 'Configure Run Settings' : 'Start Run'}
             </h2>
           </div>
           <button
             onClick={onClose}
-            disabled={isStarting}
+            disabled={isProcessing}
             className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors disabled:opacity-50"
           >
             <X className="w-5 h-5 text-gray-500 dark:text-gray-400" />
@@ -201,25 +217,42 @@ export const RunConfigDialog: React.FC<RunConfigDialogProps> = ({
         <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-200 dark:border-gray-700">
           <button
             onClick={onClose}
-            disabled={isStarting}
+            disabled={isProcessing}
             className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors disabled:opacity-50"
           >
             Cancel
           </button>
-          <button
-            onClick={handleStart}
-            disabled={isStarting}
-            className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 flex items-center gap-2"
-          >
-            {isStarting ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Starting...
-              </>
-            ) : (
-              'Start Run'
-            )}
-          </button>
+          {mode === 'configure' ? (
+            <button
+              onClick={handleSave}
+              disabled={isSaving}
+              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 flex items-center gap-2"
+            >
+              {isSaving ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                'Save'
+              )}
+            </button>
+          ) : (
+            <button
+              onClick={handleStart}
+              disabled={isStarting}
+              className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 flex items-center gap-2"
+            >
+              {isStarting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Starting...
+                </>
+              ) : (
+                'Start Run'
+              )}
+            </button>
+          )}
         </div>
       </div>
     </div>

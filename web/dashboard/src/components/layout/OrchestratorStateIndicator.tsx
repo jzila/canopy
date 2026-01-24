@@ -21,6 +21,7 @@ export interface OrchestratorStateIndicatorProps {
   onDeactivate: () => void;
   onPause: () => void;
   onResume: () => void;
+  onConfigure: () => void;
 }
 
 /**
@@ -103,6 +104,7 @@ export const OrchestratorStateIndicator: React.FC<OrchestratorStateIndicatorProp
   onDeactivate,
   onPause,
   onResume,
+  onConfigure,
 }) => {
   // Use transitioning icon/text during activation/deactivation for visual feedback
   const stateIcon = isActivating || isDeactivating ? '\u25D4' : getStateIcon(orchestratorState); // Half-filled circle during transitions
@@ -122,6 +124,7 @@ export const OrchestratorStateIndicator: React.FC<OrchestratorStateIndicatorProp
   // Hide Activate while activating to prevent "double button" appearance during transition
   // Hide other controls while deactivating since we're transitioning to 'off'
   const showActivateButton = orchestratorState === 'off' && !isActivating;
+  const showConfigureButton = orchestratorState === 'off' && !isActivating;
   const showPauseButton = (orchestratorState === 'idle' || orchestratorState === 'active') && !isDeactivating;
   const showResumeButton = orchestratorState === 'paused' && !isDeactivating;
   const showDeactivateButton = orchestratorState !== 'off' && !isDeactivating;
@@ -163,6 +166,24 @@ export const OrchestratorStateIndicator: React.FC<OrchestratorStateIndicatorProp
             ) : (
               <span className="text-sm">Activate</span>
             )}
+          </button>
+        )}
+
+        {showConfigureButton && (
+          <button
+            onClick={onConfigure}
+            disabled={disabled}
+            title={!connected ? 'Not connected to server' : 'Configure run settings'}
+            className={`
+              flex items-center gap-2 px-4 h-12 rounded-lg
+              font-medium transition-colors border
+              ${disabled
+                ? 'border-gray-300 dark:border-gray-600 text-gray-400 dark:text-gray-500 opacity-50 cursor-not-allowed'
+                : 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
+              }
+            `}
+          >
+            <span className="text-sm">Configure</span>
           </button>
         )}
 

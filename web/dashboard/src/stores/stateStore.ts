@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { Repository, MergeQueueState, Run, ActiveRunStatus, Rule } from '../api/client';
+import { getRunConfig } from '../api/client';
 
 // Types based on Go backend structures
 
@@ -344,6 +345,10 @@ interface StateStore {
   rollbackResume: (error: string) => void;
 
   clearLastError: () => void;
+
+  // Config persistence actions
+  loadSavedConfig: () => Promise<void>;
+  updateRunConfigFromServer: (config: RunConfig) => void;
 }
 
 // Initial stats
@@ -979,4 +984,34 @@ export const useStateStore = create<StateStore>((set) => ({
     }),
 
   clearLastError: () => set({ lastError: null }),
+
+  // Config persistence actions
+  loadSavedConfig: async () => {
+    try {
+      const response = await getRunConfig();
+      if (!response.error) {
+        set({
+          runConfig: {
+            concurrency: response.concurrency,
+            max_priority: response.max_priority,
+            use_bwrap: response.use_bwrap,
+            max_retries: response.max_retries,
+          },
+        });
+      }
+    } catch (error) {
+      console.error('Failed to load saved run config:', error);
+      // Keep default config on error
+    }
+  },
+
+  updateRunConfigFromServer: (config) =>
+    set({
+      runConfig: {
+        concurrency: config.concurrency,
+        max_priority: config.max_priority,
+        use_bwrap: config.use_bwrap,
+        max_retries: config.max_retries,
+      },
+    }),
 }));

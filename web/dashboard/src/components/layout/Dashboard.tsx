@@ -3,7 +3,7 @@ import { useStateStore } from '../../stores/stateStore';
 import type { RunConfig } from '../../stores/stateStore';
 import { useWebSocket, useAgentFiltering, useResizablePane, useResizableWidth } from '../../hooks';
 import type { StatusFilter } from '../../hooks';
-import { pauseOrch, resumeOrch, getState, getRepositories, activateRepository, getRuns, startRun, stopRun } from '../../api/client';
+import { pauseOrch, resumeOrch, getState, getRepositories, activateRepository, getRuns, startRun, stopRun, saveRunConfig } from '../../api/client';
 import { BeadsPane } from '../beads/BeadsPane';
 import { DashboardHeader } from './DashboardHeader';
 import { TerminalPanel } from './TerminalPanel';
@@ -22,6 +22,8 @@ export const Dashboard: React.FC = () => {
   // Orchestrator control state
   const [isPauseLoading, setIsPauseLoading] = useState(false);
   const [isResumeLoading, setIsResumeLoading] = useState(false);
+  const [isSavingConfig, setIsSavingConfig] = useState(false);
+  const [configDialogMode, setConfigDialogMode] = useState<'start' | 'configure'>('start');
 
   // Theme state
   const [isDark, setIsDark] = useState(() => {
@@ -146,6 +148,8 @@ export const Dashboard: React.FC = () => {
   const runConfig = useStateStore((state) => state.runConfig);
   const showRunConfigDialog = useStateStore((state) => state.showRunConfigDialog);
   const setShowRunConfigDialog = useStateStore((state) => state.setShowRunConfigDialog);
+  const setRunConfig = useStateStore((state) => state.setRunConfig);
+  const loadSavedConfig = useStateStore((state) => state.loadSavedConfig);
   // Optimistic update actions
   const startOptimisticRun = useStateStore((state) => state.startOptimisticRun);
   const confirmRunStarted = useStateStore((state) => state.confirmRunStarted);
@@ -191,6 +195,9 @@ export const Dashboard: React.FC = () => {
         }
 
         setRepositories(repoResponse.repositories, activeId);
+
+        // Load saved run configuration
+        await loadSavedConfig();
       } catch (error) {
         console.error('Failed to load initial state:', error);
         // Attempt to load repositories separately if combined fetch failed
@@ -208,7 +215,7 @@ export const Dashboard: React.FC = () => {
     };
 
     loadInitialState();
-  }, [syncState, setRepositories]);
+  }, [syncState, setRepositories, loadSavedConfig]);
 
   // Load runs when activeRepoId changes
   useEffect(() => {
@@ -306,7 +313,38 @@ export const Dashboard: React.FC = () => {
   // Run control handlers
   const handleCloseRunConfig = useCallback(() => {
     setShowRunConfigDialog(false);
+    setConfigDialogMode('start');
   }, [setShowRunConfigDialog]);
+
+  const handleConfigure = useCallback(() => {
+    setConfigDialogMode('configure');
+    setShowRunConfigDialog(true);
+  }, [setShowRunConfigDialog]);
+
+  const handleSaveConfig = useCallback(async (config: RunConfig) => {
+    setIsSavingConfig(true);
+    try {
+      const response = await saveRunConfig({
+        concurrency: config.concurrency,
+        max_priority: config.max_priority,
+        use_bwrap: config.use_bwrap,
+        max_retries: config.max_retries,
+      });
+
+      if (!response.error) {
+        // Update local state (WebSocket event will also update it for cross-tab sync)
+        setRunConfig(config);
+        setShowRunConfigDialog(false);
+        setConfigDialogMode('start');
+      } else {
+        console.error('Failed to save config:', response.error);
+      }
+    } catch (error) {
+      console.error('Failed to save config:', error);
+    } finally {
+      setIsSavingConfig(false);
+    }
+  }, [setRunConfig, setShowRunConfigDialog]);
 
   const handleStartRun = useCallback(async (config: RunConfig) => {
     const activeRepo = repositories.find((repo) => repo.id === activeRepoId);
@@ -453,6 +491,7 @@ export const Dashboard: React.FC = () => {
         onDeactivate={handleDeactivate}
         onPause={handlePause}
         onResume={handleResume}
+        onConfigure={handleConfigure}
         stats={stats}
       />
 
@@ -523,9 +562,12 @@ export const Dashboard: React.FC = () => {
         isOpen={showRunConfigDialog}
         onClose={handleCloseRunConfig}
         onStart={handleStartRun}
+        onSave={handleSaveConfig}
         isStarting={isStartingRun}
+        isSaving={isSavingConfig}
         initialConfig={runConfig}
         repoName={repositories.find((r) => r.id === activeRepoId)?.name}
+        mode={configDialogMode}
       />
     </div>
   );

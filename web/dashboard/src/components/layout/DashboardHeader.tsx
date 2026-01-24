@@ -45,6 +45,7 @@ export interface DashboardHeaderProps {
   onDeactivate: () => void;
   onPause: () => void;
   onResume: () => void;
+  onConfigure: () => void;
 
   // Stats
   stats: Stats;
@@ -94,6 +95,7 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
   onDeactivate,
   onPause,
   onResume,
+  onConfigure,
   stats,
 }) => {
   return (
@@ -131,6 +133,7 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
             onDeactivate={onDeactivate}
             onPause={onPause}
             onResume={onResume}
+            onConfigure={onConfigure}
           />
 
           {/* Separator */}

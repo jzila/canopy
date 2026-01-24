@@ -627,4 +627,40 @@ export async function getRulesSettings(repoPath: string): Promise<RulesSettingsR
   return fetchJson<RulesSettingsResponse>(`/api/repos/${encodeURIComponent(repoPath)}/config/rules`);
 }
 
+// Run configuration API types - matches Go backend (pkg/daemon/orchestration_handler.go)
+
+export interface RunConfigApiResponse {
+  concurrency: number;
+  max_priority: number;
+  use_bwrap: boolean;
+  max_retries: number;
+  error?: string;
+}
+
+export interface RunConfigApiRequest {
+  concurrency: number;
+  max_priority: number;
+  use_bwrap: boolean;
+  max_retries: number;
+}
+
+/**
+ * Get the saved run configuration for the current repository.
+ * Returns defaults if no configuration has been saved.
+ */
+export async function getRunConfig(): Promise<RunConfigApiResponse> {
+  return fetchJson<RunConfigApiResponse>('/api/config');
+}
+
+/**
+ * Save run configuration for the current repository.
+ * Broadcasts config_updated WebSocket event to sync across tabs.
+ */
+export async function saveRunConfig(config: RunConfigApiRequest): Promise<RunConfigApiResponse> {
+  return fetchJson<RunConfigApiResponse>('/api/config', {
+    method: 'PUT',
+    body: JSON.stringify(config),
+  });
+}
+
 export { ApiError };
