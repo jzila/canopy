@@ -12,6 +12,7 @@ import (
 
 	"github.com/jzila/canopy/pkg/beads"
 	"github.com/jzila/canopy/pkg/ipc"
+	"github.com/jzila/canopy/pkg/lifecycle"
 	"github.com/jzila/canopy/pkg/merge"
 	"github.com/jzila/canopy/pkg/metrics"
 	"github.com/jzila/canopy/pkg/repairagent"
@@ -19,6 +20,11 @@ import (
 	"github.com/jzila/canopy/pkg/sandbox"
 	"github.com/jzila/canopy/pkg/validation"
 )
+
+// LifecycleTransitionFunc is called to transition an agent's lifecycle state.
+// The processor calls this function to notify the daemon of state transitions.
+// Parameters: agentID, event, and transition context.
+type LifecycleTransitionFunc func(agentID string, event lifecycle.AgentEvent, ctx lifecycle.TransitionContext) error
 
 // Processor handles merge operations from the queue.
 // It processes merge requests sequentially, spawning resolver agents when conflicts occur.
@@ -39,6 +45,9 @@ type Processor struct {
 	repairAgent      *repairagent.RepairAgent     // Repair agent for fixing validation failures
 	historyRecorder  *HistoryRecorder             // History recorder for audit trail
 	sandboxConfig    *sandbox.SandboxConfig       // Sandbox configuration for repair agents
+
+	// Lifecycle state machine integration
+	lifecycleTransition LifecycleTransitionFunc // Callback to transition agent lifecycle state
 }
 
 // NewProcessor creates a new merge processor.
@@ -94,6 +103,40 @@ func (p *Processor) SetValidationConfig(config *validation.ValidationConfig) {
 // SetSandboxConfig sets the sandbox configuration for repair agents.
 func (p *Processor) SetSandboxConfig(config *sandbox.SandboxConfig) {
 	p.sandboxConfig = config
+}
+
+// SetLifecycleTransition sets the callback function for lifecycle state transitions.
+// This allows the processor to notify the daemon of state changes during merge operations.
+func (p *Processor) SetLifecycleTransition(fn LifecycleTransitionFunc) {
+	p.lifecycleTransition = fn
+}
+
+// transitionLifecycle transitions the agent's lifecycle state.
+// This is a helper that calls the lifecycle transition callback if set,
+// and logs errors but does not fail the merge process.
+func (p *Processor) transitionLifecycle(agentID string, event lifecycle.AgentEvent, ctx lifecycle.TransitionContext) {
+	if p.lifecycleTransition == nil {
+		return
+	}
+
+	if err := p.lifecycleTransition(agentID, event, ctx); err != nil && p.verbose {
+		fmt.Fprintf(os.Stderr, "warning: lifecycle transition failed for %s: event=%s, error=%v\n",
+			agentID, event, err)
+	}
+}
+
+// buildLifecycleContext creates a TransitionContext with validation and repair settings.
+func (p *Processor) buildLifecycleContext() lifecycle.TransitionContext {
+	ctx := lifecycle.TransitionContext{}
+
+	if p.validationConfig != nil && p.validationConfig.IsEnabled() {
+		ctx.ValidationEnabled = true
+		ctx.RepairEnabled = p.repairAgent != nil
+		ctx.StrictMode = p.validationConfig.IsStrict()
+		ctx.MaxRepairAttempts = p.validationConfig.GetMaxRepairAttempts()
+	}
+
+	return ctx
 }
 
 // InitializeRepairAgent creates the repair agent with current configuration.
@@ -185,6 +228,10 @@ func (p *Processor) Start(ctx context.Context) {
 func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeResponse {
 	resp := &MergeResponse{}
 	taskID := req.Task.ID
+	agentID := p.makeAgentID(taskID)
+
+	// Build base lifecycle context for this merge operation
+	lifecycleCtx := p.buildLifecycleContext()
 
 	// Check context at start
 	if err := ctx.Err(); err != nil {
@@ -192,7 +239,7 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 		return resp
 	}
 
-	// Send initial pending status
+	// Send initial pending status (legacy IPC for backwards compatibility)
 	p.sendMergeStatus(taskID, ipc.MergeStatusPending, 0, "")
 
 	// Auto-commit any dirty .beads/ changes before merge
@@ -210,7 +257,10 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 		return resp
 	}
 
-	// Send merging status
+	// Transition to merging state via lifecycle
+	p.transitionLifecycle(agentID, lifecycle.EventMergeStarted, lifecycleCtx)
+
+	// Send merging status (legacy IPC for backwards compatibility)
 	p.sendMergeStatus(taskID, ipc.MergeStatusMerging, 0, "")
 
 	// Record pre-merge HEAD for potential rollback in strict validation mode
@@ -230,6 +280,9 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 	mergeResult, err := p.merger.MergeSingle(req.Result, mergeOpts)
 	if err != nil {
 		resp.Error = fmt.Sprintf("merge failed: %v", err)
+		// Transition to merge failed state via lifecycle
+		lifecycleCtx.Error = resp.Error
+		p.transitionLifecycle(agentID, lifecycle.EventMergeFailed, lifecycleCtx)
 		p.markTaskFailed(ctx, taskID, resp.Error)
 		p.sendTaskUpdated(taskID, req.Task.Title, "failed")
 		p.sendMergeStatusFull(taskID, ipc.MergeStatusFailed, resp.Error, 0, false, false)
@@ -250,9 +303,12 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 			// Pre-commit repair succeeded - commit was successful
 			resp.CommitsApplied = preCommitResult.CommitsApplied
 
+			// Transition to merge success, then validation will handle its own transitions
+			p.transitionLifecycle(agentID, lifecycle.EventMergeSuccess, lifecycleCtx)
+
 			// Continue to validation if enabled
 			mergedDiff := p.getMergedDiff(resp.CommitsApplied)
-			validationResult := p.runValidationAndRepair(ctx, taskID, req.Task.Title, mergedDiff, p.makeAgentID(taskID), false, false, resp.CommitsApplied)
+			validationResult := p.runValidationAndRepair(ctx, taskID, req.Task.Title, mergedDiff, agentID, false, false, resp.CommitsApplied)
 
 			if !validationResult.ValidationPassed {
 				// Validation failed even after repair attempts
@@ -314,6 +370,8 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 
 		// Pre-commit repair failed - report failure
 		resp.Error = preCommitResult.Error
+		lifecycleCtx.Error = resp.Error
+		p.transitionLifecycle(agentID, lifecycle.EventMergeFailed, lifecycleCtx)
 		p.markTaskFailed(ctx, taskID, resp.Error)
 		p.sendTaskUpdated(taskID, req.Task.Title, "failed")
 		p.sendMergeStatusFull(taskID, ipc.MergeStatusFailed, resp.Error, resp.CommitsApplied, false, false)
@@ -351,6 +409,8 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 	// Check context before spawning resolver
 	if err := ctx.Err(); err != nil {
 		resp.Error = fmt.Sprintf("cancelled before resolver: %v", err)
+		lifecycleCtx.Error = resp.Error
+		p.transitionLifecycle(agentID, lifecycle.EventCancel, lifecycleCtx)
 		p.markTaskFailed(ctx, taskID, resp.Error)
 		p.sendTaskUpdated(taskID, req.Task.Title, "failed")
 		p.sendMergeStatusFull(taskID, ipc.MergeStatusFailed, resp.Error, resp.CommitsApplied, false, false)
@@ -363,6 +423,9 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 		if p.verbose {
 			fmt.Printf("[%s] Merge issue detected (%s), spawning resolver agent...\n", taskID, resolverReason)
 		}
+
+		// Transition to resolving state via lifecycle (merge conflict detected)
+		p.transitionLifecycle(agentID, lifecycle.EventMergeConflict, lifecycleCtx)
 
 		// Pause queue during conflict resolution
 		p.queue.AgentPause()
@@ -389,6 +452,8 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 			if err := p.validateBaseCommit(baseCommit); err != nil {
 				errMsg := fmt.Sprintf("cannot spawn resolver: %v", err)
 				resp.Error = errMsg
+				lifecycleCtx.Error = errMsg
+				p.transitionLifecycle(agentID, lifecycle.EventResolveFailed, lifecycleCtx)
 				p.markTaskFailed(ctx, taskID, errMsg)
 				p.sendTaskUpdated(taskID, req.Task.Title, "failed")
 				p.sendMergeStatusFull(taskID, ipc.MergeStatusFailed, errMsg, resp.CommitsApplied, resp.HadConflict, false)
@@ -452,6 +517,8 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 			metrics.IncResolverFailure()
 
 			resp.Error = fmt.Sprintf("resolver error: %v", resolverErr)
+			lifecycleCtx.Error = resp.Error
+			p.transitionLifecycle(agentID, lifecycle.EventResolveFailed, lifecycleCtx)
 			p.markTaskFailed(ctx, taskID, resp.Error)
 			p.sendTaskUpdated(taskID, req.Task.Title, "failed")
 			p.sendMergeStatusFull(taskID, ipc.MergeStatusFailed, resp.Error, resp.CommitsApplied, resp.HadConflict, resp.ResolverSpawned)
@@ -482,6 +549,8 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 					}
 					// Mark task as permanently failed - retrying won't help with a stale overlay
 					// The task will need manual intervention or the user needs to re-run canopy
+					lifecycleCtx.Error = errMsg
+					p.transitionLifecycle(agentID, lifecycle.EventResolveFailed, lifecycleCtx)
 					p.markTaskFailed(ctx, taskID, errMsg)
 					p.sendTaskUpdated(taskID, req.Task.Title, "failed")
 					p.sendMergeStatusFull(taskID, ipc.MergeStatusFailed, errMsg, resp.CommitsApplied, resp.HadConflict, resp.ResolverSpawned)
@@ -501,6 +570,8 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 				if mergeErr != nil {
 					errMsg := fmt.Sprintf("failed to merge resolver result: %v", mergeErr)
 					resp.Error = errMsg
+					lifecycleCtx.Error = errMsg
+					p.transitionLifecycle(agentID, lifecycle.EventResolveFailed, lifecycleCtx)
 					p.markTaskFailed(ctx, taskID, errMsg)
 					p.sendTaskUpdated(taskID, req.Task.Title, "failed")
 					p.sendMergeStatusFull(taskID, ipc.MergeStatusFailed, errMsg, resp.CommitsApplied, resp.HadConflict, resp.ResolverSpawned)
@@ -514,6 +585,8 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 					}
 					errMsg := fmt.Sprintf("resolver merge had errors: %s", strings.Join(resolverMergeResult.Errors, "; "))
 					resp.Error = errMsg
+					lifecycleCtx.Error = errMsg
+					p.transitionLifecycle(agentID, lifecycle.EventResolveFailed, lifecycleCtx)
 					p.markTaskFailed(ctx, taskID, errMsg)
 					p.sendTaskUpdated(taskID, req.Task.Title, "failed")
 					p.sendMergeStatusFull(taskID, ipc.MergeStatusFailed, errMsg, resp.CommitsApplied, resp.HadConflict, resp.ResolverSpawned)
@@ -528,6 +601,9 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 					if p.verbose {
 						fmt.Fprintf(os.Stderr, "[%s] Info: %s\n", taskID, msg)
 					}
+					// Transition to completed via resolve success (validation skipped)
+					p.transitionLifecycle(agentID, lifecycle.EventResolveSuccess, lifecycleCtx)
+					p.transitionLifecycle(agentID, lifecycle.EventValidationSkipped, lifecycleCtx)
 					// Mark task as done since the resolver successfully determined there's nothing to do
 					p.markTaskDone(ctx, taskID)
 					p.sendTaskUpdated(taskID, req.Task.Title, "completed")
@@ -542,9 +618,12 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 				p.sendMergedCommits(taskID, resolverMergeResult)
 			}
 
+			// Transition to resolve success, then validation will handle its own transitions
+			p.transitionLifecycle(agentID, lifecycle.EventResolveSuccess, lifecycleCtx)
+
 			// Run validation and repair loop after successful resolution
 			mergedDiff := p.getMergedDiff(resp.CommitsApplied)
-			validationResult := p.runValidationAndRepair(ctx, taskID, req.Task.Title, mergedDiff, p.makeAgentID(taskID), resp.HadConflict, resp.ResolverSpawned, resp.CommitsApplied)
+			validationResult := p.runValidationAndRepair(ctx, taskID, req.Task.Title, mergedDiff, agentID, resp.HadConflict, resp.ResolverSpawned, resp.CommitsApplied)
 
 			if !validationResult.ValidationPassed {
 				// Validation failed even after repair attempts
@@ -600,6 +679,8 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 				errMsg = fmt.Sprintf("resolver failed: %s", resolverResult.Error)
 			}
 			resp.Error = errMsg
+			lifecycleCtx.Error = errMsg
+			p.transitionLifecycle(agentID, lifecycle.EventResolveFailed, lifecycleCtx)
 			p.markTaskFailed(ctx, taskID, errMsg)
 			p.sendTaskUpdated(taskID, req.Task.Title, "failed")
 			p.sendMergeStatusFull(taskID, ipc.MergeStatusFailed, errMsg, resp.CommitsApplied, resp.HadConflict, resp.ResolverSpawned)
@@ -612,10 +693,13 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 		return resp
 	}
 
-	// No conflicts and no errors - run validation and repair loop
+	// No conflicts and no errors - transition to merge success
+	p.transitionLifecycle(agentID, lifecycle.EventMergeSuccess, lifecycleCtx)
+
+	// Run validation and repair loop
 	// (Error cases and no-change cases are handled by resolver above)
 	mergedDiff := p.getMergedDiff(resp.CommitsApplied)
-	validationResult := p.runValidationAndRepair(ctx, taskID, req.Task.Title, mergedDiff, p.makeAgentID(taskID), false, false, resp.CommitsApplied)
+	validationResult := p.runValidationAndRepair(ctx, taskID, req.Task.Title, mergedDiff, agentID, false, false, resp.CommitsApplied)
 
 	if !validationResult.ValidationPassed {
 		// Validation failed even after repair attempts
@@ -896,13 +980,18 @@ func (p *Processor) runValidationAndRepair(ctx context.Context, taskID, taskTitl
 
 	// Check if validation is enabled
 	if p.validationConfig == nil || !p.validationConfig.IsEnabled() {
-		// Validation disabled - skip
+		// Validation disabled - skip with lifecycle transition
+		lifecycleCtx := p.buildLifecycleContext()
+		p.transitionLifecycle(agentID, lifecycle.EventValidationSkipped, lifecycleCtx)
 		result.ValidationPassed = true
 		return result
 	}
 
 	maxAttempts := p.validationConfig.GetMaxRepairAttempts()
 	var previousAttempts []string
+
+	// Build lifecycle context for validation/repair loop
+	lifecycleCtx := p.buildLifecycleContext()
 
 	for attempt := 0; attempt <= maxAttempts; attempt++ {
 		// Check context before each iteration
@@ -918,6 +1007,8 @@ func (p *Processor) runValidationAndRepair(ctx context.Context, taskID, taskTitl
 		// Check if validation passed
 		if validationResult.Status == validation.ValidationStatusPassed {
 			result.ValidationPassed = true
+			// Transition to validation passed (completes the agent)
+			p.transitionLifecycle(agentID, lifecycle.EventValidationPassed, lifecycleCtx)
 			if attempt > 0 {
 				result.RepairSucceeded = true
 				// Record successful repair in history
@@ -947,6 +1038,11 @@ func (p *Processor) runValidationAndRepair(ctx context.Context, taskID, taskTitl
 			result.Error = fmt.Sprintf("validation failed after %d repair attempts: %s", maxAttempts, validationResult.Error)
 			result.RepairExhausted = true
 			result.RepairAttemptSummaries = previousAttempts
+			// Transition to validation failed with repair exhausted
+			lifecycleCtx.Error = result.Error
+			lifecycleCtx.RepairAttempt = attempt
+			lifecycleCtx.RepairEnabled = false // No more repairs possible
+			p.transitionLifecycle(agentID, lifecycle.EventValidationFailed, lifecycleCtx)
 			if p.historyRecorder != nil {
 				_ = p.historyRecorder.RecordFinalStatus(ctx, taskID, FinalStatusNeedsManualFix,
 					fmt.Sprintf("Exhausted %d repair attempts", maxAttempts))
@@ -957,6 +1053,10 @@ func (p *Processor) runValidationAndRepair(ctx context.Context, taskID, taskTitl
 		// Check if we have a repair agent configured
 		if p.repairAgent == nil {
 			result.Error = fmt.Sprintf("validation failed and no repair agent configured: %s", validationResult.Error)
+			// Transition to validation failed (no repair available)
+			lifecycleCtx.Error = result.Error
+			lifecycleCtx.RepairEnabled = false
+			p.transitionLifecycle(agentID, lifecycle.EventValidationFailed, lifecycleCtx)
 			if p.historyRecorder != nil {
 				_ = p.historyRecorder.RecordFinalStatus(ctx, taskID, FinalStatusNeedsManualFix,
 					"No repair agent configured")
@@ -967,14 +1067,15 @@ func (p *Processor) runValidationAndRepair(ctx context.Context, taskID, taskTitl
 		// Spawn repair agent
 		result.RepairAttempted = true
 
-		// Send pending_repair status - deciding to spawn repair agent
-		p.sendValidationStatus(agentID, ipc.MergeStatusResolving, "", commitsApplied, hadConflict, resolverSpawned,
-			"pending_repair", fmt.Sprintf("Preparing repair attempt %d/%d", attempt+1, maxAttempts), 0, nil)
-
 		if p.verbose {
 			fmt.Printf("[%s] Validation failed, spawning repair agent (attempt %d/%d)...\n",
 				taskID, attempt+1, maxAttempts)
 		}
+
+		// Transition to repairing state via lifecycle
+		lifecycleCtx.RepairAttempt = attempt + 1
+		lifecycleCtx.RepairEnabled = true
+		p.transitionLifecycle(agentID, lifecycle.EventValidationFailed, lifecycleCtx)
 
 		// Find the failed step for context
 		var failedStep *validation.StepResult
@@ -997,16 +1098,19 @@ func (p *Processor) runValidationAndRepair(ctx context.Context, taskID, taskTitl
 			MaxRepairAttempts: maxAttempts,
 		}
 
-		// Send spawning_repair status - creating repair agent
+		// Send IPC status update for repair starting (legacy)
 		p.sendValidationStatus(agentID, ipc.MergeStatusResolving, "", commitsApplied, hadConflict, resolverSpawned,
-			"spawning_repair", fmt.Sprintf("Spawning repair agent %d/%d", attempt+1, maxAttempts), 0, nil)
+			"repairing", fmt.Sprintf("Repair attempt %d/%d", attempt+1, maxAttempts), 0, nil)
 
-		// Execute repair agent (will transition to "repairing" when agent starts)
+		// Execute repair agent
 		repairResult, err := p.repairAgent.Repair(ctx, repairCtx, agentID)
 		if err != nil {
 			result.Error = fmt.Sprintf("repair agent error: %v", err)
 			return result
 		}
+
+		// Transition to repair complete (goes back to validating state)
+		p.transitionLifecycle(agentID, lifecycle.EventRepairComplete, lifecycleCtx)
 
 		// Record repair attempt in history
 		repairAttempt := &RepairAttempt{
@@ -1040,7 +1144,7 @@ func (p *Processor) runValidationAndRepair(ctx context.Context, taskID, taskTitl
 		attemptSummary := buildRepairAttemptSummary(repairAttempt, repairResult)
 		previousAttempts = append(previousAttempts, attemptSummary)
 
-		// Persist repair state for daemon restart recovery
+		// Persist repair state for daemon restart recovery (legacy IPC)
 		// lastRepairOutput captures the error for failed attempts or "success" for successful ones
 		lastOutput := repairResult.Error
 		if repairResult.Success {
