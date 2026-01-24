@@ -104,18 +104,27 @@ export const OrchestratorStateIndicator: React.FC<OrchestratorStateIndicatorProp
   onPause,
   onResume,
 }) => {
-  const stateIcon = getStateIcon(orchestratorState);
-  const stateText = getStateText(orchestratorState, activeAgentCount, pauseState);
-  const stateColorClasses = getStateColorClasses(orchestratorState);
+  // Use transitioning icon/text during activation/deactivation for visual feedback
+  const stateIcon = isActivating || isDeactivating ? '\u25D4' : getStateIcon(orchestratorState); // Half-filled circle during transitions
+  const stateText = isActivating
+    ? 'Activating...'
+    : isDeactivating
+      ? 'Deactivating...'
+      : getStateText(orchestratorState, activeAgentCount, pauseState);
+  const stateColorClasses = isActivating || isDeactivating
+    ? 'text-yellow-500 dark:text-yellow-400'
+    : getStateColorClasses(orchestratorState);
 
   const isLoading = isActivating || isDeactivating || isPauseLoading || isResumeLoading;
   const disabled = !connected || isLoading;
 
   // Determine which buttons to show based on state
-  const showActivateButton = orchestratorState === 'off';
-  const showPauseButton = orchestratorState === 'idle' || orchestratorState === 'active';
-  const showResumeButton = orchestratorState === 'paused';
-  const showDeactivateButton = orchestratorState !== 'off';
+  // Hide Activate while activating to prevent "double button" appearance during transition
+  // Hide other controls while deactivating since we're transitioning to 'off'
+  const showActivateButton = orchestratorState === 'off' && !isActivating;
+  const showPauseButton = (orchestratorState === 'idle' || orchestratorState === 'active') && !isDeactivating;
+  const showResumeButton = orchestratorState === 'paused' && !isDeactivating;
+  const showDeactivateButton = orchestratorState !== 'off' && !isDeactivating;
 
   // Can only resume if paused by user (not just agent)
   const canResume = pauseState === 'paused_user' || pauseState === 'paused_both';
