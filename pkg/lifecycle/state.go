@@ -183,6 +183,46 @@ func (l *AgentLifecycle) History() []StateTransition {
 	return result
 }
 
+// SetState forcibly sets the lifecycle to a specific state, bypassing normal transition rules.
+// This should only be used for recovery when events arrive out of order and the lifecycle
+// becomes stuck in an intermediate state while the merge status indicates completion.
+// The event parameter describes why the state was forced (for history tracking).
+// Returns the previous state.
+func (l *AgentLifecycle) SetState(newState AgentLifecycleState, event AgentEvent, ctx TransitionContext) AgentLifecycleState {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	oldState := l.state
+	if oldState == newState {
+		return oldState
+	}
+
+	l.state = newState
+	l.context = ctx
+
+	// Record the forced transition in history
+	transition := StateTransition{
+		From:      oldState,
+		To:        newState,
+		Event:     event,
+		Timestamp: time.Now(),
+		Context:   ctx,
+	}
+	l.stateHistory = append(l.stateHistory, transition)
+
+	// Trim history if it exceeds the limit
+	if len(l.stateHistory) > maxHistoryEntries {
+		l.stateHistory = l.stateHistory[len(l.stateHistory)-maxHistoryEntries:]
+	}
+
+	// Fire callback if registered
+	if l.onTransition != nil {
+		l.onTransition(oldState, newState, event)
+	}
+
+	return oldState
+}
+
 // Transition attempts to transition to a new state based on an event.
 // Returns an error if the transition is invalid for the current state.
 // The context provides additional information needed to determine the target state.

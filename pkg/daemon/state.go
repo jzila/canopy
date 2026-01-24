@@ -1758,6 +1758,68 @@ func transitionLifecycleForMergeStatus(agent *AgentState, mergeStatus string, ha
 				"error", err,
 			)
 		}
+		return
+	}
+
+	// Recovery: When merge status is terminal but lifecycle is stuck in an intermediate state,
+	// force-transition to the correct terminal state. This handles cases where events arrive
+	// out of order or intermediate statuses were missed (e.g., MergeStatusMerging never received).
+	currentState := lc.State()
+	if currentState.IsTerminal() {
+		return // Already in a terminal state, no recovery needed
+	}
+
+	var targetState lifecycle.AgentLifecycleState
+	var recoveryEvent lifecycle.AgentEvent
+
+	switch MergeStatus(mergeStatus) {
+	case MergeStatusMerged, MergeStatusResolved, MergeStatusSkipped:
+		// Merge succeeded - determine final state based on validation
+		switch validationStatus {
+		case "", "skipped", "passed":
+			targetState = lifecycle.StateCompleted
+			recoveryEvent = lifecycle.EventMergeSuccess
+		case "failed":
+			targetState = lifecycle.StateNeedsAttention
+			recoveryEvent = lifecycle.EventValidationFailed
+		case "running", "pending":
+			// Validation in progress - force to validating state
+			targetState = lifecycle.StateValidating
+			recoveryEvent = lifecycle.EventMergeSuccess
+			ctx.ValidationEnabled = true
+		case "repairing":
+			targetState = lifecycle.StateRepairing
+			recoveryEvent = lifecycle.EventValidationFailed
+			ctx.RepairEnabled = true
+		default:
+			targetState = lifecycle.StateCompleted
+			recoveryEvent = lifecycle.EventMergeSuccess
+		}
+
+	case MergeStatusMergedNeedsRepair:
+		// Merge succeeded but validation failed and repair exhausted
+		targetState = lifecycle.StateNeedsAttention
+		recoveryEvent = lifecycle.EventValidationFailed
+
+	case MergeStatusFailed:
+		// Merge failed
+		targetState = lifecycle.StateFailed
+		recoveryEvent = lifecycle.EventMergeFailed
+
+	default:
+		// Non-terminal merge status, no recovery needed
+		return
+	}
+
+	if targetState != "" && targetState != currentState {
+		oldState := lc.SetState(targetState, recoveryEvent, ctx)
+		logging.Warn("lifecycle state recovered from mismatch",
+			"agent_id", agentID,
+			"old_state", oldState,
+			"new_state", targetState,
+			"merge_status", mergeStatus,
+			"validation_status", validationStatus,
+		)
 	}
 }
 

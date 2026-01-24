@@ -550,3 +550,110 @@ func TestContextPreserved(t *testing.T) {
 		t.Errorf("Error mismatch")
 	}
 }
+
+func TestSetState(t *testing.T) {
+	t.Run("force transition bypasses state machine", func(t *testing.T) {
+		l := New()
+
+		// Start at StateStarting
+		if l.State() != StateStarting {
+			t.Fatalf("expected StateStarting, got %s", l.State())
+		}
+
+		// Force to StateCompleted, skipping all intermediate states
+		ctx := TransitionContext{}
+		oldState := l.SetState(StateCompleted, EventMergeSuccess, ctx)
+
+		if oldState != StateStarting {
+			t.Errorf("expected old state %s, got %s", StateStarting, oldState)
+		}
+		if l.State() != StateCompleted {
+			t.Errorf("expected new state %s, got %s", StateCompleted, l.State())
+		}
+		if !l.IsTerminal() {
+			t.Error("StateCompleted should be terminal")
+		}
+	})
+
+	t.Run("no-op when setting same state", func(t *testing.T) {
+		l := New()
+
+		// Force to StateRunning
+		l.SetState(StateRunning, EventAgentSpawned, TransitionContext{})
+		historyLen := len(l.History())
+
+		// Set to same state - should be no-op
+		oldState := l.SetState(StateRunning, EventAgentSpawned, TransitionContext{})
+
+		if oldState != StateRunning {
+			t.Errorf("expected old state %s, got %s", StateRunning, oldState)
+		}
+		if len(l.History()) != historyLen {
+			t.Error("history should not change when setting same state")
+		}
+	})
+
+	t.Run("records forced transition in history", func(t *testing.T) {
+		l := New()
+
+		// Progress normally to QueuedForMerge
+		l.Transition(EventAgentSpawned, TransitionContext{})
+		l.Transition(EventWorkComplete, TransitionContext{})
+
+		if l.State() != StateQueuedForMerge {
+			t.Fatalf("expected StateQueuedForMerge, got %s", l.State())
+		}
+		initialHistoryLen := len(l.History())
+
+		// Force to StateCompleted (simulating recovery)
+		ctx := TransitionContext{Error: "recovered from stuck state"}
+		l.SetState(StateCompleted, EventMergeSuccess, ctx)
+
+		history := l.History()
+		if len(history) != initialHistoryLen+1 {
+			t.Errorf("expected %d history entries, got %d", initialHistoryLen+1, len(history))
+		}
+
+		lastEntry := history[len(history)-1]
+		if lastEntry.From != StateQueuedForMerge {
+			t.Errorf("expected From=%s, got %s", StateQueuedForMerge, lastEntry.From)
+		}
+		if lastEntry.To != StateCompleted {
+			t.Errorf("expected To=%s, got %s", StateCompleted, lastEntry.To)
+		}
+		if lastEntry.Event != EventMergeSuccess {
+			t.Errorf("expected Event=%s, got %s", EventMergeSuccess, lastEntry.Event)
+		}
+		if lastEntry.Context.Error != "recovered from stuck state" {
+			t.Errorf("expected context.Error to be preserved")
+		}
+	})
+
+	t.Run("fires callback on forced transition", func(t *testing.T) {
+		var callbackCalled bool
+		var cbFrom, cbTo AgentLifecycleState
+		var cbEvent AgentEvent
+
+		l := New(WithTransitionCallback(func(from, to AgentLifecycleState, event AgentEvent) {
+			callbackCalled = true
+			cbFrom = from
+			cbTo = to
+			cbEvent = event
+		}))
+
+		l.SetState(StateCompleted, EventMergeSuccess, TransitionContext{})
+
+		if !callbackCalled {
+			t.Error("expected callback to be called")
+		}
+		if cbFrom != StateStarting {
+			t.Errorf("expected callback from=%s, got %s", StateStarting, cbFrom)
+		}
+		if cbTo != StateCompleted {
+			t.Errorf("expected callback to=%s, got %s", StateCompleted, cbTo)
+		}
+		if cbEvent != EventMergeSuccess {
+			t.Errorf("expected callback event=%s, got %s", EventMergeSuccess, cbEvent)
+		}
+	})
+}
