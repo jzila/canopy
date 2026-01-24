@@ -13,6 +13,7 @@ import (
 	cfgpkg "github.com/jzila/canopy/pkg/config"
 	"github.com/jzila/canopy/pkg/ipc"
 	"github.com/jzila/canopy/pkg/mergecoordinator"
+	"github.com/jzila/canopy/pkg/mergequeue"
 	"github.com/jzila/canopy/pkg/rules"
 	"github.com/jzila/canopy/pkg/sandbox"
 	"github.com/jzila/canopy/pkg/scheduler"
@@ -338,6 +339,13 @@ func (o *Orchestrator) WithCallbacks(callbacks *EventCallbacks) *Orchestrator {
 // This enables sending merge status events and resolver agent tracking.
 func (o *Orchestrator) SetIPCClient(client *ipc.Client) {
 	o.mergeCoordinator.SetIPCClient(client)
+}
+
+// SetMergeStatusCallback sets a callback for merge status events.
+// This is used when running in daemon mode where IPC is not available.
+// The callback is invoked whenever merge status would be sent via IPC.
+func (o *Orchestrator) SetMergeStatusCallback(callback mergequeue.MergeStatusCallback) {
+	o.mergeCoordinator.SetMergeStatusCallback(callback)
 }
 
 // SetRepoID sets the repository ID for IPC tracking.

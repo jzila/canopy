@@ -16,8 +16,10 @@ import (
 	"github.com/jzila/canopy/pkg/events"
 	"github.com/jzila/canopy/pkg/lifecycle"
 	"github.com/jzila/canopy/pkg/logging"
+	"github.com/jzila/canopy/pkg/mergequeue"
 	"github.com/jzila/canopy/pkg/orchestrator"
 	"github.com/jzila/canopy/pkg/rules"
+	"github.com/jzila/canopy/pkg/types"
 )
 
 // RunConfig holds configuration for starting a new orchestration run.
@@ -594,6 +596,10 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 	callbacks := m.createEventCallbacks(runID, config.RepoID, orch)
 	orch.SetCallbacks(callbacks)
 
+	// Register merge status callback to publish merge events to EventBus
+	// This replaces the IPC-based merge status when running in daemon mode
+	orch.SetMergeStatusCallback(m.createMergeStatusCallback())
+
 	// Register state callbacks to track Idle/Active transitions
 	orch.SetStateCallbacks(m.createStateCallbacks(lifecycle))
 
@@ -1104,6 +1110,81 @@ func (m *OrchestratorManager) createStateCallbacks(lifecycle *OrchestratorLifecy
 			activeCount := m.countActiveAgents()
 			m.publishStateChange(OrchestratorActive, activeCount)
 		},
+	}
+}
+
+// createMergeStatusCallback creates a callback that publishes merge status events to the EventBus.
+// This replaces the IPC-based merge status updates when the orchestrator runs in daemon mode.
+func (m *OrchestratorManager) createMergeStatusCallback() mergequeue.MergeStatusCallback {
+	return func(event mergequeue.MergeStatusEvent) {
+		if m.eventBus == nil {
+			return
+		}
+
+		payload := map[string]interface{}{
+			"agent_id":     event.AgentID,
+			"merge_status": string(event.Status),
+		}
+
+		// Include optional fields only when set
+		if event.QueuePos > 0 {
+			payload["queue_pos"] = event.QueuePos
+		}
+		if event.Error != "" {
+			payload["error"] = event.Error
+		}
+		if event.CommitsApplied > 0 {
+			payload["commits_applied"] = event.CommitsApplied
+		}
+		if event.HadConflict {
+			payload["had_conflict"] = event.HadConflict
+		}
+		if event.ResolverSpawned {
+			payload["resolver_spawned"] = event.ResolverSpawned
+		}
+
+		m.eventBus.Publish(events.Event{
+			Type:      events.EventAgentMergeStatus,
+			Timestamp: time.Now(),
+			Payload:   payload,
+		})
+
+		// Also transition lifecycle state if this is a final merge status
+		if m.state != nil {
+			if agent := m.state.GetAgent(event.AgentID); agent != nil && agent.Lifecycle != nil {
+				switch event.Status {
+				case types.MergeStatusMerging:
+					// Transition to merging state
+					if err := agent.Lifecycle.Transition(lifecycle.EventMergeStarted, lifecycle.TransitionContext{}); err != nil {
+						logging.Debug("lifecycle transition failed on merge started",
+							"agent_id", event.AgentID,
+							"event", lifecycle.EventMergeStarted,
+							"error", err,
+						)
+					}
+				case types.MergeStatusMerged, types.MergeStatusMergedNeedsRepair:
+					// Transition to merged state
+					if err := agent.Lifecycle.Transition(lifecycle.EventMergeSuccess, lifecycle.TransitionContext{}); err != nil {
+						logging.Debug("lifecycle transition failed on merge success",
+							"agent_id", event.AgentID,
+							"event", lifecycle.EventMergeSuccess,
+							"error", err,
+						)
+					}
+				case types.MergeStatusFailed:
+					// Transition to merge failed state
+					if err := agent.Lifecycle.Transition(lifecycle.EventMergeFailed, lifecycle.TransitionContext{
+						Error: event.Error,
+					}); err != nil {
+						logging.Debug("lifecycle transition failed on merge failed",
+							"agent_id", event.AgentID,
+							"event", lifecycle.EventMergeFailed,
+							"error", err,
+						)
+					}
+				}
+			}
+		}
 	}
 }
 

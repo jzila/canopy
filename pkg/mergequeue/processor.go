@@ -20,6 +20,22 @@ import (
 	"github.com/jzila/canopy/pkg/validation"
 )
 
+// MergeStatusEvent contains data for merge status callbacks.
+// This allows the daemon to receive merge status updates without requiring an IPC client.
+type MergeStatusEvent struct {
+	AgentID         string
+	Status          ipc.MergeStatus
+	QueuePos        int
+	Error           string
+	CommitsApplied  int
+	HadConflict     bool
+	ResolverSpawned bool
+}
+
+// MergeStatusCallback is called when merge status changes.
+// This provides an alternative to IPC for daemon-mode operation.
+type MergeStatusCallback func(event MergeStatusEvent)
+
 // Processor handles merge operations from the queue.
 // It processes merge requests sequentially, spawning resolver agents when conflicts occur.
 type Processor struct {
@@ -33,6 +49,9 @@ type Processor struct {
 	resolverTimeout time.Duration // Timeout for resolver operations (0 = no timeout)
 	runID           string        // Run ID for unique agent ID generation
 	repoID          string        // Repository ID for IPC tracking
+
+	// Callback for merge status events (alternative to IPC for daemon mode)
+	mergeStatusCallback MergeStatusCallback
 
 	// Validation and repair fields
 	validationConfig *validation.ValidationConfig // Validation configuration (nil = disabled)
@@ -83,6 +102,13 @@ func (p *Processor) SetIPCClient(client *ipc.Client) {
 // SetRepoID sets the repository ID for IPC tracking.
 func (p *Processor) SetRepoID(repoID string) {
 	p.repoID = repoID
+}
+
+// SetMergeStatusCallback sets a callback for merge status events.
+// This is used when running in daemon mode where IPC is not available.
+// The callback is invoked whenever merge status would be sent via IPC.
+func (p *Processor) SetMergeStatusCallback(callback MergeStatusCallback) {
+	p.mergeStatusCallback = callback
 }
 
 // SetValidationConfig sets the validation configuration.
@@ -800,26 +826,52 @@ func (p *Processor) sendMergedCommits(taskID string, mergeResult *merge.Result) 
 	}
 }
 
-// sendMergeStatus sends a merge status update via IPC if client is connected.
+// sendMergeStatus sends a merge status update via IPC or callback.
 func (p *Processor) sendMergeStatus(taskID string, status ipc.MergeStatus, queuePos int, errMsg string) {
-	if p.ipcClient == nil {
+	agentID := p.makeAgentID(taskID)
+
+	// Try callback first (daemon mode)
+	if p.mergeStatusCallback != nil {
+		p.mergeStatusCallback(MergeStatusEvent{
+			AgentID:  agentID,
+			Status:   status,
+			QueuePos: queuePos,
+			Error:    errMsg,
+		})
 		return
 	}
 
-	agentID := p.makeAgentID(taskID)
+	// Fall back to IPC (CLI mode)
+	if p.ipcClient == nil {
+		return
+	}
 	if err := p.ipcClient.SendAgentMergeStatus(agentID, status, queuePos, errMsg); err != nil && p.verbose {
 		fmt.Fprintf(os.Stderr, "warning: failed to send merge status for %s: %v\n", taskID, err)
 	}
 }
 
-// sendMergeStatusFull sends a final merge status update with full details via IPC.
+// sendMergeStatusFull sends a final merge status update with full details via IPC or callback.
 // This should be used for merged/failed statuses to include commit and conflict information.
 func (p *Processor) sendMergeStatusFull(taskID string, status ipc.MergeStatus, errMsg string, commitsApplied int, hadConflict, resolverSpawned bool) {
-	if p.ipcClient == nil {
+	agentID := p.makeAgentID(taskID)
+
+	// Try callback first (daemon mode)
+	if p.mergeStatusCallback != nil {
+		p.mergeStatusCallback(MergeStatusEvent{
+			AgentID:         agentID,
+			Status:          status,
+			Error:           errMsg,
+			CommitsApplied:  commitsApplied,
+			HadConflict:     hadConflict,
+			ResolverSpawned: resolverSpawned,
+		})
 		return
 	}
 
-	agentID := p.makeAgentID(taskID)
+	// Fall back to IPC (CLI mode)
+	if p.ipcClient == nil {
+		return
+	}
 	if err := p.ipcClient.SendAgentMergeStatusFull(agentID, status, 0, errMsg, commitsApplied, hadConflict, resolverSpawned); err != nil && p.verbose {
 		fmt.Fprintf(os.Stderr, "warning: failed to send merge status for %s: %v\n", taskID, err)
 	}

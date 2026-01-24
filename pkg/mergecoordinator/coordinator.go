@@ -165,6 +165,14 @@ func (mc *MergeCoordinator) SetCleanupCallback(callback func(ctx context.Context
 	mc.cleanupCallback = callback
 }
 
+// SetMergeStatusCallback sets a callback for merge status events.
+// This is used when running in daemon mode where IPC is not available.
+func (mc *MergeCoordinator) SetMergeStatusCallback(callback mergequeue.MergeStatusCallback) {
+	if mc.processor != nil {
+		mc.processor.SetMergeStatusCallback(callback)
+	}
+}
+
 // SetAgentID records the agentID for a taskID, enabling parent-child tracking.
 func (mc *MergeCoordinator) SetAgentID(taskID, agentID string) {
 	mc.agentIDMap.Store(taskID, agentID)
