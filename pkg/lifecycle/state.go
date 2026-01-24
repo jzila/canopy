@@ -115,14 +115,22 @@ type StateTransition struct {
 // The callback receives the old state, new state, and the event that triggered the transition.
 type TransitionCallback func(from, to AgentLifecycleState, event AgentEvent)
 
+// TerminalCallback is called when a terminal state is reached.
+// The callback receives the agent ID associated with this lifecycle.
+// This is useful for cleanup operations that must occur regardless of
+// how the terminal state was reached (normal completion, cancellation, timeout, etc.).
+type TerminalCallback func(agentID string)
+
 // AgentLifecycle manages state transitions for a single agent.
 // All methods are thread-safe.
 type AgentLifecycle struct {
 	mu           sync.RWMutex
+	agentID      string // Agent ID for terminal callback
 	state        AgentLifecycleState
 	stateHistory []StateTransition
 	context      TransitionContext
 	onTransition TransitionCallback
+	onTerminal   TerminalCallback
 }
 
 // Option configures an AgentLifecycle instance.
@@ -133,6 +141,17 @@ type Option func(*AgentLifecycle)
 func WithTransitionCallback(cb TransitionCallback) Option {
 	return func(l *AgentLifecycle) {
 		l.onTransition = cb
+	}
+}
+
+// WithTerminalCallback sets a callback that fires when a terminal state is reached.
+// The callback is invoked while holding the lock, so it should be fast and non-blocking.
+// This is useful for cleanup operations (e.g., overlay cleanup) that must occur
+// regardless of how the terminal state was reached.
+func WithTerminalCallback(agentID string, cb TerminalCallback) Option {
+	return func(l *AgentLifecycle) {
+		l.agentID = agentID
+		l.onTerminal = cb
 	}
 }
 
@@ -220,6 +239,11 @@ func (l *AgentLifecycle) SetState(newState AgentLifecycleState, event AgentEvent
 		l.onTransition(oldState, newState, event)
 	}
 
+	// Fire terminal callback if we transitioned to a terminal state
+	if newState.IsTerminal() && l.onTerminal != nil {
+		l.onTerminal(l.agentID)
+	}
+
 	return oldState
 }
 
@@ -258,6 +282,11 @@ func (l *AgentLifecycle) Transition(event AgentEvent, ctx TransitionContext) err
 	// Fire callback if registered (still holding lock for atomicity)
 	if l.onTransition != nil {
 		l.onTransition(oldState, newState, event)
+	}
+
+	// Fire terminal callback if we transitioned to a terminal state
+	if newState.IsTerminal() && l.onTerminal != nil {
+		l.onTerminal(l.agentID)
 	}
 
 	return nil

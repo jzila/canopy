@@ -318,6 +318,16 @@ func (o *Orchestrator) cleanupOverlay(ctx context.Context, result *agent.Result)
 	}
 }
 
+// CleanupOverlayByTaskID explicitly cleans up the overlay for a task by its ID.
+// This can be called as a safety net when a terminal state is reached, ensuring
+// overlay cleanup even if the normal callback chain was bypassed.
+// Safe to call even if no overlay exists for the task ID.
+func (o *Orchestrator) CleanupOverlayByTaskID(taskID string) {
+	if o.scheduler != nil {
+		o.scheduler.CleanupOverlay(taskID)
+	}
+}
+
 // WithCallbacks is a builder-style method to register callbacks
 func (o *Orchestrator) WithCallbacks(callbacks *EventCallbacks) *Orchestrator {
 	o.SetCallbacks(callbacks)

@@ -472,6 +472,27 @@ func (s *Scheduler) Kill(agentID string) error {
 	return fmt.Errorf("agent %s not found", agentID)
 }
 
+// CleanupOverlay cleans up the overlay for a specific task.
+// This is safe to call even if the overlay doesn't exist or has already been cleaned up.
+// Returns true if an overlay was found and cleaned up, false otherwise.
+func (s *Scheduler) CleanupOverlay(taskID string) bool {
+	s.overlaysMu.Lock()
+	overlay, exists := s.activeOverlays[taskID]
+	if exists {
+		delete(s.activeOverlays, taskID)
+	}
+	s.overlaysMu.Unlock()
+
+	if !exists {
+		return false
+	}
+
+	// Unmount and cleanup - ignore errors as this is best-effort
+	_ = overlay.Unmount()
+	_ = overlay.Cleanup()
+	return true
+}
+
 // CleanupAll synchronously unmounts all active overlays.
 // This should be called on shutdown to ensure no orphaned FUSE mounts remain.
 // Returns the number of overlays cleaned and any errors encountered.

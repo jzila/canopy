@@ -657,3 +657,103 @@ func TestSetState(t *testing.T) {
 		}
 	})
 }
+
+func TestTerminalCallback(t *testing.T) {
+	t.Run("fires on transition to terminal state", func(t *testing.T) {
+		var terminalCalled bool
+		var terminalAgentID string
+
+		l := New(
+			WithTerminalCallback("agent-123", func(agentID string) {
+				terminalCalled = true
+				terminalAgentID = agentID
+			}),
+		)
+
+		// Transition to running (not terminal)
+		err := l.Transition(EventAgentSpawned, TransitionContext{})
+		if err != nil {
+			t.Fatalf("Transition failed: %v", err)
+		}
+		if terminalCalled {
+			t.Error("terminal callback should not be called for non-terminal state")
+		}
+
+		// Transition to failed (terminal)
+		err = l.Transition(EventWorkFailed, TransitionContext{AttemptsRemaining: 0})
+		if err != nil {
+			t.Fatalf("Transition failed: %v", err)
+		}
+		if !terminalCalled {
+			t.Error("terminal callback should be called for terminal state")
+		}
+		if terminalAgentID != "agent-123" {
+			t.Errorf("expected agentID 'agent-123', got '%s'", terminalAgentID)
+		}
+	})
+
+	t.Run("fires on SetState to terminal state", func(t *testing.T) {
+		var terminalCalled bool
+		var terminalAgentID string
+
+		l := New(
+			WithTerminalCallback("agent-456", func(agentID string) {
+				terminalCalled = true
+				terminalAgentID = agentID
+			}),
+		)
+
+		// Force transition to completed (terminal)
+		l.SetState(StateCompleted, EventMergeSuccess, TransitionContext{})
+
+		if !terminalCalled {
+			t.Error("terminal callback should be called for terminal state via SetState")
+		}
+		if terminalAgentID != "agent-456" {
+			t.Errorf("expected agentID 'agent-456', got '%s'", terminalAgentID)
+		}
+	})
+
+	t.Run("does not fire for non-terminal SetState", func(t *testing.T) {
+		var terminalCalled bool
+
+		l := New(
+			WithTerminalCallback("agent-789", func(agentID string) {
+				terminalCalled = true
+			}),
+		)
+
+		// Force transition to running (not terminal)
+		l.SetState(StateRunning, EventAgentSpawned, TransitionContext{})
+
+		if terminalCalled {
+			t.Error("terminal callback should not be called for non-terminal state")
+		}
+	})
+
+	t.Run("fires for all terminal states", func(t *testing.T) {
+		terminalStates := []AgentLifecycleState{
+			StateCompleted,
+			StateFailed,
+			StateNeedsAttention,
+			StateCancelled,
+			StateTimedOut,
+		}
+
+		for _, termState := range terminalStates {
+			var terminalCalled bool
+
+			l := New(
+				WithTerminalCallback("test-agent", func(agentID string) {
+					terminalCalled = true
+				}),
+			)
+
+			l.SetState(termState, EventCancel, TransitionContext{})
+
+			if !terminalCalled {
+				t.Errorf("terminal callback should be called for state %s", termState)
+			}
+		}
+	})
+}
