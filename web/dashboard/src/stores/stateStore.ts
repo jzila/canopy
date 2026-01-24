@@ -137,6 +137,9 @@ export interface Stats {
 // Pause state enum matching Go backend (ipc/protocol.go)
 export type PauseState = 'running' | 'paused_user' | 'paused_agent' | 'paused_both';
 
+// Orchestrator state enum matching Go backend (daemon/orchestrator_manager.go)
+export type OrchestratorState = 'off' | 'idle' | 'active' | 'paused';
+
 // Run configuration for starting new runs
 export interface RunConfig {
   concurrency: number;
@@ -163,6 +166,8 @@ export interface RuntimeState {
   pause_state: PauseState;
   start_time: string;
   current_run_id: string;
+  orchestrator_state: OrchestratorState;
+  active_agent_count: number;
 }
 
 // Store interface
@@ -177,6 +182,8 @@ interface StateStore {
   isPausedByAgent: boolean;
   pauseState: PauseState;
   currentRunId: string; // Currently active orchestrator run ID (empty if no active run)
+  orchestratorState: OrchestratorState; // Current orchestrator state (off/idle/active/paused)
+  activeAgentCount: number; // Number of currently running agents
   selectedAgentId: string | null;
   highlightedTaskId: string | null;
   selectedBeadId: string | null; // Selected bead for filtering agents
@@ -236,6 +243,8 @@ interface StateStore {
   ) => void;
   // Current run tracking
   setCurrentRunId: (runId: string) => void;
+  // Orchestrator state
+  setOrchestratorState: (state: OrchestratorState, activeAgentCount: number) => void;
   // Run filtering actions
   setRuns: (runs: Run[]) => void;
   setActiveRunId: (runId: string) => void;
@@ -337,6 +346,8 @@ export const useStateStore = create<StateStore>((set) => ({
   isPausedByAgent: false,
   pauseState: 'running',
   currentRunId: '', // empty means no active orchestrator run
+  orchestratorState: 'off' as OrchestratorState,
+  activeAgentCount: 0,
   selectedAgentId: null,
   highlightedTaskId: null,
   selectedBeadId: null,
@@ -433,6 +444,8 @@ export const useStateStore = create<StateStore>((set) => ({
       isPausedByAgent: runtimeState.is_paused_by_agent,
       pauseState: runtimeState.pause_state,
       currentRunId: runtimeState.current_run_id ?? '',
+      orchestratorState: runtimeState.orchestrator_state ?? 'off',
+      activeAgentCount: runtimeState.active_agent_count ?? 0,
     }),
 
   appendOutput: (agentId, output, isError = false) =>
@@ -597,6 +610,10 @@ export const useStateStore = create<StateStore>((set) => ({
 
   // Current run tracking
   setCurrentRunId: (currentRunId) => set({ currentRunId }),
+
+  // Orchestrator state
+  setOrchestratorState: (orchestratorState, activeAgentCount) =>
+    set({ orchestratorState, activeAgentCount }),
 
   // Run filtering actions
   setRuns: (runs) => set({ runs }),

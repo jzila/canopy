@@ -11,11 +11,13 @@ import (
 
 	"github.com/jzila/canopy/pkg/beads"
 	"github.com/jzila/canopy/pkg/persistence"
+	"github.com/jzila/canopy/pkg/repository"
 )
 
 // DaemonInterface abstracts daemon operations for handlers
 type DaemonInterface interface {
 	GetActiveRepositoryID() string
+	GetActiveRepository() *repository.Repository
 	GetOrchestratorManager() *OrchestratorManager
 }
 
@@ -106,6 +108,29 @@ func (h *Handler) HandleGetState(w http.ResponseWriter, r *http.Request) {
 	// Get full snapshot (don't filter tasks by repo - tasks may have been loaded
 	// with a different or empty RepoID, and filtering would hide them from the UI)
 	snapshot := h.state.GetSnapshot()
+
+	// Add orchestrator state if available
+	if h.daemon != nil {
+		orchMgr := h.daemon.GetOrchestratorManager()
+		if orchMgr != nil {
+			// Get the active repo and query its orchestrator state
+			activeRepo := h.daemon.GetActiveRepository()
+			if activeRepo != nil {
+				state := orchMgr.GetOrchestratorState(activeRepo.Path)
+				if state != "" {
+					snapshot.OrchestratorState = string(state)
+				}
+			}
+		}
+		// Count active agents (running status)
+		activeCount := 0
+		for _, agent := range snapshot.Agents {
+			if agent.Status == "running" {
+				activeCount++
+			}
+		}
+		snapshot.ActiveAgentCount = activeCount
+	}
 
 	// Wrap snapshot with additional daemon-level state
 	response := StateResponse{

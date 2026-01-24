@@ -31,6 +31,7 @@ const (
 	EventTaskUpdated        EventType = "task:updated"
 	EventOrchPaused         EventType = "orch:paused"
 	EventOrchResumed        EventType = "orch:resumed"
+	EventOrchStateChanged   EventType = "orch:state_changed" // Orchestrator state changed (off/idle/active/paused)
 	EventStatsUpdated       EventType = "stats:updated"
 	EventRulesChanged       EventType = "rules:changed" // Rules configuration changed at runtime
 )
@@ -44,7 +45,7 @@ func (et EventType) IsCritical() bool {
 		EventAgentStarted, EventAgentResumed, EventAgentCompleted,
 		EventAgentDone, EventAgentFailed,
 		EventAgentMergeStatus,
-		EventOrchPaused, EventOrchResumed,
+		EventOrchPaused, EventOrchResumed, EventOrchStateChanged,
 		EventTaskUpdated:
 		return true
 	default:

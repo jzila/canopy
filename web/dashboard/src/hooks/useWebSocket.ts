@@ -269,9 +269,13 @@ interface BackendRuntimeState {
   pause_state: PauseState;
   start_time: string;
   current_run_id: string;
+  orchestrator_state?: OrchestratorState;
+  active_agent_count?: number;
 }
 // Pause state enum matching Go backend (ipc/protocol.go)
 type PauseState = 'running' | 'paused_user' | 'paused_agent' | 'paused_both';
+// Orchestrator state enum matching Go backend (daemon/orchestrator_manager.go)
+type OrchestratorState = 'off' | 'idle' | 'active' | 'paused';
 interface StateSyncEvent {
   type: 'state:sync';
   timestamp: string;
@@ -299,6 +303,15 @@ interface OrchResumedEvent {
   timestamp: string;
   payload: OrchPauseStatusPayload;
 }
+interface OrchStateChangedPayload {
+  state: OrchestratorState;
+  active_agent_count: number;
+}
+interface OrchStateChangedEvent {
+  type: 'orch:state_changed';
+  timestamp: string;
+  payload: OrchStateChangedPayload;
+}
 type EventType =
   | StateSyncEvent
   | AgentStartedEvent
@@ -312,6 +325,7 @@ type EventType =
   | StatsUpdatedEvent
   | OrchPausedEvent
   | OrchResumedEvent
+  | OrchStateChangedEvent
   | RunStartedEvent
   | RunCompletedEvent
   | RulesChangedEvent;
@@ -346,6 +360,7 @@ export function useWebSocket() {
     addRun,
     updateRun,
     setCurrentRunId,
+    setOrchestratorState,
   } = useStateStore();
   const connect = useCallback(() => {
     // Don't reconnect if manually closed
@@ -506,6 +521,8 @@ export function useWebSocket() {
                 pause_state: backendState.pause_state ?? 'running',
                 start_time: backendState.start_time,
                 current_run_id: backendState.current_run_id ?? '',
+                orchestrator_state: backendState.orchestrator_state ?? 'off',
+                active_agent_count: backendState.active_agent_count ?? 0,
               });
               console.log('[WebSocket] State synced with', Object.keys(transformedAgents).length, 'agents');
               break;
@@ -656,6 +673,12 @@ export function useWebSocket() {
               setPauseState(is_paused, is_paused_by_user, is_paused_by_agent, pause_state);
               break;
             }
+            case 'orch:state_changed': {
+              const { state, active_agent_count } = message.payload;
+              console.log('[WebSocket] Orchestrator state changed:', state, 'agents:', active_agent_count);
+              setOrchestratorState(state, active_agent_count);
+              break;
+            }
             case 'run:started': {
               const { run_id, task_count, repo_id, repo_path, repo_name } = message.payload;
               console.log('[WebSocket] Run started:', run_id, 'tasks:', task_count);
@@ -745,7 +768,7 @@ export function useWebSocket() {
         }, backoffTime);
       }
     }
-  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, appendGitCommit, syncState, setPauseState, setActiveRepo, updateAgentMergeStatus, addRun, updateRun, clearOutput, setCurrentRunId]);
+  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, appendGitCommit, syncState, setPauseState, setActiveRepo, updateAgentMergeStatus, addRun, updateRun, clearOutput, setCurrentRunId, setOrchestratorState]);
   const disconnect = useCallback(() => {
     isManuallyClosedRef.current = true;
     if (reconnectTimeoutRef.current !== null) {

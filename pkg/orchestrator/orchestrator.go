@@ -72,6 +72,16 @@ func (e *EventCallbacks) OnFail(ctx context.Context, taskID string, result *agen
 	}
 }
 
+// StateCallbacks defines callbacks for orchestrator state transitions.
+// These are called when the orchestrator transitions between Idle and Active states.
+type StateCallbacks struct {
+	// OnIdle is called when the orchestrator enters idle state (no in-flight tasks)
+	OnIdle func()
+
+	// OnActive is called when the orchestrator enters active state (has in-flight tasks)
+	OnActive func()
+}
+
 // Config holds orchestrator configuration
 type Config struct {
 	WorkDir         string
@@ -120,6 +130,10 @@ type Orchestrator struct {
 	inFlightMu   sync.RWMutex
 	inFlight     map[string]bool   // Tasks currently being executed
 	inFlightTask map[string]*beads.Task // Task objects for in-flight tasks (for concurrency limiting)
+
+	// State transition callbacks
+	stateCallbacks *StateCallbacks
+	wasActive      bool // Track previous state to detect transitions
 }
 
 // New creates a new orchestrator
@@ -357,6 +371,35 @@ func (o *Orchestrator) SetAgentID(taskID, agentID string) {
 // GetAgentID retrieves the agentID for a taskID.
 func (o *Orchestrator) GetAgentID(taskID string) string {
 	return o.mergeCoordinator.GetAgentID(taskID)
+}
+
+// SetStateCallbacks sets callbacks for orchestrator state transitions (Idle/Active).
+// These callbacks are invoked when the orchestrator transitions between having
+// in-flight tasks (Active) and having no work to do (Idle).
+func (o *Orchestrator) SetStateCallbacks(callbacks *StateCallbacks) {
+	o.stateCallbacks = callbacks
+}
+
+// notifyStateChange checks if state has changed and invokes appropriate callback.
+func (o *Orchestrator) notifyStateChange(inFlightCount int) {
+	if o.stateCallbacks == nil {
+		return
+	}
+
+	isActive := inFlightCount > 0
+	if isActive && !o.wasActive {
+		// Transition to Active
+		o.wasActive = true
+		if o.stateCallbacks.OnActive != nil {
+			o.stateCallbacks.OnActive()
+		}
+	} else if !isActive && o.wasActive {
+		// Transition to Idle
+		o.wasActive = false
+		if o.stateCallbacks.OnIdle != nil {
+			o.stateCallbacks.OnIdle()
+		}
+	}
 }
 
 // Run executes the orchestration loop, polling continuously for work until context is cancelled.
@@ -603,16 +646,27 @@ func (o *Orchestrator) filterTasksWithEngine(tasks []beads.Task) []beads.Task {
 // markInFlight marks a task as currently in-flight
 func (o *Orchestrator) markInFlight(taskID string) {
 	o.inFlightMu.Lock()
-	defer o.inFlightMu.Unlock()
+	wasEmpty := len(o.inFlight) == 0
 	o.inFlight[taskID] = true
+	count := len(o.inFlight)
+	o.inFlightMu.Unlock()
+
+	// Notify state change if we transitioned from empty to non-empty
+	if wasEmpty {
+		o.notifyStateChange(count)
+	}
 }
 
 // unmarkInFlight removes a task from the in-flight set
 func (o *Orchestrator) unmarkInFlight(taskID string) {
 	o.inFlightMu.Lock()
-	defer o.inFlightMu.Unlock()
 	delete(o.inFlight, taskID)
 	delete(o.inFlightTask, taskID)
+	count := len(o.inFlight)
+	o.inFlightMu.Unlock()
+
+	// Notify state change (might transition to idle if count is 0)
+	o.notifyStateChange(count)
 }
 
 // isInFlight returns whether a task is currently in-flight

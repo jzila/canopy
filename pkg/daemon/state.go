@@ -843,6 +843,10 @@ type RuntimeStateSnapshot struct {
 	StartTime    time.Time              `json:"start_time"`
 	CurrentRunID string                 `json:"current_run_id"`
 
+	// Orchestrator state fields
+	OrchestratorState string `json:"orchestrator_state,omitempty"` // off, idle, active, paused
+	ActiveAgentCount  int    `json:"active_agent_count,omitempty"` // Number of currently running agents
+
 	// Hybrid overlay architecture: dual-source task state
 	// PersistentTasks: canonical state from beads (source of truth)
 	// RuntimeTasks: ephemeral overlay (in_progress, agent assignments)

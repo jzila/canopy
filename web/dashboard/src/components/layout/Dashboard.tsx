@@ -117,8 +117,6 @@ export const Dashboard: React.FC = () => {
   // State from store
   const agents = useStateStore((state) => state.agents);
   const stats = useStateStore((state) => state.stats);
-  const isPaused = useStateStore((state) => state.isPaused);
-  const isPausedByAgent = useStateStore((state) => state.isPausedByAgent);
   const pauseState = useStateStore((state) => state.pauseState);
   const selectedAgentId = useStateStore((state) => state.selectedAgentId);
   const setSelectedAgent = useStateStore((state) => state.setSelectedAgent);
@@ -139,6 +137,9 @@ export const Dashboard: React.FC = () => {
   const selectedBeadId = useStateStore((state) => state.selectedBeadId);
   const setSelectedBead = useStateStore((state) => state.setSelectedBead);
   const tasks = useStateStore((state) => state.tasks);
+  // Orchestrator state
+  const orchestratorState = useStateStore((state) => state.orchestratorState);
+  const activeAgentCount = useStateStore((state) => state.activeAgentCount);
   // Run control state
   const isStartingRun = useStateStore((state) => state.isStartingRun);
   const isStoppingRun = useStateStore((state) => state.isStoppingRun);
@@ -285,10 +286,6 @@ export const Dashboard: React.FC = () => {
   }, [agents, handleSelectAgent]);
 
   // Run control handlers
-  const handleOpenRunConfig = useCallback(() => {
-    setShowRunConfigDialog(true);
-  }, [setShowRunConfigDialog]);
-
   const handleCloseRunConfig = useCallback(() => {
     setShowRunConfigDialog(false);
   }, [setShowRunConfigDialog]);
@@ -353,6 +350,44 @@ export const Dashboard: React.FC = () => {
     }
   }, [setStoppingRun, syncState]);
 
+  // Activate orchestrator - starts with current run config
+  const handleActivate = useCallback(async () => {
+    const activeRepo = repositories.find((repo) => repo.id === activeRepoId);
+    if (!activeRepo) {
+      console.error('No active repository selected');
+      return;
+    }
+
+    try {
+      setStartingRun(true);
+      const config = useStateStore.getState().runConfig;
+      const response = await startRun({
+        work_dir: activeRepo.path,
+        repo_id: activeRepo.id,
+        concurrency: config.concurrency,
+        max_priority: config.max_priority,
+        use_bwrap: config.use_bwrap,
+        max_retries: config.max_retries,
+      });
+
+      if (response.success && response.run_id) {
+        setCurrentRunId(response.run_id);
+        // Refresh state after activating
+        const state = await getState();
+        syncState(state);
+      } else {
+        console.error('Failed to activate orchestrator:', response.error);
+      }
+    } catch (error) {
+      console.error('Failed to activate orchestrator:', error);
+    } finally {
+      setStartingRun(false);
+    }
+  }, [activeRepoId, repositories, setStartingRun, setCurrentRunId, syncState]);
+
+  // Deactivate orchestrator - same as stop run
+  const handleDeactivate = handleStopRun;
+
   const selectedAgent = selectedAgentId ? agents[selectedAgentId] : null;
   const totalAgentCount = Object.keys(agents).length;
   const currentRunId = useStateStore((state) => state.currentRunId);
@@ -371,6 +406,17 @@ export const Dashboard: React.FC = () => {
         activeRunId={activeRunId}
         isRunsLoading={isRunsLoading}
         onRunSelect={setActiveRunId}
+        orchestratorState={orchestratorState}
+        activeAgentCount={activeAgentCount}
+        pauseState={pauseState}
+        isActivating={isStartingRun}
+        isDeactivating={isStoppingRun}
+        isPauseLoading={isPauseLoading}
+        isResumeLoading={isResumeLoading}
+        onActivate={handleActivate}
+        onDeactivate={handleDeactivate}
+        onPause={handlePause}
+        onResume={handleResume}
         stats={stats}
       />
 
@@ -410,19 +456,6 @@ export const Dashboard: React.FC = () => {
                 selectedBeadId={selectedBeadId}
                 selectedBeadTitle={selectedBeadId ? tasks[selectedBeadId]?.title : undefined}
                 onClearBeadFilter={() => setSelectedBead(null)}
-                isPaused={isPaused}
-                isPausedByAgent={isPausedByAgent}
-                pauseState={pauseState}
-                isPauseLoading={isPauseLoading}
-                isResumeLoading={isResumeLoading}
-                currentRunId={currentRunId}
-                connected={connected}
-                onPause={handlePause}
-                onResume={handleResume}
-                isStartingRun={isStartingRun}
-                isStoppingRun={isStoppingRun}
-                onStartRun={handleOpenRunConfig}
-                onStopRun={handleStopRun}
               />
             </div>
 

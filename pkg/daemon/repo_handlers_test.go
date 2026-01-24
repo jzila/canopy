@@ -22,6 +22,15 @@ func (m *mockDaemon) GetActiveRepositoryID() string {
 	return m.activeRepoID
 }
 
+func (m *mockDaemon) GetActiveRepository() *repository.Repository {
+	// Return nil for tests - orchestrator state won't be populated
+	return nil
+}
+
+func (m *mockDaemon) GetOrchestratorManager() *OrchestratorManager {
+	return nil
+}
+
 func (m *mockDaemon) SetActiveRepository(repoID string) error {
 	m.activeRepoID = repoID
 	return nil
@@ -29,10 +38,6 @@ func (m *mockDaemon) SetActiveRepository(repoID string) error {
 
 func (m *mockDaemon) ListRepositories() ([]repository.Repository, error) {
 	return repository.List()
-}
-
-func (m *mockDaemon) GetOrchestratorManager() *OrchestratorManager {
-	return nil
 }
 
 // mockRepoStore implements RepositoryStoreInterface for testing

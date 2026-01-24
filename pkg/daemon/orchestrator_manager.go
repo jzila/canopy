@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -533,6 +534,9 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 	callbacks := m.createEventCallbacks(runID, config.RepoID)
 	orch.SetCallbacks(callbacks)
 
+	// Register state callbacks to track Idle/Active transitions
+	orch.SetStateCallbacks(m.createStateCallbacks(repoOrch))
+
 	// Set run and repo IDs on the orchestrator for agent tracking
 	orch.SetRunID(runID)
 	if config.RepoID != "" {
@@ -559,6 +563,9 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 
 	// Publish run started event
 	m.publishRunStarted(runID, runState.TasksTotal, config)
+
+	// Publish initial state change (orchestrator now idle/active)
+	m.publishStateChange(OrchestratorIdle, 0)
 
 	// Start orchestrator in background goroutine
 	go m.runOrchestrator(runCtx, runState, repoOrch)
@@ -611,42 +618,6 @@ func (m *OrchestratorManager) StopRun(runID string) error {
 	}
 
 	logging.Info("cancelled orchestration run", "run_id", runID)
-
-	return nil
-}
-
-// KillAgent terminates a specific agent by ID.
-// It searches all active runs for the agent and kills it via the orchestrator's scheduler.
-func (m *OrchestratorManager) KillAgent(agentID string) error {
-	var found bool
-
-	// Search all runs for the agent
-	m.runs.Range(func(key, value interface{}) bool {
-		runState := value.(*RunState)
-		runState.mu.RLock()
-		orch := runState.orch
-		status := runState.Status
-		runState.mu.RUnlock()
-
-		// Only check active runs
-		if status != RunStatusRunning || orch == nil {
-			return true // continue
-		}
-
-		// Try to kill via the scheduler
-		if sched := orch.GetScheduler(); sched != nil {
-			if err := sched.Kill(agentID); err == nil {
-				found = true
-				return false // stop iteration
-			}
-		}
-
-		return true // continue
-	})
-
-	if !found {
-		return fmt.Errorf("agent %s not found", agentID)
-	}
 
 	return nil
 }
@@ -799,6 +770,9 @@ func (m *OrchestratorManager) runOrchestrator(ctx context.Context, runState *Run
 	// Remove from active runs by repo
 	m.runsByRepo.Delete(runState.RepoPath)
 
+	// Publish state change to Off
+	m.publishStateChange(OrchestratorOff, 0)
+
 	// Publish run completed event
 	m.publishRunCompleted(runState)
 
@@ -945,6 +919,63 @@ func (m *OrchestratorManager) createEventCallbacks(runID, repoID string) *orches
 	}
 }
 
+// createStateCallbacks creates state transition callbacks for a RepoOrchestrator.
+// These callbacks update the RepoOrchestrator's State field when the underlying
+// Orchestrator transitions between Idle and Active states.
+func (m *OrchestratorManager) createStateCallbacks(repoOrch *RepoOrchestrator) *orchestrator.StateCallbacks {
+	return &orchestrator.StateCallbacks{
+		OnIdle: func() {
+			repoOrch.mu.Lock()
+			repoOrch.State = OrchestratorIdle
+			repoOrch.mu.Unlock()
+			logging.Debug("orchestrator entered idle state", "repo_path", repoOrch.RepoPath)
+
+			// Publish state change event
+			m.publishStateChange(OrchestratorIdle, 0)
+		},
+		OnActive: func() {
+			repoOrch.mu.Lock()
+			repoOrch.State = OrchestratorActive
+			repoOrch.mu.Unlock()
+			logging.Debug("orchestrator entered active state", "repo_path", repoOrch.RepoPath)
+
+			// Count active agents
+			activeCount := m.countActiveAgents()
+			m.publishStateChange(OrchestratorActive, activeCount)
+		},
+	}
+}
+
+// publishStateChange publishes an orchestrator state change event to the event bus.
+func (m *OrchestratorManager) publishStateChange(state OrchestratorState, activeAgentCount int) {
+	if m.eventBus == nil {
+		return
+	}
+
+	m.eventBus.Publish(events.Event{
+		Type:      events.EventOrchStateChanged,
+		Timestamp: time.Now(),
+		Payload: map[string]interface{}{
+			"state":              string(state),
+			"active_agent_count": activeAgentCount,
+		},
+	})
+}
+
+// countActiveAgents counts the number of currently running agents.
+func (m *OrchestratorManager) countActiveAgents() int {
+	count := 0
+	if m.state != nil {
+		snapshot := m.state.GetSnapshot()
+		for _, agent := range snapshot.Agents {
+			if agent.Status == "running" {
+				count++
+			}
+		}
+	}
+	return count
+}
+
 // buildCompletionPayload creates the payload for agent completion events.
 func (m *OrchestratorManager) buildCompletionPayload(agentID string, result *agent.Result) map[string]interface{} {
 	payload := map[string]interface{}{
@@ -1036,4 +1067,49 @@ func makeAgentID(runID, taskID string) string {
 		prefix = prefix[:8]
 	}
 	return fmt.Sprintf("agent-%s-%s", prefix, taskID)
+}
+
+// KillAgent terminates a specific agent by its ID.
+// It finds the run that owns the agent and delegates to the scheduler.
+// Agent ID format: agent-{runID[:8]}-{taskID}
+func (m *OrchestratorManager) KillAgent(agentID string) error {
+	// Parse agent ID to extract run ID prefix
+	// Format: agent-{runID[:8]}-{taskID}
+	parts := strings.SplitN(agentID, "-", 3)
+	if len(parts) < 3 || parts[0] != "agent" {
+		return fmt.Errorf("invalid agent ID format: %s", agentID)
+	}
+	runPrefix := parts[1]
+
+	// Find the run with matching ID prefix
+	var foundRun *RunState
+	m.runs.Range(func(key, value interface{}) bool {
+		runID := key.(string)
+		// Check if run ID starts with the prefix
+		if len(runID) >= len(runPrefix) && runID[:len(runPrefix)] == runPrefix {
+			foundRun = value.(*RunState)
+			return false // stop iteration
+		}
+		return true
+	})
+
+	if foundRun == nil {
+		return fmt.Errorf("run not found for agent %s", agentID)
+	}
+
+	// Get the scheduler from the orchestrator
+	foundRun.mu.RLock()
+	orch := foundRun.orch
+	foundRun.mu.RUnlock()
+
+	if orch == nil {
+		return fmt.Errorf("orchestrator not available for agent %s", agentID)
+	}
+
+	sched := orch.GetScheduler()
+	if sched == nil {
+		return fmt.Errorf("scheduler not available for agent %s", agentID)
+	}
+
+	return sched.Kill(agentID)
 }
