@@ -610,8 +610,15 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 // sendInitialState sends the current runtime state to a newly connected client
 func (s *Server) sendInitialState(client *Client) {
-	// Get a snapshot of the current state
-	snapshot := s.state.GetSnapshot()
+	// Get a snapshot of the current state.
+	// Use daemon.GetState() if available, as it includes orchestrator state.
+	// Otherwise fall back to direct state snapshot.
+	var snapshot RuntimeStateSnapshot
+	if s.daemon != nil {
+		snapshot = s.daemon.GetState()
+	} else {
+		snapshot = s.state.GetSnapshot()
+	}
 
 	// Create state sync event
 	event := Event{

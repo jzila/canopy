@@ -451,11 +451,33 @@ func (d *Daemon) GetEventBus() *EventBus {
 }
 
 // GetState returns a snapshot of the current runtime state.
+// It includes orchestrator state from the OrchestratorManager if available.
 func (d *Daemon) GetState() RuntimeStateSnapshot {
-	if d.state != nil {
-		return d.state.GetSnapshot()
+	if d.state == nil {
+		return RuntimeStateSnapshot{}
 	}
-	return RuntimeStateSnapshot{}
+
+	snapshot := d.state.GetSnapshot()
+
+	// Populate orchestrator state from OrchestratorManager if available
+	if d.repoManager != nil && d.orchManager != nil {
+		if repo := d.GetActiveRepository(); repo != nil {
+			state := d.orchManager.GetOrchestratorState(repo.Path)
+			if state != "" {
+				snapshot.OrchestratorState = string(state)
+			}
+			// Count active agents from the snapshot we already have
+			activeCount := 0
+			for _, agent := range snapshot.Agents {
+				if agent.Status == "running" {
+					activeCount++
+				}
+			}
+			snapshot.ActiveAgentCount = activeCount
+		}
+	}
+
+	return snapshot
 }
 
 // GetRuntimeState returns the RuntimeState instance for direct access.
