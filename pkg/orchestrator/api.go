@@ -29,8 +29,6 @@ type RunConfig struct {
 	Concurrency int `json:"concurrency"`
 	// DryRun shows what would execute without running agents
 	DryRun bool `json:"dry_run"`
-	// Watch enables watch mode (poll for new tasks instead of exiting)
-	Watch bool `json:"watch"`
 	// MaxRetries is the maximum retry count for failed tasks (-1 = infinite)
 	MaxRetries int `json:"max_retries"`
 	// MaxPriority filters tasks by priority (only tasks with priority <= this value)

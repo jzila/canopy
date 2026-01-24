@@ -40,14 +40,17 @@ var (
 	filterLabels     []string
 	excludeLabels    []string
 	filterAssignee   string
-	watchMode        bool
 	pollInterval     time.Duration
 )
 
 var runCmd = &cobra.Command{
 	Use:   "run",
 	Short: "Execute ready tasks from beads",
-	Long: `Executes all ready (unblocked) tasks from beads in parallel.
+	Long: `Executes ready (unblocked) tasks from beads in parallel, polling continuously.
+
+The orchestrator runs continuously until cancelled (Ctrl+C):
+- When work is available: processes tasks (Active state)
+- When no work is available: sleeps for poll interval (Idle state)
 
 Each task runs in an isolated sandbox with its own copy of the working
 directory. Changes are merged back after completion.
@@ -130,10 +133,8 @@ Example:
   # Resume interrupted agents after daemon restart
   canopy run --resume                 # Resume agents that were interrupted
 
-  # Watch mode: keep running and poll for new tasks
-  canopy run --watch                  # Run indefinitely, polling for new tasks
-  canopy run --watch --poll-interval 10s  # Poll every 10 seconds (default: 5s)
-  canopy run -w                       # Short form of --watch`,
+  # Set poll interval for idle state
+  canopy run --poll-interval 10s      # Poll every 10 seconds (default: 5s)`,
 	RunE: runOrchestrator,
 }
 
@@ -154,9 +155,8 @@ func init() {
 	runCmd.Flags().StringSliceVar(&excludeLabels, "exclude-label", nil, "Exclude tasks with these labels (comma-separated)")
 	runCmd.Flags().StringVar(&filterAssignee, "assignee", "", "Filter by assignee (\"\" = unassigned only, \"*\" = any, name = exact match)")
 
-	// Watch mode flags
-	runCmd.Flags().BoolVarP(&watchMode, "watch", "w", false, "Watch mode: keep running and poll for new tasks instead of exiting when queue is empty")
-	runCmd.Flags().DurationVar(&pollInterval, "poll-interval", 5*time.Second, "Interval between polling for new tasks in watch mode")
+	// Poll interval for idle state
+	runCmd.Flags().DurationVar(&pollInterval, "poll-interval", 5*time.Second, "Interval between polling for new tasks when idle")
 
 	rootCmd.AddCommand(runCmd)
 }
@@ -304,7 +304,6 @@ func runOrchestrator(cmd *cobra.Command, args []string) error {
 		ResolverTimeout: effectiveResolverTimeout,
 		Rules:           rules,
 		RulesOverrides:  rulesOverrides,
-		Watch:           watchMode,
 		PollInterval:    pollInterval,
 	})
 	if err != nil {

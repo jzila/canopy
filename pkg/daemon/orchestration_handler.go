@@ -64,10 +64,9 @@ type RunStatusResponse struct {
 
 // UpdateRunConfigRequest is the JSON request body for updating run configuration.
 type UpdateRunConfigRequest struct {
-	Concurrency  *int  `json:"concurrency,omitempty"`
-	MaxPriority  *int  `json:"max_priority,omitempty"`
-	Watch        *bool `json:"watch,omitempty"`
-	PollInterval *int  `json:"poll_interval_ms,omitempty"` // milliseconds
+	Concurrency  *int `json:"concurrency,omitempty"`
+	MaxPriority  *int `json:"max_priority,omitempty"`
+	PollInterval *int `json:"poll_interval_ms,omitempty"` // milliseconds
 }
 
 // UpdateRunConfigResponse is the JSON response for updating run configuration.
@@ -317,7 +316,7 @@ func (h *OrchestrationHandler) HandleUpdateRunConfig(w http.ResponseWriter, r *h
 		return
 	}
 
-	err := h.manager.UpdateRunConfig(runID, req.Concurrency, req.MaxPriority, req.Watch)
+	err := h.manager.UpdateRunConfig(runID, req.Concurrency, req.MaxPriority)
 	if err != nil {
 		logging.Warn("failed to update run config",
 			"run_id", runID,

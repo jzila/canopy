@@ -68,8 +68,8 @@ interface AgentCompletedEvent {
     duration: number;
     input_tokens: number;
     output_tokens: number;
-    cache_creation_tokens?: number;
-    cache_read_tokens?: number;
+    cache_creation_input_tokens?: number;
+    cache_read_input_tokens?: number;
     cost_usd: number;
     files_changed: number;
     commits_created: number;
@@ -251,6 +251,10 @@ interface BackendRuntimeState {
     completed_tasks: number;
     failed_tasks: number;
     running_tasks: number;
+    total_input_tokens: number;
+    total_output_tokens: number;
+    total_cache_creation_tokens: number;
+    total_cache_read_tokens: number;
     total_tokens: number;
     total_cost_usd: number;
     total_duration: number;
@@ -484,6 +488,10 @@ export function useWebSocket() {
                   completed_tasks: 0,
                   failed_tasks: 0,
                   running_tasks: 0,
+                  total_input_tokens: 0,
+                  total_output_tokens: 0,
+                  total_cache_creation_tokens: 0,
+                  total_cache_read_tokens: 0,
                   total_tokens: 0,
                   total_cost_usd: 0,
                   total_duration: 0,
@@ -570,7 +578,7 @@ export function useWebSocket() {
               break;
             }
             case 'agent:completed': {
-              const { agent_id, error, exit_code, duration, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, commits_created } = message.payload;
+              const { agent_id, error, exit_code, duration, input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, cost_usd, files_changed, commits_created } = message.payload;
               updateAgent(agent_id, {
                 status: error ? 'failed' : 'completed',
                 end_time: message.timestamp,
@@ -585,8 +593,8 @@ export function useWebSocket() {
                   total_tokens: input_tokens + output_tokens,
                   cost_usd,
                   // Optional cache token fields - only set if defined (exactOptionalPropertyTypes compliance)
-                  ...(cache_creation_tokens !== undefined && { cache_creation_input_tokens: cache_creation_tokens }),
-                  ...(cache_read_tokens !== undefined && { cache_read_input_tokens: cache_read_tokens }),
+                  ...(cache_creation_input_tokens !== undefined && { cache_creation_input_tokens }),
+                  ...(cache_read_input_tokens !== undefined && { cache_read_input_tokens }),
                 },
               });
               break;

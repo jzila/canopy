@@ -44,7 +44,7 @@ type RulesSettings struct {
 	Assignee string `toml:"assignee"`
 
 	// Behavior
-	// StopWhenEmpty stops the run when no tasks match (for watch mode)
+	// StopWhenEmpty stops the orchestrator when no tasks match rules
 	StopWhenEmpty bool `toml:"stop_when_empty"`
 
 	// Concurrency limits

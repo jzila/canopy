@@ -121,6 +121,10 @@ export interface Stats {
   completed_tasks: number;
   failed_tasks: number;
   running_tasks: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_cache_creation_tokens: number;
+  total_cache_read_tokens: number;
   total_tokens: number;
   total_cost_usd: number;
   total_duration: number;
@@ -261,6 +265,10 @@ const initialStats: Stats = {
   completed_tasks: 0,
   failed_tasks: 0,
   running_tasks: 0,
+  total_input_tokens: 0,
+  total_output_tokens: 0,
+  total_cache_creation_tokens: 0,
+  total_cache_read_tokens: 0,
   total_tokens: 0,
   total_cost_usd: 0,
   total_duration: 0,
@@ -293,6 +301,11 @@ function recalculateStats(agents: Record<string, AgentState>): Stats {
         break;
     }
 
+    // Track all token types separately
+    stats.total_input_tokens += agent.token_usage.input_tokens;
+    stats.total_output_tokens += agent.token_usage.output_tokens;
+    stats.total_cache_creation_tokens += agent.token_usage.cache_creation_input_tokens ?? 0;
+    stats.total_cache_read_tokens += agent.token_usage.cache_read_input_tokens ?? 0;
     stats.total_tokens += agent.token_usage.total_tokens;
     stats.total_cost_usd += agent.token_usage.cost_usd;
     stats.file_changes += agent.changes;

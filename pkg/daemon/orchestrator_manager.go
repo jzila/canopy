@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,11 +49,13 @@ const (
 type OrchestratorState string
 
 const (
-	// OrchestratorIdle means the orchestrator is running but not processing tasks.
+	// OrchestratorOff means no orchestrator instance exists (not activated, not watching).
+	OrchestratorOff OrchestratorState = "off"
+	// OrchestratorIdle means the orchestrator is running, polling for work, but none available.
 	OrchestratorIdle OrchestratorState = "idle"
 	// OrchestratorActive means the orchestrator is actively processing tasks.
 	OrchestratorActive OrchestratorState = "active"
-	// OrchestratorPaused means the orchestrator is paused (tasks queued but not processed).
+	// OrchestratorPaused means the orchestrator is running but scheduler is paused.
 	OrchestratorPaused OrchestratorState = "paused"
 )
 
@@ -155,11 +158,11 @@ func (m *OrchestratorManager) RegisterRepo(repoPath string, repoID string) (*Rep
 	// Create rules engine from config
 	rulesEngine := rules.NewEngine(&cfg.Rules)
 
-	// Create the RepoOrchestrator in IDLE state
+	// Create the RepoOrchestrator in OFF state (registered but not activated)
 	repoOrch := &RepoOrchestrator{
 		RepoPath:    repoPath,
 		RepoID:      repoID,
-		State:       OrchestratorIdle,
+		State:       OrchestratorOff,
 		rulesEngine: rulesEngine,
 	}
 
@@ -168,7 +171,7 @@ func (m *OrchestratorManager) RegisterRepo(repoPath string, repoID string) (*Rep
 		return existing.(*RepoOrchestrator), nil
 	}
 
-	logging.Info("registered repo orchestrator", "repo_path", repoPath, "state", OrchestratorIdle)
+	logging.Info("registered repo orchestrator", "repo_path", repoPath, "state", OrchestratorOff)
 
 	return repoOrch, nil
 }
@@ -450,7 +453,7 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 		if cleanupOnError {
 			m.runsByRepo.Delete(config.WorkDir)
 			repoOrch.mu.Lock()
-			repoOrch.State = OrchestratorIdle
+			repoOrch.State = OrchestratorOff
 			repoOrch.RunID = ""
 			repoOrch.mu.Unlock()
 		}
@@ -599,10 +602,10 @@ func (m *OrchestratorManager) StopRun(runID string) error {
 	now := time.Now()
 	runState.EndTime = &now
 
-	// Also update the RepoOrchestrator state
+	// Also update the RepoOrchestrator state (back to off since orchestrator stopped)
 	if repoOrch := m.GetRepoOrchestrator(runState.RepoPath); repoOrch != nil {
 		repoOrch.mu.Lock()
-		repoOrch.State = OrchestratorIdle
+		repoOrch.State = OrchestratorOff
 		repoOrch.orch = nil
 		repoOrch.cancel = nil
 		repoOrch.mu.Unlock()
@@ -681,9 +684,9 @@ func (m *OrchestratorManager) GetActiveRunForRepo(repoPath string) (*RunState, e
 }
 
 // UpdateRunConfig updates the configuration of a running orchestration.
-// Supports modifying concurrency, max priority filter, and pause state.
+// Supports modifying concurrency and max priority filter.
 // Returns an error if the run is not found or not active.
-func (m *OrchestratorManager) UpdateRunConfig(runID string, concurrency *int, maxPriority *int, paused *bool) error {
+func (m *OrchestratorManager) UpdateRunConfig(runID string, concurrency *int, maxPriority *int) error {
 	runStateI, ok := m.runs.Load(runID)
 	if !ok {
 		return fmt.Errorf("run not found: %s", runID)
@@ -715,22 +718,6 @@ func (m *OrchestratorManager) UpdateRunConfig(runID string, concurrency *int, ma
 		logging.Info("updated run max priority", "run_id", runID, "max_priority", *maxPriority)
 	}
 
-	// Update pause state if specified
-	if paused != nil {
-		if runState.orch != nil {
-			sched := runState.orch.GetScheduler()
-			if sched != nil {
-				if *paused {
-					sched.Pause()
-					logging.Info("paused run", "run_id", runID)
-				} else {
-					sched.Resume()
-					logging.Info("resumed run", "run_id", runID)
-				}
-			}
-		}
-	}
-
 	return nil
 }
 
@@ -760,13 +747,13 @@ func (m *OrchestratorManager) runOrchestrator(ctx context.Context, runState *Run
 	}
 	runState.mu.Unlock()
 
-	// Transition RepoOrchestrator back to IDLE state
+	// Transition RepoOrchestrator back to OFF state (orchestrator stopped)
 	if repoOrch != nil {
 		repoOrch.mu.Lock()
-		repoOrch.State = OrchestratorIdle
+		repoOrch.State = OrchestratorOff
 		repoOrch.orch = nil
 		repoOrch.cancel = nil
-		// Keep rulesEngine for continued rules access in IDLE state
+		// Keep rulesEngine for continued rules access in OFF state
 		// Reload from config to ensure fresh state
 		if cfg, err := config.LoadConfig(repoOrch.RepoPath); err == nil {
 			repoOrch.rulesEngine = rules.NewEngine(&cfg.Rules)
@@ -1006,47 +993,6 @@ func (m *OrchestratorManager) publishRunCompleted(runState *RunState) {
 	})
 }
 
-// KillAgent terminates a running agent by its agent ID.
-// It finds the agent's run via RuntimeState and calls Kill on the scheduler.
-func (m *OrchestratorManager) KillAgent(agentID string) error {
-	// Look up agent in RuntimeState to find its run ID
-	agent := m.state.GetAgent(agentID)
-	if agent == nil {
-		return fmt.Errorf("agent %s not found", agentID)
-	}
-
-	runID := agent.RunID
-	if runID == "" {
-		return fmt.Errorf("agent %s has no associated run", agentID)
-	}
-
-	// Find the run state
-	runStateVal, ok := m.runs.Load(runID)
-	if !ok {
-		return fmt.Errorf("run %s not found for agent %s", runID, agentID)
-	}
-
-	runState := runStateVal.(*RunState)
-	runState.mu.RLock()
-	orch := runState.orch
-	runState.mu.RUnlock()
-
-	if orch == nil {
-		return fmt.Errorf("orchestrator not available for run %s", runID)
-	}
-
-	// Get scheduler from orchestrator and kill the agent
-	sched := orch.GetScheduler()
-	if sched == nil {
-		return fmt.Errorf("scheduler not available for run %s", runID)
-	}
-
-	// The scheduler uses task ID, not agent ID
-	// Agent ID format: agent-{runID[:8]}-{taskID}
-	// We have the task ID directly from the agent state
-	return sched.Kill(agent.TaskID)
-}
-
 // makeAgentID creates a unique agent ID by combining run ID prefix with task ID.
 // Format: agent-{runID[:8]}-{taskID}
 func makeAgentID(runID, taskID string) string {
@@ -1055,4 +1001,49 @@ func makeAgentID(runID, taskID string) string {
 		prefix = prefix[:8]
 	}
 	return fmt.Sprintf("agent-%s-%s", prefix, taskID)
+}
+
+// KillAgent terminates a specific agent by its ID.
+// It finds the run that owns the agent and delegates to the scheduler.
+// Agent ID format: agent-{runID[:8]}-{taskID}
+func (m *OrchestratorManager) KillAgent(agentID string) error {
+	// Parse agent ID to extract run ID prefix
+	// Format: agent-{runID[:8]}-{taskID}
+	parts := strings.SplitN(agentID, "-", 3)
+	if len(parts) < 3 || parts[0] != "agent" {
+		return fmt.Errorf("invalid agent ID format: %s", agentID)
+	}
+	runPrefix := parts[1]
+
+	// Find the run with matching ID prefix
+	var foundRun *RunState
+	m.runs.Range(func(key, value interface{}) bool {
+		runID := key.(string)
+		// Check if run ID starts with the prefix
+		if len(runID) >= len(runPrefix) && runID[:len(runPrefix)] == runPrefix {
+			foundRun = value.(*RunState)
+			return false // stop iteration
+		}
+		return true
+	})
+
+	if foundRun == nil {
+		return fmt.Errorf("run not found for agent %s", agentID)
+	}
+
+	// Get the scheduler from the orchestrator
+	foundRun.mu.RLock()
+	orch := foundRun.orch
+	foundRun.mu.RUnlock()
+
+	if orch == nil {
+		return fmt.Errorf("orchestrator not available for agent %s", agentID)
+	}
+
+	sched := orch.GetScheduler()
+	if sched == nil {
+		return fmt.Errorf("scheduler not available for agent %s", agentID)
+	}
+
+	return sched.Kill(agentID)
 }
