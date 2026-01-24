@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/jzila/canopy/pkg/daemon"
+	"github.com/jzila/canopy/pkg/repository"
 	"github.com/jzila/canopy/pkg/runtime"
 )
 
@@ -161,9 +162,14 @@ func getDaemonInfo() (*DaemonInfo, error) {
 	info.OrchestratorState = stateResp.OrchestratorState
 	info.ActiveAgentCount = stateResp.ActiveAgentCount
 
-	// Get active repo ID from response
+	// Get active repo path from response (look up path from ID)
 	if activeRepoID, ok := stateResp.Extra["active_repo_id"].(string); ok && activeRepoID != "" {
-		info.ActiveRepo = activeRepoID
+		if repo, err := repository.FromID(activeRepoID); err == nil && repo != nil {
+			info.ActiveRepo = repo.Path
+		} else {
+			// Fallback to ID if lookup fails
+			info.ActiveRepo = activeRepoID
+		}
 	}
 
 	// Extract stats
