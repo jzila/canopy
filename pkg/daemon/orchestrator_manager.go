@@ -1221,5 +1221,7 @@ func (m *OrchestratorManager) KillAgent(agentID string) error {
 		return fmt.Errorf("scheduler not available for agent %s", agentID)
 	}
 
-	return sched.Kill(agentID)
+	// Extract task ID from parts (taskID is parts[2])
+	taskID := parts[2]
+	return sched.Kill(taskID)
 }

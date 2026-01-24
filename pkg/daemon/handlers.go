@@ -252,7 +252,13 @@ func (h *Handler) HandleKillAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if killErr != nil {
-		http.Error(w, fmt.Sprintf("Failed to kill agent: %v", killErr), http.StatusInternalServerError)
+		// Check if error is "agent not found" in scheduler
+		errMsg := killErr.Error()
+		if strings.Contains(errMsg, "not found") {
+			http.Error(w, fmt.Sprintf("Agent %s not found in scheduler", agentID), http.StatusNotFound)
+		} else {
+			http.Error(w, fmt.Sprintf("Failed to kill agent: %v", killErr), http.StatusInternalServerError)
+		}
 		return
 	}
 
