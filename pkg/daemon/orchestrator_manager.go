@@ -41,6 +41,10 @@ type RunConfig struct {
 	Labels          []string      `json:"labels,omitempty"`
 	ExcludeLabels   []string      `json:"exclude_labels,omitempty"`
 	Assignee        string        `json:"assignee,omitempty"`
+	// RuleOverrides contains custom rules to apply for this run only.
+	// These rules are applied with the highest precedence (above config.toml rules).
+	// When the run ends, these overrides are discarded unless persisted.
+	RuleOverrides []cfgpkg.CustomRule `json:"rule_overrides,omitempty"`
 }
 
 // RunStatus represents the current status of an orchestration run.
@@ -565,6 +569,16 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 	orch, err := orchestrator.New(orchConfig)
 	if err != nil {
 		return "", fmt.Errorf("failed to create orchestrator: %w", err)
+	}
+
+	// Apply run-configured rule overrides if provided
+	// These rules are applied with the highest precedence (above config.toml rules)
+	if len(config.RuleOverrides) > 0 {
+		if orchEngine := orch.GetRulesEngine(); orchEngine != nil {
+			if err := orchEngine.ApplyOverrides(config.RuleOverrides); err != nil {
+				return "", fmt.Errorf("failed to apply rule overrides: %w", err)
+			}
+		}
 	}
 
 	// Create cancellable context for this run

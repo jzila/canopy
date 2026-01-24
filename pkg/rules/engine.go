@@ -9,13 +9,25 @@ import (
 	"github.com/jzila/canopy/pkg/config"
 )
 
+// internalRule wraps a CustomRule with its source for internal tracking.
+type internalRule struct {
+	config.CustomRule
+	Source config.RuleSource
+}
+
 // Engine evaluates task selection rules against candidate tasks.
 // Rules are stored in a single unified slice, evaluated in order.
+// The three-tier precedence hierarchy is:
+//  1. Override rules (run-configured, highest priority)
+//  2. Config rules (from .canopy/config.toml)
+//  3. Default rules (built-in, lowest priority)
+//
 // The configSnapshot tracks the original config state for persistence tracking.
 type Engine struct {
 	settings       *config.RulesSettings // Filter settings (priority, types, labels, etc.)
-	rules          []config.CustomRule   // Unified rules slice (config + runtime)
+	rules          []internalRule        // Unified rules slice with source tracking
 	configSnapshot []config.CustomRule   // Snapshot of rules loaded from config (for persistence tracking)
+	defaultRules   []config.CustomRule   // Default rules (formalized baseline)
 	mu             sync.RWMutex
 }
 
@@ -23,16 +35,48 @@ type Engine struct {
 // Rules from cfg.Custom are loaded into the unified rules slice.
 func NewEngine(cfg *config.RulesSettings) *Engine {
 	e := &Engine{
-		settings: cfg,
-		rules:    nil,
+		settings:     cfg,
+		rules:        nil,
+		defaultRules: nil,
 	}
 
-	// Load config rules into unified slice and snapshot
+	// Load config rules into unified slice and snapshot with source tracking
 	if cfg != nil && len(cfg.Custom) > 0 {
-		e.rules = make([]config.CustomRule, len(cfg.Custom))
-		copy(e.rules, cfg.Custom)
+		e.rules = make([]internalRule, len(cfg.Custom))
+		for i, r := range cfg.Custom {
+			e.rules[i] = internalRule{
+				CustomRule: r,
+				Source:     config.RuleSourceConfig,
+			}
+		}
 		e.configSnapshot = make([]config.CustomRule, len(cfg.Custom))
 		copy(e.configSnapshot, cfg.Custom)
+	}
+
+	return e
+}
+
+// NewEngineWithDefaults creates a new rule evaluation engine with explicit default rules.
+// This allows establishing a baseline ruleset that is always present.
+// Precedence: override rules > config rules > default rules.
+func NewEngineWithDefaults(cfg *config.RulesSettings, defaults []config.CustomRule) *Engine {
+	e := NewEngine(cfg)
+
+	// Store default rules
+	if len(defaults) > 0 {
+		e.defaultRules = make([]config.CustomRule, len(defaults))
+		copy(e.defaultRules, defaults)
+
+		// Prepend defaults to rules slice (lowest priority, evaluated first)
+		// Note: rules are evaluated in order, so defaults come first
+		defaultInternals := make([]internalRule, len(defaults))
+		for i, r := range defaults {
+			defaultInternals[i] = internalRule{
+				CustomRule: r,
+				Source:     config.RuleSourceDefault,
+			}
+		}
+		e.rules = append(defaultInternals, e.rules...)
 	}
 
 	return e
@@ -56,10 +100,24 @@ type EvalResult struct {
 
 // AddRule adds a rule to the end of the unified rules slice.
 // Rules are evaluated in order: DENY stops and rejects, ALLOW continues.
+// New rules added at runtime are marked as override source.
 func (e *Engine) AddRule(rule config.CustomRule) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.rules = append(e.rules, rule)
+	e.rules = append(e.rules, internalRule{
+		CustomRule: rule,
+		Source:     config.RuleSourceOverride,
+	})
+}
+
+// AddRuleWithSource adds a rule with an explicit source.
+func (e *Engine) AddRuleWithSource(rule config.CustomRule, source config.RuleSource) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.rules = append(e.rules, internalRule{
+		CustomRule: rule,
+		Source:     source,
+	})
 }
 
 // RemoveRule removes a rule by name from the unified rules slice.
@@ -68,7 +126,7 @@ func (e *Engine) RemoveRule(name string) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	for i, r := range e.rules {
-		if r.Name == name {
+		if r.CustomRule.Name == name {
 			e.rules = append(e.rules[:i], e.rules[i+1:]...)
 			return true
 		}
@@ -76,16 +134,86 @@ func (e *Engine) RemoveRule(name string) bool {
 	return false
 }
 
-// ClearRuntimeRules removes all non-persisted rules (resets to config snapshot).
+// ClearRuntimeRules removes all override rules, keeping only default and config rules.
+// This is called when a run ends to discard run-specific rule overrides.
 func (e *Engine) ClearRuntimeRules() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.configSnapshot != nil {
-		e.rules = make([]config.CustomRule, len(e.configSnapshot))
-		copy(e.rules, e.configSnapshot)
-	} else {
-		e.rules = nil
+
+	// Rebuild rules slice with only default and config rules
+	var newRules []internalRule
+
+	// Add back default rules first
+	for _, r := range e.defaultRules {
+		newRules = append(newRules, internalRule{
+			CustomRule: r,
+			Source:     config.RuleSourceDefault,
+		})
 	}
+
+	// Add back config rules from snapshot
+	for _, r := range e.configSnapshot {
+		newRules = append(newRules, internalRule{
+			CustomRule: r,
+			Source:     config.RuleSourceConfig,
+		})
+	}
+
+	e.rules = newRules
+}
+
+// ClearOverrides removes only override rules, keeping default and config rules.
+// This is an alias for ClearRuntimeRules for clarity.
+func (e *Engine) ClearOverrides() {
+	e.ClearRuntimeRules()
+}
+
+// ApplyOverrides adds a set of override rules to the engine.
+// These rules are added with RuleSourceOverride and will be removed
+// when ClearOverrides() is called (typically at run end).
+// Rules with the same name as existing rules will be skipped.
+func (e *Engine) ApplyOverrides(rules []config.CustomRule) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Build a set of existing rule names for dedup
+	existingNames := make(map[string]bool)
+	for _, r := range e.rules {
+		existingNames[r.CustomRule.Name] = true
+	}
+
+	// Add override rules
+	for _, rule := range rules {
+		if existingNames[rule.Name] {
+			// Skip duplicate - could also return error but skipping is more lenient
+			continue
+		}
+		// Set default enabled if not specified
+		if rule.Enabled == nil {
+			enabled := true
+			rule.Enabled = &enabled
+		}
+		e.rules = append(e.rules, internalRule{
+			CustomRule: rule,
+			Source:     config.RuleSourceOverride,
+		})
+		existingNames[rule.Name] = true
+	}
+
+	return nil
+}
+
+// HasOverrides returns true if there are any override rules currently active.
+func (e *Engine) HasOverrides() bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	for _, r := range e.rules {
+		if r.Source == config.RuleSourceOverride {
+			return true
+		}
+	}
+	return false
 }
 
 // Action represents what a rule does when its conditions match.
@@ -98,10 +226,11 @@ const (
 	ActionAllow Action = "allow"
 )
 
-// RuntimeRule extends CustomRule with persistence metadata.
+// RuntimeRule extends CustomRule with source and persistence metadata.
 type RuntimeRule struct {
 	config.CustomRule
-	Persisted bool `json:"persisted"` // true if rule exists in config snapshot
+	Source    config.RuleSource `json:"source"`    // where the rule comes from (default/config/override)
+	Persisted bool              `json:"persisted"` // true if rule exists in config snapshot
 }
 
 // RulesSnapshot contains all rules and settings for API responses.
@@ -130,11 +259,12 @@ func (e *Engine) GetSnapshot() RulesSnapshot {
 		RuntimeRules: make([]RuntimeRule, 0),
 	}
 
-	// Build unified rules list with persistence status
+	// Build unified rules list with source and persistence status
 	for _, rule := range e.rules {
-		persisted := e.isRulePersisted(rule.Name)
+		persisted := e.isRulePersisted(rule.CustomRule.Name)
 		rr := RuntimeRule{
-			CustomRule: rule,
+			CustomRule: rule.CustomRule,
+			Source:     rule.Source,
 			Persisted:  persisted,
 		}
 		snapshot.Rules = append(snapshot.Rules, rr)
@@ -161,21 +291,31 @@ func (e *Engine) isRulePersisted(name string) bool {
 	return false
 }
 
-// isListPersisted checks if the entire rules list matches the config snapshot.
-// Returns true only if:
-// - The lists have the same length (no additions or deletions)
-// - Rules appear in the same order
-// - Each rule in the current list matches the corresponding rule in the snapshot
+// isListPersisted checks if the rules list matches the config snapshot.
+// Returns true only if there are no override rules and the config rules
+// match the snapshot (no additions, deletions, or reorders).
 // Must be called with mu held (at least read lock).
 func (e *Engine) isListPersisted() bool {
+	// Count non-default rules (config + override)
+	var nonDefaultRules []internalRule
+	for _, r := range e.rules {
+		if r.Source != config.RuleSourceDefault {
+			nonDefaultRules = append(nonDefaultRules, r)
+		}
+	}
+
 	// Different lengths means additions or deletions occurred
-	if len(e.rules) != len(e.configSnapshot) {
+	if len(nonDefaultRules) != len(e.configSnapshot) {
 		return false
 	}
 
-	// Compare each rule in order
-	for i, rule := range e.rules {
-		if rule.Name != e.configSnapshot[i].Name {
+	// Compare each non-default rule in order
+	for i, rule := range nonDefaultRules {
+		if rule.CustomRule.Name != e.configSnapshot[i].Name {
+			return false
+		}
+		// If there are any override rules, not fully persisted
+		if rule.Source == config.RuleSourceOverride {
 			return false
 		}
 	}
@@ -183,37 +323,43 @@ func (e *Engine) isListPersisted() bool {
 	return true
 }
 
-// GetRuntimeRules returns a copy of all non-persisted rules.
+// GetRuntimeRules returns a copy of all override rules (non-persisted, run-specific).
 func (e *Engine) GetRuntimeRules() []config.CustomRule {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
 	var result []config.CustomRule
 	for _, r := range e.rules {
-		if !e.isRulePersisted(r.Name) {
-			result = append(result, r)
+		if r.Source == config.RuleSourceOverride {
+			result = append(result, r.CustomRule)
 		}
 	}
 	return result
 }
 
+// GetOverrideRules returns a copy of all override rules (alias for GetRuntimeRules).
+func (e *Engine) GetOverrideRules() []config.CustomRule {
+	return e.GetRuntimeRules()
+}
+
 // PersistRule marks a rule as persisted by adding it to the config snapshot.
 // The rule must exist in the unified rules slice and not already be persisted.
+// When an override rule is persisted, its source changes to config.
 // Returns the persisted rule on success.
 func (e *Engine) PersistRule(name string) (*config.CustomRule, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	// Find the rule in the unified slice
-	var foundRule *config.CustomRule
+	var foundIndex int = -1
 	for i := range e.rules {
-		if e.rules[i].Name == name {
-			foundRule = &e.rules[i]
+		if e.rules[i].CustomRule.Name == name {
+			foundIndex = i
 			break
 		}
 	}
 
-	if foundRule == nil {
+	if foundIndex == -1 {
 		return nil, fmt.Errorf("rule %q not found", name)
 	}
 
@@ -222,8 +368,13 @@ func (e *Engine) PersistRule(name string) (*config.CustomRule, error) {
 		return nil, fmt.Errorf("rule %q is already persisted", name)
 	}
 
+	foundRule := &e.rules[foundIndex].CustomRule
+
 	// Add to config snapshot (marks as persisted)
 	e.configSnapshot = append(e.configSnapshot, *foundRule)
+
+	// Change source from override to config
+	e.rules[foundIndex].Source = config.RuleSourceConfig
 
 	// Also update settings.Custom for persistence to disk
 	if e.settings == nil {
@@ -234,17 +385,19 @@ func (e *Engine) PersistRule(name string) (*config.CustomRule, error) {
 	return foundRule, nil
 }
 
-// PersistAllRules marks all non-persisted rules as persisted.
+// PersistAllRules marks all override rules as persisted (changes source to config).
 // Returns the list of rule names that were persisted.
 func (e *Engine) PersistAllRules() ([]string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	var persisted []string
-	for _, rule := range e.rules {
-		if !e.isRulePersisted(rule.Name) {
-			e.configSnapshot = append(e.configSnapshot, rule)
-			persisted = append(persisted, rule.Name)
+	for i := range e.rules {
+		rule := &e.rules[i]
+		if rule.Source == config.RuleSourceOverride {
+			e.configSnapshot = append(e.configSnapshot, rule.CustomRule)
+			rule.Source = config.RuleSourceConfig
+			persisted = append(persisted, rule.CustomRule.Name)
 		}
 	}
 
@@ -308,9 +461,10 @@ func (e *Engine) GetRule(name string) *RuntimeRule {
 	defer e.mu.RUnlock()
 
 	for _, rule := range e.rules {
-		if rule.Name == name {
+		if rule.CustomRule.Name == name {
 			return &RuntimeRule{
-				CustomRule: rule,
+				CustomRule: rule.CustomRule,
+				Source:     rule.Source,
 				Persisted:  e.isRulePersisted(name),
 			}
 		}
@@ -326,8 +480,8 @@ func (e *Engine) UpdateRule(name string, enabled bool) error {
 	defer e.mu.Unlock()
 
 	for i := range e.rules {
-		if e.rules[i].Name == name {
-			e.rules[i].Enabled = &enabled
+		if e.rules[i].CustomRule.Name == name {
+			e.rules[i].CustomRule.Enabled = &enabled
 			return nil
 		}
 	}
@@ -345,7 +499,7 @@ func (e *Engine) ReorderRule(name string, newPosition int) error {
 	// Find the rule first
 	currentIndex := -1
 	for i, r := range e.rules {
-		if r.Name == name {
+		if r.CustomRule.Name == name {
 			currentIndex = i
 			break
 		}
@@ -370,14 +524,21 @@ func (e *Engine) ReorderRule(name string, newPosition int) error {
 	e.rules = append(e.rules[:currentIndex], e.rules[currentIndex+1:]...)
 
 	// Insert at new position
-	e.rules = append(e.rules[:newPosition], append([]config.CustomRule{rule}, e.rules[newPosition:]...)...)
+	e.rules = append(e.rules[:newPosition], append([]internalRule{rule}, e.rules[newPosition:]...)...)
 
 	return nil
 }
 
 // AddRuleWithValidation adds a rule after validating it.
 // Returns an error if validation fails or if a rule with the same name exists.
+// New rules are added as override source by default.
 func (e *Engine) AddRuleWithValidation(rule config.CustomRule) error {
+	return e.AddRuleWithValidationAndSource(rule, config.RuleSourceOverride)
+}
+
+// AddRuleWithValidationAndSource adds a rule with explicit source after validating it.
+// Returns an error if validation fails or if a rule with the same name exists.
+func (e *Engine) AddRuleWithValidationAndSource(rule config.CustomRule, source config.RuleSource) error {
 	// Validate the rule
 	if rule.Name == "" {
 		return fmt.Errorf("rule name is required")
@@ -403,7 +564,7 @@ func (e *Engine) AddRuleWithValidation(rule config.CustomRule) error {
 
 	// Check for duplicate name in unified rules slice
 	for _, r := range e.rules {
-		if r.Name == rule.Name {
+		if r.CustomRule.Name == rule.Name {
 			return fmt.Errorf("rule %q already exists", rule.Name)
 		}
 	}
@@ -414,7 +575,10 @@ func (e *Engine) AddRuleWithValidation(rule config.CustomRule) error {
 		rule.Enabled = &enabled
 	}
 
-	e.rules = append(e.rules, rule)
+	e.rules = append(e.rules, internalRule{
+		CustomRule: rule,
+		Source:     source,
+	})
 	return nil
 }
 
@@ -592,18 +756,19 @@ func (e *Engine) Evaluate(task *beads.Task, inFlight map[string]bool, inFlightTa
 	// Rules are evaluated in order. DENY stops evaluation and rejects.
 	// ALLOW continues to the next rule (or accepts if last).
 	for _, rule := range e.rules {
+		r := rule.CustomRule
 		// Skip disabled rules
-		if rule.Enabled != nil && !*rule.Enabled {
+		if r.Enabled != nil && !*r.Enabled {
 			continue
 		}
 
-		if matches := EvaluateCondition(rule.Condition, task); matches {
-			action := parseAction(rule.Action)
+		if matches := EvaluateCondition(r.Condition, task); matches {
+			action := parseAction(r.Action)
 			switch action {
 			case ActionDeny:
-				reason := rule.Reason
+				reason := r.Reason
 				if reason == "" {
-					reason = "Denied by rule: " + rule.Name
+					reason = "Denied by rule: " + r.Name
 				}
 				return EvalResult{Skip: true, SkipReason: reason}
 

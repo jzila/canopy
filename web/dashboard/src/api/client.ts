@@ -278,6 +278,15 @@ export async function getRuns(filter?: RunListFilter): Promise<RunListResponse> 
   return fetchJson<RunListResponse>(endpoint);
 }
 
+// RuleOverride for run-configured rules
+export interface RuleOverride {
+  name: string;
+  condition: string;
+  action: 'deny' | 'allow';
+  enabled?: boolean;
+  reason?: string;
+}
+
 // Orchestration types - matches Go backend (pkg/daemon/orchestration_handler.go)
 export interface StartRunRequest {
   work_dir: string;
@@ -286,6 +295,7 @@ export interface StartRunRequest {
   max_priority?: number;
   use_bwrap?: boolean;
   max_retries?: number;
+  rule_overrides?: RuleOverride[];
 }
 
 export interface StartRunResponse {
@@ -342,6 +352,7 @@ export interface ActivateRequest {
   max_priority?: number;
   use_bwrap?: boolean;
   max_retries?: number;
+  rule_overrides?: RuleOverride[];
 }
 
 export interface ActivateResponse {
@@ -410,6 +421,9 @@ export interface UpdateConfigRequest {
   assignee?: string;
 }
 
+// RuleSource indicates where a rule comes from in the precedence hierarchy
+export type RuleSource = 'default' | 'config' | 'override';
+
 // Unified Rule interface - single format for all rules
 export interface Rule {
   name: string;
@@ -417,6 +431,7 @@ export interface Rule {
   action: 'deny' | 'allow';
   enabled: boolean;
   persisted: boolean;
+  source: RuleSource;
 }
 
 // RulesState contains the unified rules list with list-level persisted flag

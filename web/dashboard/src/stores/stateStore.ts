@@ -164,11 +164,21 @@ export type PauseState = 'running' | 'paused_user' | 'paused_agent' | 'paused_bo
 export type OrchestratorState = 'off' | 'idle' | 'active' | 'paused';
 
 // Run configuration for starting new runs
+// RuleOverride for run-configured rules (matches Go config.CustomRule)
+export interface RuleOverride {
+  name: string;
+  condition: string;
+  action: 'deny' | 'allow';
+  enabled?: boolean;
+  reason?: string;
+}
+
 export interface RunConfig {
   concurrency: number;
   max_priority: number;
   use_bwrap: boolean;
   max_retries: number;
+  rule_overrides?: RuleOverride[];
 }
 
 // Default run configuration
@@ -177,6 +187,7 @@ export const DEFAULT_RUN_CONFIG: RunConfig = {
   max_priority: 4,
   use_bwrap: true,
   max_retries: 3,
+  rule_overrides: [],
 };
 
 // Optimistic update types

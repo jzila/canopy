@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jzila/canopy/pkg/config"
 	"github.com/jzila/canopy/pkg/logging"
 	"github.com/jzila/canopy/pkg/persistence"
 )
@@ -35,24 +36,34 @@ func NewOrchestrationHandlerWithDaemon(manager *OrchestratorManager, daemon *Dae
 	}
 }
 
+// RuleOverrideRequest represents a custom rule in API requests.
+type RuleOverrideRequest struct {
+	Name      string `json:"name"`
+	Condition string `json:"condition"`
+	Action    string `json:"action"`
+	Enabled   *bool  `json:"enabled,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+}
+
 // ExecuteRunRequest is the JSON request body for starting a run.
 type ExecuteRunRequest struct {
-	WorkDir           string   `json:"work_dir"`
-	OutputDir         string   `json:"output_dir,omitempty"`
-	Concurrency       int      `json:"concurrency,omitempty"`
-	Verbose           bool     `json:"verbose,omitempty"`
-	DryRun            bool     `json:"dry_run,omitempty"`
-	UseBwrap          bool     `json:"use_bwrap,omitempty"`
-	MaxRetries        int      `json:"max_retries,omitempty"`
-	MaxPriority       int      `json:"max_priority,omitempty"`
-	ResolverTimeoutMS int64    `json:"resolver_timeout_ms,omitempty"`
-	RepoID            string   `json:"repo_id,omitempty"`
-	PollIntervalMS    int64    `json:"poll_interval_ms,omitempty"`
-	Types             []string `json:"types,omitempty"`
-	ExcludeTypes      []string `json:"exclude_types,omitempty"`
-	Labels            []string `json:"labels,omitempty"`
-	ExcludeLabels     []string `json:"exclude_labels,omitempty"`
-	Assignee          string   `json:"assignee,omitempty"`
+	WorkDir           string                `json:"work_dir"`
+	OutputDir         string                `json:"output_dir,omitempty"`
+	Concurrency       int                   `json:"concurrency,omitempty"`
+	Verbose           bool                  `json:"verbose,omitempty"`
+	DryRun            bool                  `json:"dry_run,omitempty"`
+	UseBwrap          bool                  `json:"use_bwrap,omitempty"`
+	MaxRetries        int                   `json:"max_retries,omitempty"`
+	MaxPriority       int                   `json:"max_priority,omitempty"`
+	ResolverTimeoutMS int64                 `json:"resolver_timeout_ms,omitempty"`
+	RepoID            string                `json:"repo_id,omitempty"`
+	PollIntervalMS    int64                 `json:"poll_interval_ms,omitempty"`
+	Types             []string              `json:"types,omitempty"`
+	ExcludeTypes      []string              `json:"exclude_types,omitempty"`
+	Labels            []string              `json:"labels,omitempty"`
+	ExcludeLabels     []string              `json:"exclude_labels,omitempty"`
+	Assignee          string                `json:"assignee,omitempty"`
+	RuleOverrides     []RuleOverrideRequest `json:"rule_overrides,omitempty"`
 }
 
 // ExecuteRunResponse is the JSON response for starting a run.
@@ -148,8 +159,20 @@ func (h *OrchestrationHandler) HandleExecuteRun(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	// Convert rule overrides to config.CustomRule
+	var ruleOverrides []config.CustomRule
+	for _, r := range req.RuleOverrides {
+		ruleOverrides = append(ruleOverrides, config.CustomRule{
+			Name:      r.Name,
+			Condition: r.Condition,
+			Action:    r.Action,
+			Enabled:   r.Enabled,
+			Reason:    r.Reason,
+		})
+	}
+
 	// Convert request to RunConfig
-	config := RunConfig{
+	runCfg := RunConfig{
 		WorkDir:         req.WorkDir,
 		OutputDir:       req.OutputDir,
 		Concurrency:     req.Concurrency,
@@ -166,10 +189,11 @@ func (h *OrchestrationHandler) HandleExecuteRun(w http.ResponseWriter, r *http.R
 		Labels:          req.Labels,
 		ExcludeLabels:   req.ExcludeLabels,
 		Assignee:        req.Assignee,
+		RuleOverrides:   ruleOverrides,
 	}
 
 	// Start the run with a background context (not tied to request)
-	runID, err := h.manager.StartRun(context.Background(), config)
+	runID, err := h.manager.StartRun(context.Background(), runCfg)
 	if err != nil {
 		logging.Warn("failed to start orchestration run",
 			"work_dir", req.WorkDir,
