@@ -1,7 +1,7 @@
 # Design: Active Orchestrator Model
 
 **Status**: Draft
-**Epic**: canopy-i4sm
+**Epic**: canopy-2360
 **Author**: Design Agent
 **Date**: 2026-01-23
 
@@ -40,23 +40,23 @@ Key characteristics:
 
 4. **Dashboard confusion**: Switching between run-centric (filtering by run) and repo-centric (the repo I'm working on) mental models
 
-5. **Session continuity**: No conceptual continuity between runs on the same repo
+5. **Run continuity**: No conceptual continuity between runs on the same repo
 
 ## Proposed Design
 
-### Core Concept: Always-Running Orchestrator
+### Core Concept: Always-Watching Orchestrator
 
 Shift from "discrete runs" to "repo has an orchestrator that can be activated/deactivated":
 
 ```
 Repository
-  └─ Orchestrator (always exists when repo is registered)
-       ├─ State: idle | active | paused
-       ├─ RulesEngine (persistent)
-       ├─ Config (persistent)
-       └─ Sessions (historical tracking)
-            ├─ Session 1 (was: Run)
-            ├─ Session 2
+  └─ OrchestratorLifecycle (created on activation)
+       ├─ State: off | idle | active | paused
+       ├─ RulesEngine (persistent while activated)
+       ├─ Config (persistent in .canopy/config.toml)
+       └─ Runs (historical tracking)
+            ├─ Run 1
+            ├─ Run 2
             └─ ...
 ```
 
@@ -66,135 +66,195 @@ Repository
 type OrchestratorState string
 
 const (
-    OrchestratorIdle   OrchestratorState = "idle"    // Ready but not processing
+    OrchestratorOff    OrchestratorState = "off"     // Not activated, no instance exists
+    OrchestratorIdle   OrchestratorState = "idle"    // Activated, watching for work, none available
     OrchestratorActive OrchestratorState = "active"  // Processing tasks
-    OrchestratorPaused OrchestratorState = "paused"  // Active but temporarily stopped
+    OrchestratorPaused OrchestratorState = "paused"  // Temporarily stopped (resumes on unpause)
 )
 ```
 
 **State transitions:**
-- `idle → active`: User clicks "Start" (or CLI `canopy run`)
-- `active → paused`: User clicks "Pause" (or CLI signal)
-- `paused → active`: User clicks "Resume"
-- `active → idle`: Run completes or user clicks "Stop"
-- `paused → idle`: User clicks "Stop"
+
+```
+                    ┌──────────────────────────────────┐
+                    │                                  │
+                    ▼                                  │
+┌─────┐  activate  ┌──────┐  work available  ┌────────┴─┐
+│ Off │ ─────────► │ Idle │ ◄──────────────► │  Active  │
+└─────┘            └──────┘  work exhausted  └────────┬─┘
+   ▲                  │                          │    │
+   │                  │ deactivate               │    │
+   │                  ▼                          │    │
+   │              (destroyed)◄───────────────────┘    │
+   │                                                  │
+   │                                                  │ pause
+   │                                                  ▼
+   │                                            ┌──────────┐
+   │                                            │  Paused  │
+   │                                            └────┬─────┘
+   │                                                 │
+   │◄────────────────────────────────────────────────┘
+                      deactivate
+```
+
+**Key behaviors:**
+- `off → idle`: Activation creates OrchestratorLifecycle, starts watching for work
+- `idle ↔ active`: Automatic transitions as work becomes available/exhausted
+- `active → paused`: User pauses; orchestrator stops dispatching but keeps watching
+- `paused → active`: User resumes; orchestrator continues processing
+- `* → off`: Deactivation (context cancellation) destroys the lifecycle
+
+**Critical invariant:** An activated orchestrator **never exits on its own**. It continuously polls for available work and transitions between idle and active states. Only explicit deactivation (user action or context cancellation) terminates it.
 
 ### What's Already Implemented
 
-Looking at `pkg/daemon/orchestrator_manager.go`, much of this is already in place:
+Looking at `pkg/daemon/orchestrator_manager.go`, the structural foundation exists:
 
 ```go
 type OrchestratorLifecycle struct {
     RepoPath    string
     RepoID      string
-    State       OrchestratorState  // idle | active | paused
-    RunID       string             // Current session ID when active
+    State       OrchestratorState  // off | idle | active | paused
+    RunID       string             // Current run ID when active
     rulesEngine *rules.Engine      // Persistent rules engine
     // ...
 }
 ```
 
-The `RegisterRepo()` function creates an always-running orchestrator:
-```go
-func (m *OrchestratorManager) RegisterRepo(repoPath string, repoID string) (*OrchestratorLifecycle, error)
-```
+**canopy-o7ww added:**
+- The `OrchestratorLifecycle` wrapper struct
+- State enum with `off` state
+- Basic state management infrastructure
+
+**What canopy-o7ww did NOT add:**
+- Always-watching behavior (orchestrator still exits when work is exhausted)
+- Automatic idle ↔ active transitions based on work availability
+- Polling loop for continuous work detection
+
+The current implementation still treats "idle" as essentially "off" — there is no persistent watching behavior. The orchestrator terminates when its current batch of work completes rather than polling for new work.
 
 ### What Needs to Change
 
-#### 1. Mental Model in UI
+#### 1. Core Orchestration Loop
+
+The orchestrator needs a persistent watch loop:
+
+```go
+func (o *OrchestratorLifecycle) Run(ctx context.Context) error {
+    for {
+        select {
+        case <-ctx.Done():
+            return ctx.Err()  // Only way to exit
+        default:
+            tasks := o.pollForWork()
+            if len(tasks) == 0 {
+                o.setState(OrchestratorIdle)
+                time.Sleep(o.pollInterval)
+                continue
+            }
+            o.setState(OrchestratorActive)
+            o.dispatchTasks(ctx, tasks)
+        }
+    }
+}
+```
+
+#### 2. Mental Model in UI
 
 **Current**: "Start Run" / "Stop Run" with run selector
-**Proposed**: "Activate" / "Deactivate" with session history
+**Proposed**: "Activate" / "Deactivate" with run history
 
 The UI should present:
-- **Primary state**: Is the orchestrator active?
-- **Secondary**: Which session are you viewing? (for history)
+- **Primary state**: Is the orchestrator active/idle/off?
+- **Secondary**: Which run are you viewing? (for history)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │ [Repository Selector]  │ Orchestrator: Active ● │ [Pause] [Stop]│
-│                        │ Session: abc123 (2h ago)│              │
+│                        │ Run: abc123 (2h ago)   │               │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│   [Agent Cards - filtered by selected session]                  │
+│   [Agent Cards - filtered by selected run]                      │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-#### 2. Terminology Changes
+#### 3. Terminology
 
-| Current Term | Proposed Term | Notes |
-|--------------|---------------|-------|
-| Run | Session | Historical work period |
-| Run ID | Session ID | For filtering/tracking |
-| Start Run | Activate | State transition |
-| Stop Run | Deactivate | State transition |
-| Active Run | Current Session | When orchestrator is active |
+| Term | Meaning |
+|------|---------|
+| Run | A period of work within an activated orchestrator |
+| OrchestratorLifecycle | Wrapper managing orchestrator state and lifecycle |
+| Orchestrator | The execution engine that dispatches agents |
+| OrchestratorManager | Daemon component that manages lifecycles across repos |
+| Activate | Create lifecycle and start watching |
+| Deactivate | Cancel context, destroy lifecycle |
 
-#### 3. API Endpoints
+#### 4. API Endpoints
 
 **Keep (rename optional)**:
 - `POST /api/orchestrator/run` → `POST /api/orchestrator/activate`
 - `POST /api/orchestrator/run/stop` → `POST /api/orchestrator/deactivate`
-- `GET /api/daemon/runs` → `GET /api/daemon/sessions`
 
 **New**:
 - `GET /api/repos/:repo_id/orchestrator` - Get orchestrator state
 - `PATCH /api/repos/:repo_id/orchestrator` - Update config (concurrency, etc.)
 
-#### 4. Persistence Between Sessions
+#### 5. Persistence
 
 **What persists (tied to repo):**
-- Rules configuration (already in `.canopy/config.toml`)
-- Rules engine state (enabled/disabled rules)
+- Rules configuration (in `.canopy/config.toml`)
 - Orchestrator configuration (concurrency, max_priority, etc.)
 - Repository registration
 
-**What resets (per session):**
+**What resets (per activation):**
 - Active agents
-- In-progress tasks (returned to "ready" on session end)
+- In-progress tasks (returned to "ready" on deactivation)
 - Pause state
 - Real-time metrics
 
-**What accumulates (across sessions):**
-- Session history (in SQLite)
+**What accumulates (across runs):**
+- Run history (in SQLite)
 - Agent history (in SQLite)
-- Cost/token aggregates (per session)
+- Cost/token aggregates (per run)
 
 ### Migration Path
 
-#### Phase 1: Backend Alignment (Mostly Done)
+#### Phase 1: Always-Watching Behavior
 
-The backend already has `OrchestratorLifecycle` with state management. Remaining work:
-- [ ] Ensure rules engine persists in idle state (already implemented)
-- [ ] Add `GET /api/repos/:repo_id/orchestrator` endpoint
-- [ ] Add `PATCH /api/repos/:repo_id/orchestrator` for config updates
+Implement the core watch loop so activated orchestrators poll for work:
+- [ ] Add polling loop to OrchestratorLifecycle
+- [ ] Implement automatic idle ↔ active transitions
+- [ ] Ensure context cancellation is the only exit path
+- [ ] Add configurable poll interval
 
-#### Phase 2: API Deprecation Layer
+#### Phase 2: API Updates
 
 Add new endpoints alongside old ones:
 ```go
 // New
 router.POST("/api/orchestrator/activate", h.HandleActivate)
 router.POST("/api/orchestrator/deactivate", h.HandleDeactivate)
-router.GET("/api/repos/:repo_id/sessions", h.HandleListSessions)
 
 // Old (deprecated but functional)
 router.POST("/api/orchestrator/run", h.HandleExecuteRun)  // calls HandleActivate internally
 router.POST("/api/orchestrator/run/stop", h.HandleStopRun) // calls HandleDeactivate internally
 ```
 
+- [ ] Add `GET /api/repos/:repo_id/orchestrator` endpoint
+- [ ] Add `PATCH /api/repos/:repo_id/orchestrator` for config updates
+
 #### Phase 3: Dashboard Updates
 
 1. Rename UI elements (Start Run → Activate, etc.)
-2. Add orchestrator state indicator to header
-3. Change "Run Selector" to "Session Selector" with historical context
-4. Update state store terminology
+2. Add orchestrator state indicator showing off/idle/active/paused
+3. Update state store to reflect new state model
+4. Show "Watching for work..." in idle state
 
 #### Phase 4: CLI Updates
 
 1. `canopy run` becomes `canopy activate` (alias `canopy run` for backward compat)
-2. `canopy status` shows orchestrator state
+2. `canopy status` shows orchestrator state (off/idle/active/paused)
 3. `canopy config set concurrency=8` modifies repo orchestrator
 
 ### Dashboard State Store Changes
@@ -210,16 +270,16 @@ interface StateStore {
 
 // Proposed
 interface StateStore {
-  // Orchestrator state (always present when repo selected)
+  // Orchestrator state (present when repo has activated orchestrator)
   orchestrator: {
-    state: 'idle' | 'active' | 'paused';
+    state: 'off' | 'idle' | 'active' | 'paused';
     config: OrchestratorConfig;
-    currentSessionId: string | null;  // null when idle
+    currentRunId: string | null;  // null when off
   };
 
-  // Session filtering (for history view)
-  selectedSessionId: string;  // empty = all sessions
-  sessions: Session[];        // Historical sessions
+  // Run filtering (for history view)
+  selectedRunId: string;  // empty = all runs
+  runs: Run[];            // Historical runs
 }
 ```
 
@@ -231,23 +291,23 @@ interface StateStore {
 
 3. **Config changes feel natural**: Adjusting concurrency is tweaking the orchestrator, not a run
 
-4. **Session continuity**: Clear that sessions are work periods within a persistent orchestrator
+4. **Run continuity**: Clear that runs are work periods within a persistent orchestrator
 
-5. **Better state representation**: Dashboard shows orchestrator state, not just "is there a run?"
+5. **Better state representation**: Dashboard shows orchestrator state (off/idle/active/paused), not just "is there a run?"
+
+6. **No orphaned work**: Orchestrator watches continuously until explicitly deactivated
 
 ## Open Questions
 
-1. **Session auto-naming?** Should sessions have human-readable names or descriptions?
+1. **Run auto-naming?** Should runs have human-readable names or descriptions?
 
-2. **Session grouping?** Should multiple activations in quick succession be grouped?
+2. **Multi-repo support?** How does this model extend to working on multiple repos?
 
-3. **Watch mode sessions?** How do watch mode iterations relate to sessions?
-
-4. **Multi-repo support?** How does this model extend to working on multiple repos?
+3. **Poll interval tuning?** What's the right balance between responsiveness and resource usage?
 
 ## Implementation Tasks
 
-See child tasks of canopy-i4sm for implementation breakdown.
+See child tasks of canopy-2360 for implementation breakdown.
 
 ## References
 
