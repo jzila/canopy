@@ -922,6 +922,11 @@ type RuntimeStateSnapshot struct {
 	// Frontend merges: runtime overlays persistent for display
 	PersistentTasks map[string]*TaskState `json:"persistent_tasks,omitempty"`
 	RuntimeTasks    map[string]*TaskState `json:"runtime_tasks,omitempty"`
+
+	// EventSequence is the sequence number of the last event published before
+	// this snapshot was taken. Clients should discard any events with sequence
+	// numbers <= this value, as they are already reflected in the snapshot.
+	EventSequence uint64 `json:"event_sequence,omitempty"`
 }
 
 // GetSnapshot returns a complete snapshot of the runtime state (thread-safe)
@@ -932,6 +937,13 @@ func (r *RuntimeState) GetSnapshot() RuntimeStateSnapshot {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
+	// Get current event sequence if eventBus is available.
+	// Clients can use this to discard events that occurred before the snapshot.
+	var eventSequence uint64
+	if r.eventBus != nil {
+		eventSequence = r.eventBus.GetSequence()
+	}
+
 	snapshot := RuntimeStateSnapshot{
 		Agents:          make(map[string]*AgentState),
 		Tasks:           make(map[string]*TaskState),
@@ -941,6 +953,7 @@ func (r *RuntimeState) GetSnapshot() RuntimeStateSnapshot {
 		IsPaused:        r.IsPaused,
 		StartTime:       r.StartTime,
 		CurrentRunID:    r.CurrentRunID,
+		EventSequence:   eventSequence,
 	}
 
 	// Deep copy agents
@@ -1013,6 +1026,12 @@ func (r *RuntimeState) GetSnapshotForRepo(repoID string) RuntimeStateSnapshot {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
+	// Get current event sequence if eventBus is available.
+	var eventSequence uint64
+	if r.eventBus != nil {
+		eventSequence = r.eventBus.GetSequence()
+	}
+
 	snapshot := RuntimeStateSnapshot{
 		Agents:          make(map[string]*AgentState),
 		Tasks:           make(map[string]*TaskState),
@@ -1021,6 +1040,7 @@ func (r *RuntimeState) GetSnapshotForRepo(repoID string) RuntimeStateSnapshot {
 		IsPaused:        r.IsPaused,
 		StartTime:       r.StartTime,
 		CurrentRunID:    r.CurrentRunID,
+		EventSequence:   eventSequence,
 	}
 
 	// Filter and deep copy agents (note: agents don't have repo_id in struct yet,

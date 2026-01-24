@@ -216,6 +216,9 @@ export interface RuntimeState {
   current_run_id: string;
   orchestrator_state: OrchestratorState;
   active_agent_count: number;
+  // Event sequence number for ordering - events with sequence <= this are already
+  // reflected in the snapshot and should be discarded by the client
+  event_sequence?: number;
 }
 
 // Store interface
@@ -232,6 +235,9 @@ interface StateStore {
   currentRunId: string; // Currently active orchestrator run ID (empty if no active run)
   orchestratorState: OrchestratorState; // Current orchestrator state (off/idle/active/paused)
   activeAgentCount: number; // Number of currently running agents
+  // Event sequence number from last state:sync - used to discard stale events
+  // that occurred before the snapshot was taken
+  eventSequence: number;
   selectedAgentId: string | null;
   highlightedTaskId: string | null;
   selectedBeadId: string | null; // Selected bead for filtering agents
@@ -420,6 +426,7 @@ export const useStateStore = create<StateStore>((set) => ({
   currentRunId: '', // empty means no active orchestrator run
   orchestratorState: 'off' as OrchestratorState,
   activeAgentCount: 0,
+  eventSequence: 0, // Sequence number from last state:sync
   selectedAgentId: null,
   highlightedTaskId: null,
   selectedBeadId: null,
@@ -522,6 +529,8 @@ export const useStateStore = create<StateStore>((set) => ({
       currentRunId: runtimeState.current_run_id ?? '',
       orchestratorState: runtimeState.orchestrator_state ?? 'off',
       activeAgentCount: runtimeState.active_agent_count ?? 0,
+      // Update event sequence from snapshot - used to discard stale events
+      eventSequence: runtimeState.event_sequence ?? 0,
     }),
 
   appendOutput: (agentId, output, isError = false) =>

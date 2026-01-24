@@ -61,6 +61,7 @@ type Event struct {
 	Type      EventType   `json:"type"`
 	Timestamp time.Time   `json:"timestamp"`
 	Payload   interface{} `json:"payload"`
+	Sequence  uint64      `json:"sequence,omitempty"` // Monotonic sequence number for ordering
 }
 
 // EventHandler is a function that receives events
@@ -79,6 +80,7 @@ type EventBus struct {
 	mu            sync.RWMutex
 	subscriptions map[int]subscription
 	nextID        int
+	sequence      uint64 // Monotonic sequence number for event ordering
 }
 
 // NewEventBus creates a new EventBus instance
@@ -114,14 +116,18 @@ func (eb *EventBus) Subscribe(handler EventHandler) func() {
 // Publish sends an event to all subscribers
 // Handlers are called synchronously in the order they subscribed
 // If a handler panics, it does not affect other handlers
+// Each event is assigned a monotonic sequence number for ordering.
 func (eb *EventBus) Publish(event Event) {
-	eb.mu.RLock()
-	// Copy subscriptions to avoid holding read lock during handler execution
+	eb.mu.Lock()
+	// Assign monotonic sequence number
+	eb.sequence++
+	event.Sequence = eb.sequence
+	// Copy subscriptions to avoid holding lock during handler execution
 	handlers := make([]EventHandler, 0, len(eb.subscriptions))
 	for _, sub := range eb.subscriptions {
 		handlers = append(handlers, sub.handler)
 	}
-	eb.mu.RUnlock()
+	eb.mu.Unlock()
 
 	// Execute handlers without holding lock
 	for _, handler := range handlers {
@@ -139,6 +145,15 @@ func (eb *EventBus) Publish(event Event) {
 			handler(event)
 		}()
 	}
+}
+
+// GetSequence returns the current sequence number.
+// This is useful for including in snapshots so clients can discard
+// events that occurred before the snapshot was taken.
+func (eb *EventBus) GetSequence() uint64 {
+	eb.mu.RLock()
+	defer eb.mu.RUnlock()
+	return eb.sequence
 }
 
 // SubscriberCount returns the number of active subscriptions

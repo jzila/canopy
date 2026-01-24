@@ -1,11 +1,12 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useStateStore } from '../stores/stateStore';
 // Event types that match the Go backend (wire_events.go)
-// Backend sends: { type, timestamp, payload }
+// Backend sends: { type, timestamp, payload, sequence }
 interface WebSocketEvent {
   type: string;
   timestamp: string;
   payload: unknown;
+  sequence?: number; // Monotonic sequence number for event ordering
 }
 interface AgentStartedEvent {
   type: 'agent:started';
@@ -295,6 +296,9 @@ interface BackendRuntimeState {
   current_run_id: string;
   orchestrator_state?: OrchestratorState;
   active_agent_count?: number;
+  // Event sequence number - events with sequence <= this are already reflected
+  // in the snapshot state and should be discarded by the client
+  event_sequence?: number;
 }
 // Pause state enum matching Go backend (ipc/protocol.go)
 type PauseState = 'running' | 'paused_user' | 'paused_agent' | 'paused_both';
@@ -391,6 +395,21 @@ export function useWebSocket() {
     confirmPause,
     confirmResume,
   } = useStateStore();
+
+  // Helper to check if an event is stale (occurred before the last state:sync snapshot)
+  // Events with sequence <= the snapshot's eventSequence are already reflected in the state
+  const isStaleEvent = useCallback((eventSequence: number | undefined): boolean => {
+    if (eventSequence === undefined || eventSequence === 0) {
+      // No sequence number - process the event (backwards compatibility)
+      return false;
+    }
+    const snapshotSequence = useStateStore.getState().eventSequence;
+    if (snapshotSequence === 0) {
+      // No snapshot sequence yet - process the event
+      return false;
+    }
+    return eventSequence <= snapshotSequence;
+  }, []);
   const connect = useCallback(() => {
     // Don't reconnect if manually closed
     if (isManuallyClosedRef.current) {
@@ -413,8 +432,18 @@ export function useWebSocket() {
       };
       ws.onmessage = (event) => {
         try {
-          const message: EventType = JSON.parse(event.data);
-          console.log('[WebSocket] Received:', message.type, message);
+          // Parse as WebSocketEvent first to get the sequence number
+          const rawMessage: WebSocketEvent = JSON.parse(event.data);
+          const message: EventType = rawMessage as unknown as EventType;
+          console.log('[WebSocket] Received:', message.type, 'seq:', rawMessage.sequence ?? 'none');
+
+          // For events other than state:sync, check if the event is stale
+          // (occurred before the last snapshot we received)
+          if (message.type !== 'state:sync' && isStaleEvent(rawMessage.sequence)) {
+            console.log('[WebSocket] Discarding stale event:', message.type, 'seq:', rawMessage.sequence, '<= snapshot seq:', useStateStore.getState().eventSequence);
+            return;
+          }
+
           switch (message.type) {
             case 'state:sync': {
               // Check if this is a repo switch event (partial sync)
@@ -554,8 +583,10 @@ export function useWebSocket() {
                 current_run_id: backendState.current_run_id ?? '',
                 orchestrator_state: backendState.orchestrator_state ?? 'off',
                 active_agent_count: backendState.active_agent_count ?? 0,
+                // Event sequence for discarding stale events
+                event_sequence: backendState.event_sequence ?? 0,
               });
-              console.log('[WebSocket] State synced with', Object.keys(transformedAgents).length, 'agents');
+              console.log('[WebSocket] State synced with', Object.keys(transformedAgents).length, 'agents, event_sequence:', backendState.event_sequence ?? 0);
               break;
             }
             case 'agent:started': {
@@ -835,7 +866,7 @@ export function useWebSocket() {
         }, backoffTime);
       }
     }
-  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, appendGitCommit, syncState, setPauseState, setActiveRepo, updateAgentMergeStatus, addRun, updateRun, clearOutput, setCurrentRunId, setOrchestratorState, confirmPause, confirmResume]);
+  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, appendGitCommit, syncState, setPauseState, setActiveRepo, updateAgentMergeStatus, addRun, updateRun, clearOutput, setCurrentRunId, setOrchestratorState, confirmPause, confirmResume, isStaleEvent]);
   const disconnect = useCallback(() => {
     isManuallyClosedRef.current = true;
     if (reconnectTimeoutRef.current !== null) {
