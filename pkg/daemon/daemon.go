@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jzila/canopy/pkg/events"
 	"github.com/jzila/canopy/pkg/logging"
@@ -432,6 +433,17 @@ func (d *Daemon) Stop() error {
 	// Stop periodic sync first (it's non-critical, background)
 	if d.periodicSyncMgr != nil {
 		d.periodicSyncMgr.Stop()
+	}
+
+	// Clean up active overlays before stopping orchestrators
+	// This prevents orphaned FUSE mounts and overlay directories
+	if d.orchManager != nil {
+		count, err := d.orchManager.CleanupAllOverlays(30 * time.Second)
+		if err != nil {
+			logging.Warn("overlay cleanup encountered errors", "count", count, "error", err)
+		} else if count > 0 {
+			logging.Info("cleaned up active overlays", "count", count)
+		}
 	}
 
 	// Stop lifecycle-managed components (IPC, HTTP, pidfile)

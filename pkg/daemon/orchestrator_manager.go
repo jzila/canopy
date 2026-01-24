@@ -1259,3 +1259,45 @@ func hasRulesOverrides(cfg *RunConfig) bool {
 		len(cfg.ExcludeLabels) > 0 ||
 		cfg.Assignee != ""
 }
+
+// CleanupAllOverlays cleans up active overlays from all running orchestrators.
+// This should be called during daemon shutdown to prevent orphaned FUSE mounts.
+// The timeout specifies how long to wait for cleanup to complete.
+// Returns the number of overlays cleaned and any errors encountered.
+func (m *OrchestratorManager) CleanupAllOverlays(timeout time.Duration) (int, error) {
+	var totalCleaned int
+	var cleanupErrors []error
+
+	// Iterate through all active runs to find their schedulers
+	m.runs.Range(func(key, value interface{}) bool {
+		runState := value.(*RunState)
+		runState.mu.RLock()
+		orch := runState.orch
+		runState.mu.RUnlock()
+
+		if orch == nil {
+			return true // continue iteration
+		}
+
+		sched := orch.GetScheduler()
+		if sched == nil {
+			return true // continue iteration
+		}
+
+		// Cleanup overlays for this scheduler
+		count, err := sched.CleanupAll(timeout)
+		totalCleaned += count
+		if err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("run %s: %w", key.(string), err))
+		}
+
+		return true // continue iteration
+	})
+
+	// If there were errors, return them
+	if len(cleanupErrors) > 0 {
+		return totalCleaned, fmt.Errorf("cleanup completed with %d error(s): %v", len(cleanupErrors), cleanupErrors)
+	}
+
+	return totalCleaned, nil
+}
