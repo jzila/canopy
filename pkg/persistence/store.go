@@ -118,6 +118,7 @@ type Agent struct {
 	TaskTitle       string      `json:"task_title"`
 	TaskDescription string      `json:"task_description,omitempty"` // Full task description from beads
 	Status          AgentStatus `json:"status"`
+	LifecycleState  string      `json:"lifecycle_state,omitempty"` // Unified lifecycle state (source of truth)
 	StartedAt           time.Time   `json:"started_at"`
 	FinishedAt          *time.Time  `json:"finished_at,omitempty"`
 	DurationSeconds     float64     `json:"duration_seconds,omitempty"`
@@ -354,12 +355,13 @@ func (t *Tx) CreateRun(run *Run) error {
 // the existing record is updated with the new values.
 func (t *Tx) CreateAgent(agent *Agent) error {
 	query := `
-		INSERT INTO agents (id, run_id, task_id, task_title, task_description, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived, parent_agent_id, merge_status, merge_commits_applied, merge_had_conflict, merge_resolver_spawned, merge_error, validation_status, validation_duration_ms, validation_error, validation_steps, session_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO agents (id, run_id, task_id, task_title, task_description, status, lifecycle_state, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived, parent_agent_id, merge_status, merge_commits_applied, merge_had_conflict, merge_resolver_spawned, merge_error, validation_status, validation_duration_ms, validation_error, validation_steps, session_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			run_id = excluded.run_id,
 			task_description = excluded.task_description,
 			status = excluded.status,
+			lifecycle_state = excluded.lifecycle_state,
 			started_at = excluded.started_at,
 			finished_at = excluded.finished_at,
 			duration_seconds = excluded.duration_seconds,
@@ -401,6 +403,7 @@ func (t *Tx) CreateAgent(agent *Agent) error {
 		agent.TaskTitle,
 		nullString(agent.TaskDescription),
 		string(agent.Status),
+		nullString(agent.LifecycleState),
 		agent.StartedAt.Unix(),
 		finishedAt,
 		agent.DurationSeconds,
@@ -667,12 +670,13 @@ func (s *Store) ListRuns(filter RunFilter) (*RunListResult, error) {
 // the existing record is updated with the new values.
 func (s *Store) CreateAgent(agent *Agent) error {
 	query := `
-		INSERT INTO agents (id, run_id, task_id, task_title, task_description, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived, parent_agent_id, merge_status, merge_commits_applied, merge_had_conflict, merge_resolver_spawned, merge_error, validation_status, validation_duration_ms, validation_error, validation_steps, session_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO agents (id, run_id, task_id, task_title, task_description, status, lifecycle_state, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived, parent_agent_id, merge_status, merge_commits_applied, merge_had_conflict, merge_resolver_spawned, merge_error, validation_status, validation_duration_ms, validation_error, validation_steps, session_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			run_id = excluded.run_id,
 			task_description = excluded.task_description,
 			status = excluded.status,
+			lifecycle_state = excluded.lifecycle_state,
 			started_at = excluded.started_at,
 			finished_at = excluded.finished_at,
 			duration_seconds = excluded.duration_seconds,
@@ -714,6 +718,7 @@ func (s *Store) CreateAgent(agent *Agent) error {
 		agent.TaskTitle,
 		nullString(agent.TaskDescription),
 		string(agent.Status),
+		nullString(agent.LifecycleState),
 		agent.StartedAt.Unix(),
 		finishedAt,
 		agent.DurationSeconds,
@@ -761,6 +766,7 @@ func (s *Store) UpdateAgent(agent *Agent) error {
 	query := `
 		UPDATE agents SET
 			status = ?,
+			lifecycle_state = ?,
 			finished_at = ?,
 			duration_seconds = ?,
 			exit_code = ?,
@@ -799,6 +805,7 @@ func (s *Store) UpdateAgent(agent *Agent) error {
 	}
 	_, err := s.db.Exec(query,
 		string(agent.Status),
+		nullString(agent.LifecycleState),
 		finishedAt,
 		agent.DurationSeconds,
 		agent.ExitCode,
@@ -847,6 +854,7 @@ func (s *Store) UpdateAgentCompletion(agent *Agent) error {
 	query := `
 		UPDATE agents SET
 			status = ?,
+			lifecycle_state = ?,
 			finished_at = ?,
 			duration_seconds = ?,
 			exit_code = ?,
@@ -873,6 +881,7 @@ func (s *Store) UpdateAgentCompletion(agent *Agent) error {
 	}
 	_, err := s.db.Exec(query,
 		string(agent.Status),
+		nullString(agent.LifecycleState),
 		finishedAt,
 		agent.DurationSeconds,
 		agent.ExitCode,
@@ -955,15 +964,23 @@ func (s *Store) UpdateAgentRepairState(agentID string, repairAttempts int, lastR
 	return err
 }
 
+// UpdateAgentLifecycleState updates only the lifecycle_state field of an agent.
+// This is the primary method for persisting lifecycle state transitions.
+func (s *Store) UpdateAgentLifecycleState(agentID string, lifecycleState string) error {
+	query := `UPDATE agents SET lifecycle_state = ? WHERE id = ?`
+	_, err := s.db.Exec(query, nullString(lifecycleState), agentID)
+	return err
+}
+
 // agentColumns lists all columns for agent queries
-const agentColumns = `id, run_id, task_id, task_title, task_description, status, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived, parent_agent_id, merge_status, merge_commits_applied, merge_had_conflict, merge_resolver_spawned, merge_error, validation_status, validation_duration_ms, validation_error, validation_steps, repair_attempts, last_repair_output, session_id`
+const agentColumns = `id, run_id, task_id, task_title, task_description, status, lifecycle_state, started_at, finished_at, duration_seconds, exit_code, error_message, stdout, stderr, input_tokens, output_tokens, total_tokens, cache_creation_tokens, cache_read_tokens, cost_usd, files_changed, git_commits_created, num_turns, result_message, repo_id, archived, parent_agent_id, merge_status, merge_commits_applied, merge_had_conflict, merge_resolver_spawned, merge_error, validation_status, validation_duration_ms, validation_error, validation_steps, repair_attempts, last_repair_output, session_id`
 
 // agentColumnsWithPrefix returns the agent columns with a table alias prefix.
 // This is used for queries with JOINs to disambiguate column names.
 func agentColumnsWithPrefix(prefix string) string {
 	cols := []string{
-		"id", "run_id", "task_id", "task_title", "task_description", "status", "started_at", "finished_at",
-		"duration_seconds", "exit_code", "error_message", "stdout", "stderr",
+		"id", "run_id", "task_id", "task_title", "task_description", "status", "lifecycle_state",
+		"started_at", "finished_at", "duration_seconds", "exit_code", "error_message", "stdout", "stderr",
 		"input_tokens", "output_tokens", "total_tokens", "cache_creation_tokens",
 		"cache_read_tokens", "cost_usd", "files_changed", "git_commits_created",
 		"num_turns", "result_message", "repo_id", "archived", "parent_agent_id",
@@ -1561,6 +1578,7 @@ func (s *Store) scanAgent(row *sql.Row) (*Agent, error) {
 	var startedAt, finishedAt sql.NullInt64
 	var exitCode sql.NullInt64
 	var status string
+	var lifecycleState sql.NullString
 	var taskDescription sql.NullString
 	var errorMessage, stdout, stderr, resultMessage, repoID, parentAgentID sql.NullString
 	var archived sql.NullInt64
@@ -1579,6 +1597,7 @@ func (s *Store) scanAgent(row *sql.Row) (*Agent, error) {
 		&agent.TaskTitle,
 		&taskDescription,
 		&status,
+		&lifecycleState,
 		&startedAt,
 		&finishedAt,
 		&agent.DurationSeconds,
@@ -1620,6 +1639,7 @@ func (s *Store) scanAgent(row *sql.Row) (*Agent, error) {
 	}
 
 	agent.Status = AgentStatus(status)
+	agent.LifecycleState = lifecycleState.String
 	agent.TaskDescription = taskDescription.String
 	agent.StartedAt = time.Unix(startedAt.Int64, 0)
 	if finishedAt.Valid {
@@ -1658,6 +1678,7 @@ func (s *Store) scanAgentFromRows(rows *sql.Rows) (*Agent, error) {
 	var startedAt, finishedAt sql.NullInt64
 	var exitCode sql.NullInt64
 	var status string
+	var lifecycleState sql.NullString
 	var taskDescription sql.NullString
 	var errorMessage, stdout, stderr, resultMessage, repoID, parentAgentID sql.NullString
 	var archived sql.NullInt64
@@ -1676,6 +1697,7 @@ func (s *Store) scanAgentFromRows(rows *sql.Rows) (*Agent, error) {
 		&agent.TaskTitle,
 		&taskDescription,
 		&status,
+		&lifecycleState,
 		&startedAt,
 		&finishedAt,
 		&agent.DurationSeconds,
@@ -1714,6 +1736,7 @@ func (s *Store) scanAgentFromRows(rows *sql.Rows) (*Agent, error) {
 	}
 
 	agent.Status = AgentStatus(status)
+	agent.LifecycleState = lifecycleState.String
 	agent.TaskDescription = taskDescription.String
 	agent.StartedAt = time.Unix(startedAt.Int64, 0)
 	if finishedAt.Valid {

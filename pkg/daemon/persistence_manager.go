@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/jzila/canopy/pkg/lifecycle"
 	"github.com/jzila/canopy/pkg/logging"
 	"github.com/jzila/canopy/pkg/persistence"
 )
@@ -271,7 +272,76 @@ func ConvertPersistenceAgentToState(pAgent *persistence.Agent) *AgentState {
 	// Restore session ID for claude --resume support
 	agent.SessionID = pAgent.SessionID
 
+	// Restore lifecycle state - use persisted state if available, otherwise derive from legacy fields
+	lifecycleState := pAgent.LifecycleState
+	if lifecycleState == "" {
+		// Migration: derive lifecycle state from legacy fields for agents without lifecycle_state
+		lifecycleState = string(deriveLifecycleStateFromLegacy(pAgent))
+	}
+	agent.LifecycleState = lifecycleState
+
+	// Create the lifecycle state machine with the restored state
+	// For restored agents, we initialize directly into the restored state without transitions
+	if lifecycleState != "" {
+		agent.Lifecycle = lifecycle.New(
+			lifecycle.WithInitialState(lifecycle.AgentLifecycleState(lifecycleState)),
+		)
+	}
+
 	return agent
+}
+
+// deriveLifecycleStateFromLegacy derives a lifecycle state from the legacy status fields.
+// This is used for migrating existing agents that don't have lifecycle_state persisted.
+// Note: Persistence only stores final merge statuses (merged, failed, skipped, merged_needs_repair),
+// not intermediate states (pending, merging, resolving) which are runtime-only.
+func deriveLifecycleStateFromLegacy(pAgent *persistence.Agent) lifecycle.AgentLifecycleState {
+	// Check validation status first (most specific states)
+	switch pAgent.ValidationStatus {
+	case "running":
+		return lifecycle.StateValidating
+	case "repairing":
+		return lifecycle.StateRepairing
+	case "failed":
+		// Validation failed - could be failed or needs_attention
+		if pAgent.MergeStatus == persistence.MergeStatusMergedNeedsRepair {
+			return lifecycle.StateNeedsAttention
+		}
+		return lifecycle.StateFailed
+	case "passed":
+		return lifecycle.StateCompleted
+	}
+
+	// Check merge status - persistence only stores final statuses
+	switch pAgent.MergeStatus {
+	case persistence.MergeStatusMerged, persistence.MergeStatusResolved:
+		return lifecycle.StateCompleted
+	case persistence.MergeStatusFailed:
+		return lifecycle.StateMergeFailed
+	case persistence.MergeStatusMergedNeedsRepair:
+		return lifecycle.StateNeedsAttention
+	case persistence.MergeStatusSkipped:
+		return lifecycle.StateCompleted
+	}
+
+	// Fall back to agent status
+	switch pAgent.Status {
+	case persistence.AgentStatusStarting:
+		return lifecycle.StateStarting
+	case persistence.AgentStatusRunning:
+		return lifecycle.StateRunning
+	case persistence.AgentStatusCompleted:
+		return lifecycle.StateCompleted
+	case persistence.AgentStatusFailed:
+		return lifecycle.StateFailed
+	case persistence.AgentStatusCancelled:
+		return lifecycle.StateCancelled
+	case persistence.AgentStatusTimedOut:
+		return lifecycle.StateTimedOut
+	}
+
+	// Default to running for unknown states
+	return lifecycle.StateRunning
 }
 
 // ConvertPersistenceStatus converts persistence.AgentStatus to daemon.AgentStatus

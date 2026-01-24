@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-const currentSchemaVersion = 14
+const currentSchemaVersion = 15
 
 // migrate runs all pending database migrations
 func (s *Store) migrate() error {
@@ -99,6 +99,10 @@ func (s *Store) runMigration(version int) error {
 		}
 	case 14:
 		if err := s.migrateV14(tx); err != nil {
+			return err
+		}
+	case 15:
+		if err := s.migrateV15(tx); err != nil {
 			return err
 		}
 	default:
@@ -434,4 +438,25 @@ func (s *Store) migrateV14(tx *sql.Tx) error {
 	`
 	_, err := tx.Exec(schema)
 	return err
+}
+
+// migrateV15 adds lifecycle_state column to agents table for unified state machine tracking.
+// Existing agents will have NULL lifecycle_state, which is handled by deriving it from
+// legacy fields (status, merge_status, validation_status) on first read.
+func (s *Store) migrateV15(tx *sql.Tx) error {
+	migrations := []string{
+		// Add lifecycle_state column (nullable for migration compatibility)
+		// Valid values match lifecycle.AgentLifecycleState: starting, running, queued_for_merge,
+		// merging, resolving, validating, repairing, merge_failed, completed, failed,
+		// needs_attention, cancelled, timed_out
+		`ALTER TABLE agents ADD COLUMN lifecycle_state TEXT`,
+	}
+
+	for _, m := range migrations {
+		if _, err := tx.Exec(m); err != nil {
+			return fmt.Errorf("failed to execute migration: %s: %w", m, err)
+		}
+	}
+
+	return nil
 }

@@ -100,7 +100,7 @@ func (h *PersistenceHandler) handleRunStarted(event Event) {
 // handleAgentMergeStatus updates the merge result fields when merge completes.
 // We only persist final merge statuses (merged or failed) to avoid noise from
 // intermediate statuses (pending, merging, resolving).
-// Also persists validation results if present.
+// Also persists validation results and lifecycle state if present.
 func (h *PersistenceHandler) handleAgentMergeStatus(event Event) {
 	payload, ok := event.Payload.(map[string]interface{})
 	if !ok {
@@ -116,6 +116,22 @@ func (h *PersistenceHandler) handleAgentMergeStatus(event Event) {
 
 	mergeStatus, _ := payload["merge_status"].(string)
 	mergeErr, _ := payload["error"].(string)
+	lifecycleState, _ := payload["lifecycle_state"].(string)
+
+	// Persist lifecycle state if present (always persist lifecycle updates)
+	if lifecycleState != "" {
+		if err := h.store.UpdateAgentLifecycleState(agentID, lifecycleState); err != nil {
+			logging.Error("failed to update lifecycle state",
+				"agent_id", agentID,
+				"error", err,
+				"component", "persistence")
+		} else {
+			logging.Debug("updated lifecycle state",
+				"agent_id", agentID,
+				"lifecycle_state", lifecycleState,
+				"component", "persistence")
+		}
+	}
 
 	// Persist validation results if present
 	validationStatus, hasValidation := payload["validation_status"].(string)
@@ -219,6 +235,7 @@ func (h *PersistenceHandler) handleAgentStarted(event Event) {
 	taskDescription, _ := payload["task_description"].(string)
 	repoID, _ := payload["repo_id"].(string)
 	parentAgentID, _ := payload["parent_agent_id"].(string)
+	lifecycleState, _ := payload["lifecycle_state"].(string)
 
 	// Get current run ID
 	h.mu.RLock()
@@ -232,6 +249,7 @@ func (h *PersistenceHandler) handleAgentStarted(event Event) {
 		TaskTitle:       taskTitle,
 		TaskDescription: taskDescription,
 		Status:          persistence.AgentStatusRunning,
+		LifecycleState:  lifecycleState,
 		StartedAt:       event.Timestamp,
 		RepoID:          repoID,
 		ParentAgentID:   parentAgentID,
@@ -247,6 +265,7 @@ func (h *PersistenceHandler) handleAgentStarted(event Event) {
 			"agent_id", agentID,
 			"task_id", taskID,
 			"run_id", runID,
+			"lifecycle_state", lifecycleState,
 			"component", "persistence")
 	}
 }
@@ -292,12 +311,14 @@ func (h *PersistenceHandler) handleAgentCompleted(event Event) {
 	stdout, _ := payload["stdout"].(string)
 	stderr, _ := payload["stderr"].(string)
 	sessionID, _ := payload["session_id"].(string)
+	lifecycleState, _ := payload["lifecycle_state"].(string)
 
 	finishedAt := event.Timestamp
 	agent := &persistence.Agent{
 		ID:                  agentID,
 		RunID:               runID,
 		Status:              status,
+		LifecycleState:      lifecycleState,
 		FinishedAt:          &finishedAt,
 		DurationSeconds:     duration,
 		ExitCode:            &exitCode,
@@ -328,6 +349,7 @@ func (h *PersistenceHandler) handleAgentCompleted(event Event) {
 		logging.Debug("updated agent completion",
 			"agent_id", agentID,
 			"status", status,
+			"lifecycle_state", lifecycleState,
 			"component", "persistence")
 	}
 }
