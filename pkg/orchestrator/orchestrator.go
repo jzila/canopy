@@ -477,9 +477,9 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 
 			// Check if retries exhausted
 			if o.config.MaxRetries != -1 && failureCount > o.config.MaxRetries {
-				// Mark as permanently failed in beads
-				if err := o.beadsClient.Fail(ctx, taskID, fmt.Sprintf("Task failed after %d attempts", failureCount)); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: could not mark task %s as failed in beads: %v\n", taskID, err)
+				// Mark as permanently failed in beads - closes task and adds needs-investigation label
+				if err := o.beadsClient.FailPermanently(ctx, taskID, fmt.Sprintf("Task failed after %d attempts", failureCount)); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: could not mark task %s as permanently failed in beads: %v\n", taskID, err)
 				}
 				fmt.Fprintf(os.Stderr, "ERROR: Task %s has failed %d times and will not be retried\n", taskID, failureCount)
 			} else if o.config.MaxRetries == -1 || failureCount <= o.config.MaxRetries {

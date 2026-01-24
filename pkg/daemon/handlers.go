@@ -56,6 +56,7 @@ type BeadsClientInterface interface {
 	Start(ctx context.Context, taskID string) error
 	Done(ctx context.Context, taskID string) error
 	Fail(ctx context.Context, taskID string, reason string) error
+	FailPermanently(ctx context.Context, taskID string, reason string) error
 	AddDep(ctx context.Context, child, parent string) error
 	List(ctx context.Context) ([]beads.Task, error)
 	Show(ctx context.Context, taskID string) (*beads.Task, error)

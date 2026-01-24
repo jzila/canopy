@@ -52,8 +52,12 @@ type BeadsClient interface {
 	// Done marks a task as completed
 	Done(ctx context.Context, taskID string) error
 
-	// Fail marks a task as failed by closing it with a failure reason
+	// Fail marks a task as failed by reopening it so it can be retried
 	Fail(ctx context.Context, taskID string, reason string) error
+
+	// FailPermanently marks a task as permanently failed by closing it and adding needs-investigation label
+	// This prevents the task from being retried again
+	FailPermanently(ctx context.Context, taskID string, reason string) error
 
 	// NeedsInput marks a task as needing user input (paused state)
 	// The sessionID is preserved so the task can be resumed later
@@ -192,6 +196,23 @@ func (c *Client) Done(ctx context.Context, taskID string) error {
 func (c *Client) Fail(ctx context.Context, taskID string, reason string) error {
 	_, err := c.run(ctx, "reopen", taskID, "--reason", "FAILED: "+reason)
 	return err
+}
+
+// FailPermanently marks a task as permanently failed by closing it and adding needs-investigation label.
+// This prevents the task from being automatically retried by the orchestrator.
+// The failure reason is recorded in the close event.
+func (c *Client) FailPermanently(ctx context.Context, taskID string, reason string) error {
+	// Close the task with the failure reason
+	if _, err := c.run(ctx, "close", taskID, "--reason", "FAILED PERMANENTLY: "+reason); err != nil {
+		return fmt.Errorf("failed to close task: %w", err)
+	}
+
+	// Add needs-investigation label to exclude from future runs
+	if _, err := c.run(ctx, "update", taskID, "--labels", "needs-investigation"); err != nil {
+		return fmt.Errorf("failed to add needs-investigation label: %w", err)
+	}
+
+	return nil
 }
 
 // NeedsInput marks a task as needing user input by setting its status to needs-input.

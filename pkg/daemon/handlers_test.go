@@ -64,6 +64,11 @@ func (m *mockBeadsClient) Fail(_ context.Context, taskID string, reason string) 
 	return nil
 }
 
+func (m *mockBeadsClient) FailPermanently(_ context.Context, taskID string, reason string) error {
+	m.failCalls = append(m.failCalls, taskID)
+	return nil
+}
+
 func (m *mockBeadsClient) AddDep(_ context.Context, child, parent string) error {
 	return nil
 }
