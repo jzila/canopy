@@ -337,6 +337,14 @@ type GitCommit struct {
 	FilesChanged []string `json:"files_changed"` // List of files modified in this commit
 }
 
+// LifecycleHistoryEntry represents a single state transition in the agent lifecycle.
+type LifecycleHistoryEntry struct {
+	From      string `json:"from"`      // Previous state
+	To        string `json:"to"`        // New state
+	Event     string `json:"event"`     // Event that triggered the transition
+	Timestamp string `json:"timestamp"` // ISO 8601 timestamp
+}
+
 // Append adds new output to the buffer (thread-safe)
 func (b *OutputBuffer) Append(stdout, stderr string) {
 	b.mu.Lock()
@@ -438,6 +446,12 @@ type AgentState struct {
 	// divergence is logged for monitoring. The lifecycle field is not serialized
 	// to JSON as it is ephemeral runtime state.
 	Lifecycle *lifecycle.AgentLifecycle `json:"-"`
+	// LifecycleState is the current lifecycle state as a string for JSON serialization.
+	// Derived from the Lifecycle state machine when available.
+	LifecycleState string `json:"lifecycle_state,omitempty"`
+	// LifecycleHistory contains the state transition history for debugging.
+	// Populated on demand (e.g., when --show-history is requested).
+	LifecycleHistory []LifecycleHistoryEntry `json:"lifecycle_history,omitempty"`
 	MergeQueuePos   int             `json:"merge_queue_pos,omitempty"`  // Position in merge wait queue (0 = not waiting)
 	MergeError      string          `json:"merge_error,omitempty"`      // Error message if merge failed
 	StartTime       time.Time       `json:"start_time"`                 // When agent started
@@ -485,6 +499,22 @@ func (a *AgentState) GetSnapshot() AgentState {
 	// Get output buffer values safely
 	stdout, stderr := a.Output.Get()
 
+	// Derive lifecycle state from the state machine if available
+	var lifecycleState string
+	var lifecycleHistory []LifecycleHistoryEntry
+	if a.Lifecycle != nil {
+		lifecycleState = a.Lifecycle.State().String()
+		// Copy history entries
+		for _, h := range a.Lifecycle.History() {
+			lifecycleHistory = append(lifecycleHistory, LifecycleHistoryEntry{
+				From:      h.From.String(),
+				To:        h.To.String(),
+				Event:     h.Event.String(),
+				Timestamp: h.Timestamp.Format(time.RFC3339),
+			})
+		}
+	}
+
 	// Copy all fields except mutexes
 	return AgentState{
 		ID:                 a.ID,
@@ -497,6 +527,8 @@ func (a *AgentState) GetSnapshot() AgentState {
 		ChildAgentIDs:      append([]string(nil), a.ChildAgentIDs...),
 		Status:             a.Status,
 		MergeStatus:        a.MergeStatus,
+		LifecycleState:     lifecycleState,
+		LifecycleHistory:   lifecycleHistory,
 		MergeQueuePos:      a.MergeQueuePos,
 		MergeError:         a.MergeError,
 		StartTime:          a.StartTime,
@@ -577,9 +609,6 @@ type RuntimeState struct {
 	// runtimeTasks: ephemeral overlay (in_progress, agent assignments)
 	persistentTasks map[string]*TaskState // From beads - does NOT get modified during runtime
 	runtimeTasks    map[string]*TaskState // Runtime overlay - rebuilt from agent events
-
-	// eventBus for publishing lifecycle transition events
-	eventBus *EventBus
 
 	mu sync.RWMutex
 }
@@ -1166,49 +1195,10 @@ func checkLifecycleDivergence(agent *AgentState, event string) {
 
 // SubscribeToEventBus subscribes to the EventBus and updates state from events.
 // Returns an unsubscribe function. This bridges IPC events to RuntimeState updates.
-// Also stores the EventBus reference for publishing lifecycle transition events.
 func (r *RuntimeState) SubscribeToEventBus(eventBus *EventBus) func() {
-	r.mu.Lock()
-	r.eventBus = eventBus
-	r.mu.Unlock()
-
 	return eventBus.Subscribe(func(event Event) {
 		r.handleEvent(event)
 	})
-}
-
-// makeLifecycleTransitionCallback creates a callback that publishes lifecycle
-// state transitions to the EventBus. This enables real-time tracking of agent
-// lifecycle state changes by dashboard and other subscribers.
-func (r *RuntimeState) makeLifecycleTransitionCallback(agentID string) lifecycle.TransitionCallback {
-	return func(from, to lifecycle.AgentLifecycleState, event lifecycle.AgentEvent) {
-		r.mu.RLock()
-		eventBus := r.eventBus
-		r.mu.RUnlock()
-
-		if eventBus == nil {
-			return
-		}
-
-		// Publish lifecycle state change event
-		eventBus.Publish(Event{
-			Type:      EventAgentRunning, // Reuse existing event type for lifecycle transitions
-			Timestamp: time.Now(),
-			Payload: map[string]interface{}{
-				"agent_id":        agentID,
-				"lifecycle_state": to.String(),
-				"previous_state":  from.String(),
-				"event":           event.String(),
-			},
-		})
-
-		logging.Debug("lifecycle state transition",
-			"agent_id", agentID,
-			"from", from.String(),
-			"to", to.String(),
-			"event", event.String(),
-		)
-	}
 }
 
 // handleEvent processes an event and updates the runtime state accordingly
@@ -1273,13 +1263,8 @@ func (r *RuntimeState) handleAgentStarted(payload map[string]interface{}, timest
 		r.mu.RUnlock()
 	}
 
-	// Initialize lifecycle state machine in starting state with transition callback.
-	// The callback publishes lifecycle state changes to the EventBus.
-	// Note: The transition to running state is done in OnAgentStartFn callback,
-	// not here. This handler only initializes the agent with lifecycle in starting state.
-	agentLifecycle := lifecycle.New(
-		lifecycle.WithTransitionCallback(r.makeLifecycleTransitionCallback(agentID)),
-	)
+	// Initialize lifecycle state machine in starting state
+	agentLifecycle := lifecycle.New()
 
 	agent := &AgentState{
 		ID:              agentID,
@@ -1294,8 +1279,17 @@ func (r *RuntimeState) handleAgentStarted(payload map[string]interface{}, timest
 		Lifecycle:       agentLifecycle,
 	}
 
-	// Note: Lifecycle transition (EventAgentSpawned) is called in OnAgentStartFn callback
-	// after this event handler completes. This ensures the agent exists before transition.
+	// Transition lifecycle to running state (parallel with legacy Status field)
+	if err := agentLifecycle.Transition(lifecycle.EventAgentSpawned, lifecycle.TransitionContext{}); err != nil {
+		logging.Warn("lifecycle transition failed on agent start",
+			"agent_id", agentID,
+			"event", lifecycle.EventAgentSpawned,
+			"error", err,
+		)
+	}
+
+	// Check for divergence between legacy and lifecycle state
+	checkLifecycleDivergence(agent, "agent_started")
 
 	r.AddAgent(agent)
 
@@ -1807,11 +1801,8 @@ func (r *RuntimeState) handleAgentCompleted(payload map[string]interface{}, time
 	})
 
 	// Update lifecycle state machine for completion (parallel with legacy fields)
-	// Note: Primary lifecycle transitions are now handled in orchestrator callbacks:
-	// - OnDoneFn: EventWorkComplete → StateQueuedForMerge
-	// - OnFailFn: EventWorkFailed → StateFailed
-	// This handler only transitions for edge cases not covered by callbacks
-	// (e.g., events from recovery, or agents created without going through callbacks).
+	// Note: Many completion events are already handled via merge status events,
+	// but agents can also complete directly (e.g., work failed, cancelled, timeout).
 	if agent.Lifecycle != nil {
 		transitionLifecycleForCompletion(agent, payload)
 	}

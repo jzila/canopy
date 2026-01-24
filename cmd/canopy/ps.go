@@ -20,6 +20,7 @@ var (
 	psJSON        bool
 	psDaemonOnly  bool
 	psWorkersOnly bool
+	psShowHistory bool
 )
 
 var psCmd = &cobra.Command{
@@ -42,7 +43,10 @@ EXAMPLES
   canopy ps --workers-only
 
   # Output as JSON for scripting
-  canopy ps --json`,
+  canopy ps --json
+
+  # Show state transition history for debugging
+  canopy ps --show-history`,
 	RunE: runPs,
 }
 
@@ -50,6 +54,7 @@ func init() {
 	psCmd.Flags().BoolVar(&psJSON, "json", false, "Output as JSON")
 	psCmd.Flags().BoolVar(&psDaemonOnly, "daemon-only", false, "Show only daemon status")
 	psCmd.Flags().BoolVar(&psWorkersOnly, "workers-only", false, "Show only worker agents")
+	psCmd.Flags().BoolVar(&psShowHistory, "show-history", false, "Display state transition history for debugging")
 
 	rootCmd.AddCommand(psCmd)
 }
@@ -86,15 +91,26 @@ type StatsInfo struct {
 
 // WorkerInfo contains information about a worker agent
 type WorkerInfo struct {
-	AgentID          string `json:"agentId"`
-	TaskID           string `json:"taskId"`
-	TaskTitle        string `json:"taskTitle,omitempty"`
-	Status           string `json:"status"`
-	MergeStatus      string `json:"mergeStatus,omitempty"`
-	ValidationStatus string `json:"validationStatus,omitempty"`
-	RepairAttempts   int    `json:"repairAttempts,omitempty"`
-	Duration         string `json:"duration"`
-	StartTime        string `json:"startTime,omitempty"`
+	AgentID          string                    `json:"agentId"`
+	TaskID           string                    `json:"taskId"`
+	TaskTitle        string                    `json:"taskTitle,omitempty"`
+	Status           string                    `json:"status"`
+	MergeStatus      string                    `json:"mergeStatus,omitempty"`
+	ValidationStatus string                    `json:"validationStatus,omitempty"`
+	RepairAttempts   int                       `json:"repairAttempts,omitempty"`
+	LifecycleState   string                    `json:"lifecycleState,omitempty"`
+	LifecycleHistory []LifecycleHistoryEntry   `json:"lifecycleHistory,omitempty"`
+	MergeQueuePos    int                       `json:"mergeQueuePos,omitempty"`
+	Duration         string                    `json:"duration"`
+	StartTime        string                    `json:"startTime,omitempty"`
+}
+
+// LifecycleHistoryEntry represents a single state transition
+type LifecycleHistoryEntry struct {
+	From      string `json:"from"`
+	To        string `json:"to"`
+	Event     string `json:"event"`
+	Timestamp string `json:"timestamp"`
 }
 
 func runPs(cmd *cobra.Command, args []string) error {
@@ -198,16 +214,27 @@ type StateResponse struct {
 
 // AgentInfo matches the daemon's agent state structure
 type AgentInfo struct {
-	ID               string    `json:"id"`
-	TaskID           string    `json:"task_id"`
-	TaskTitle        string    `json:"task_title"`
-	Status           string    `json:"status"`
-	MergeStatus      string    `json:"merge_status"`
-	ValidationStatus string    `json:"validation_status"`
-	RepairAttempts   int       `json:"repair_attempts"`
-	StartTime        time.Time `json:"start_time"`
-	Duration         float64   `json:"duration"`
-	Archived         bool      `json:"archived"`
+	ID               string                         `json:"id"`
+	TaskID           string                         `json:"task_id"`
+	TaskTitle        string                         `json:"task_title"`
+	Status           string                         `json:"status"`
+	MergeStatus      string                         `json:"merge_status"`
+	ValidationStatus string                         `json:"validation_status"`
+	RepairAttempts   int                            `json:"repair_attempts"`
+	LifecycleState   string                         `json:"lifecycle_state"`
+	LifecycleHistory []AgentLifecycleHistoryEntry   `json:"lifecycle_history"`
+	MergeQueuePos    int                            `json:"merge_queue_pos"`
+	StartTime        time.Time                      `json:"start_time"`
+	Duration         float64                        `json:"duration"`
+	Archived         bool                           `json:"archived"`
+}
+
+// AgentLifecycleHistoryEntry matches the daemon's lifecycle history structure
+type AgentLifecycleHistoryEntry struct {
+	From      string `json:"from"`
+	To        string `json:"to"`
+	Event     string `json:"event"`
+	Timestamp string `json:"timestamp"`
 }
 
 // TaskInfo matches the daemon's task state structure
@@ -296,6 +323,17 @@ func getWorkerInfo() ([]WorkerInfo, error) {
 			duration = formatDuration(time.Duration(agent.Duration * float64(time.Second)))
 		}
 
+		// Convert lifecycle history entries
+		var history []LifecycleHistoryEntry
+		for _, h := range agent.LifecycleHistory {
+			history = append(history, LifecycleHistoryEntry{
+				From:      h.From,
+				To:        h.To,
+				Event:     h.Event,
+				Timestamp: h.Timestamp,
+			})
+		}
+
 		workers = append(workers, WorkerInfo{
 			AgentID:          agent.ID,
 			TaskID:           agent.TaskID,
@@ -304,6 +342,9 @@ func getWorkerInfo() ([]WorkerInfo, error) {
 			MergeStatus:      agent.MergeStatus,
 			ValidationStatus: agent.ValidationStatus,
 			RepairAttempts:   agent.RepairAttempts,
+			LifecycleState:   agent.LifecycleState,
+			LifecycleHistory: history,
+			MergeQueuePos:    agent.MergeQueuePos,
 			Duration:         duration,
 			StartTime:        agent.StartTime.Format("15:04:05"),
 		})
@@ -365,7 +406,7 @@ func outputPsTable(info ProcessInfo) error {
 			fmt.Println("  No active workers")
 		} else {
 			// Print header - use full agent IDs since they're needed for canopy kill
-			fmt.Printf("  %-30s  %-16s  %-10s  %-10s  %s\n",
+			fmt.Printf("  %-30s  %-16s  %-18s  %-10s  %s\n",
 				"AGENT ID", "TASK ID", "STATUS", "DURATION", "TITLE")
 
 			for _, w := range info.Workers {
@@ -377,26 +418,67 @@ func outputPsTable(info ProcessInfo) error {
 					title = title[:37] + "..."
 				}
 
-				status := w.Status
-				// Show validation status when repairing (takes precedence)
-				if w.ValidationStatus == "repairing" {
-					if w.RepairAttempts > 0 {
-						status = fmt.Sprintf("repairing (%d)", w.RepairAttempts)
-					} else {
-						status = "repairing"
-					}
-				} else if w.MergeStatus != "" && w.MergeStatus != "none" {
-					status = w.MergeStatus
-				}
+				// Use lifecycle state directly if available
+				status := formatLifecycleStatus(w)
 
-				fmt.Printf("  %-30s  %-16s  %-10s  %-10s  %s\n",
+				fmt.Printf("  %-30s  %-16s  %-18s  %-10s  %s\n",
 					w.AgentID, taskID, status, w.Duration, title)
+
+				// Show state transition history if requested
+				if psShowHistory && len(w.LifecycleHistory) > 0 {
+					fmt.Println("    State History:")
+					for _, h := range w.LifecycleHistory {
+						// Parse and format timestamp for display
+						ts := h.Timestamp
+						if t, err := time.Parse(time.RFC3339, h.Timestamp); err == nil {
+							ts = t.Format("15:04:05")
+						}
+						fmt.Printf("      %s  %s -> %s  (%s)\n", ts, h.From, h.To, h.Event)
+					}
+				}
 			}
 		}
 		fmt.Println()
 	}
 
 	return nil
+}
+
+// formatLifecycleStatus returns a display string for the agent's status.
+// Prefers lifecycle_state when available, with additional context for specific states.
+func formatLifecycleStatus(w WorkerInfo) string {
+	// Use lifecycle state if available
+	if w.LifecycleState != "" {
+		switch w.LifecycleState {
+		case "queued_for_merge":
+			if w.MergeQueuePos > 0 {
+				return fmt.Sprintf("queued (pos %d)", w.MergeQueuePos)
+			}
+			return "queued"
+		case "validating":
+			return "validating"
+		case "repairing":
+			if w.RepairAttempts > 0 {
+				return fmt.Sprintf("repairing (%d/3)", w.RepairAttempts)
+			}
+			return "repairing"
+		default:
+			return w.LifecycleState
+		}
+	}
+
+	// Fallback to legacy status derivation
+	status := w.Status
+	if w.ValidationStatus == "repairing" {
+		if w.RepairAttempts > 0 {
+			status = fmt.Sprintf("repairing (%d)", w.RepairAttempts)
+		} else {
+			status = "repairing"
+		}
+	} else if w.MergeStatus != "" && w.MergeStatus != "none" {
+		status = w.MergeStatus
+	}
+	return status
 }
 
 // truncateID truncates an ID to the specified length, showing the first part
