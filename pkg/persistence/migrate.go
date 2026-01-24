@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-const currentSchemaVersion = 15
+const currentSchemaVersion = 16
 
 // migrate runs all pending database migrations
 func (s *Store) migrate() error {
@@ -103,6 +103,10 @@ func (s *Store) runMigration(version int) error {
 		}
 	case 15:
 		if err := s.migrateV15(tx); err != nil {
+			return err
+		}
+	case 16:
+		if err := s.migrateV16(tx); err != nil {
 			return err
 		}
 	default:
@@ -456,6 +460,27 @@ func (s *Store) migrateV15(tx *sql.Tx) error {
 		if _, err := tx.Exec(m); err != nil {
 			return fmt.Errorf("failed to execute migration: %s: %w", m, err)
 		}
+	}
+
+	return nil
+}
+
+// migrateV16 creates the run_configs table for persisting per-repository orchestrator settings
+func (s *Store) migrateV16(tx *sql.Tx) error {
+	schema := `
+		CREATE TABLE IF NOT EXISTS run_configs (
+			repo_id TEXT PRIMARY KEY,
+			concurrency INTEGER NOT NULL DEFAULT 4,
+			max_priority INTEGER NOT NULL DEFAULT 4,
+			use_bwrap INTEGER NOT NULL DEFAULT 1,
+			max_retries INTEGER NOT NULL DEFAULT 3,
+			updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+		);
+	`
+
+	_, err := tx.Exec(schema)
+	if err != nil {
+		return fmt.Errorf("failed to create run_configs table: %w", err)
 	}
 
 	return nil

@@ -110,6 +110,16 @@ type ActiveOverlay struct {
 	Status    string `json:"status"` // active, completed, orphaned
 }
 
+// RunConfig represents persisted orchestrator settings for a repository
+type RunConfig struct {
+	RepoID      string `json:"repo_id"`
+	Concurrency int    `json:"concurrency"`
+	MaxPriority int    `json:"max_priority"`
+	UseBwrap    bool   `json:"use_bwrap"`
+	MaxRetries  int    `json:"max_retries"`
+	UpdatedAt   int64  `json:"updated_at,omitempty"`
+}
+
 // Agent represents a single agent execution within a run
 type Agent struct {
 	ID              string      `json:"id"`
@@ -2100,4 +2110,73 @@ func (s *Store) scanOverlayFromRows(rows *sql.Rows) (*ActiveOverlay, error) {
 
 	overlay.SessionID = sessionID.String
 	return &overlay, nil
+}
+
+// DefaultRunConfig returns a RunConfig with default values
+func DefaultRunConfig(repoID string) *RunConfig {
+	return &RunConfig{
+		RepoID:      repoID,
+		Concurrency: 4,
+		MaxPriority: 4,
+		UseBwrap:    true,
+		MaxRetries:  3,
+	}
+}
+
+// GetRunConfig retrieves the run configuration for a repository.
+// Returns a default configuration if no record exists for the repo.
+func (s *Store) GetRunConfig(repoID string) (*RunConfig, error) {
+	query := `SELECT repo_id, concurrency, max_priority, use_bwrap, max_retries, updated_at FROM run_configs WHERE repo_id = ?`
+	row := s.db.QueryRow(query, repoID)
+
+	var config RunConfig
+	var useBwrap int
+	var updatedAt sql.NullInt64
+
+	err := row.Scan(
+		&config.RepoID,
+		&config.Concurrency,
+		&config.MaxPriority,
+		&useBwrap,
+		&config.MaxRetries,
+		&updatedAt,
+	)
+	if err == sql.ErrNoRows {
+		// Return default config if not found
+		return DefaultRunConfig(repoID), nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get run config: %w", err)
+	}
+
+	config.UseBwrap = useBwrap == 1
+	config.UpdatedAt = updatedAt.Int64
+
+	return &config, nil
+}
+
+// SaveRunConfig creates or updates the run configuration for a repository.
+// Uses upsert pattern to handle both new and existing configurations.
+func (s *Store) SaveRunConfig(repoID string, config *RunConfig) error {
+	query := `
+		INSERT INTO run_configs (repo_id, concurrency, max_priority, use_bwrap, max_retries, updated_at)
+		VALUES (?, ?, ?, ?, ?, strftime('%s', 'now'))
+		ON CONFLICT(repo_id) DO UPDATE SET
+			concurrency = excluded.concurrency,
+			max_priority = excluded.max_priority,
+			use_bwrap = excluded.use_bwrap,
+			max_retries = excluded.max_retries,
+			updated_at = excluded.updated_at
+	`
+	_, err := s.db.Exec(query,
+		repoID,
+		config.Concurrency,
+		config.MaxPriority,
+		boolToInt(config.UseBwrap),
+		config.MaxRetries,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to save run config: %w", err)
+	}
+	return nil
 }
