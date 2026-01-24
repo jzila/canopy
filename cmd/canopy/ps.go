@@ -56,8 +56,9 @@ func init() {
 
 // ProcessInfo contains information about canopy processes
 type ProcessInfo struct {
-	Daemon  *DaemonInfo  `json:"daemon,omitempty"`
-	Workers []WorkerInfo `json:"workers,omitempty"`
+	Daemon     *DaemonInfo      `json:"daemon,omitempty"`
+	Workers    []WorkerInfo     `json:"workers,omitempty"`
+	MergeQueue *MergeQueueInfo  `json:"merge_queue,omitempty"`
 }
 
 // DaemonInfo contains information about the daemon process
@@ -90,7 +91,6 @@ type WorkerInfo struct {
 	TaskID           string `json:"taskId"`
 	TaskTitle        string `json:"taskTitle,omitempty"`
 	Status           string `json:"status"`
-	LifecycleState   string `json:"lifecycleState,omitempty"`
 	MergeStatus      string `json:"mergeStatus,omitempty"`
 	ValidationStatus string `json:"validationStatus,omitempty"`
 	RepairAttempts   int    `json:"repairAttempts,omitempty"`
@@ -112,12 +112,13 @@ func runPs(cmd *cobra.Command, args []string) error {
 
 	// Get worker info unless daemon-only is specified
 	if !psDaemonOnly {
-		workers, err := getWorkerInfo()
+		workers, mergeQueue, err := getWorkerInfo()
 		if err != nil && info.Daemon != nil && info.Daemon.Running {
 			// Only report error if daemon is running but we failed to get workers
 			return fmt.Errorf("failed to get worker info: %w", err)
 		}
 		info.Workers = workers
+		info.MergeQueue = mergeQueue
 	}
 
 	if psJSON {
@@ -194,7 +195,25 @@ type StateResponse struct {
 	StartTime         time.Time              `json:"start_time"`
 	OrchestratorState string                 `json:"orchestrator_state,omitempty"`
 	ActiveAgentCount  int                    `json:"active_agent_count,omitempty"`
+	MergeQueue        *MergeQueueInfo        `json:"merge_queue,omitempty"`
 	Extra             map[string]interface{} `json:"-"` // For capturing additional fields like active_repo_id
+}
+
+// MergeQueueInfo contains the merge queue state
+type MergeQueueInfo struct {
+	Entries     []MergeQueueEntry `json:"entries"`
+	QueueLength int               `json:"queue_length"`
+	IsPaused    bool              `json:"is_paused"`
+	PauseState  string            `json:"pause_state"`
+}
+
+// MergeQueueEntry represents an item in the merge queue
+type MergeQueueEntry struct {
+	AgentID   string `json:"agent_id"`
+	TaskID    string `json:"task_id"`
+	TaskTitle string `json:"task_title,omitempty"`
+	Status    string `json:"status"` // merging, waiting
+	Position  int    `json:"position"`
 }
 
 // AgentInfo matches the daemon's agent state structure
@@ -205,7 +224,6 @@ type AgentInfo struct {
 	Status           string    `json:"status"`
 	MergeStatus      string    `json:"merge_status"`
 	ValidationStatus string    `json:"validation_status"`
-	LifecycleState   string    `json:"lifecycle_state"`
 	RepairAttempts   int       `json:"repair_attempts"`
 	StartTime        time.Time `json:"start_time"`
 	Duration         float64   `json:"duration"`
@@ -266,17 +284,17 @@ func queryDaemonState(port int) (*StateResponse, error) {
 	return &state, nil
 }
 
-func getWorkerInfo() ([]WorkerInfo, error) {
+func getWorkerInfo() ([]WorkerInfo, *MergeQueueInfo, error) {
 	// Check if daemon is running
 	running, _, err := daemon.IsRunning()
 	if err != nil || !running {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	// Query daemon for agent info
 	state, err := queryDaemonState(8080)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var workers []WorkerInfo
@@ -286,19 +304,9 @@ func getWorkerInfo() ([]WorkerInfo, error) {
 			continue
 		}
 
-		// Only show active (non-terminal) agents by default
-		// Prefer lifecycle state when available, fall back to legacy status
-		if agent.LifecycleState != "" {
-			// Skip terminal lifecycle states
-			switch agent.LifecycleState {
-			case "completed", "failed", "needs_attention", "cancelled", "timed_out":
-				continue
-			}
-		} else {
-			// Fall back to legacy status check
-			if agent.Status != "running" && agent.Status != "starting" {
-				continue
-			}
+		// Only show running agents by default
+		if agent.Status != "running" && agent.Status != "starting" {
+			continue
 		}
 
 		duration := ""
@@ -313,7 +321,6 @@ func getWorkerInfo() ([]WorkerInfo, error) {
 			TaskID:           agent.TaskID,
 			TaskTitle:        agent.TaskTitle,
 			Status:           agent.Status,
-			LifecycleState:   agent.LifecycleState,
 			MergeStatus:      agent.MergeStatus,
 			ValidationStatus: agent.ValidationStatus,
 			RepairAttempts:   agent.RepairAttempts,
@@ -322,7 +329,7 @@ func getWorkerInfo() ([]WorkerInfo, error) {
 		})
 	}
 
-	return workers, nil
+	return workers, state.MergeQueue, nil
 }
 
 func outputPsJSON(info ProcessInfo) error {
@@ -390,23 +397,16 @@ func outputPsTable(info ProcessInfo) error {
 					title = title[:37] + "..."
 				}
 
-				// Prefer lifecycle state from state machine if available
-				status := w.LifecycleState
-				if status == "" {
-					// Fall back to legacy status derivation for backwards compatibility
-					status = w.Status
-					if w.ValidationStatus == "repairing" {
-						if w.RepairAttempts > 0 {
-							status = fmt.Sprintf("repairing (%d)", w.RepairAttempts)
-						} else {
-							status = "repairing"
-						}
-					} else if w.MergeStatus != "" && w.MergeStatus != "none" {
-						status = w.MergeStatus
+				status := w.Status
+				// Show validation status when repairing (takes precedence)
+				if w.ValidationStatus == "repairing" {
+					if w.RepairAttempts > 0 {
+						status = fmt.Sprintf("repairing (%d)", w.RepairAttempts)
+					} else {
+						status = "repairing"
 					}
-				} else if status == "repairing" && w.RepairAttempts > 0 {
-					// Enhance repairing state with attempt count
-					status = fmt.Sprintf("repairing (%d)", w.RepairAttempts)
+				} else if w.MergeStatus != "" && w.MergeStatus != "none" {
+					status = w.MergeStatus
 				}
 
 				fmt.Printf("  %-30s  %-16s  %-10s  %-10s  %s\n",
@@ -416,7 +416,33 @@ func outputPsTable(info ProcessInfo) error {
 		fmt.Println()
 	}
 
+	// Show merge queue section unless daemon-only
+	if !psDaemonOnly {
+		outputMergeQueue(info.MergeQueue)
+	}
+
 	return nil
+}
+
+// outputMergeQueue displays the merge queue state
+func outputMergeQueue(mq *MergeQueueInfo) {
+	if mq == nil || len(mq.Entries) == 0 {
+		fmt.Println("Merge Queue: empty")
+		fmt.Println()
+		return
+	}
+
+	fmt.Println("Merge Queue:")
+	for _, entry := range mq.Entries {
+		// Format: Position N: agent-id (task-id) - status
+		fmt.Printf("  Position %d: %s (%s) - %s\n",
+			entry.Position,
+			truncateID(entry.AgentID, 20),
+			truncateID(entry.TaskID, 16),
+			entry.Status,
+		)
+	}
+	fmt.Println()
 }
 
 // truncateID truncates an ID to the specified length, showing the first part

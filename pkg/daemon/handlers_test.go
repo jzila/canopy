@@ -858,3 +858,133 @@ func TestHandleGetMergeQueue(t *testing.T) {
 		}
 	})
 }
+
+func TestBuildMergeQueueSnapshot(t *testing.T) {
+	state := NewRuntimeState()
+	handler := NewHandler(state, nil, nil, nil)
+
+	t.Run("EmptyState", func(t *testing.T) {
+		snapshot := state.GetSnapshot()
+		mqSnapshot := handler.buildMergeQueueSnapshot(snapshot)
+
+		if mqSnapshot == nil {
+			t.Fatal("Expected non-nil snapshot")
+		}
+		if len(mqSnapshot.Entries) != 0 {
+			t.Errorf("Expected 0 entries, got %d", len(mqSnapshot.Entries))
+		}
+		if mqSnapshot.QueueLength != 0 {
+			t.Errorf("Expected queue length 0, got %d", mqSnapshot.QueueLength)
+		}
+	})
+
+	t.Run("WithMergingAndPendingAgents", func(t *testing.T) {
+		// Clear state
+		state = NewRuntimeState()
+		handler = NewHandler(state, nil, nil, nil)
+
+		// Add agent currently merging
+		mergingAgent := &AgentState{
+			ID:          "agent-merging",
+			TaskID:      "task-merging",
+			TaskTitle:   "Merging Task",
+			Status:      AgentStatusRunning,
+			MergeStatus: MergeStatusMerging,
+			StartTime:   time.Now(),
+		}
+		state.AddAgent(mergingAgent)
+
+		// Add two agents pending in queue
+		pendingAgent1 := &AgentState{
+			ID:            "agent-pending1",
+			TaskID:        "task-pending1",
+			TaskTitle:     "Pending Task 1",
+			Status:        AgentStatusRunning,
+			MergeStatus:   MergeStatusPending,
+			MergeQueuePos: 2,
+			StartTime:     time.Now(),
+		}
+		state.AddAgent(pendingAgent1)
+
+		pendingAgent2 := &AgentState{
+			ID:            "agent-pending2",
+			TaskID:        "task-pending2",
+			TaskTitle:     "Pending Task 2",
+			Status:        AgentStatusRunning,
+			MergeStatus:   MergeStatusAcquiring,
+			MergeQueuePos: 3,
+			StartTime:     time.Now(),
+		}
+		state.AddAgent(pendingAgent2)
+
+		snapshot := state.GetSnapshot()
+		mqSnapshot := handler.buildMergeQueueSnapshot(snapshot)
+
+		if mqSnapshot == nil {
+			t.Fatal("Expected non-nil snapshot")
+		}
+		if len(mqSnapshot.Entries) != 3 {
+			t.Errorf("Expected 3 entries, got %d", len(mqSnapshot.Entries))
+		}
+		if mqSnapshot.QueueLength != 3 {
+			t.Errorf("Expected queue length 3, got %d", mqSnapshot.QueueLength)
+		}
+
+		// Check that entries are sorted by position
+		for i, entry := range mqSnapshot.Entries {
+			expectedPos := i + 1
+			if entry.Position != expectedPos {
+				t.Errorf("Entry %d: expected position %d, got %d", i, expectedPos, entry.Position)
+			}
+		}
+
+		// First entry should be merging
+		if mqSnapshot.Entries[0].Status != "merging" {
+			t.Errorf("First entry should have status 'merging', got %q", mqSnapshot.Entries[0].Status)
+		}
+	})
+}
+
+func TestStateResponseIncludesMergeQueue(t *testing.T) {
+	state := NewRuntimeState()
+	handler := NewHandler(state, nil, nil, nil)
+
+	// Add an agent in the merge queue
+	pendingAgent := &AgentState{
+		ID:            "agent-pending",
+		TaskID:        "task-pending",
+		TaskTitle:     "Pending Task",
+		Status:        AgentStatusRunning,
+		MergeStatus:   MergeStatusPending,
+		MergeQueuePos: 1,
+		StartTime:     time.Now(),
+	}
+	state.AddAgent(pendingAgent)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/state", nil)
+	w := httptest.NewRecorder()
+
+	handler.HandleGetState(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", w.Code)
+	}
+
+	var result StateResponse
+	if err := json.NewDecoder(w.Body).Decode(&result); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	// Check that merge queue is included
+	if result.MergeQueueInfo == nil {
+		t.Fatal("Expected MergeQueueInfo in response")
+	}
+
+	if len(result.MergeQueueInfo.Entries) != 1 {
+		t.Errorf("Expected 1 merge queue entry, got %d", len(result.MergeQueueInfo.Entries))
+	}
+
+	if result.MergeQueueInfo.Entries[0].AgentID != "agent-pending" {
+		t.Errorf("Expected agent ID 'agent-pending', got %q", result.MergeQueueInfo.Entries[0].AgentID)
+	}
+}
