@@ -504,7 +504,12 @@ func (m *SequentialMerger) resetToHead(headCommit string, paths []string) error 
 // Format: "<original message> (<bead-id>)" or combined messages if multiple commits.
 // Falls back to generating a message from the task title if no agent commits exist.
 func (m *SequentialMerger) buildMergeCommitMessage(result *agent.Result, opts *MergeOptions) string {
-	beadID := result.TaskID
+	// Use BeadID if set (repair/resolver agents set this to the original bead ID),
+	// otherwise fall back to TaskID (for normal agents, TaskID is the bead ID).
+	beadID := result.BeadID
+	if beadID == "" {
+		beadID = result.TaskID
+	}
 
 	// If agent made commits, use their message(s) as the primary content
 	if result.GitState != nil && len(result.GitState.CommitMessages) > 0 {

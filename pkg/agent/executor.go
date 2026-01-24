@@ -25,6 +25,7 @@ const processGroupGracePeriod = 3 * time.Second
 // Result holds the execution result from an agent
 type Result struct {
 	TaskID       string
+	BeadID       string // Original bead ID for commit messages (set by repair/resolver agents)
 	Success      bool
 	Output       *ClaudeOutput
 	Stdout       string

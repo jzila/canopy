@@ -148,6 +148,9 @@ func (r *RepairAgent) Repair(ctx context.Context, repairCtx *RepairContext, pare
 	// Execute the repair agent
 	agentResult := r.executor.Execute(ctx, repairTask, overlay, nil, nil)
 
+	// Set the original bead ID for commit messages (TaskID is the synthetic repair agent ID)
+	agentResult.BeadID = repairCtx.TaskID
+
 	result.AgentResult = agentResult
 	result.Success = agentResult.Success
 	result.Duration = time.Since(start)
@@ -268,6 +271,9 @@ func (r *RepairAgent) RepairPreCommit(ctx context.Context, repairCtx *PreCommitR
 
 	// Execute the repair agent
 	agentResult := r.executor.Execute(ctx, repairTask, overlay, nil, nil)
+
+	// Set the original bead ID for commit messages (TaskID is the synthetic repair agent ID)
+	agentResult.BeadID = repairCtx.TaskID
 
 	result.AgentResult = agentResult
 	result.Success = agentResult.Success
