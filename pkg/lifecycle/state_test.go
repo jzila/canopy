@@ -68,9 +68,9 @@ func TestValidationWorkflow(t *testing.T) {
 	l := New()
 
 	// Fast forward to Merging
-	l.Transition(EventAgentSpawned, TransitionContext{})
-	l.Transition(EventWorkComplete, TransitionContext{})
-	l.Transition(EventMergeStarted, TransitionContext{})
+	_ = l.Transition(EventAgentSpawned, TransitionContext{})
+	_ = l.Transition(EventWorkComplete, TransitionContext{})
+	_ = l.Transition(EventMergeStarted, TransitionContext{})
 
 	// Merging -> Validating (with validation enabled)
 	err := l.Transition(EventMergeSuccess, TransitionContext{ValidationEnabled: true})
@@ -95,10 +95,10 @@ func TestRepairWorkflow(t *testing.T) {
 	l := New()
 
 	// Fast forward to Validating
-	l.Transition(EventAgentSpawned, TransitionContext{})
-	l.Transition(EventWorkComplete, TransitionContext{})
-	l.Transition(EventMergeStarted, TransitionContext{})
-	l.Transition(EventMergeSuccess, TransitionContext{ValidationEnabled: true})
+	_ = l.Transition(EventAgentSpawned, TransitionContext{})
+	_ = l.Transition(EventWorkComplete, TransitionContext{})
+	_ = l.Transition(EventMergeStarted, TransitionContext{})
+	_ = l.Transition(EventMergeSuccess, TransitionContext{ValidationEnabled: true})
 
 	// Validating -> Repairing (repair enabled, attempts remaining)
 	ctx := TransitionContext{
@@ -137,10 +137,10 @@ func TestRepairExhausted(t *testing.T) {
 	l := New()
 
 	// Fast forward to Validating
-	l.Transition(EventAgentSpawned, TransitionContext{})
-	l.Transition(EventWorkComplete, TransitionContext{})
-	l.Transition(EventMergeStarted, TransitionContext{})
-	l.Transition(EventMergeSuccess, TransitionContext{ValidationEnabled: true})
+	_ = l.Transition(EventAgentSpawned, TransitionContext{})
+	_ = l.Transition(EventWorkComplete, TransitionContext{})
+	_ = l.Transition(EventMergeStarted, TransitionContext{})
+	_ = l.Transition(EventMergeSuccess, TransitionContext{ValidationEnabled: true})
 
 	// Validating -> NeedsAttention (repair exhausted, lenient mode)
 	ctx := TransitionContext{
@@ -162,10 +162,10 @@ func TestStrictModeValidationFailure(t *testing.T) {
 	l := New()
 
 	// Fast forward to Validating
-	l.Transition(EventAgentSpawned, TransitionContext{})
-	l.Transition(EventWorkComplete, TransitionContext{})
-	l.Transition(EventMergeStarted, TransitionContext{})
-	l.Transition(EventMergeSuccess, TransitionContext{ValidationEnabled: true})
+	_ = l.Transition(EventAgentSpawned, TransitionContext{})
+	_ = l.Transition(EventWorkComplete, TransitionContext{})
+	_ = l.Transition(EventMergeStarted, TransitionContext{})
+	_ = l.Transition(EventMergeSuccess, TransitionContext{ValidationEnabled: true})
 
 	// Validating -> Failed (strict mode, repair exhausted)
 	ctx := TransitionContext{
@@ -187,9 +187,9 @@ func TestConflictResolution(t *testing.T) {
 	l := New()
 
 	// Fast forward to Merging
-	l.Transition(EventAgentSpawned, TransitionContext{})
-	l.Transition(EventWorkComplete, TransitionContext{})
-	l.Transition(EventMergeStarted, TransitionContext{})
+	_ = l.Transition(EventAgentSpawned, TransitionContext{})
+	_ = l.Transition(EventWorkComplete, TransitionContext{})
+	_ = l.Transition(EventMergeStarted, TransitionContext{})
 
 	// Merging -> Resolving
 	err := l.Transition(EventMergeConflict, TransitionContext{})
@@ -214,9 +214,9 @@ func TestMergeFailedRetry(t *testing.T) {
 	l := New()
 
 	// Fast forward to Merging
-	l.Transition(EventAgentSpawned, TransitionContext{})
-	l.Transition(EventWorkComplete, TransitionContext{})
-	l.Transition(EventMergeStarted, TransitionContext{})
+	_ = l.Transition(EventAgentSpawned, TransitionContext{})
+	_ = l.Transition(EventWorkComplete, TransitionContext{})
+	_ = l.Transition(EventMergeStarted, TransitionContext{})
 
 	// Merging -> MergeFailed
 	err := l.Transition(EventMergeFailed, TransitionContext{})
@@ -369,26 +369,24 @@ func TestTransitionCallback(t *testing.T) {
 }
 
 func TestHistoryBounding(t *testing.T) {
-	l := New()
+	var l *AgentLifecycle
 
 	// Simulate many transitions
 	// Start with a valid workflow and repeat
 	for i := 0; i < maxHistoryEntries+50; i++ {
 		// Create a new lifecycle each time to avoid needing complex valid paths
 		l = New()
-		l.Transition(EventAgentSpawned, TransitionContext{})
+		_ = l.Transition(EventAgentSpawned, TransitionContext{})
 	}
 
 	// For a fresh lifecycle with just the spawned transition
-	l = New()
 	for i := 0; i < maxHistoryEntries+10; i++ {
 		// Reset to starting state by creating new lifecycle
 		l = New()
-		l.Transition(EventAgentSpawned, TransitionContext{})
+		_ = l.Transition(EventAgentSpawned, TransitionContext{})
 	}
 
 	// Test history bounding on a single lifecycle
-	l = New()
 	// We'll use cancel transitions since they're allowed from any non-terminal state
 	// But once cancelled, we can't transition anymore. So let's test differently.
 
@@ -396,10 +394,10 @@ func TestHistoryBounding(t *testing.T) {
 	// after many transitions that are valid
 
 	l = New()
-	l.Transition(EventAgentSpawned, TransitionContext{})
+	_ = l.Transition(EventAgentSpawned, TransitionContext{})
 	// Now we're in Running, do work complete/retry cycles
 	for i := 0; i < maxHistoryEntries+20; i++ {
-		l.Transition(EventWorkFailed, TransitionContext{AttemptsRemaining: 1})
+		_ = l.Transition(EventWorkFailed, TransitionContext{AttemptsRemaining: 1})
 	}
 
 	history := l.History()
@@ -437,7 +435,7 @@ func TestIsTerminal(t *testing.T) {
 
 func TestWorkFailedWithRetry(t *testing.T) {
 	l := New()
-	l.Transition(EventAgentSpawned, TransitionContext{})
+	_ = l.Transition(EventAgentSpawned, TransitionContext{})
 
 	// Work failed but attempts remaining - stay in Running
 	err := l.Transition(EventWorkFailed, TransitionContext{AttemptsRemaining: 2})
@@ -460,10 +458,10 @@ func TestWorkFailedWithRetry(t *testing.T) {
 
 func TestValidationSkipped(t *testing.T) {
 	l := New()
-	l.Transition(EventAgentSpawned, TransitionContext{})
-	l.Transition(EventWorkComplete, TransitionContext{})
-	l.Transition(EventMergeStarted, TransitionContext{})
-	l.Transition(EventMergeSuccess, TransitionContext{ValidationEnabled: true})
+	_ = l.Transition(EventAgentSpawned, TransitionContext{})
+	_ = l.Transition(EventWorkComplete, TransitionContext{})
+	_ = l.Transition(EventMergeStarted, TransitionContext{})
+	_ = l.Transition(EventMergeSuccess, TransitionContext{ValidationEnabled: true})
 
 	// Validation skipped -> Completed
 	err := l.Transition(EventValidationSkipped, TransitionContext{})
@@ -477,10 +475,10 @@ func TestValidationSkipped(t *testing.T) {
 
 func TestRetriesExhausted(t *testing.T) {
 	l := New()
-	l.Transition(EventAgentSpawned, TransitionContext{})
-	l.Transition(EventWorkComplete, TransitionContext{})
-	l.Transition(EventMergeStarted, TransitionContext{})
-	l.Transition(EventMergeFailed, TransitionContext{})
+	_ = l.Transition(EventAgentSpawned, TransitionContext{})
+	_ = l.Transition(EventWorkComplete, TransitionContext{})
+	_ = l.Transition(EventMergeStarted, TransitionContext{})
+	_ = l.Transition(EventMergeFailed, TransitionContext{})
 
 	// RetriesExhausted -> Failed
 	err := l.Transition(EventRetriesExhausted, TransitionContext{})
@@ -494,10 +492,10 @@ func TestRetriesExhausted(t *testing.T) {
 
 func TestResolveFailed(t *testing.T) {
 	l := New()
-	l.Transition(EventAgentSpawned, TransitionContext{})
-	l.Transition(EventWorkComplete, TransitionContext{})
-	l.Transition(EventMergeStarted, TransitionContext{})
-	l.Transition(EventMergeConflict, TransitionContext{})
+	_ = l.Transition(EventAgentSpawned, TransitionContext{})
+	_ = l.Transition(EventWorkComplete, TransitionContext{})
+	_ = l.Transition(EventMergeStarted, TransitionContext{})
+	_ = l.Transition(EventMergeConflict, TransitionContext{})
 
 	// ResolveFailed -> MergeFailed
 	err := l.Transition(EventResolveFailed, TransitionContext{})
@@ -522,7 +520,7 @@ func TestContextPreserved(t *testing.T) {
 		Error:             "test error",
 	}
 
-	l.Transition(EventAgentSpawned, ctx)
+	_ = l.Transition(EventAgentSpawned, ctx)
 	got := l.Context()
 
 	if got.ValidationEnabled != ctx.ValidationEnabled {
@@ -597,8 +595,8 @@ func TestSetState(t *testing.T) {
 		l := New()
 
 		// Progress normally to QueuedForMerge
-		l.Transition(EventAgentSpawned, TransitionContext{})
-		l.Transition(EventWorkComplete, TransitionContext{})
+		_ = l.Transition(EventAgentSpawned, TransitionContext{})
+		_ = l.Transition(EventWorkComplete, TransitionContext{})
 
 		if l.State() != StateQueuedForMerge {
 			t.Fatalf("expected StateQueuedForMerge, got %s", l.State())

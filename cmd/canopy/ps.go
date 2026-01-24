@@ -346,12 +346,7 @@ func getWorkerInfo() ([]WorkerInfo, *MergeQueueInfo, error) {
 		// Convert lifecycle history entries
 		var history []LifecycleHistoryEntry
 		for _, h := range agent.LifecycleHistory {
-			history = append(history, LifecycleHistoryEntry{
-				From:      h.From,
-				To:        h.To,
-				Event:     h.Event,
-				Timestamp: h.Timestamp,
-			})
+			history = append(history, LifecycleHistoryEntry(h))
 		}
 
 		workers = append(workers, WorkerInfo{

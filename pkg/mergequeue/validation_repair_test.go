@@ -1085,15 +1085,15 @@ func TestGetMergeBase(t *testing.T) {
 	}
 
 	// Configure git user for commits
-	exec.Command("git", "-C", tmpDir, "config", "user.name", "Test User").Run()
-	exec.Command("git", "-C", tmpDir, "config", "user.email", "test@example.com").Run()
+	_ = exec.Command("git", "-C", tmpDir, "config", "user.name", "Test User").Run()
+	_ = exec.Command("git", "-C", tmpDir, "config", "user.email", "test@example.com").Run()
 
 	// Create initial commit
 	if err := os.WriteFile(tmpDir+"/file1.txt", []byte("initial"), 0644); err != nil {
 		t.Fatalf("failed to create file: %v", err)
 	}
-	exec.Command("git", "-C", tmpDir, "add", ".").Run()
-	exec.Command("git", "-C", tmpDir, "commit", "-m", "initial").Run()
+	_ = exec.Command("git", "-C", tmpDir, "add", ".").Run()
+	_ = exec.Command("git", "-C", tmpDir, "commit", "-m", "initial").Run()
 
 	// Get the initial commit hash (base)
 	baseOutput, err := exec.Command("git", "-C", tmpDir, "rev-parse", "HEAD").Output()
@@ -1106,8 +1106,8 @@ func TestGetMergeBase(t *testing.T) {
 	if err := os.WriteFile(tmpDir+"/file2.txt", []byte("second"), 0644); err != nil {
 		t.Fatalf("failed to create file2: %v", err)
 	}
-	exec.Command("git", "-C", tmpDir, "add", ".").Run()
-	exec.Command("git", "-C", tmpDir, "commit", "-m", "second").Run()
+	_ = exec.Command("git", "-C", tmpDir, "add", ".").Run()
+	_ = exec.Command("git", "-C", tmpDir, "commit", "-m", "second").Run()
 
 	// Get current HEAD
 	headOutput, err := exec.Command("git", "-C", tmpDir, "rev-parse", "HEAD").Output()

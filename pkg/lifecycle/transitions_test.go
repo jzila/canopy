@@ -7,23 +7,6 @@ import (
 	"testing"
 )
 
-// allStates lists all defined lifecycle states for exhaustive testing.
-var allStates = []AgentLifecycleState{
-	StateStarting,
-	StateRunning,
-	StateQueuedForMerge,
-	StateMerging,
-	StateResolving,
-	StateValidating,
-	StateRepairing,
-	StateMergeFailed,
-	StateCompleted,
-	StateFailed,
-	StateNeedsAttention,
-	StateCancelled,
-	StateTimedOut,
-}
-
 // nonTerminalStates are states that allow transitions out.
 var nonTerminalStates = []AgentLifecycleState{
 	StateStarting,
@@ -73,7 +56,6 @@ type transitionTest struct {
 	event         AgentEvent
 	ctx           TransitionContext
 	expectedState AgentLifecycleState
-	expectError   bool
 }
 
 // TestAllValidTransitions exhaustively tests all valid state transitions.
@@ -813,9 +795,9 @@ func TestPropertyHistoryFromToMatch(t *testing.T) {
 	l := New()
 
 	// Perform a series of transitions
-	l.Transition(EventAgentSpawned, TransitionContext{})
-	l.Transition(EventWorkComplete, TransitionContext{})
-	l.Transition(EventMergeStarted, TransitionContext{})
+	_ = l.Transition(EventAgentSpawned, TransitionContext{})
+	_ = l.Transition(EventWorkComplete, TransitionContext{})
+	_ = l.Transition(EventMergeStarted, TransitionContext{})
 
 	history := l.History()
 
@@ -917,7 +899,7 @@ func TestConcurrentTransitionsNoCorruption(t *testing.T) {
 // TestConcurrentReadsNoRace verifies that concurrent reads don't race.
 func TestConcurrentReadsNoRace(t *testing.T) {
 	l := New(WithInitialState(StateRunning))
-	l.Transition(EventWorkComplete, TransitionContext{})
+	_ = l.Transition(EventWorkComplete, TransitionContext{})
 
 	var wg sync.WaitGroup
 	wg.Add(300)
@@ -994,7 +976,7 @@ func TestCallbackCalledUnderLock(t *testing.T) {
 	var wg sync.WaitGroup
 	const numGoroutines = 50
 
-	l.Transition(EventAgentSpawned, TransitionContext{}) // Get to Running first
+	_ = l.Transition(EventAgentSpawned, TransitionContext{}) // Get to Running first
 
 	wg.Add(numGoroutines)
 	for i := 0; i < numGoroutines; i++ {
@@ -1055,8 +1037,8 @@ func TestConcurrentCancelRace(t *testing.T) {
 // a copy, not a reference to internal state.
 func TestHistorySliceIndependentOfInternal(t *testing.T) {
 	l := New()
-	l.Transition(EventAgentSpawned, TransitionContext{})
-	l.Transition(EventWorkComplete, TransitionContext{})
+	_ = l.Transition(EventAgentSpawned, TransitionContext{})
+	_ = l.Transition(EventWorkComplete, TransitionContext{})
 
 	history1 := l.History()
 	len1 := len(history1)
@@ -1073,7 +1055,7 @@ func TestHistorySliceIndependentOfInternal(t *testing.T) {
 	}
 
 	// Perform another transition
-	l.Transition(EventMergeStarted, TransitionContext{})
+	_ = l.Transition(EventMergeStarted, TransitionContext{})
 
 	// Original slice should be unchanged
 	if len(history1) != len1 {
@@ -1088,7 +1070,7 @@ func TestContextCopiedNotReferenced(t *testing.T) {
 		ValidationEnabled: true,
 		AttemptsRemaining: 5,
 	}
-	l.Transition(EventAgentSpawned, ctx)
+	_ = l.Transition(EventAgentSpawned, ctx)
 
 	got1 := l.Context()
 	got1.AttemptsRemaining = 999 // modify the copy

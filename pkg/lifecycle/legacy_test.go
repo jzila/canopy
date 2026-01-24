@@ -159,11 +159,11 @@ func TestLegacyValidationStatus(t *testing.T) {
 func TestLegacyValidationStatusAfterValidation(t *testing.T) {
 	// Test that Completed returns "passed" if we came from Validating
 	l := New()
-	l.Transition(EventAgentSpawned, TransitionContext{})
-	l.Transition(EventWorkComplete, TransitionContext{})
-	l.Transition(EventMergeStarted, TransitionContext{})
-	l.Transition(EventMergeSuccess, TransitionContext{ValidationEnabled: true})
-	l.Transition(EventValidationPassed, TransitionContext{})
+	_ = l.Transition(EventAgentSpawned, TransitionContext{})
+	_ = l.Transition(EventWorkComplete, TransitionContext{})
+	_ = l.Transition(EventMergeStarted, TransitionContext{})
+	_ = l.Transition(EventMergeSuccess, TransitionContext{ValidationEnabled: true})
+	_ = l.Transition(EventValidationPassed, TransitionContext{})
 
 	if l.State() != StateCompleted {
 		t.Fatalf("expected Completed, got %s", l.State())
@@ -178,10 +178,10 @@ func TestLegacyValidationStatusAfterValidation(t *testing.T) {
 func TestLegacyValidationStatusWithoutValidation(t *testing.T) {
 	// Test that Completed returns "" if we didn't go through validation
 	l := New()
-	l.Transition(EventAgentSpawned, TransitionContext{})
-	l.Transition(EventWorkComplete, TransitionContext{})
-	l.Transition(EventMergeStarted, TransitionContext{})
-	l.Transition(EventMergeSuccess, TransitionContext{ValidationEnabled: false})
+	_ = l.Transition(EventAgentSpawned, TransitionContext{})
+	_ = l.Transition(EventWorkComplete, TransitionContext{})
+	_ = l.Transition(EventMergeStarted, TransitionContext{})
+	_ = l.Transition(EventMergeSuccess, TransitionContext{ValidationEnabled: false})
 
 	if l.State() != StateCompleted {
 		t.Fatalf("expected Completed, got %s", l.State())
