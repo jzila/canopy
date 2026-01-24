@@ -18,23 +18,6 @@ export type MergeStatus = 'pending' | 'acquiring' | 'merging' | 'resolving' | 'm
 // Includes repair-related intermediate states: pending_repair (deciding to spawn), spawning_repair (creating agent), repairing (agent executing)
 export type ValidationStatus = 'pending' | 'running' | 'passed' | 'failed' | 'skipped' | 'pending_repair' | 'spawning_repair' | 'repairing';
 
-// Lifecycle state types matching Go backend (lifecycle/state.go)
-// This is the new unified state machine that replaces interpreting multiple fields
-export type LifecycleState =
-  | 'starting'
-  | 'running'
-  | 'queued_for_merge'
-  | 'merging'
-  | 'resolving'
-  | 'validating'
-  | 'repairing'
-  | 'merge_failed'
-  | 'completed'
-  | 'failed'
-  | 'needs_attention'
-  | 'cancelled'
-  | 'timed_out';
-
 // ValidationStep represents a single validation step result
 export interface ValidationStep {
   name: string;           // e.g., "build", "test", "lint"
@@ -92,7 +75,6 @@ export interface AgentState {
   parent_agent_id?: string;    // ID of parent agent if spawned by another agent
   child_agent_ids?: string[];  // IDs of child agents spawned by this agent
   status: AgentStatus;
-  lifecycle_state?: LifecycleState; // New unified lifecycle state (optional for backwards compat)
   start_time: string;
   end_time: string | null;
   duration: number;
@@ -111,6 +93,7 @@ export interface AgentState {
   max_retries?: number;       // Maximum retry attempts configured (0 = no retries, -1 = infinite)
   // Merge status fields (snake_case per API conventions)
   merge_status?: MergeStatus;
+  merge_status_seq?: number;        // Last processed sequence number for out-of-order detection
   merge_queue_pos?: number;
   merge_error?: string;
   merge_commits_applied?: number;   // Number of commits applied during merge
@@ -254,6 +237,7 @@ interface StateStore {
   updateAgentMergeStatus: (
     agentId: string,
     mergeStatus: MergeStatus,
+    sequence: number,
     queuePos?: number,
     error?: string,
     validationStatus?: ValidationStatus,
@@ -580,7 +564,7 @@ export const useStateStore = create<StateStore>((set) => ({
 
   setMergeQueue: (mergeQueue) => set({ mergeQueue }),
 
-  updateAgentMergeStatus: (agentId, mergeStatus, queuePos, error, validationStatus, validationSteps, validationDurationMs, validationError, repairAttempts, lastRepairOutput) =>
+  updateAgentMergeStatus: (agentId, mergeStatus, sequence, queuePos, error, validationStatus, validationSteps, validationDurationMs, validationError, repairAttempts, lastRepairOutput) =>
     set((state) => {
       const agent = state.agents[agentId];
       if (!agent) {
@@ -590,10 +574,19 @@ export const useStateStore = create<StateStore>((set) => ({
         return state;
       }
 
+      // Check for out-of-order events: if we've already processed a higher sequence
+      // number, discard this stale event to prevent UI confusion
+      const lastSeq = agent.merge_status_seq ?? 0;
+      if (sequence > 0 && sequence <= lastSeq) {
+        console.debug('[StateStore] Discarding out-of-order merge status event:', agentId, 'seq:', sequence, 'last:', lastSeq);
+        return state;
+      }
+
       // Build update object with proper handling of optional fields
       const updatedAgent: AgentState = {
         ...agent,
         merge_status: mergeStatus,
+        merge_status_seq: sequence,
       };
 
       // Only set fields if provided (exactOptionalPropertyTypes compliance)

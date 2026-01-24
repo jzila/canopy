@@ -102,8 +102,6 @@ type MergeStatus = 'pending' | 'acquiring' | 'merging' | 'resolving' | 'merged' 
 // Validation status types matching Go backend (validation/executor.go)
 // Includes repair-related intermediate states: pending_repair (deciding to spawn), spawning_repair (creating agent), repairing (agent executing)
 type ValidationStatus = 'pending' | 'running' | 'passed' | 'failed' | 'skipped' | 'pending_repair' | 'spawning_repair' | 'repairing';
-// Lifecycle state types matching Go backend (lifecycle/state.go)
-type LifecycleState = 'starting' | 'running' | 'queued_for_merge' | 'merging' | 'resolving' | 'validating' | 'repairing' | 'merge_failed' | 'completed' | 'failed' | 'needs_attention' | 'cancelled' | 'timed_out';
 // Validation step result matching Go backend (ipc/protocol.go)
 interface ValidationStep {
   name: string;
@@ -117,6 +115,7 @@ interface AgentMergeStatusEvent {
   payload: {
     agent_id: string;
     merge_status: MergeStatus;
+    sequence: number;          // Monotonic sequence number for ordering events
     queue_pos?: number;
     error?: string;
     // Validation results
@@ -199,7 +198,6 @@ interface BackendAgentState {
   task_title: string;
   task_description?: string;
   status: string;
-  lifecycle_state?: string; // New unified lifecycle state
   start_time: string;
   end_time: string | null;
   duration: number;
@@ -225,6 +223,7 @@ interface BackendAgentState {
   parent_agent_id?: string;
   // Merge status fields
   merge_status?: string;
+  merge_status_seq?: number;
   merge_queue_pos?: number;
   merge_error?: string;
   // Validation and repair fields
@@ -450,6 +449,7 @@ export function useWebSocket() {
                   ...(agent.parent_agent_id && { parent_agent_id: agent.parent_agent_id }),
                   // Merge status fields
                   ...(agent.merge_status && { merge_status: agent.merge_status as import('../stores/stateStore').MergeStatus }),
+                  ...(agent.merge_status_seq !== undefined && { merge_status_seq: agent.merge_status_seq }),
                   ...(agent.merge_queue_pos !== undefined && { merge_queue_pos: agent.merge_queue_pos }),
                   ...(agent.merge_error && { merge_error: agent.merge_error }),
                   // Validation and repair fields
@@ -459,8 +459,6 @@ export function useWebSocket() {
                   ...(agent.validation_error && { validation_error: agent.validation_error }),
                   ...(agent.repair_attempts !== undefined && { repair_attempts: agent.repair_attempts }),
                   ...(agent.last_repair_output && { last_repair_output: agent.last_repair_output }),
-                  // Lifecycle state (new unified state machine)
-                  ...(agent.lifecycle_state && { lifecycle_state: agent.lifecycle_state as import('../stores/stateStore').LifecycleState }),
                 };
               }
               // Merge dual-source tasks: runtime overlays persistent for display
@@ -578,18 +576,10 @@ export function useWebSocket() {
               break;
             }
             case 'agent:running': {
-              const payload = message.payload as {
-                agent_id: string;
-                lifecycle_state?: string;
-                previous_state?: string;
-                event?: string;
-              };
-              const { agent_id, lifecycle_state } = payload;
-              // Transition agent from starting to running, include lifecycle_state if present
-              // The lifecycle_state field comes from lifecycle transition callbacks
+              const { agent_id } = message.payload;
+              // Transition agent from starting to running
               updateAgent(agent_id, {
                 status: 'running',
-                ...(lifecycle_state && { lifecycle_state: lifecycle_state as import('../stores/stateStore').LifecycleState }),
               });
               break;
             }
@@ -655,6 +645,7 @@ export function useWebSocket() {
               const {
                 agent_id,
                 merge_status,
+                sequence,
                 queue_pos,
                 error,
                 validation_status,
@@ -664,10 +655,11 @@ export function useWebSocket() {
                 repair_attempts,
                 last_repair_output,
               } = message.payload;
-              console.log('[WebSocket] Agent merge status:', agent_id, merge_status, 'pos:', queue_pos, 'validation:', validation_status);
+              console.log('[WebSocket] Agent merge status:', agent_id, merge_status, 'seq:', sequence, 'pos:', queue_pos, 'validation:', validation_status);
               updateAgentMergeStatus(
                 agent_id,
                 merge_status,
+                sequence,
                 queue_pos,
                 error,
                 validation_status as import('../stores/stateStore').ValidationStatus | undefined,
