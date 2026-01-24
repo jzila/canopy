@@ -8,17 +8,30 @@ import (
 	"time"
 
 	"github.com/jzila/canopy/pkg/logging"
+	"github.com/jzila/canopy/pkg/persistence"
 )
 
 // OrchestrationHandler handles HTTP requests for orchestration control.
 type OrchestrationHandler struct {
-	manager *OrchestratorManager
+	manager  *OrchestratorManager
+	daemon   *Daemon
+	eventBus *EventBus
 }
 
 // NewOrchestrationHandler creates a new OrchestrationHandler.
 func NewOrchestrationHandler(manager *OrchestratorManager) *OrchestrationHandler {
 	return &OrchestrationHandler{
 		manager: manager,
+	}
+}
+
+// NewOrchestrationHandlerWithDaemon creates a new OrchestrationHandler with daemon access.
+// This allows the handler to access persistence store and event bus for config CRUD.
+func NewOrchestrationHandlerWithDaemon(manager *OrchestratorManager, daemon *Daemon, eventBus *EventBus) *OrchestrationHandler {
+	return &OrchestrationHandler{
+		manager:  manager,
+		daemon:   daemon,
+		eventBus: eventBus,
 	}
 }
 
@@ -464,6 +477,175 @@ func runStateToWire(rs *RunState) *RunStatusWire {
 	}
 
 	return wire
+}
+
+// RunConfigRequest is the JSON request/response body for run configuration CRUD.
+// This uses the persistence.RunConfig fields but with omitempty for optional updates.
+type RunConfigRequest struct {
+	Concurrency int  `json:"concurrency"`
+	MaxPriority int  `json:"max_priority"`
+	UseBwrap    bool `json:"use_bwrap"`
+	MaxRetries  int  `json:"max_retries"`
+}
+
+// RunConfigResponse is the JSON response for GET /api/config.
+type RunConfigResponse struct {
+	Concurrency int    `json:"concurrency"`
+	MaxPriority int    `json:"max_priority"`
+	UseBwrap    bool   `json:"use_bwrap"`
+	MaxRetries  int    `json:"max_retries"`
+	Error       string `json:"error,omitempty"`
+}
+
+// HandleGetConfig handles GET /api/config requests.
+// Returns the saved run configuration for the current repository, or defaults if none saved.
+func (h *OrchestrationHandler) HandleGetConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Get the repo ID from the current active repository
+	repoID := h.getActiveRepoID()
+	if repoID == "" {
+		writeJSON(w, http.StatusBadRequest, RunConfigResponse{
+			Error: "no active repository",
+		})
+		return
+	}
+
+	// Get the persistence store
+	store := h.getPersistenceStore()
+	if store == nil {
+		// No persistence - return defaults
+		config := persistence.DefaultRunConfig(repoID)
+		writeJSON(w, http.StatusOK, RunConfigResponse{
+			Concurrency: config.Concurrency,
+			MaxPriority: config.MaxPriority,
+			UseBwrap:    config.UseBwrap,
+			MaxRetries:  config.MaxRetries,
+		})
+		return
+	}
+
+	// Load config from persistence (returns defaults if not found)
+	config, err := store.GetRunConfig(repoID)
+	if err != nil {
+		logging.Error("failed to get run config", "repo_id", repoID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, RunConfigResponse{
+			Error: "failed to load configuration: " + err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, RunConfigResponse{
+		Concurrency: config.Concurrency,
+		MaxPriority: config.MaxPriority,
+		UseBwrap:    config.UseBwrap,
+		MaxRetries:  config.MaxRetries,
+	})
+}
+
+// HandlePutConfig handles PUT /api/config requests.
+// Saves run configuration for the current repository, broadcasts config_updated event.
+func (h *OrchestrationHandler) HandlePutConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Get the repo ID from the current active repository
+	repoID := h.getActiveRepoID()
+	if repoID == "" {
+		writeJSON(w, http.StatusBadRequest, RunConfigResponse{
+			Error: "no active repository",
+		})
+		return
+	}
+
+	// Parse request body
+	var req RunConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, RunConfigResponse{
+			Error: "invalid request body: " + err.Error(),
+		})
+		return
+	}
+
+	// Get the persistence store
+	store := h.getPersistenceStore()
+	if store == nil {
+		writeJSON(w, http.StatusServiceUnavailable, RunConfigResponse{
+			Error: "persistence not enabled",
+		})
+		return
+	}
+
+	// Create config from request
+	config := &persistence.RunConfig{
+		RepoID:      repoID,
+		Concurrency: req.Concurrency,
+		MaxPriority: req.MaxPriority,
+		UseBwrap:    req.UseBwrap,
+		MaxRetries:  req.MaxRetries,
+	}
+
+	// Save to persistence
+	if err := store.SaveRunConfig(repoID, config); err != nil {
+		logging.Error("failed to save run config", "repo_id", repoID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, RunConfigResponse{
+			Error: "failed to save configuration: " + err.Error(),
+		})
+		return
+	}
+
+	logging.Info("saved run config via HTTP", "repo_id", repoID,
+		"concurrency", config.Concurrency,
+		"max_priority", config.MaxPriority,
+		"use_bwrap", config.UseBwrap,
+		"max_retries", config.MaxRetries)
+
+	// Broadcast config_updated event via WebSocket
+	if h.eventBus != nil {
+		h.eventBus.Publish(Event{
+			Type:      EventConfigUpdated,
+			Timestamp: time.Now(),
+			Payload: RunConfigResponse{
+				Concurrency: config.Concurrency,
+				MaxPriority: config.MaxPriority,
+				UseBwrap:    config.UseBwrap,
+				MaxRetries:  config.MaxRetries,
+			},
+		})
+	}
+
+	// Return the saved configuration
+	writeJSON(w, http.StatusOK, RunConfigResponse{
+		Concurrency: config.Concurrency,
+		MaxPriority: config.MaxPriority,
+		UseBwrap:    config.UseBwrap,
+		MaxRetries:  config.MaxRetries,
+	})
+}
+
+// getActiveRepoID returns the repository ID for the current active repository.
+func (h *OrchestrationHandler) getActiveRepoID() string {
+	if h.daemon == nil {
+		return ""
+	}
+	return h.daemon.GetWorkDir()
+}
+
+// getPersistenceStore returns the persistence store, or nil if persistence is disabled.
+func (h *OrchestrationHandler) getPersistenceStore() *persistence.Store {
+	if h.daemon == nil {
+		return nil
+	}
+	pm := h.daemon.GetPersistenceStore()
+	if pm == nil {
+		return nil
+	}
+	return pm.GetStore()
 }
 
 // writeJSON writes a JSON response with the given status code.

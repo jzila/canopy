@@ -31,6 +31,7 @@ const (
 	EventStatsUpdated          = events.EventStatsUpdated
 	EventRulesChanged          = events.EventRulesChanged
 	EventLifecycleStateChanged = events.EventLifecycleStateChanged
+	EventConfigUpdated         = events.EventConfigUpdated
 )
 
 // NewEventBus creates a new EventBus instance.

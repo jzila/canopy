@@ -90,7 +90,7 @@ func NewServerWithDaemon(port int, state *RuntimeState, eventBus *EventBus, sche
 	// Create orchestration handler for run control (requires daemon reference)
 	var orchHandler *OrchestrationHandler
 	if daemon != nil {
-		orchHandler = NewOrchestrationHandler(daemon.GetOrchestratorManager())
+		orchHandler = NewOrchestrationHandlerWithDaemon(daemon.GetOrchestratorManager(), daemon, eventBus)
 	}
 
 	// Create rules handler for runtime rule management (requires daemon reference)
@@ -219,6 +219,9 @@ func (s *Server) setupRoutes() *http.ServeMux {
 
 	// REST API routes - beads operations
 	mux.HandleFunc("/api/beads/sync", s.handleBeadsSyncRoute) // Handles POST /api/beads/sync
+
+	// REST API routes - run configuration CRUD
+	mux.HandleFunc("/api/config", s.handleConfigRoute) // Handles GET and PUT /api/config
 
 	// REST API routes - orchestration control (daemon-owned runs)
 	// New: /api/runs/:run_id/... for run-scoped operations
@@ -423,6 +426,23 @@ func (s *Server) handleOrchestratorRoutes(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.orchHandler.RouteOrchestrator(w, r)
+}
+
+// handleConfigRoute routes run configuration CRUD requests
+func (s *Server) handleConfigRoute(w http.ResponseWriter, r *http.Request) {
+	if s.orchHandler == nil {
+		http.Error(w, "Configuration not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		s.orchHandler.HandleGetConfig(w, r)
+	case http.MethodPut:
+		s.orchHandler.HandlePutConfig(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // handleReposRoutes routes repo-scoped requests for rules and config

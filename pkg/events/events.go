@@ -36,6 +36,7 @@ const (
 	EventStatsUpdated       EventType = "stats:updated"
 	EventRulesChanged            EventType = "rules:changed"             // Rules configuration changed at runtime
 	EventLifecycleStateChanged   EventType = "lifecycle:state_changed"   // Agent lifecycle state transition
+	EventConfigUpdated           EventType = "config:updated"            // Run configuration updated
 )
 
 // IsCritical returns true if this event type must never be dropped.
