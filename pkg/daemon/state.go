@@ -2001,11 +2001,13 @@ func transitionLifecycleForCompletion(agent *AgentState, payload map[string]inte
 			ctx.AttemptsRemaining = 0 // No retries for direct failure
 			shouldTransition = true
 		}
+	} else if currentState == lifecycle.StateRunning {
+		// Successful completion: transition from running to queued_for_merge
+		// This ensures lifecycle state stays in sync even if events arrive out of order
+		// or if the orchestrator's direct transition didn't happen (e.g., daemon restart)
+		event = lifecycle.EventWorkComplete
+		shouldTransition = true
 	}
-
-	// If not an error and lifecycle isn't already terminal/advanced past running,
-	// we don't need to transition here - the merge status handler will do it.
-	// This is because agent_completed events often arrive after merge completion.
 
 	if shouldTransition {
 		if err := lc.Transition(event, ctx); err != nil {
