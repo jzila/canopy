@@ -275,6 +275,96 @@ func TestEvaluateConditionEmptyLabels(t *testing.T) {
 	}
 }
 
+func TestEvaluateConditionLabelsWildcard(t *testing.T) {
+	task := &beads.Task{
+		ID:     "1",
+		Labels: []string{"frontend-auth", "frontend-ui", "team-platform", "api-deprecated", "urgent"},
+	}
+
+	tests := []struct {
+		condition string
+		expected  bool
+	}{
+		// Prefix wildcard: frontend-*
+		{"'frontend-*' in labels", true},
+		{"'frontend-auth' in labels", true}, // exact match still works
+		{"'frontend-api' in labels", false}, // exact match, not present
+
+		// Suffix wildcard: *-deprecated
+		{"'*-deprecated' in labels", true},
+		{"'*-auth' in labels", true},
+		{"'*-missing' in labels", false},
+
+		// Prefix wildcard: team-*
+		{"'team-*' in labels", true},
+		{"'backend-*' in labels", false},
+
+		// Not in labels with wildcards
+		{"'frontend-*' not in labels", false}, // frontend-* matches, so NOT returns false
+		{"'backend-*' not in labels", true},   // backend-* doesn't match, so NOT returns true
+
+		// Multiple wildcards
+		{"'*-*' in labels", true}, // matches frontend-auth, frontend-ui, team-platform, api-deprecated
+
+		// Single character wildcard (?)
+		{"'team-????????' in labels", true}, // team-platform is 8 chars after team-
+		{"'team-???' in labels", false},     // no 3-char suffix
+
+		// Exact match (no wildcard) still uses fast path
+		{"'urgent' in labels", true},
+		{"'missing' in labels", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.condition, func(t *testing.T) {
+			result := EvaluateCondition(tt.condition, task)
+			if result != tt.expected {
+				t.Errorf("EvaluateCondition(%q) = %v, want %v", tt.condition, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestContainsLabelWildcard(t *testing.T) {
+	labels := []string{"frontend-auth", "frontend-ui", "team-platform", "api-deprecated"}
+
+	tests := []struct {
+		pattern  string
+		expected bool
+	}{
+		// Exact matches
+		{"frontend-auth", true},
+		{"frontend-api", false},
+
+		// Prefix wildcards
+		{"frontend-*", true},
+		{"backend-*", false},
+
+		// Suffix wildcards
+		{"*-deprecated", true},
+		{"*-enabled", false},
+
+		// Middle wildcards
+		{"front*-auth", true},
+		{"*-plat*", true},
+
+		// Multiple wildcards
+		{"*-*", true},
+
+		// Invalid pattern (unmatched bracket) returns false
+		{"[invalid", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.pattern, func(t *testing.T) {
+			result := containsLabel(labels, tt.pattern)
+			if result != tt.expected {
+				t.Errorf("containsLabel(%v, %q) = %v, want %v", labels, tt.pattern, result, tt.expected)
+			}
+		})
+	}
+}
+
 func TestSplitOnOperator(t *testing.T) {
 	tests := []struct {
 		condition string

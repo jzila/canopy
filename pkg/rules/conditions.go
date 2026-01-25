@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ import (
 //   - "type == bug", "type != feature"
 //   - "assignee == john", "assignee != \"\""
 //   - "'frontend' in labels", "'urgent' not in labels"
+//   - "'frontend-*' in labels" (wildcard matching with *)
 //   - "title contains 'fix'"
 //   - Conditions can be combined with "and" / "or"
 //
@@ -21,6 +23,7 @@ import (
 //   - "priority <= 1 and type == bug"
 //   - "type == bug or type == feature"
 //   - "'urgent' in labels and priority <= 1"
+//   - "'team-*' in labels" (matches team-frontend, team-backend, etc.)
 func EvaluateCondition(condition string, task *beads.Task) bool {
 	condition = strings.TrimSpace(condition)
 	if condition == "" {
@@ -185,9 +188,26 @@ func evaluateComparison(condition string, task *beads.Task) bool {
 }
 
 // containsLabel checks if labels contains a specific label.
-func containsLabel(labels []string, label string) bool {
+// Supports wildcard patterns using * and ? (e.g., "frontend-*", "*-deprecated", "team-*").
+func containsLabel(labels []string, pattern string) bool {
+	// Fast path: no wildcards, use exact matching
+	if !strings.ContainsAny(pattern, "*?[") {
+		for _, l := range labels {
+			if l == pattern {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Wildcard path: use glob matching
 	for _, l := range labels {
-		if l == label {
+		matched, err := filepath.Match(pattern, l)
+		if err != nil {
+			// Invalid pattern, treat as no match
+			return false
+		}
+		if matched {
 			return true
 		}
 	}
