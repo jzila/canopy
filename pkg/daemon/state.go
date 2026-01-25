@@ -1721,20 +1721,56 @@ func transitionLifecycleForMergeStatus(agent *AgentState, mergeStatus string, ha
 		if lc.State() == lifecycle.StateRunning {
 			event = lifecycle.EventWorkComplete
 			shouldTransition = true
+		} else {
+			logging.Debug("lifecycle guard failed for MergeStatusPending",
+				"agent_id", agentID,
+				"expected_state", lifecycle.StateRunning,
+				"actual_state", lc.State(),
+			)
 		}
 
 	case MergeStatusAcquiring, MergeStatusMerging:
-		// Merge started
-		if lc.State() == lifecycle.StateQueuedForMerge {
+		// Merge started - allow from QueuedForMerge (normal) or Running (if Pending was missed)
+		currentState := lc.State()
+		if currentState == lifecycle.StateQueuedForMerge {
 			event = lifecycle.EventMergeStarted
 			shouldTransition = true
+		} else if currentState == lifecycle.StateRunning {
+			// Out-of-order: Pending was missed, use SetState to recover
+			// First transition to QueuedForMerge, then immediately to Merging
+			logging.Debug("lifecycle recovery: missed Pending event, forcing transition",
+				"agent_id", agentID,
+				"from_state", currentState,
+				"merge_status", mergeStatus,
+			)
+			lc.SetState(lifecycle.StateQueuedForMerge, lifecycle.EventWorkComplete, ctx)
+			event = lifecycle.EventMergeStarted
+			shouldTransition = true
+		} else {
+			logging.Debug("lifecycle guard failed for MergeStatusMerging",
+				"agent_id", agentID,
+				"expected_states", []string{string(lifecycle.StateQueuedForMerge), string(lifecycle.StateRunning)},
+				"actual_state", currentState,
+			)
 		}
 
 	case MergeStatusResolving:
 		// Merge had conflict, now resolving
-		if lc.State() == lifecycle.StateMerging && hadConflict {
+		currentState := lc.State()
+		if currentState == lifecycle.StateMerging && hadConflict {
 			event = lifecycle.EventMergeConflict
 			shouldTransition = true
+		} else if currentState == lifecycle.StateMerging && !hadConflict {
+			logging.Debug("lifecycle guard failed for MergeStatusResolving: no conflict flagged",
+				"agent_id", agentID,
+				"actual_state", currentState,
+			)
+		} else if currentState != lifecycle.StateMerging {
+			logging.Debug("lifecycle guard failed for MergeStatusResolving",
+				"agent_id", agentID,
+				"expected_state", lifecycle.StateMerging,
+				"actual_state", currentState,
+			)
 		}
 
 	case MergeStatusMerged, MergeStatusResolved, MergeStatusSkipped:
@@ -1763,15 +1799,43 @@ func transitionLifecycleForMergeStatus(agent *AgentState, mergeStatus string, ha
 			// Repair complete, back to validation
 			event = lifecycle.EventRepairComplete
 			shouldTransition = true
+		} else if currentState == lifecycle.StateRunning || currentState == lifecycle.StateQueuedForMerge {
+			// Out-of-order: intermediate events were missed, force to completed state
+			logging.Debug("lifecycle recovery: missed intermediate events, forcing to completed",
+				"agent_id", agentID,
+				"from_state", currentState,
+				"merge_status", mergeStatus,
+			)
+			// Determine target state based on validation
+			targetState := lifecycle.StateCompleted
+			if validationStatus != "" && validationStatus != "skipped" && validationStatus != "passed" {
+				// Validation is pending or in progress - go to validating
+				targetState = lifecycle.StateValidating
+			}
+			lc.SetState(targetState, lifecycle.EventMergeSuccess, ctx)
+			// Don't set shouldTransition since we already set the state directly
+		} else {
+			logging.Debug("lifecycle guard failed for MergeStatusMerged",
+				"agent_id", agentID,
+				"expected_states", []string{"merging", "resolving", "validating", "repairing", "running", "queued_for_merge"},
+				"actual_state", currentState,
+			)
 		}
 
 	case MergeStatusMergedNeedsRepair:
 		// Validation failed but kept the merge
-		if lc.State() == lifecycle.StateValidating {
+		currentState := lc.State()
+		if currentState == lifecycle.StateValidating {
 			event = lifecycle.EventValidationFailed
 			ctx.RepairEnabled = false // No more repair attempts
-			ctx.StrictMode = false     // Lenient mode keeps merge
+			ctx.StrictMode = false    // Lenient mode keeps merge
 			shouldTransition = true
+		} else {
+			logging.Debug("lifecycle guard failed for MergeStatusMergedNeedsRepair",
+				"agent_id", agentID,
+				"expected_state", lifecycle.StateValidating,
+				"actual_state", currentState,
+			)
 		}
 
 	case MergeStatusFailed:
@@ -1787,6 +1851,21 @@ func transitionLifecycleForMergeStatus(agent *AgentState, mergeStatus string, ha
 			event = lifecycle.EventValidationFailed
 			ctx.StrictMode = true // Strict mode fails on validation failure
 			shouldTransition = true
+		} else if currentState == lifecycle.StateRunning || currentState == lifecycle.StateQueuedForMerge {
+			// Out-of-order: intermediate events were missed, force to failed state
+			logging.Debug("lifecycle recovery: missed intermediate events, forcing to failed",
+				"agent_id", agentID,
+				"from_state", currentState,
+				"merge_status", mergeStatus,
+			)
+			lc.SetState(lifecycle.StateMergeFailed, lifecycle.EventMergeFailed, ctx)
+			// Don't set shouldTransition since we already set the state directly
+		} else {
+			logging.Debug("lifecycle guard failed for MergeStatusFailed",
+				"agent_id", agentID,
+				"expected_states", []string{"merging", "resolving", "validating", "running", "queued_for_merge"},
+				"actual_state", currentState,
+			)
 		}
 	}
 
