@@ -451,6 +451,9 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 	} else if ctx.Err() == context.DeadlineExceeded {
 		result.Success = false
 		result.Error = "execution timed out"
+	} else if ctx.Err() == context.Canceled {
+		result.Success = false
+		result.Error = "execution cancelled"
 	} else if err != nil {
 		result.Success = false
 		result.Error = err.Error()
@@ -748,6 +751,9 @@ func (e *Executor) ExecuteResume(ctx context.Context, task *beads.Task, overlay 
 	} else if ctx.Err() == context.DeadlineExceeded {
 		result.Success = false
 		result.Error = "execution timed out"
+	} else if ctx.Err() == context.Canceled {
+		result.Success = false
+		result.Error = "execution cancelled"
 	} else if err != nil {
 		result.Success = false
 		result.Error = err.Error()
