@@ -43,27 +43,45 @@ const getStatusIcon = (status: string) => {
   }
 };
 
-const getStatusColor = (status: string) => {
-  switch (status) {
-    case 'completed':
-    case 'success':
-    case 'passed':
-    case 'merged':
-      return 'text-green-600 dark:text-green-400';
-    case 'failed':
-      return 'text-red-600 dark:text-red-400';
-    case 'running':
-    case 'pending':
-    case 'acquiring':
-    case 'merging':
-      return 'text-blue-600 dark:text-blue-400';
-    case 'repairing':
-      return 'text-orange-600 dark:text-orange-400';
-    case 'skipped':
-      return 'text-gray-500 dark:text-gray-400';
-    default:
-      return 'text-gray-500 dark:text-gray-400';
-  }
+// Icon-only status indicator for compact display in agent chain
+const StatusDot: React.FC<{ status: string; attempt?: number | undefined }> = ({ status, attempt }) => {
+  const getStatusInfo = (status: string): { icon: string; color: string; label: string } => {
+    switch (status) {
+      case 'completed':
+      case 'success':
+      case 'passed':
+      case 'merged':
+      case 'resolved':
+      case 'fixed':
+        return { icon: '●', color: 'text-green-500', label: 'Success' };
+      case 'failed':
+        return { icon: '⊘', color: 'text-red-500', label: 'Failed' };
+      case 'running':
+      case 'pending':
+      case 'acquiring':
+      case 'merging':
+        return { icon: '◐', color: 'text-blue-500', label: 'In Progress' };
+      case 'repairing':
+        return { icon: '◐', color: 'text-orange-500', label: 'Repairing' };
+      case 'skipped':
+        return { icon: '○', color: 'text-gray-400', label: 'Skipped' };
+      default:
+        return { icon: '○', color: 'text-gray-400', label: status };
+    }
+  };
+
+  const { icon, color, label } = getStatusInfo(status);
+  const tooltipText = attempt !== undefined && attempt >= 1 ? `${label} (attempt ${attempt})` : label;
+
+  return (
+    <span
+      className={`${color} text-sm font-mono leading-none cursor-default`}
+      title={tooltipText}
+      aria-label={tooltipText}
+    >
+      {icon}
+    </span>
+  );
 };
 
 interface TimelineItemProps {
@@ -79,16 +97,6 @@ interface TimelineItemProps {
   attempt?: number | undefined;
 }
 
-// Format status with optional attempt number: "completed" -> "Completed (2)"
-const formatStatusWithAttempt = (status: string, attempt?: number): string => {
-  // Capitalize first letter of status
-  const capitalized = status.charAt(0).toUpperCase() + status.slice(1);
-  if (attempt !== undefined && attempt >= 1) {
-    return `${capitalized} (${attempt})`;
-  }
-  return capitalized;
-};
-
 const TimelineItem: React.FC<TimelineItemProps> = ({
   icon,
   title,
@@ -103,7 +111,6 @@ const TimelineItem: React.FC<TimelineItemProps> = ({
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const hasExpandableContent = output || children;
-  const displayStatus = formatStatusWithAttempt(status, attempt);
 
   const handleClick = () => {
     if (isClickable && onClick) {
@@ -145,7 +152,7 @@ const TimelineItem: React.FC<TimelineItemProps> = ({
                 : <ChevronRight className="w-3 h-3 text-gray-400" />
             )}
             <span className={`text-xs font-medium ${isClickable ? 'text-amber-700 dark:text-amber-300' : 'text-gray-700 dark:text-gray-300'}`}>{title}</span>
-            <span className={`text-xs ${getStatusColor(status)}`}>{displayStatus}</span>
+            <StatusDot status={status} attempt={attempt} />
             {duration !== undefined && (
               <span className="text-xs text-gray-400 font-mono tabular-nums ml-auto">
                 {formatDuration(duration)}
@@ -324,9 +331,8 @@ export const AgentChainTimeline: React.FC<AgentChainTimelineProps> = ({
               <div className="mt-2 space-y-1">
                 {item.steps.map((step, stepIndex) => (
                   <div key={stepIndex} className="flex items-center gap-2 text-xs">
-                    {getStatusIcon(step.status)}
                     <span className="text-gray-600 dark:text-gray-400">{step.name}</span>
-                    <span className={getStatusColor(step.status)}>{step.status}</span>
+                    <StatusDot status={step.status} />
                     {step.duration_ms > 0 && (
                       <span className="text-gray-400 font-mono tabular-nums ml-auto">
                         {formatDuration(step.duration_ms)}
