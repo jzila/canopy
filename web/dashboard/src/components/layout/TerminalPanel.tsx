@@ -1,12 +1,11 @@
 import React, { useState } from 'react';
-import { List, Terminal as TerminalIcon, GitCommit, GripHorizontal, Info } from 'lucide-react';
-import { AgentTerminal } from '../agents/AgentTerminal';
+import { List, GitCommit, GripHorizontal, Info } from 'lucide-react';
 import { LiveFeed } from '../agents/LiveFeed';
 import { CommitList } from '../agents/CommitList';
 import { AgentDetail } from '../agents/AgentDetail';
 import type { AgentState } from '../../stores/stateStore';
 
-type TerminalTab = 'feed' | 'terminal' | 'commits' | 'detail';
+type TerminalTab = 'feed' | 'commits' | 'detail';
 
 export interface TerminalPanelProps {
   /** The selected agent to display */
@@ -28,7 +27,7 @@ export interface TerminalPanelProps {
  *
  * Contains:
  * - Resize handle
- * - Tab navigation (Live Feed, Raw Output, Commits)
+ * - Tab navigation (Live Feed, Commits, Detail)
  * - Agent info display
  * - Close button
  */
@@ -83,20 +82,6 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
               >
                 <List className="w-4 h-4" />
                 Live Feed
-              </button>
-              <button
-                onClick={() => setActiveTab('terminal')}
-                className={`
-                  flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all
-                  ${
-                    activeTab === 'terminal'
-                      ? 'bg-blue-600 text-white'
-                      : 'text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 hover:bg-gray-300/50 dark:hover:bg-gray-700/50'
-                  }
-                `}
-              >
-                <TerminalIcon className="w-4 h-4" />
-                Raw Output
               </button>
               <button
                 onClick={() => setActiveTab('commits')}
@@ -154,7 +139,6 @@ export const TerminalPanel: React.FC<TerminalPanelProps> = ({
         {/* Tab Content */}
         <div className="flex-1 overflow-hidden">
           {activeTab === 'feed' && <LiveFeed agentId={agent.id} />}
-          {activeTab === 'terminal' && <AgentTerminal agentId={agent.id} />}
           {activeTab === 'commits' && (
             <div className="h-full overflow-y-auto p-4 bg-gray-50 dark:bg-gray-900">
               <CommitList commits={agent.git_commits || []} />
