@@ -251,6 +251,7 @@ export const AgentChainTimeline: React.FC<AgentChainTimelineProps> = ({
       duration: repair.duration * 1000,
       output: repair.error || agent.last_repair_output,
       attempt: repairAttempt,
+      agentId: repair.id,
     });
 
     // If repair was successful, add a validation pass after it
@@ -281,9 +282,10 @@ export const AgentChainTimeline: React.FC<AgentChainTimelineProps> = ({
       </div>
       <div className="ml-1">
         {items.map((item, index) => {
-          // Make resolvers and prior attempt agents clickable
+          // Make resolvers, prior attempt agents, and repair agents clickable
           const isClickable = item.agentId && onSelectAgent && (
             item.type === 'resolver' ||
+            item.type === 'repair' ||
             (item.type === 'agent' && item.agentId !== agent.id) // Prior attempts
           );
           return (
