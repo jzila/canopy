@@ -20,6 +20,16 @@ const formatDuration = (ms: number): string => {
   return `${seconds}s`;
 };
 
+const formatTimestamp = (isoString: string): string => {
+  const date = new Date(isoString);
+  return date.toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+};
+
 const getStatusIcon = (status: string) => {
   switch (status) {
     case 'completed':
@@ -88,6 +98,7 @@ interface TimelineItemProps {
   icon: React.ReactNode;
   title: string;
   status: string;
+  startTime?: string | undefined;
   duration?: number | undefined;
   output?: string | undefined;
   isLast?: boolean;
@@ -101,6 +112,7 @@ const TimelineItem: React.FC<TimelineItemProps> = ({
   icon,
   title,
   status,
+  startTime,
   duration,
   output,
   isLast = false,
@@ -153,11 +165,11 @@ const TimelineItem: React.FC<TimelineItemProps> = ({
             )}
             <span className={`text-xs font-medium ${isClickable ? 'text-amber-700 dark:text-amber-300' : 'text-gray-700 dark:text-gray-300'}`}>{title}</span>
             <StatusDot status={status} attempt={attempt} />
-            {duration !== undefined && (
-              <span className="text-xs text-gray-400 font-mono tabular-nums ml-auto">
-                {formatDuration(duration)}
-              </span>
-            )}
+            <span className="text-xs text-gray-400 font-mono tabular-nums ml-auto">
+              {startTime && formatTimestamp(startTime)}
+              {startTime && duration !== undefined && ' · '}
+              {duration !== undefined && formatDuration(duration)}
+            </span>
             {isClickable && (
               <span className="text-xs text-amber-500 dark:text-amber-400 ml-1">→</span>
             )}
@@ -190,6 +202,7 @@ export const AgentChainTimeline: React.FC<AgentChainTimelineProps> = ({
     type: 'agent' | 'resolver' | 'validation' | 'repair';
     title: string;
     status: string;
+    startTime?: string | undefined;
     duration?: number | undefined;
     output?: string | undefined;
     steps?: ValidationStep[] | undefined;
@@ -209,6 +222,7 @@ export const AgentChainTimeline: React.FC<AgentChainTimelineProps> = ({
       type: 'agent',
       title: 'Worker',
       status: priorAgent.status,
+      startTime: priorAgent.start_time,
       duration: priorAgent.duration * 1000,
       output: priorAgent.error || undefined,
       agentId: priorAgent.id,
@@ -223,6 +237,7 @@ export const AgentChainTimeline: React.FC<AgentChainTimelineProps> = ({
     type: 'agent',
     title: hasRetries ? 'Worker' : 'Implementor',
     status: agent.status,
+    startTime: agent.start_time,
     duration: agent.duration * 1000, // Convert seconds to ms
     agentId: agent.id,
     attempt: hasRetries ? currentAttempt : undefined,
@@ -240,6 +255,7 @@ export const AgentChainTimeline: React.FC<AgentChainTimelineProps> = ({
       type: 'resolver',
       title: 'Resolver',
       status: resolver.status === 'completed' ? 'resolved' : resolver.status,
+      startTime: resolver.start_time,
       duration: resolver.duration * 1000,
       output: resolver.error || undefined,
       agentId: resolver.id,
@@ -272,6 +288,7 @@ export const AgentChainTimeline: React.FC<AgentChainTimelineProps> = ({
       type: 'repair',
       title: `Repair #${repairAttempt}`,
       status: repair.status === 'completed' ? 'fixed' : repair.status,
+      startTime: repair.start_time,
       duration: repair.duration * 1000,
       output: repair.error || agent.last_repair_output,
       attempt: repairAttempt,
@@ -323,6 +340,7 @@ export const AgentChainTimeline: React.FC<AgentChainTimelineProps> = ({
             }
             title={item.title}
             status={item.status}
+            startTime={item.startTime}
             duration={item.duration}
             output={item.output}
             isLast={index === items.length - 1}
