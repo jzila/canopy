@@ -5,6 +5,7 @@ import type { AgentState, ValidationStep } from '../../stores/stateStore';
 interface AgentChainTimelineProps {
   agent: AgentState;
   childAgents?: AgentState[];
+  priorAttempts?: AgentState[];  // Agents with same task_id but earlier attempts
   onSelectAgent?: (agentId: string) => void;
 }
 
@@ -161,6 +162,7 @@ const TimelineItem: React.FC<TimelineItemProps> = ({
 export const AgentChainTimeline: React.FC<AgentChainTimelineProps> = ({
   agent,
   childAgents = [],
+  priorAttempts = [],
   onSelectAgent,
 }) => {
   // Build the agent chain from agent state
@@ -175,15 +177,38 @@ export const AgentChainTimeline: React.FC<AgentChainTimelineProps> = ({
     agentId?: string | undefined;
   }> = [];
 
-  // 1. Original implementor agent
+  // Sort prior attempts by attempt number ascending
+  const sortedPriorAttempts = [...priorAttempts].sort((a, b) =>
+    (a.attempt ?? 1) - (b.attempt ?? 1)
+  );
+
+  // 1. Prior attempt agents (failed attempts before the current one)
+  for (const priorAgent of sortedPriorAttempts) {
+    const attemptNum = priorAgent.attempt ?? 1;
+    items.push({
+      type: 'agent',
+      title: `Worker (attempt ${attemptNum})`,
+      status: priorAgent.status,
+      duration: priorAgent.duration * 1000,
+      output: priorAgent.error || undefined,
+      agentId: priorAgent.id,
+      attempt: attemptNum,
+    });
+  }
+
+  // 2. Current implementor agent
+  const hasRetries = priorAttempts.length > 0 || (agent.attempt !== undefined && agent.attempt > 1);
+  const currentAttempt = agent.attempt ?? (priorAttempts.length + 1);
   items.push({
     type: 'agent',
-    title: 'Implementor Agent',
+    title: hasRetries ? `Worker (attempt ${currentAttempt})` : 'Implementor Agent',
     status: agent.status,
     duration: agent.duration * 1000, // Convert seconds to ms
+    agentId: agent.id,
+    attempt: currentAttempt,
   });
 
-  // 2. Check for resolver (child agent that resolves conflicts)
+  // 3. Check for resolver (child agent that resolves conflicts)
   const resolverAgents = childAgents.filter(child =>
     child.parent_agent_id === agent.id && !child.task_id.includes('repair')
   );
@@ -199,7 +224,7 @@ export const AgentChainTimeline: React.FC<AgentChainTimelineProps> = ({
     });
   }
 
-  // 3. Validation (if applicable)
+  // 4. Validation (if applicable)
   if (agent.validation_status) {
     items.push({
       type: 'validation',
@@ -211,7 +236,7 @@ export const AgentChainTimeline: React.FC<AgentChainTimelineProps> = ({
     });
   }
 
-  // 4. Repair agents (if any) - only match agents with 'repair' in task_id
+  // 5. Repair agents (if any) - only match agents with 'repair' in task_id
   const repairAgents = childAgents.filter(child =>
     child.task_id.includes('repair')
   ).sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
@@ -256,7 +281,11 @@ export const AgentChainTimeline: React.FC<AgentChainTimelineProps> = ({
       </div>
       <div className="ml-1">
         {items.map((item, index) => {
-          const isResolverClickable = item.type === 'resolver' && item.agentId && onSelectAgent;
+          // Make resolvers and prior attempt agents clickable
+          const isClickable = item.agentId && onSelectAgent && (
+            item.type === 'resolver' ||
+            (item.type === 'agent' && item.agentId !== agent.id) // Prior attempts
+          );
           return (
           <TimelineItem
             key={`${item.type}-${index}`}
@@ -271,8 +300,8 @@ export const AgentChainTimeline: React.FC<AgentChainTimelineProps> = ({
             duration={item.duration}
             output={item.output}
             isLast={index === items.length - 1}
-            isClickable={Boolean(isResolverClickable)}
-            onClick={isResolverClickable ? () => onSelectAgent(item.agentId!) : undefined}
+            isClickable={Boolean(isClickable)}
+            onClick={isClickable ? () => onSelectAgent(item.agentId!) : undefined}
           >
             {/* Render validation steps if available */}
             {item.type === 'validation' && item.steps && item.steps.length > 0 && (

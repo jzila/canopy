@@ -167,6 +167,13 @@ export const AgentCard: React.FC<AgentCardProps> = ({
     a => a.parent_agent_id === agent.id
   );
 
+  // Get prior attempts for this task (agents with same task_id but earlier attempt numbers)
+  const priorAttempts = Object.values(agents).filter(a =>
+    a.task_id === agent.task_id &&
+    a.id !== agent.id &&
+    (a.attempt ?? 1) < (agent.attempt ?? 1)
+  ).sort((a, b) => (a.attempt ?? 1) - (b.attempt ?? 1));
+
   // Check if there's an active resolver for this agent's task
   const activeResolver = childAgents.find(
     child => (child.status === 'running' || child.status === 'starting') &&
@@ -241,7 +248,8 @@ export const AgentCard: React.FC<AgentCardProps> = ({
     agent.merge_status ||
     agent.validation_status ||
     agent.repair_attempts ||
-    childAgents.length > 0
+    childAgents.length > 0 ||
+    priorAttempts.length > 0
   );
 
   // Get failed validation step name if applicable
@@ -444,7 +452,7 @@ export const AgentCard: React.FC<AgentCardProps> = ({
 
       {/* Agent chain timeline (expandable) */}
       {showAgentChain && hasAgentChainData && (
-        <AgentChainTimeline agent={agent} childAgents={childAgents} onSelectAgent={onSelect} />
+        <AgentChainTimeline agent={agent} childAgents={childAgents} priorAttempts={priorAttempts} onSelectAgent={onSelect} />
       )}
 
       {agent.error && (
