@@ -212,6 +212,12 @@ type CommitInfo struct {
 	AuthorEmail  string   // Author email
 	Timestamp    string   // ISO 8601 timestamp
 	FilesChanged []string // Files modified in this commit
+	Patch        string   // Full commit diff (optional, can be expensive for large commits)
+}
+
+// CommitInfoOptions controls what information to extract for a commit
+type CommitInfoOptions struct {
+	IncludePatch bool // If true, extract the full diff (can be expensive for large commits)
 }
 
 // GetCommitInfo extracts detailed information about a commit
@@ -219,10 +225,22 @@ func (o *Overlay) GetCommitInfo(commitHash string) (*CommitInfo, error) {
 	return GetCommitInfoFromDir(o.MergedDir, commitHash)
 }
 
+// GetCommitInfoWithOptions extracts detailed information about a commit with configurable options
+func (o *Overlay) GetCommitInfoWithOptions(commitHash string, opts CommitInfoOptions) (*CommitInfo, error) {
+	return GetCommitInfoFromDirWithOptions(o.MergedDir, commitHash, opts)
+}
+
 // GetCommitInfoFromDir extracts detailed information about a commit from any git directory.
 // This is a standalone function that doesn't require an Overlay, useful for getting
 // commit info from the main repository after merge (when overlays are destroyed).
+// Does not include patch by default; use GetCommitInfoFromDirWithOptions for that.
 func GetCommitInfoFromDir(gitDir, commitHash string) (*CommitInfo, error) {
+	return GetCommitInfoFromDirWithOptions(gitDir, commitHash, CommitInfoOptions{})
+}
+
+// GetCommitInfoFromDirWithOptions extracts detailed information about a commit with configurable options.
+// Use opts.IncludePatch to include the full commit diff (can be expensive for large commits).
+func GetCommitInfoFromDirWithOptions(gitDir, commitHash string, opts CommitInfoOptions) (*CommitInfo, error) {
 	info := &CommitInfo{
 		Hash:      commitHash,
 		ShortHash: commitHash,
@@ -264,7 +282,30 @@ func GetCommitInfoFromDir(gitDir, commitHash string) (*CommitInfo, error) {
 		}
 	}
 
+	// Extract patch if requested
+	if opts.IncludePatch {
+		patch, err := getCommitPatch(gitDir, commitHash)
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract patch: %w", err)
+		}
+		info.Patch = patch
+	}
+
 	return info, nil
+}
+
+// getCommitPatch extracts the full diff for a commit using git show --format=
+func getCommitPatch(gitDir, commitHash string) (string, error) {
+	// Use --format= to suppress commit metadata and only output the diff
+	cmd := exec.Command("git", "show", "--format=", commitHash)
+	cmd.Dir = gitDir
+
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git show --format= failed: %w", err)
+	}
+
+	return string(out), nil
 }
 
 // ExtractFilesFromPatches returns unique file paths mentioned in git format-patch output.
