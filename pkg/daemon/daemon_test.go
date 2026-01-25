@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -1094,6 +1095,423 @@ func TestRestoreLiveFeedEventsFromJSONL(t *testing.T) {
 				t.Errorf("expected commits_created=1, got %d", completedData.CommitsCreated)
 			}
 		}
+	}
+
+	_ = store.Close()
+}
+
+// TestRestoreStateFromDB_WithGitCommits verifies git commits are restored from database
+func TestRestoreStateFromDB_WithGitCommits(t *testing.T) {
+	// Create temp directory for test database
+	tmpDir, err := os.MkdirTemp("", "canopy-daemon-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	dbPath := filepath.Join(tmpDir, "test.db")
+	store, err := persistence.NewStoreWithPath(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+
+	now := time.Now()
+
+	// Create a completed run
+	run := &persistence.Run{
+		ID:        "run-with-commits",
+		StartedAt: now.Add(-1 * time.Hour),
+		Status:    persistence.RunStatusCompleted,
+	}
+	if err := store.CreateRun(run); err != nil {
+		t.Fatalf("failed to create run: %v", err)
+	}
+
+	// Create an agent with some commits
+	agent := &persistence.Agent{
+		ID:                "agent-with-commits",
+		RunID:             "run-with-commits",
+		TaskID:            "task-1",
+		TaskTitle:         "Test Task",
+		Status:            persistence.AgentStatusCompleted,
+		StartedAt:         now.Add(-50 * time.Minute),
+		GitCommitsCreated: 2, // Will be overwritten by actual commit count
+	}
+	if err := store.CreateAgent(agent); err != nil {
+		t.Fatalf("failed to create agent: %v", err)
+	}
+
+	// Create commits for the agent
+	commits := []*persistence.AgentCommit{
+		{
+			AgentID:      "agent-with-commits",
+			Hash:         "abc123def456abc123def456abc123def456abc1",
+			ShortHash:    "abc123d",
+			Message:      "feat: add new feature",
+			Author:       "Test User",
+			AuthorEmail:  "test@example.com",
+			Timestamp:    now.Add(-45 * time.Minute).Format(time.RFC3339),
+			FilesChanged: []string{"main.go", "util.go"},
+		},
+		{
+			AgentID:      "agent-with-commits",
+			Hash:         "def456abc123def456abc123def456abc123def4",
+			ShortHash:    "def456a",
+			Message:      "fix: resolve edge case",
+			Author:       "Test User",
+			AuthorEmail:  "test@example.com",
+			Timestamp:    now.Add(-40 * time.Minute).Format(time.RFC3339),
+			FilesChanged: []string{"main.go"},
+		},
+	}
+	for _, commit := range commits {
+		if err := store.CreateAgentCommit(commit); err != nil {
+			t.Fatalf("failed to create agent commit: %v", err)
+		}
+	}
+
+	// Create daemon and restore state
+	daemon := newDaemonForTest(Config{EnablePersistence: true}, store, nil)
+
+	if err := daemon.restoreStateFromDB(); err != nil {
+		t.Fatalf("restoreStateFromDB failed: %v", err)
+	}
+
+	// Verify agent was restored with commits
+	state := daemon.GetRuntimeState()
+	restoredAgent := state.GetAgent("agent-with-commits")
+	if restoredAgent == nil {
+		t.Fatal("expected agent to be restored")
+	}
+
+	// Should have 2 git commits restored
+	if len(restoredAgent.GitCommits) != 2 {
+		t.Fatalf("expected 2 git commits, got %d", len(restoredAgent.GitCommits))
+	}
+
+	// Verify first commit details
+	firstCommit := restoredAgent.GitCommits[0]
+	if firstCommit.Hash != "abc123def456abc123def456abc123def456abc1" {
+		t.Errorf("expected first commit hash abc123def456abc123def456abc123def456abc1, got %s", firstCommit.Hash)
+	}
+	if firstCommit.ShortHash != "abc123d" {
+		t.Errorf("expected first commit short_hash abc123d, got %s", firstCommit.ShortHash)
+	}
+	if firstCommit.Message != "feat: add new feature" {
+		t.Errorf("expected first commit message 'feat: add new feature', got %s", firstCommit.Message)
+	}
+	if firstCommit.Author != "Test User" {
+		t.Errorf("expected first commit author 'Test User', got %s", firstCommit.Author)
+	}
+	if len(firstCommit.FilesChanged) != 2 {
+		t.Errorf("expected 2 files changed in first commit, got %d", len(firstCommit.FilesChanged))
+	}
+
+	// Verify second commit details
+	secondCommit := restoredAgent.GitCommits[1]
+	if secondCommit.Hash != "def456abc123def456abc123def456abc123def4" {
+		t.Errorf("expected second commit hash def456abc123def456abc123def456abc123def4, got %s", secondCommit.Hash)
+	}
+	if secondCommit.Message != "fix: resolve edge case" {
+		t.Errorf("expected second commit message 'fix: resolve edge case', got %s", secondCommit.Message)
+	}
+
+	// Verify legacy Commits field is in sync
+	if restoredAgent.Commits != 2 {
+		t.Errorf("expected Commits count 2, got %d", restoredAgent.Commits)
+	}
+
+	_ = store.Close()
+}
+
+// TestRestoreStateFromDB_WithGitCommits_ViaEvents verifies git commits persisted via events
+// are properly restored after daemon restart
+func TestRestoreStateFromDB_WithGitCommits_ViaEvents(t *testing.T) {
+	// Create temp directory for test database
+	tmpDir, err := os.MkdirTemp("", "canopy-daemon-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	dbPath := filepath.Join(tmpDir, "test.db")
+	store, err := persistence.NewStoreWithPath(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+
+	// Create event bus and persistence handler (simulating daemon behavior)
+	eventBus := NewEventBus()
+	handler := NewPersistenceHandler(store, eventBus)
+	unsubscribe := handler.Start()
+
+	// Publish a run started event
+	eventBus.Publish(Event{
+		Type:      EventRunStarted,
+		Timestamp: time.Now().Add(-1 * time.Hour),
+		Payload: map[string]interface{}{
+			"run_id":     "run-commit-test",
+			"task_count": 1,
+		},
+	})
+	time.Sleep(10 * time.Millisecond)
+
+	// Publish agent started event
+	eventBus.Publish(Event{
+		Type:      EventAgentStarted,
+		Timestamp: time.Now().Add(-50 * time.Minute),
+		Payload: map[string]interface{}{
+			"agent_id":   "agent-commit-test",
+			"task_id":    "task-1",
+			"task_title": "Test Task",
+		},
+	})
+	time.Sleep(10 * time.Millisecond)
+
+	// Publish commit events (simulating agent making commits)
+	eventBus.Publish(Event{
+		Type:      EventAgentCommit,
+		Timestamp: time.Now().Add(-45 * time.Minute),
+		Payload: map[string]interface{}{
+			"agent_id":      "agent-commit-test",
+			"hash":          "abc123def456abc123def456abc123def456abc1",
+			"short_hash":    "abc123d",
+			"message":       "feat: add new feature",
+			"author":        "Test User",
+			"author_email":  "test@example.com",
+			"timestamp":     time.Now().Add(-45 * time.Minute).Format(time.RFC3339),
+			"files_changed": []interface{}{"main.go", "util.go"},
+		},
+	})
+	time.Sleep(10 * time.Millisecond)
+
+	eventBus.Publish(Event{
+		Type:      EventAgentCommit,
+		Timestamp: time.Now().Add(-40 * time.Minute),
+		Payload: map[string]interface{}{
+			"agent_id":      "agent-commit-test",
+			"hash":          "def456abc123def456abc123def456abc123def4",
+			"short_hash":    "def456a",
+			"message":       "fix: resolve edge case",
+			"author":        "Test User",
+			"author_email":  "test@example.com",
+			"timestamp":     time.Now().Add(-40 * time.Minute).Format(time.RFC3339),
+			"files_changed": []interface{}{"main.go"},
+		},
+	})
+	time.Sleep(10 * time.Millisecond)
+
+	// Publish agent completed event
+	eventBus.Publish(Event{
+		Type:      EventAgentCompleted,
+		Timestamp: time.Now().Add(-30 * time.Minute),
+		Payload: map[string]interface{}{
+			"agent_id":        "agent-commit-test",
+			"exit_code":       0,
+			"commits_created": 2,
+		},
+	})
+	time.Sleep(10 * time.Millisecond)
+
+	// Unsubscribe and close store to simulate daemon shutdown
+	unsubscribe()
+	if err := store.Close(); err != nil {
+		t.Fatalf("failed to close store: %v", err)
+	}
+
+	// Now simulate daemon restart - reopen the store
+	store2, err := persistence.NewStoreWithPath(dbPath)
+	if err != nil {
+		t.Fatalf("failed to reopen store: %v", err)
+	}
+
+	// Verify commits were persisted (pre-restore check)
+	commits, err := store2.GetAllAgentCommits([]string{"agent-commit-test"})
+	if err != nil {
+		t.Fatalf("failed to get commits: %v", err)
+	}
+	if len(commits["agent-commit-test"]) != 2 {
+		t.Fatalf("expected 2 commits to be persisted in DB, got %d", len(commits["agent-commit-test"]))
+	}
+
+	// Create daemon and restore state (simulating restart)
+	daemon := newDaemonForTest(Config{EnablePersistence: true}, store2, nil)
+
+	if err := daemon.restoreStateFromDB(); err != nil {
+		t.Fatalf("restoreStateFromDB failed: %v", err)
+	}
+
+	// Verify agent was restored with commits
+	state := daemon.GetRuntimeState()
+	restoredAgent := state.GetAgent("agent-commit-test")
+	if restoredAgent == nil {
+		t.Fatal("expected agent to be restored")
+	}
+
+	// Should have 2 git commits restored
+	if len(restoredAgent.GitCommits) != 2 {
+		t.Fatalf("expected 2 git commits, got %d", len(restoredAgent.GitCommits))
+	}
+
+	// Verify first commit details
+	firstCommit := restoredAgent.GitCommits[0]
+	if firstCommit.Hash != "abc123def456abc123def456abc123def456abc1" {
+		t.Errorf("expected first commit hash abc123..., got %s", firstCommit.Hash)
+	}
+	if firstCommit.Message != "feat: add new feature" {
+		t.Errorf("expected first commit message 'feat: add new feature', got %s", firstCommit.Message)
+	}
+
+	// Verify second commit details
+	secondCommit := restoredAgent.GitCommits[1]
+	if secondCommit.Hash != "def456abc123def456abc123def456abc123def4" {
+		t.Errorf("expected second commit hash def456..., got %s", secondCommit.Hash)
+	}
+	if secondCommit.Message != "fix: resolve edge case" {
+		t.Errorf("expected second commit message 'fix: resolve edge case', got %s", secondCommit.Message)
+	}
+
+	// Verify that GetSnapshot includes the commits (WebSocket serialization)
+	snapshot := daemon.GetState()
+	snapshotAgent, exists := snapshot.Agents["agent-commit-test"]
+	if !exists {
+		t.Fatal("expected agent in snapshot")
+	}
+	if len(snapshotAgent.GitCommits) != 2 {
+		t.Errorf("expected 2 git commits in snapshot, got %d", len(snapshotAgent.GitCommits))
+	}
+
+	_ = store2.Close()
+}
+
+// TestRestoreStateFromDB_WebSocketSerializationIncludesCommits verifies that the
+// WebSocket state sync includes git commits after restoration
+func TestRestoreStateFromDB_WebSocketSerializationIncludesCommits(t *testing.T) {
+	// Create temp directory for test database
+	tmpDir, err := os.MkdirTemp("", "canopy-daemon-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	dbPath := filepath.Join(tmpDir, "test.db")
+	store, err := persistence.NewStoreWithPath(dbPath)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+
+	now := time.Now()
+
+	// Create a completed run
+	run := &persistence.Run{
+		ID:        "run-ws-test",
+		StartedAt: now.Add(-1 * time.Hour),
+		Status:    persistence.RunStatusCompleted,
+	}
+	if err := store.CreateRun(run); err != nil {
+		t.Fatalf("failed to create run: %v", err)
+	}
+
+	// Create an agent
+	agent := &persistence.Agent{
+		ID:                "agent-ws-test",
+		RunID:             "run-ws-test",
+		TaskID:            "task-1",
+		TaskTitle:         "Test Task",
+		Status:            persistence.AgentStatusCompleted,
+		StartedAt:         now.Add(-50 * time.Minute),
+		GitCommitsCreated: 1,
+	}
+	if err := store.CreateAgent(agent); err != nil {
+		t.Fatalf("failed to create agent: %v", err)
+	}
+
+	// Create a commit
+	commit := &persistence.AgentCommit{
+		AgentID:      "agent-ws-test",
+		Hash:         "abc123def456abc123def456abc123def456abc1",
+		ShortHash:    "abc123d",
+		Message:      "test commit",
+		Author:       "Test User",
+		AuthorEmail:  "test@example.com",
+		Timestamp:    now.Add(-45 * time.Minute).Format(time.RFC3339),
+		FilesChanged: []string{"main.go"},
+	}
+	if err := store.CreateAgentCommit(commit); err != nil {
+		t.Fatalf("failed to create agent commit: %v", err)
+	}
+
+	// Create daemon and restore state
+	daemon := newDaemonForTest(Config{EnablePersistence: true}, store, nil)
+
+	if err := daemon.restoreStateFromDB(); err != nil {
+		t.Fatalf("restoreStateFromDB failed: %v", err)
+	}
+
+	// Get the snapshot (simulating what WebSocket does)
+	snapshot := daemon.GetState()
+
+	// Verify commits are in the snapshot
+	snapshotAgent, exists := snapshot.Agents["agent-ws-test"]
+	if !exists {
+		t.Fatal("expected agent in snapshot")
+	}
+	if len(snapshotAgent.GitCommits) != 1 {
+		t.Errorf("expected 1 git commit in snapshot agent, got %d", len(snapshotAgent.GitCommits))
+	}
+
+	// Marshal the snapshot to JSON (simulating WebSocket serialization)
+	event := Event{
+		Type:      EventStateSync,
+		Timestamp: now,
+		Payload:   snapshot,
+	}
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("failed to marshal event: %v", err)
+	}
+
+	// Unmarshal back and verify commits are present
+	var unmarshaled map[string]interface{}
+	if err := json.Unmarshal(data, &unmarshaled); err != nil {
+		t.Fatalf("failed to unmarshal event: %v", err)
+	}
+
+	payload, ok := unmarshaled["payload"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected payload to be a map")
+	}
+
+	agents, ok := payload["agents"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected agents to be a map")
+	}
+
+	wsAgent, ok := agents["agent-ws-test"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected agent-ws-test to be in agents")
+	}
+
+	gitCommits, ok := wsAgent["git_commits"].([]interface{})
+	if !ok {
+		t.Fatalf("expected git_commits to be an array, got %T", wsAgent["git_commits"])
+	}
+
+	if len(gitCommits) != 1 {
+		t.Errorf("expected 1 git commit in WebSocket payload, got %d", len(gitCommits))
+	}
+
+	// Verify the commit details
+	firstCommit, ok := gitCommits[0].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected first commit to be a map")
+	}
+
+	if firstCommit["hash"] != "abc123def456abc123def456abc123def456abc1" {
+		t.Errorf("unexpected commit hash: %v", firstCommit["hash"])
+	}
+	if firstCommit["message"] != "test commit" {
+		t.Errorf("unexpected commit message: %v", firstCommit["message"])
 	}
 
 	_ = store.Close()
