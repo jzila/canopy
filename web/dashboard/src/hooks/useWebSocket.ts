@@ -66,6 +66,7 @@ interface AgentCommitEvent {
     author_email: string;
     timestamp: string;
     files_changed: string[];
+    patch?: string;
   };
 }
 interface AgentCompletedEvent {
@@ -213,6 +214,7 @@ interface BackendGitCommit {
   author_email: string;
   timestamp: string;
   files_changed: string[];
+  patch?: string;
 }
 // Backend RuntimeState format (snake_case)
 interface BackendAgentState {
@@ -685,7 +687,7 @@ export function useWebSocket() {
               break;
             }
             case 'agent:commit': {
-              const { agent_id, hash, short_hash, message: commitMessage, author, author_email, timestamp, files_changed } = message.payload;
+              const { agent_id, hash, short_hash, message: commitMessage, author, author_email, timestamp, files_changed, patch } = message.payload;
               console.log('[WebSocket] Agent commit:', agent_id, short_hash, commitMessage);
               appendGitCommit(agent_id, {
                 hash,
@@ -695,6 +697,7 @@ export function useWebSocket() {
                 author_email,
                 timestamp,
                 files_changed: files_changed || [],
+                ...(patch && { patch }),
               });
               break;
             }

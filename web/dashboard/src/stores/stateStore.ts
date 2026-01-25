@@ -82,6 +82,7 @@ export interface GitCommit {
   author_email: string;
   timestamp: string;
   files_changed: string[];
+  patch?: string;
 }
 
 export interface AgentState {
