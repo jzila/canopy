@@ -77,11 +77,23 @@ type subscription struct {
 // EventBus manages event subscriptions and distribution
 // It provides a thread-safe pub/sub mechanism for internal communication
 // between the IPC server (publisher) and WebSocket hub (subscriber)
+//
+// The EventBus guarantees that events are delivered to all subscribers in the
+// order they were published (by sequence number). When a handler publishes a
+// nested event during callback execution, the nested event is queued and
+// delivered after the current event completes delivery to all handlers.
+// This prevents out-of-order delivery that can occur with synchronous nested
+// publishing.
 type EventBus struct {
 	mu            sync.RWMutex
 	subscriptions map[int]subscription
 	nextID        int
 	sequence      uint64 // Monotonic sequence number for event ordering
+
+	// Publishing state - protected by publishMu
+	publishMu    sync.Mutex
+	publishing   bool    // True when we're delivering an event to handlers
+	pendingQueue []Event // Events queued during handler execution
 }
 
 // NewEventBus creates a new EventBus instance
@@ -118,17 +130,60 @@ func (eb *EventBus) Subscribe(handler EventHandler) func() {
 // Handlers are called synchronously in the order they subscribed
 // If a handler panics, it does not affect other handlers
 // Each event is assigned a monotonic sequence number for ordering.
+//
+// Nested publishing: If a handler calls Publish during its callback, the nested
+// event is queued and delivered after the current event completes delivery to
+// all handlers. This ensures events are delivered in sequence order, preventing
+// race conditions where nested events arrive before their parent events.
 func (eb *EventBus) Publish(event Event) {
+	// Assign sequence number under lock
 	eb.mu.Lock()
-	// Assign monotonic sequence number
 	eb.sequence++
 	event.Sequence = eb.sequence
+	eb.mu.Unlock()
+
+	// Check if we're already publishing (nested call)
+	eb.publishMu.Lock()
+	if eb.publishing {
+		// Queue this event to be delivered after current publish completes
+		eb.pendingQueue = append(eb.pendingQueue, event)
+		eb.publishMu.Unlock()
+		return
+	}
+	// Mark that we're publishing
+	eb.publishing = true
+	eb.publishMu.Unlock()
+
+	// Deliver this event and any events that get queued during delivery
+	eb.deliverEvent(event)
+
+	// Process any events that were queued during handler execution
+	for {
+		eb.publishMu.Lock()
+		if len(eb.pendingQueue) == 0 {
+			eb.publishing = false
+			eb.publishMu.Unlock()
+			return
+		}
+		// Take the next event from the queue
+		next := eb.pendingQueue[0]
+		eb.pendingQueue = eb.pendingQueue[1:]
+		eb.publishMu.Unlock()
+
+		eb.deliverEvent(next)
+	}
+}
+
+// deliverEvent sends an event to all current subscribers.
+// Called by Publish to deliver events in sequence order.
+func (eb *EventBus) deliverEvent(event Event) {
 	// Copy subscriptions to avoid holding lock during handler execution
+	eb.mu.RLock()
 	handlers := make([]EventHandler, 0, len(eb.subscriptions))
 	for _, sub := range eb.subscriptions {
 		handlers = append(handlers, sub.handler)
 	}
-	eb.mu.Unlock()
+	eb.mu.RUnlock()
 
 	// Execute handlers without holding lock
 	for _, handler := range handlers {
