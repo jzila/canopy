@@ -18,6 +18,7 @@ import (
 	"github.com/jzila/canopy/pkg/logging"
 	"github.com/jzila/canopy/pkg/mergequeue"
 	"github.com/jzila/canopy/pkg/orchestrator"
+	"github.com/jzila/canopy/pkg/resolver"
 	"github.com/jzila/canopy/pkg/rules"
 	"github.com/jzila/canopy/pkg/types"
 )
@@ -653,6 +654,10 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 	// This replaces the IPC-based commit events when running in daemon mode
 	orch.SetCommitCallback(m.createCommitCallback())
 
+	// Register agent callback to publish resolver/repair agent events to EventBus
+	// This replaces the IPC-based agent events when running in daemon mode
+	orch.SetAgentCallback(m.createAgentCallback(runID, config.RepoID))
+
 	// Register state callbacks to track Idle/Active transitions
 	orch.SetStateCallbacks(m.createStateCallbacks(lifecycle))
 
@@ -1259,6 +1264,132 @@ func (m *OrchestratorManager) createCommitCallback() mergequeue.CommitCallback {
 			Timestamp: time.Now(),
 			Payload:   payload,
 		})
+	}
+}
+
+// createAgentCallback creates a callback that publishes resolver/repair agent events to the EventBus.
+// This replaces the IPC-based agent events when the orchestrator runs in daemon mode.
+// It handles agent started, completed, and failed events from child agents (resolvers, repair agents).
+func (m *OrchestratorManager) createAgentCallback(runID, repoID string) func(event interface{}) {
+	return func(eventI interface{}) {
+		if m.eventBus == nil {
+			return
+		}
+
+		// Type-assert to resolver.AgentEvent
+		event, ok := eventI.(resolver.AgentEvent)
+		if !ok {
+			logging.Warn("createAgentCallback: unexpected event type", "type", fmt.Sprintf("%T", eventI))
+			return
+		}
+
+		switch event.EventType {
+		case "started":
+			// Publish agent started event
+			payload := map[string]interface{}{
+				"agent_id":         event.AgentID,
+				"run_id":           event.RunID,
+				"task_id":          event.TaskID,
+				"task_title":       event.TaskTitle,
+				"task_description": event.TaskDescription,
+				"parent_agent_id":  event.ParentAgentID,
+				"repo_id":          event.RepoID,
+			}
+			m.eventBus.Publish(events.Event{
+				Type:      events.EventAgentStarted,
+				Timestamp: time.Now(),
+				Payload:   payload,
+			})
+
+			// Transition lifecycle to running state
+			if m.state != nil {
+				if agent := m.state.GetAgent(event.AgentID); agent != nil && agent.Lifecycle != nil {
+					if err := agent.Lifecycle.Transition(lifecycle.EventAgentSpawned, lifecycle.TransitionContext{}); err != nil {
+						logging.Warn("lifecycle transition failed on resolver agent start",
+							"agent_id", event.AgentID,
+							"event", lifecycle.EventAgentSpawned,
+							"error", err,
+						)
+					}
+				}
+			}
+
+		case "completed":
+			// Build completion payload
+			payload := map[string]interface{}{
+				"agent_id":        event.AgentID,
+				"parent_agent_id": event.ParentAgentID,
+				"exit_code":       event.ExitCode,
+				"duration":        event.DurationSeconds,
+				"files_changed":   event.FilesChanged,
+				"input_tokens":    event.InputTokens,
+				"output_tokens":   event.OutputTokens,
+				"cost_usd":        event.CostUSD,
+				"duration_ms":     event.DurationMS,
+				"duration_api_ms": event.DurationAPIMS,
+				"num_turns":       event.NumTurns,
+				"commits_created": event.CommitsCreated,
+			}
+
+			m.eventBus.Publish(events.Event{
+				Type:      events.EventAgentCompleted,
+				Timestamp: time.Now(),
+				Payload:   payload,
+			})
+
+			// Transition lifecycle to queued_for_merge state
+			if m.state != nil {
+				if agent := m.state.GetAgent(event.AgentID); agent != nil && agent.Lifecycle != nil {
+					if err := agent.Lifecycle.Transition(lifecycle.EventWorkComplete, lifecycle.TransitionContext{}); err != nil {
+						logging.Warn("lifecycle transition failed on resolver agent done",
+							"agent_id", event.AgentID,
+							"event", lifecycle.EventWorkComplete,
+							"error", err,
+						)
+					}
+				}
+			}
+
+		case "failed":
+			// Build failure payload
+			payload := map[string]interface{}{
+				"agent_id":        event.AgentID,
+				"parent_agent_id": event.ParentAgentID,
+				"exit_code":       event.ExitCode,
+				"duration":        event.DurationSeconds,
+				"files_changed":   event.FilesChanged,
+				"input_tokens":    event.InputTokens,
+				"output_tokens":   event.OutputTokens,
+				"cost_usd":        event.CostUSD,
+				"duration_ms":     event.DurationMS,
+				"duration_api_ms": event.DurationAPIMS,
+				"num_turns":       event.NumTurns,
+				"commits_created": event.CommitsCreated,
+				"error":           event.Error,
+			}
+
+			m.eventBus.Publish(events.Event{
+				Type:      events.EventAgentFailed,
+				Timestamp: time.Now(),
+				Payload:   payload,
+			})
+
+			// Transition lifecycle to failed state
+			if m.state != nil {
+				if agent := m.state.GetAgent(event.AgentID); agent != nil && agent.Lifecycle != nil {
+					if err := agent.Lifecycle.Transition(lifecycle.EventWorkFailed, lifecycle.TransitionContext{
+						AttemptsRemaining: 0,
+						Error:             event.Error,
+					}); err != nil {
+						logging.Warn("lifecycle transition failed on resolver agent fail",
+							"agent_id", event.AgentID,
+							"event", lifecycle.EventWorkFailed,
+							"error", err,
+						)
+					}
+				}
+			}
+		}
 	}
 }
 

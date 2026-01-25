@@ -351,6 +351,14 @@ func (o *Orchestrator) SetCommitCallback(callback mergequeue.CommitCallback) {
 	o.mergeCoordinator.SetCommitCallback(callback)
 }
 
+// SetAgentCallback sets a callback for agent lifecycle events from child agents.
+// This is used when running in daemon mode where IPC is not available.
+// The callback is invoked for resolver and repair agent start/done/fail events.
+// The callback receives resolver.AgentEvent directly - callers must import the resolver package.
+func (o *Orchestrator) SetAgentCallback(callback func(event interface{})) {
+	o.mergeCoordinator.SetAgentCallback(callback)
+}
+
 // SetRepoID sets the repository ID for IPC tracking.
 // This ID is passed to resolver agents for parent-child tracking.
 func (o *Orchestrator) SetRepoID(repoID string) {

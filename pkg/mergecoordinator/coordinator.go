@@ -181,6 +181,19 @@ func (mc *MergeCoordinator) SetCommitCallback(callback mergequeue.CommitCallback
 	}
 }
 
+// SetAgentCallback sets a callback for agent lifecycle events (start, done, fail).
+// This is used when running in daemon mode where IPC is not available.
+// The callback is propagated to the resolver for tracking resolver agent events.
+// The callback receives events as interface{} which callers should type-assert to resolver.AgentEvent.
+func (mc *MergeCoordinator) SetAgentCallback(callback func(event interface{})) {
+	if mc.resolver != nil {
+		// Wrap the interface{} callback to match resolver.AgentCallback signature
+		mc.resolver.SetAgentCallback(func(event resolver.AgentEvent) {
+			callback(event)
+		})
+	}
+}
+
 // SetAgentID records the agentID for a taskID, enabling parent-child tracking.
 func (mc *MergeCoordinator) SetAgentID(taskID, agentID string) {
 	mc.agentIDMap.Store(taskID, agentID)

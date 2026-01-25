@@ -69,11 +69,42 @@ type Result struct {
 	ResolverAgentID string
 }
 
+// AgentCallback is called for agent lifecycle events (start, done, fail).
+// This is used when running in daemon mode where IPC is not available.
+type AgentCallback func(event AgentEvent)
+
+// AgentEvent contains data for agent lifecycle callbacks.
+// This allows the daemon to receive agent events from resolver/repair agents
+// without requiring an IPC client.
+type AgentEvent struct {
+	AgentID         string
+	RunID           string
+	TaskID          string
+	TaskTitle       string
+	TaskDescription string
+	ParentAgentID   string
+	RepoID          string
+	EventType       string // "started", "completed", "failed"
+	// Completion fields (only set for completed/failed events)
+	ExitCode        int
+	DurationSeconds float64
+	FilesChanged    int
+	InputTokens     int
+	OutputTokens    int
+	CostUSD         float64
+	DurationMS      int64
+	DurationAPIMS   int64
+	NumTurns        int
+	CommitsCreated  int
+	Error           string // Only for failed events
+}
+
 // Resolver manages conflict resolution agents
 type Resolver struct {
-	config    *Config
-	executor  *agent.Executor
-	ipcClient *ipc.Client
+	config        *Config
+	executor      *agent.Executor
+	ipcClient     *ipc.Client
+	agentCallback AgentCallback
 }
 
 // New creates a new Resolver
@@ -94,6 +125,13 @@ func New(config *Config) *Resolver {
 // This enables parent-child agent tracking in the UI.
 func (r *Resolver) SetIPCClient(client *ipc.Client) {
 	r.ipcClient = client
+}
+
+// SetAgentCallback sets the callback for agent lifecycle events.
+// This is used when running in daemon mode where IPC is not available.
+// The callback is invoked for agent start, done, and fail events.
+func (r *Resolver) SetAgentCallback(callback AgentCallback) {
+	r.agentCallback = callback
 }
 
 // SetRepoID sets the repository ID for IPC tracking.
@@ -171,8 +209,20 @@ func (r *Resolver) Resolve(ctx context.Context, conflict *ConflictContext) (*Res
 		Description: r.buildResolverPrompt(conflict),
 	}
 
-	// Send IPC event for resolver start (child of original agent)
-	if r.ipcClient != nil {
+	// Send event for resolver start (child of original agent)
+	// Try callback first (daemon mode), then fall back to IPC (CLI mode)
+	if r.agentCallback != nil {
+		r.agentCallback(AgentEvent{
+			AgentID:         resolverAgentID,
+			RunID:           r.config.RunID,
+			TaskID:          conflict.TaskID,
+			TaskTitle:       resolverTask.Title,
+			TaskDescription: conflict.TaskDescription,
+			ParentAgentID:   conflict.ParentAgentID,
+			RepoID:          r.config.RepoID,
+			EventType:       "started",
+		})
+	} else if r.ipcClient != nil {
 		if err := r.ipcClient.SendAgentStart(
 			resolverAgentID,
 			r.config.RunID,            // Run ID for historical filtering
@@ -204,8 +254,45 @@ func (r *Resolver) Resolve(ctx context.Context, conflict *ConflictContext) (*Res
 		result.Error = agentResult.Error
 	}
 
-	// Send IPC event for resolver completion
-	if r.ipcClient != nil {
+	// Send event for resolver completion
+	// Try callback first (daemon mode), then fall back to IPC (CLI mode)
+	if r.agentCallback != nil {
+		event := AgentEvent{
+			AgentID:         resolverAgentID,
+			RunID:           r.config.RunID,
+			TaskID:          conflict.TaskID,
+			TaskTitle:       resolverTask.Title,
+			TaskDescription: conflict.TaskDescription,
+			ParentAgentID:   conflict.ParentAgentID,
+			RepoID:          r.config.RepoID,
+			ExitCode:        agentResult.ExitCode,
+			DurationSeconds: result.Duration.Seconds(),
+			FilesChanged:    len(agentResult.Changes),
+		}
+
+		// Add token usage if available
+		if agentResult.Output != nil {
+			event.InputTokens = agentResult.Output.TotalInputTokens
+			event.OutputTokens = agentResult.Output.TotalOutputTokens
+			event.CostUSD = agentResult.Output.CostUSD
+			event.DurationMS = agentResult.Output.DurationMS
+			event.DurationAPIMS = agentResult.Output.DurationAPIMS
+			event.NumTurns = agentResult.Output.NumTurns
+		}
+
+		if agentResult.GitState != nil {
+			event.CommitsCreated = len(agentResult.GitState.NewCommits)
+		}
+
+		if result.Success {
+			event.EventType = "completed"
+		} else {
+			event.EventType = "failed"
+			event.Error = result.Error
+		}
+
+		r.agentCallback(event)
+	} else if r.ipcClient != nil {
 		ipcResult := &ipc.AgentResult{
 			ExitCode:        agentResult.ExitCode,
 			DurationSeconds: result.Duration.Seconds(),
