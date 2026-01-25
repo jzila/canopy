@@ -762,8 +762,14 @@ export const useStateStore = create<StateStore>((set) => ({
       if (state.runs.some((r) => r.id === run.id)) {
         return state;
       }
-      // Add new run at the beginning (most recent first)
-      return { runs: [run, ...state.runs] };
+      // Add new run and sort by started_at descending (most recent first)
+      // This ensures correct ordering regardless of WebSocket/API timing
+      const runs = [run, ...state.runs].sort((a, b) => {
+        const aTime = a.started_at ? new Date(a.started_at).getTime() : 0;
+        const bTime = b.started_at ? new Date(b.started_at).getTime() : 0;
+        return bTime - aTime;
+      });
+      return { runs };
     }),
 
   updateRun: (runId, update) =>
