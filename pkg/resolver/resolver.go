@@ -12,7 +12,6 @@ import (
 
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
-	"github.com/jzila/canopy/pkg/ipc"
 	"github.com/jzila/canopy/pkg/sandbox"
 )
 
@@ -103,7 +102,6 @@ type AgentEvent struct {
 type Resolver struct {
 	config        *Config
 	executor      *agent.Executor
-	ipcClient     *ipc.Client
 	agentCallback AgentCallback
 }
 
@@ -121,14 +119,7 @@ func New(config *Config) *Resolver {
 	}
 }
 
-// SetIPCClient sets the IPC client for sending resolver events to the daemon.
-// This enables parent-child agent tracking in the UI.
-func (r *Resolver) SetIPCClient(client *ipc.Client) {
-	r.ipcClient = client
-}
-
 // SetAgentCallback sets the callback for agent lifecycle events.
-// This is used when running in daemon mode where IPC is not available.
 // The callback is invoked for agent start, done, and fail events.
 func (r *Resolver) SetAgentCallback(callback AgentCallback) {
 	r.agentCallback = callback
@@ -210,7 +201,6 @@ func (r *Resolver) Resolve(ctx context.Context, conflict *ConflictContext) (*Res
 	}
 
 	// Send event for resolver start (child of original agent)
-	// Try callback first (daemon mode), then fall back to IPC (CLI mode)
 	if r.agentCallback != nil {
 		r.agentCallback(AgentEvent{
 			AgentID:         resolverAgentID,
@@ -222,18 +212,6 @@ func (r *Resolver) Resolve(ctx context.Context, conflict *ConflictContext) (*Res
 			RepoID:          r.config.RepoID,
 			EventType:       "started",
 		})
-	} else if r.ipcClient != nil {
-		if err := r.ipcClient.SendAgentStart(
-			resolverAgentID,
-			r.config.RunID,            // Run ID for historical filtering
-			conflict.TaskID,           // TaskID is the original task
-			resolverTask.Title,
-			conflict.TaskDescription,  // Task description from original task
-			conflict.ParentAgentID,    // Parent is the implementor agent
-			r.config.RepoID,           // Repository ID for tracking
-		); err != nil && r.config.Verbose {
-			fmt.Fprintf(os.Stderr, "warning: failed to send resolver start event: %v\n", err)
-		}
 	}
 
 	// Execute the resolver agent
@@ -255,7 +233,6 @@ func (r *Resolver) Resolve(ctx context.Context, conflict *ConflictContext) (*Res
 	}
 
 	// Send event for resolver completion
-	// Try callback first (daemon mode), then fall back to IPC (CLI mode)
 	if r.agentCallback != nil {
 		event := AgentEvent{
 			AgentID:         resolverAgentID,
@@ -292,45 +269,6 @@ func (r *Resolver) Resolve(ctx context.Context, conflict *ConflictContext) (*Res
 		}
 
 		r.agentCallback(event)
-	} else if r.ipcClient != nil {
-		ipcResult := &ipc.AgentResult{
-			ExitCode:        agentResult.ExitCode,
-			DurationSeconds: result.Duration.Seconds(),
-			FilesChanged:    len(agentResult.Changes),
-		}
-
-		// Add token usage if available
-		if agentResult.Output != nil {
-			ipcResult.InputTokens = agentResult.Output.TotalInputTokens
-			ipcResult.OutputTokens = agentResult.Output.TotalOutputTokens
-			ipcResult.CostUSD = agentResult.Output.CostUSD
-			ipcResult.DurationMS = agentResult.Output.DurationMS
-			ipcResult.DurationAPIMS = agentResult.Output.DurationAPIMS
-			ipcResult.NumTurns = agentResult.Output.NumTurns
-		}
-
-		if agentResult.GitState != nil {
-			ipcResult.CommitsCreated = len(agentResult.GitState.NewCommits)
-		}
-
-		if result.Success {
-			if err := r.ipcClient.SendAgentDone(
-				resolverAgentID,
-				conflict.ParentAgentID,
-				ipcResult,
-			); err != nil && r.config.Verbose {
-				fmt.Fprintf(os.Stderr, "warning: failed to send resolver done event: %v\n", err)
-			}
-		} else {
-			if err := r.ipcClient.SendAgentFail(
-				resolverAgentID,
-				conflict.ParentAgentID,
-				fmt.Errorf("%s", result.Error),
-				ipcResult,
-			); err != nil && r.config.Verbose {
-				fmt.Fprintf(os.Stderr, "warning: failed to send resolver fail event: %v\n", err)
-			}
-		}
 	}
 
 	// Keep overlay reference in agent result for merge

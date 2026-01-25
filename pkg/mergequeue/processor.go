@@ -73,6 +73,9 @@ type Processor struct {
 	// Callback for commit events (alternative to IPC for daemon mode)
 	commitCallback CommitCallback
 
+	// Callback for repair agent events (alternative to IPC for daemon mode)
+	repairAgentCallback repairagent.AgentCallback
+
 	// Validation and repair fields
 	validationConfig *validation.ValidationConfig // Validation configuration (nil = disabled)
 	repairAgent      *repairagent.RepairAgent     // Repair agent for fixing validation failures
@@ -138,6 +141,12 @@ func (p *Processor) SetCommitCallback(callback CommitCallback) {
 	p.commitCallback = callback
 }
 
+// SetRepairAgentCallback sets a callback for repair agent lifecycle events.
+// This is used when running in daemon mode to track repair agent start/done/fail events.
+func (p *Processor) SetRepairAgentCallback(callback repairagent.AgentCallback) {
+	p.repairAgentCallback = callback
+}
+
 // SetValidationConfig sets the validation configuration.
 // If nil, validation is disabled.
 func (p *Processor) SetValidationConfig(config *validation.ValidationConfig) {
@@ -164,8 +173,8 @@ func (p *Processor) InitializeRepairAgent() {
 		RunID:         p.runID,
 	})
 
-	if p.ipcClient != nil {
-		p.repairAgent.SetIPCClient(p.ipcClient)
+	if p.repairAgentCallback != nil {
+		p.repairAgent.SetAgentCallback(p.repairAgentCallback)
 	}
 
 	p.historyRecorder = NewHistoryRecorder(p.beadsClient, p.verbose)
@@ -830,35 +839,15 @@ func (p *Processor) markTaskFailed(ctx context.Context, taskID string, reason st
 
 // sendMergedCommits sends commit events for each commit created during merge.
 // This sends the actual merged commits (with repo hashes) instead of overlay commits.
-// Uses callback in daemon mode, IPC client in CLI mode.
 func (p *Processor) sendMergedCommits(taskID string, mergeResult *merge.Result) {
-	if mergeResult == nil {
+	if mergeResult == nil || p.commitCallback == nil {
 		return
 	}
 
 	agentID := p.makeAgentID(taskID)
 	for _, commitInfo := range mergeResult.MergedCommits {
-		// Try callback first (daemon mode)
-		if p.commitCallback != nil {
-			p.commitCallback(CommitEvent{
-				AgentID:      agentID,
-				Hash:         commitInfo.Hash,
-				ShortHash:    commitInfo.ShortHash,
-				Message:      commitInfo.Message,
-				Author:       commitInfo.Author,
-				AuthorEmail:  commitInfo.AuthorEmail,
-				Timestamp:    commitInfo.Timestamp,
-				FilesChanged: commitInfo.FilesChanged,
-			})
-			continue
-		}
-
-		// Fall back to IPC (CLI mode)
-		if p.ipcClient == nil {
-			continue
-		}
-
-		commit := &ipc.AgentCommitPayload{
+		p.commitCallback(CommitEvent{
+			AgentID:      agentID,
 			Hash:         commitInfo.Hash,
 			ShortHash:    commitInfo.ShortHash,
 			Message:      commitInfo.Message,
@@ -866,63 +855,39 @@ func (p *Processor) sendMergedCommits(taskID string, mergeResult *merge.Result) 
 			AuthorEmail:  commitInfo.AuthorEmail,
 			Timestamp:    commitInfo.Timestamp,
 			FilesChanged: commitInfo.FilesChanged,
-		}
-
-		if err := p.ipcClient.SendAgentCommit(agentID, commit); err != nil && p.verbose {
-			fmt.Fprintf(os.Stderr, "warning: failed to send merged commit for %s: %v\n", taskID, err)
-		}
-	}
-}
-
-// sendMergeStatus sends a merge status update via IPC or callback.
-func (p *Processor) sendMergeStatus(taskID string, status ipc.MergeStatus, queuePos int, errMsg string) {
-	agentID := p.makeAgentID(taskID)
-
-	// Try callback first (daemon mode)
-	if p.mergeStatusCallback != nil {
-		p.mergeStatusCallback(MergeStatusEvent{
-			AgentID:  agentID,
-			Status:   status,
-			QueuePos: queuePos,
-			Error:    errMsg,
 		})
-		return
-	}
-
-	// Fall back to IPC (CLI mode)
-	if p.ipcClient == nil {
-		return
-	}
-	if err := p.ipcClient.SendAgentMergeStatus(agentID, status, queuePos, errMsg); err != nil && p.verbose {
-		fmt.Fprintf(os.Stderr, "warning: failed to send merge status for %s: %v\n", taskID, err)
 	}
 }
 
-// sendMergeStatusFull sends a final merge status update with full details via IPC or callback.
+// sendMergeStatus sends a merge status update via callback.
+func (p *Processor) sendMergeStatus(taskID string, status ipc.MergeStatus, queuePos int, errMsg string) {
+	if p.mergeStatusCallback == nil {
+		return
+	}
+	agentID := p.makeAgentID(taskID)
+	p.mergeStatusCallback(MergeStatusEvent{
+		AgentID:  agentID,
+		Status:   status,
+		QueuePos: queuePos,
+		Error:    errMsg,
+	})
+}
+
+// sendMergeStatusFull sends a final merge status update with full details via callback.
 // This should be used for merged/failed statuses to include commit and conflict information.
 func (p *Processor) sendMergeStatusFull(taskID string, status ipc.MergeStatus, errMsg string, commitsApplied int, hadConflict, resolverSpawned bool) {
+	if p.mergeStatusCallback == nil {
+		return
+	}
 	agentID := p.makeAgentID(taskID)
-
-	// Try callback first (daemon mode)
-	if p.mergeStatusCallback != nil {
-		p.mergeStatusCallback(MergeStatusEvent{
-			AgentID:         agentID,
-			Status:          status,
-			Error:           errMsg,
-			CommitsApplied:  commitsApplied,
-			HadConflict:     hadConflict,
-			ResolverSpawned: resolverSpawned,
-		})
-		return
-	}
-
-	// Fall back to IPC (CLI mode)
-	if p.ipcClient == nil {
-		return
-	}
-	if err := p.ipcClient.SendAgentMergeStatusFull(agentID, status, 0, errMsg, commitsApplied, hadConflict, resolverSpawned); err != nil && p.verbose {
-		fmt.Fprintf(os.Stderr, "warning: failed to send merge status for %s: %v\n", taskID, err)
-	}
+	p.mergeStatusCallback(MergeStatusEvent{
+		AgentID:         agentID,
+		Status:          status,
+		Error:           errMsg,
+		CommitsApplied:  commitsApplied,
+		HadConflict:     hadConflict,
+		ResolverSpawned: resolverSpawned,
+	})
 }
 
 // sendTaskUpdated sends a task status update via IPC if client is connected.
