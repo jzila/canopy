@@ -111,26 +111,33 @@ export function useAgentFiltering({
   }, [agentList, statusFilter, showArchived, activeRunId, selectedBeadId]);
 
   // Group agents by parent/child relationships
+  // Child agents (resolvers, repair agents) are always shown with their parent,
+  // regardless of the child's individual filter status. This ensures the agent
+  // chain timeline displays all related agents together.
   const groupedAgents = useMemo(() => {
     // Build a set of filtered agent IDs for quick lookup
     const filteredIds = new Set(filteredAgents.map((a) => a.id));
 
-    // Build a map of parent_id -> children (only for filtered children)
+    // Build a map of parent_id -> children from ALL agents (not just filtered)
+    // This ensures child agents are visible in the agent chain even if their
+    // status doesn't match the current filter (e.g., running resolver when
+    // filter is 'completed')
     const childrenByParent = new Map<string, AgentState[]>();
     const orphanedChildren: AgentState[] = [];
 
-    for (const agent of filteredAgents) {
+    for (const agent of agentList) {
       if (agent.parent_agent_id) {
         // Check if parent is in filtered set
         if (filteredIds.has(agent.parent_agent_id)) {
-          // Parent is visible, group with parent
+          // Parent is visible, group child with parent (regardless of child's filter status)
           const siblings = childrenByParent.get(agent.parent_agent_id) || [];
           siblings.push(agent);
           childrenByParent.set(agent.parent_agent_id, siblings);
-        } else {
-          // Parent is filtered out, show child as standalone
+        } else if (filteredIds.has(agent.id)) {
+          // Parent is filtered out but child passed filter, show child as standalone
           orphanedChildren.push(agent);
         }
+        // If neither parent nor child passed filter, don't show the child
       }
     }
 
@@ -149,7 +156,7 @@ export function useAgentFiltering({
     }));
 
     return [...parentGroups, ...orphanGroups];
-  }, [filteredAgents]);
+  }, [filteredAgents, agentList]);
 
   return {
     filteredAgents,
