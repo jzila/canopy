@@ -1305,15 +1305,22 @@ func (m *OrchestratorManager) buildCompletionPayload(agentID string, result *age
 
 // publishRunStarted publishes a run started event.
 func (m *OrchestratorManager) publishRunStarted(runID string, taskCount int, config RunConfig) {
+	payload := map[string]interface{}{
+		"run_id":     runID,
+		"task_count": taskCount,
+		"repo_id":    config.RepoID,
+		"repo_path":  config.WorkDir,
+	}
+
+	// Include rule overrides if present
+	if len(config.RuleOverrides) > 0 {
+		payload["rule_overrides"] = config.RuleOverrides
+	}
+
 	m.eventBus.Publish(events.Event{
 		Type:      events.EventRunStarted,
 		Timestamp: time.Now(),
-		Payload: map[string]interface{}{
-			"run_id":     runID,
-			"task_count": taskCount,
-			"repo_id":    config.RepoID,
-			"repo_path":  config.WorkDir,
-		},
+		Payload:   payload,
 	})
 }
 

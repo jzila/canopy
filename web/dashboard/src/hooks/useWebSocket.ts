@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback } from 'react';
-import { useStateStore } from '../stores/stateStore';
+import { useStateStore, type RuleOverride } from '../stores/stateStore';
 // Event types that match the Go backend (wire_events.go)
 // Backend sends: { type, timestamp, payload, sequence }
 interface WebSocketEvent {
@@ -145,6 +145,7 @@ interface RunStartedEvent {
     repo_id?: string;
     repo_path?: string;
     repo_name?: string;
+    rule_overrides?: RuleOverride[];
   };
 }
 interface RunCompletedEvent {
@@ -410,6 +411,9 @@ export function useWebSocket() {
     confirmResume,
     // Config updates
     updateRunConfigFromServer,
+    // Active run overrides
+    setActiveRunOverrides,
+    clearActiveRunOverrides,
   } = useStateStore();
 
   // Helper to check if an event is stale (occurred before the last state:sync snapshot)
@@ -792,10 +796,14 @@ export function useWebSocket() {
               break;
             }
             case 'run:started': {
-              const { run_id, task_count, repo_id, repo_path, repo_name } = message.payload;
-              console.log('[WebSocket] Run started:', run_id, 'tasks:', task_count);
+              const { run_id, task_count, repo_id, repo_path, repo_name, rule_overrides } = message.payload;
+              console.log('[WebSocket] Run started:', run_id, 'tasks:', task_count, 'rule_overrides:', rule_overrides?.length ?? 0);
               // Set the current run ID for the orchestrator
               setCurrentRunId(run_id);
+              // Set active run overrides if present
+              if (rule_overrides && rule_overrides.length > 0) {
+                setActiveRunOverrides(rule_overrides);
+              }
               addRun({
                 id: run_id,
                 started_at: message.timestamp,
@@ -824,6 +832,8 @@ export function useWebSocket() {
               console.log('[WebSocket] Run completed:', run_id, 'succeeded:', succeeded_tasks, 'failed:', failed_tasks);
               // Clear the current run ID as the run has completed
               setCurrentRunId('');
+              // Clear active run overrides as the run has ended
+              clearActiveRunOverrides();
               // Determine status based on results
               const status = failed_tasks > 0 ? 'partial' : 'completed';
               updateRun(run_id, {

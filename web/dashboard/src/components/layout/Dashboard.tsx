@@ -393,6 +393,8 @@ export const Dashboard: React.FC = () => {
         max_priority: config.max_priority,
         use_bwrap: config.use_bwrap,
         max_retries: config.max_retries,
+        // Only include rule_overrides if defined (exactOptionalPropertyTypes compliance)
+        ...(config.rule_overrides && config.rule_overrides.length > 0 && { rule_overrides: config.rule_overrides }),
       });
 
       if (response.success && response.run_id) {

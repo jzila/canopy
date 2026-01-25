@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Filter, Plus, RefreshCw, ChevronDown, AlertTriangle, Save } from 'lucide-react';
+import { Filter, Plus, RefreshCw, ChevronDown, AlertTriangle, Save, Zap, Terminal } from 'lucide-react';
 import {
   DndContext,
   closestCenter,
@@ -62,6 +62,9 @@ export const RulesPanel: React.FC<RulesPanelProps> = ({
   const storeReorderRules = useStateStore((state) => state.reorderRules);
   const repositories = useStateStore((state) => state.repositories);
   const activeRepoId = useStateStore((state) => state.activeRepoId);
+  // Active run overrides from current run
+  const activeRunOverrides = useStateStore((state) => state.activeRunOverrides);
+  const currentRunId = useStateStore((state) => state.currentRunId);
 
   // Get the active repository path
   const activeRepo = repositories.find((r) => r.id === activeRepoId);
@@ -332,6 +335,75 @@ export const RulesPanel: React.FC<RulesPanelProps> = ({
             <div className="flex items-center gap-2 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-red-700 dark:text-red-400 text-sm">
               <AlertTriangle className="w-4 h-4 flex-shrink-0" />
               <span>{loadError}</span>
+            </div>
+          )}
+
+          {/* Active Run Overrides Section */}
+          {currentRunId && activeRunOverrides.length > 0 && (
+            <div className="mb-4">
+              <div className="flex items-center gap-2 mb-2">
+                <Zap className="w-3.5 h-3.5 text-amber-500" />
+                <h3 className="text-xs font-mono text-amber-600 dark:text-amber-400 uppercase tracking-wider">
+                  Run Overrides ({activeRunOverrides.length})
+                </h3>
+              </div>
+              <div className="space-y-2">
+                {activeRunOverrides.map((override) => (
+                  <div
+                    key={override.name}
+                    className={`
+                      p-3 rounded-lg border transition-all
+                      ${override.enabled !== false
+                        ? 'bg-amber-50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-800/50'
+                        : 'bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-700 opacity-60'
+                      }
+                    `}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        {/* Name and badges */}
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-mono font-normal text-sm text-gray-900 dark:text-gray-100">
+                            {override.name}
+                          </span>
+                          <span
+                            className={`
+                              px-2 py-0.5 rounded text-xs font-mono
+                              ${override.action === 'deny'
+                                ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'
+                                : 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
+                              }
+                            `}
+                          >
+                            {override.action}
+                          </span>
+                          <span className="px-2 py-0.5 rounded text-xs font-mono bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400">
+                            run-scoped
+                          </span>
+                        </div>
+
+                        {/* Condition */}
+                        <div className="mt-2 flex items-start gap-2">
+                          <Terminal className="w-3.5 h-3.5 text-gray-400 dark:text-gray-500 mt-0.5 flex-shrink-0" />
+                          <code className="text-xs font-mono text-gray-600 dark:text-gray-400 break-all">
+                            {override.condition || '(always)'}
+                          </code>
+                        </div>
+
+                        {/* Reason if present */}
+                        {override.reason && (
+                          <div className="mt-1 text-xs text-gray-500 dark:text-gray-400 italic">
+                            {override.reason}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-2 text-xs text-gray-500 dark:text-gray-400 italic">
+                These overrides apply only to the current run and will be cleared when it ends.
+              </div>
             </div>
           )}
 

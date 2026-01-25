@@ -272,6 +272,8 @@ interface StateStore {
   rulesPersistedState: boolean; // list-level persisted flag
   isRulesLoading: boolean;
   showAddRuleDialog: boolean;
+  // Active run overrides (transient, cleared when run ends)
+  activeRunOverrides: RuleOverride[];
 
   // Optimistic update state
   pendingOperations: OptimisticOperation[];
@@ -338,6 +340,9 @@ interface StateStore {
   updateRule: (name: string, update: Partial<Rule>) => void;
   removeRule: (name: string) => void;
   reorderRules: (fromIndex: number, toIndex: number) => void;
+  // Active run overrides actions
+  setActiveRunOverrides: (overrides: RuleOverride[]) => void;
+  clearActiveRunOverrides: () => void;
 
   // Optimistic update actions
   startOptimisticRun: (tempRunId: string) => void;
@@ -466,6 +471,8 @@ export const useStateStore = create<StateStore>((set) => ({
   rulesPersistedState: false,
   isRulesLoading: false,
   showAddRuleDialog: false,
+  // Active run overrides
+  activeRunOverrides: [],
 
   // Optimistic update state
   pendingOperations: [],
@@ -829,6 +836,10 @@ export const useStateStore = create<StateStore>((set) => ({
         rulesPersistedState: false, // Reordering changes persisted state
       };
     }),
+
+  // Active run overrides actions
+  setActiveRunOverrides: (overrides) => set({ activeRunOverrides: overrides }),
+  clearActiveRunOverrides: () => set({ activeRunOverrides: [] }),
 
   // Optimistic update actions - Start Run
   startOptimisticRun: (tempRunId) =>
