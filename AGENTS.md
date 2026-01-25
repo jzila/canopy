@@ -236,6 +236,25 @@ activeCount atomic.Int64
 
 **Both patterns require:** mutex-protected state, query methods (`State()`, `IsTerminal()`), `String()` for logging.
 
+### Agent Lifecycle (`pkg/lifecycle/state.go`)
+
+**All agent state changes MUST go through `Transition()`:**
+
+```go
+// CORRECT: Let Transition() validate and fire callbacks
+err := lc.Transition(lifecycle.EventWorkComplete, ctx)
+if err != nil {
+    log.Printf("transition failed: %v", err)  // Never silently ignore
+}
+
+// WRONG: Manual guards that bypass the state machine
+if lc.State() == lifecycle.StateQueuedForMerge {
+    // Don't check state as a precondition - just call Transition()
+}
+```
+
+**`TransitionCallback` is the single point for event emission.** All `EventLifecycleStateChanged` publishing belongs there, not scattered through handler code.
+
 ## API Conventions (Go ↔ TypeScript)
 
 **JSON field names use snake_case** throughout the codebase.
