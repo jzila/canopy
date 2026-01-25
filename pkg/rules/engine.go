@@ -538,14 +538,27 @@ func (e *Engine) AddRuleWithValidation(rule config.CustomRule) error {
 
 // AddRuleWithValidationAndSource adds a rule with explicit source after validating it.
 // Returns an error if validation fails or if a rule with the same name exists.
+// Validates rule name length, condition syntax, and reason length before adding.
 func (e *Engine) AddRuleWithValidationAndSource(rule config.CustomRule, source config.RuleSource) error {
-	// Validate the rule
-	if rule.Name == "" {
-		return fmt.Errorf("rule name is required")
+	// Validate rule name (required and length limit)
+	if err := ValidateRuleName(rule.Name); err != nil {
+		return err
 	}
+
+	// Validate condition (required and syntax)
 	if rule.Condition == "" {
 		return fmt.Errorf("rule condition is required")
 	}
+	if err := ValidateConditionSyntax(rule.Condition); err != nil {
+		return fmt.Errorf("invalid condition: %w", err)
+	}
+
+	// Validate reason length if present
+	if err := ValidateReason(rule.Reason); err != nil {
+		return err
+	}
+
+	// Validate action format
 	if rule.Action == "" {
 		return fmt.Errorf("rule action is required")
 	}
