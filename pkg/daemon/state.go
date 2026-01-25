@@ -912,6 +912,20 @@ func (r *RuntimeState) Resume() {
 	r.IsPaused = false
 }
 
+// CountRunningAgents returns the number of agents currently in "running" status.
+func (r *RuntimeState) CountRunningAgents() int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	count := 0
+	for _, agent := range r.Agents {
+		if agent.Status == "running" {
+			count++
+		}
+	}
+	return count
+}
+
 // RuntimeStateSnapshot is a snapshot of RuntimeState without the mutex.
 // Used to safely return state copies without triggering copylocks warnings.
 type RuntimeStateSnapshot struct {

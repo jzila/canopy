@@ -280,6 +280,39 @@ func (m *OrchestratorManager) GetOrchestratorState(repoPath string) Orchestrator
 	return ""
 }
 
+// SetOrchestratorPaused transitions the orchestrator to paused or unpaused state.
+// When paused=true, state transitions to OrchestratorPaused.
+// When paused=false, state transitions to OrchestratorActive (or OrchestratorIdle if no agents).
+// Returns false if the repo is not registered or not in an active state.
+func (m *OrchestratorManager) SetOrchestratorPaused(repoPath string, paused bool) bool {
+	lifecycle := m.GetOrchestratorLifecycle(repoPath)
+	if lifecycle == nil {
+		return false
+	}
+
+	lifecycle.mu.Lock()
+	defer lifecycle.mu.Unlock()
+
+	// Only allow pausing/resuming when orchestrator is active, idle, or already paused
+	if lifecycle.State == OrchestratorOff {
+		return false
+	}
+
+	if paused {
+		lifecycle.State = OrchestratorPaused
+	} else {
+		// When resuming, determine state based on active agents
+		activeCount := m.countActiveAgents()
+		if activeCount > 0 {
+			lifecycle.State = OrchestratorActive
+		} else {
+			lifecycle.State = OrchestratorIdle
+		}
+	}
+
+	return true
+}
+
 // ListRegisteredRepos returns the paths of all registered repositories.
 func (m *OrchestratorManager) ListRegisteredRepos() []string {
 	var repos []string

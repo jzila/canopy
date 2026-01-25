@@ -28,6 +28,7 @@ const (
 	EventTaskUpdated      = events.EventTaskUpdated
 	EventOrchPaused            = events.EventOrchPaused
 	EventOrchResumed           = events.EventOrchResumed
+	EventOrchStateChanged      = events.EventOrchStateChanged
 	EventStatsUpdated          = events.EventStatsUpdated
 	EventRulesChanged          = events.EventRulesChanged
 	EventLifecycleStateChanged = events.EventLifecycleStateChanged
