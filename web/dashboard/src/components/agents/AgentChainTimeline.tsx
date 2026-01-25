@@ -229,8 +229,10 @@ export const AgentChainTimeline: React.FC<AgentChainTimelineProps> = ({
   });
 
   // 3. Check for resolver (child agent that resolves conflicts)
+  // Note: Both resolver and repair agents have the same task_id (the original task),
+  // so we must distinguish by agent ID: resolvers have "-resolver" suffix, repairs have "-repair" suffix
   const resolverAgents = childAgents.filter(child =>
-    child.parent_agent_id === agent.id && !child.task_id.includes('repair')
+    child.parent_agent_id === agent.id && child.id.includes('-resolver')
   );
 
   for (const resolver of resolverAgents) {
@@ -256,9 +258,11 @@ export const AgentChainTimeline: React.FC<AgentChainTimelineProps> = ({
     });
   }
 
-  // 5. Repair agents (if any) - only match agents with 'repair' in task_id
+  // 5. Repair agents (if any) - only match agents with '-repair' in agent ID
+  // Note: Both resolver and repair agents have the same task_id (the original task),
+  // so we must distinguish by agent ID: repairs have "-repair-{n}" suffix
   const repairAgents = childAgents.filter(child =>
-    child.task_id.includes('repair')
+    child.id.includes('-repair')
   ).sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
 
   let repairAttempt = 0;

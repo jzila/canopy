@@ -175,9 +175,11 @@ export const AgentCard: React.FC<AgentCardProps> = ({
   ).sort((a, b) => (a.attempt ?? 1) - (b.attempt ?? 1));
 
   // Check if there's an active resolver for this agent's task
+  // Note: Both resolver and repair agents have the same task_id (the original task),
+  // so we must distinguish by agent ID: resolvers have "-resolver" suffix
   const activeResolver = childAgents.find(
     child => (child.status === 'running' || child.status === 'starting') &&
-             !child.task_id.includes('repair')
+             child.id.includes('-resolver')
   );
   const hasActiveResolver = Boolean(activeResolver);
 

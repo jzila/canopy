@@ -23,12 +23,14 @@ export const AgentCardGroup: React.FC<AgentCardGroupProps> = ({
 
   // Separate resolver agents (conflict resolvers) from repair agents
   // Resolvers are now shown only in the AgentChainTimeline, not as stacked cards
+  // Note: Both resolver and repair agents have the same task_id (the original task),
+  // so we must distinguish by agent ID: resolvers have "-resolver" suffix, repairs have "-repair-{n}" suffix
   const resolverAgents = useMemo(() => {
-    return childAgents.filter(child => !child.task_id.includes('repair'));
+    return childAgents.filter(child => child.id.includes('-resolver'));
   }, [childAgents]);
 
   const repairAgents = useMemo(() => {
-    return childAgents.filter(child => child.task_id.includes('repair'));
+    return childAgents.filter(child => child.id.includes('-repair'));
   }, [childAgents]);
 
   // Only repair agents show as stacked cards; resolvers are hidden from card stack
