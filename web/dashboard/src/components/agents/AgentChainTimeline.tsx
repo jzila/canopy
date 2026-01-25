@@ -76,7 +76,18 @@ interface TimelineItemProps {
   children?: React.ReactNode;
   onClick?: (() => void) | undefined;
   isClickable?: boolean;
+  attempt?: number | undefined;
 }
+
+// Format status with optional attempt number: "completed" -> "Completed (2)"
+const formatStatusWithAttempt = (status: string, attempt?: number): string => {
+  // Capitalize first letter of status
+  const capitalized = status.charAt(0).toUpperCase() + status.slice(1);
+  if (attempt !== undefined && attempt >= 1) {
+    return `${capitalized} (${attempt})`;
+  }
+  return capitalized;
+};
 
 const TimelineItem: React.FC<TimelineItemProps> = ({
   icon,
@@ -88,9 +99,11 @@ const TimelineItem: React.FC<TimelineItemProps> = ({
   children,
   onClick,
   isClickable = false,
+  attempt,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const hasExpandableContent = output || children;
+  const displayStatus = formatStatusWithAttempt(status, attempt);
 
   const handleClick = () => {
     if (isClickable && onClick) {
@@ -132,7 +145,7 @@ const TimelineItem: React.FC<TimelineItemProps> = ({
                 : <ChevronRight className="w-3 h-3 text-gray-400" />
             )}
             <span className={`text-xs font-medium ${isClickable ? 'text-amber-700 dark:text-amber-300' : 'text-gray-700 dark:text-gray-300'}`}>{title}</span>
-            <span className={`text-xs ${getStatusColor(status)}`}>{status}</span>
+            <span className={`text-xs ${getStatusColor(status)}`}>{displayStatus}</span>
             {duration !== undefined && (
               <span className="text-xs text-gray-400 font-mono tabular-nums ml-auto">
                 {formatDuration(duration)}
@@ -187,7 +200,7 @@ export const AgentChainTimeline: React.FC<AgentChainTimelineProps> = ({
     const attemptNum = priorAgent.attempt ?? 1;
     items.push({
       type: 'agent',
-      title: `Worker (attempt ${attemptNum})`,
+      title: 'Worker',
       status: priorAgent.status,
       duration: priorAgent.duration * 1000,
       output: priorAgent.error || undefined,
@@ -201,11 +214,11 @@ export const AgentChainTimeline: React.FC<AgentChainTimelineProps> = ({
   const currentAttempt = agent.attempt ?? (priorAttempts.length + 1);
   items.push({
     type: 'agent',
-    title: hasRetries ? `Worker (attempt ${currentAttempt})` : 'Implementor Agent',
+    title: hasRetries ? 'Worker' : 'Implementor Agent',
     status: agent.status,
     duration: agent.duration * 1000, // Convert seconds to ms
     agentId: agent.id,
-    attempt: currentAttempt,
+    attempt: hasRetries ? currentAttempt : undefined,
   });
 
   // 3. Check for resolver (child agent that resolves conflicts)
@@ -304,6 +317,7 @@ export const AgentChainTimeline: React.FC<AgentChainTimelineProps> = ({
             isLast={index === items.length - 1}
             isClickable={Boolean(isClickable)}
             onClick={isClickable ? () => onSelectAgent(item.agentId!) : undefined}
+            attempt={item.attempt}
           >
             {/* Render validation steps if available */}
             {item.type === 'validation' && item.steps && item.steps.length > 0 && (
