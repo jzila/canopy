@@ -114,15 +114,18 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
             onSelect={onRepoSelect}
             isLoading={isRepoSwitching}
             disabled={!connected}
+            orchestratorState={orchestratorState}
+            activeAgentCount={activeAgentCount}
+            pauseState={pauseState}
+            isTransitioning={isActivating || isDeactivating}
           />
 
           {/* Separator */}
           <div className="w-px h-8 bg-gray-300 dark:bg-gray-600" />
 
-          {/* Orchestrator State Indicator */}
+          {/* Orchestrator Action Buttons */}
           <OrchestratorStateIndicator
             orchestratorState={orchestratorState}
-            activeAgentCount={activeAgentCount}
             connected={connected}
             pauseState={pauseState}
             isActivating={isActivating}

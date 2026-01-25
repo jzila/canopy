@@ -5,8 +5,6 @@ import type { OrchestratorState, PauseState } from '../../stores/stateStore';
 export interface OrchestratorStateIndicatorProps {
   /** Current orchestrator state */
   orchestratorState: OrchestratorState;
-  /** Number of currently active agents */
-  activeAgentCount: number;
   /** Whether connected to the backend */
   connected: boolean;
   /** Current pause state (for showing paused_user vs paused_agent) */
@@ -25,75 +23,12 @@ export interface OrchestratorStateIndicatorProps {
 }
 
 /**
- * Get the state indicator icon for the current orchestrator state.
- */
-function getStateIcon(state: OrchestratorState): string {
-  switch (state) {
-    case 'off':
-      return '\u25CB'; // White circle
-    case 'idle':
-      return '\u25D0'; // Circle with left half black
-    case 'active':
-      return '\u25CF'; // Black circle
-    case 'paused':
-      return '\u23F8'; // Pause symbol
-    default:
-      return '\u25CB';
-  }
-}
-
-/**
- * Get the display text for the current orchestrator state.
- */
-function getStateText(
-  state: OrchestratorState,
-  activeAgentCount: number,
-  pauseState: PauseState
-): string {
-  switch (state) {
-    case 'off':
-      return 'Off';
-    case 'idle':
-      return 'Idle (watching)';
-    case 'active':
-      return `Active (${activeAgentCount} agent${activeAgentCount !== 1 ? 's' : ''})`;
-    case 'paused':
-      if (pauseState === 'paused_agent') {
-        return 'Paused (agent)';
-      } else if (pauseState === 'paused_both') {
-        return 'Paused (user+agent)';
-      }
-      return 'Paused';
-    default:
-      return 'Unknown';
-  }
-}
-
-/**
- * Get the color classes for the state indicator.
- */
-function getStateColorClasses(state: OrchestratorState): string {
-  switch (state) {
-    case 'off':
-      return 'text-gray-400 dark:text-gray-500';
-    case 'idle':
-      return 'text-blue-500 dark:text-blue-400';
-    case 'active':
-      return 'text-green-500 dark:text-green-400';
-    case 'paused':
-      return 'text-orange-500 dark:text-orange-400';
-    default:
-      return 'text-gray-400 dark:text-gray-500';
-  }
-}
-
-/**
- * Orchestrator state indicator component that displays the current state
- * and provides controls to activate, deactivate, pause, and resume.
+ * Orchestrator action buttons component that provides controls to
+ * activate, deactivate, pause, and resume the orchestrator.
+ * The state indicator is now shown as a dot on the RepoSelector.
  */
 export const OrchestratorStateIndicator: React.FC<OrchestratorStateIndicatorProps> = ({
   orchestratorState,
-  activeAgentCount,
   connected,
   pauseState,
   isActivating,
@@ -106,17 +41,6 @@ export const OrchestratorStateIndicator: React.FC<OrchestratorStateIndicatorProp
   onResume,
   onConfigure,
 }) => {
-  // Use transitioning icon/text during activation/deactivation for visual feedback
-  const stateIcon = isActivating || isDeactivating ? '\u25D4' : getStateIcon(orchestratorState); // Half-filled circle during transitions
-  const stateText = isActivating
-    ? 'Activating...'
-    : isDeactivating
-      ? 'Deactivating...'
-      : getStateText(orchestratorState, activeAgentCount, pauseState);
-  const stateColorClasses = isActivating || isDeactivating
-    ? 'text-yellow-500 dark:text-yellow-400'
-    : getStateColorClasses(orchestratorState);
-
   const isLoading = isActivating || isDeactivating || isPauseLoading || isResumeLoading;
   const disabled = !connected || isLoading;
 
@@ -133,17 +57,7 @@ export const OrchestratorStateIndicator: React.FC<OrchestratorStateIndicatorProp
   const canResume = pauseState === 'paused_user' || pauseState === 'paused_both';
 
   return (
-    <div className="flex items-center gap-3">
-      {/* State indicator */}
-      <div className={`flex items-center gap-2 px-4 h-12 bg-gray-100 dark:bg-gray-700 rounded-lg ${stateColorClasses}`}>
-        <span className="text-lg leading-none">{stateIcon}</span>
-        <span className="text-sm font-medium tracking-wide text-gray-700 dark:text-gray-300">
-          {stateText}
-        </span>
-      </div>
-
-      {/* Action buttons */}
-      <div className="flex items-center gap-2">
+    <div className="flex items-center gap-2">
         {showActivateButton && (
           <button
             onClick={onActivate}
@@ -267,7 +181,6 @@ export const OrchestratorStateIndicator: React.FC<OrchestratorStateIndicatorProp
             )}
           </button>
         )}
-      </div>
     </div>
   );
 };

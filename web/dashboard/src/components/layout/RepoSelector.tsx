@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ChevronDown, FolderGit2, Loader2, Check } from 'lucide-react';
 import type { Repository } from '../../api/client';
+import type { OrchestratorState, PauseState } from '../../stores/stateStore';
 
 interface RepoSelectorProps {
   repositories: Repository[];
@@ -8,6 +9,66 @@ interface RepoSelectorProps {
   onSelect: (repoId: string) => void;
   isLoading?: boolean;
   disabled?: boolean;
+  /** Current orchestrator state for status dot indicator */
+  orchestratorState?: OrchestratorState;
+  /** Number of currently active agents */
+  activeAgentCount?: number;
+  /** Current pause state (for tooltip detail) */
+  pauseState?: PauseState;
+  /** Whether orchestrator is activating/deactivating */
+  isTransitioning?: boolean;
+}
+
+/**
+ * Get the dot color classes for the current orchestrator state.
+ */
+function getDotColorClasses(state: OrchestratorState | undefined, isTransitioning: boolean): string {
+  if (isTransitioning) {
+    return 'bg-yellow-500 dark:bg-yellow-400';
+  }
+  switch (state) {
+    case 'off':
+      return 'bg-gray-400 dark:bg-gray-500';
+    case 'idle':
+      return 'bg-blue-500 dark:bg-blue-400';
+    case 'active':
+      return 'bg-green-500 dark:bg-green-400';
+    case 'paused':
+      return 'bg-orange-500 dark:bg-orange-400';
+    default:
+      return 'bg-gray-400 dark:bg-gray-500';
+  }
+}
+
+/**
+ * Get the tooltip text for the orchestrator state.
+ */
+function getOrchestratorTooltip(
+  state: OrchestratorState | undefined,
+  activeAgentCount: number,
+  pauseState: PauseState | undefined,
+  isTransitioning: boolean
+): string {
+  if (isTransitioning) {
+    return 'Orchestrator: Transitioning...';
+  }
+  switch (state) {
+    case 'off':
+      return 'Orchestrator: Off';
+    case 'idle':
+      return 'Orchestrator: Idle (watching)';
+    case 'active':
+      return `Orchestrator: Active (${activeAgentCount} agent${activeAgentCount !== 1 ? 's' : ''})`;
+    case 'paused':
+      if (pauseState === 'paused_agent') {
+        return 'Orchestrator: Paused (agent)';
+      } else if (pauseState === 'paused_both') {
+        return 'Orchestrator: Paused (user+agent)';
+      }
+      return 'Orchestrator: Paused';
+    default:
+      return 'Orchestrator: Unknown';
+  }
 }
 
 export const RepoSelector: React.FC<RepoSelectorProps> = ({
@@ -16,6 +77,10 @@ export const RepoSelector: React.FC<RepoSelectorProps> = ({
   onSelect,
   isLoading = false,
   disabled = false,
+  orchestratorState,
+  activeAgentCount = 0,
+  pauseState,
+  isTransitioning = false,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -104,6 +169,13 @@ export const RepoSelector: React.FC<RepoSelectorProps> = ({
             </span>
           )}
         </div>
+        {/* Orchestrator status dot indicator */}
+        {orchestratorState !== undefined && (
+          <span
+            className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${getDotColorClasses(orchestratorState, isTransitioning)}`}
+            title={getOrchestratorTooltip(orchestratorState, activeAgentCount, pauseState, isTransitioning)}
+          />
+        )}
         <ChevronDown
           className={`w-4 h-4 text-gray-500 dark:text-gray-400 transition-transform flex-shrink-0 ${
             isOpen ? 'rotate-180' : ''
