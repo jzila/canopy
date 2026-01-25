@@ -254,13 +254,13 @@ Each card represents one agent execution.
 
 Repair attempt count shown when relevant: `(attempt 2/3)`
 
-### Worker Chain Timeline
+### Agent Chain Timeline
 
 Expandable section showing the full execution flow:
 
 ```
-▼ Worker Chain
-  ├─ Agent ────────── completed (2m 15s)
+▼ Agent Chain
+  ├─ Implementor ──── completed (2m 15s)
   ├─ Merge ────────── merged (0.3s)
   │   └─ Resolver ─── spawned (conflict in main.go)
   ├─ Validation ───── passed (15s)

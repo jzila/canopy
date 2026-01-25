@@ -44,8 +44,8 @@ export interface ValidationStep {
   output?: string;        // Output or error message
 }
 
-// WorkerChainItem represents an item in the worker chain timeline
-export interface WorkerChainItem {
+// AgentChainItem represents an item in the agent chain timeline
+export interface AgentChainItem {
   type: 'agent' | 'resolver' | 'validation' | 'repair';
   status: 'pending' | 'running' | 'success' | 'failed';
   duration_ms?: number;
@@ -124,7 +124,7 @@ export interface AgentState {
   validation_error?: string;                 // Error message if validation failed
   repair_attempts?: number;                  // Number of repair attempts made (0 = no repairs)
   last_repair_output?: string;               // Output/error from last repair attempt
-  worker_chain?: WorkerChainItem[];          // Full worker chain timeline
+  agent_chain?: AgentChainItem[];             // Full agent chain timeline
 }
 
 export interface TaskState {

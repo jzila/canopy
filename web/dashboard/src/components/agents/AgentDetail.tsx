@@ -478,7 +478,7 @@ export const AgentDetail: React.FC<AgentDetailProps> = ({ agent, onSelectAgent }
                     <Users className="w-4 h-4 text-gray-600 dark:text-gray-400" />
                   </div>
                   <div>
-                    <div className="text-sm font-medium text-gray-800 dark:text-gray-200">Parent Worker</div>
+                    <div className="text-sm font-medium text-gray-800 dark:text-gray-200">Parent Agent</div>
                     <div className="text-xs font-mono text-gray-500 dark:text-gray-400">{parentAgent.id}</div>
                   </div>
                 </div>

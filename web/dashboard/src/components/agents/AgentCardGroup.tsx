@@ -22,7 +22,7 @@ export const AgentCardGroup: React.FC<AgentCardGroupProps> = ({
   const [isExpanded, setIsExpanded] = useState(false);
 
   // Separate resolver agents (conflict resolvers) from repair agents
-  // Resolvers are now shown only in the WorkerChainTimeline, not as stacked cards
+  // Resolvers are now shown only in the AgentChainTimeline, not as stacked cards
   const resolverAgents = useMemo(() => {
     return childAgents.filter(child => !child.task_id.includes('repair'));
   }, [childAgents]);

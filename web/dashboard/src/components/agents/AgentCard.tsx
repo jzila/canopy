@@ -3,7 +3,7 @@ import { Clock, Zap, DollarSign, XCircle, GitCommit, Archive, ExternalLink, GitM
 import type { AgentState, LifecycleState } from '../../stores/stateStore';
 import { useStateStore } from '../../stores/stateStore';
 import { killAgent, archiveAgent } from '../../api/client';
-import { WorkerChainTimeline } from './WorkerChainTimeline';
+import { AgentChainTimeline } from './AgentChainTimeline';
 import { ValidationStatusBadge } from './ValidationStatusBadge';
 
 interface AgentCardProps {
@@ -157,7 +157,7 @@ export const AgentCard: React.FC<AgentCardProps> = ({
   );
   const [isKilling, setIsKilling] = useState(false);
   const [isArchiving, setIsArchiving] = useState(false);
-  const [showWorkerChain, setShowWorkerChain] = useState(false);
+  const [showAgentChain, setShowAgentChain] = useState(false);
   const setHighlightedTask = useStateStore((state) => state.setHighlightedTask);
   const tasks = useStateStore((state) => state.tasks);
   const agents = useStateStore((state) => state.agents);
@@ -236,8 +236,8 @@ export const AgentCard: React.FC<AgentCardProps> = ({
   // Check if task exists in the BeadsPane (incomplete tasks only)
   const taskExistsInBeads = Boolean(tasks[agent.task_id]);
 
-  // Check if we have worker chain data to display
-  const hasWorkerChainData = Boolean(
+  // Check if we have agent chain data to display
+  const hasAgentChainData = Boolean(
     agent.merge_status ||
     agent.validation_status ||
     agent.repair_attempts ||
@@ -380,7 +380,7 @@ export const AgentCard: React.FC<AgentCardProps> = ({
       </div>
 
       {/* Merge and validation status indicators */}
-      {hasWorkerChainData && (
+      {hasAgentChainData && (
         <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
           {/* Merge status */}
           {agent.merge_status === 'merged' || agent.merge_status === 'merged_needs_repair' ? (
@@ -425,26 +425,26 @@ export const AgentCard: React.FC<AgentCardProps> = ({
             />
           )}
 
-          {/* Worker chain toggle */}
-          {hasWorkerChainData && (
+          {/* Agent chain toggle */}
+          {hasAgentChainData && (
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                setShowWorkerChain(!showWorkerChain);
+                setShowAgentChain(!showAgentChain);
               }}
               className="flex items-center gap-1 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 ml-auto"
-              title={showWorkerChain ? 'Hide worker chain' : 'Show worker chain'}
+              title={showAgentChain ? 'Hide agent chain' : 'Show agent chain'}
             >
-              {showWorkerChain ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+              {showAgentChain ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
               <span className="tracking-wide">Details</span>
             </button>
           )}
         </div>
       )}
 
-      {/* Worker chain timeline (expandable) */}
-      {showWorkerChain && hasWorkerChainData && (
-        <WorkerChainTimeline agent={agent} childAgents={childAgents} onSelectAgent={onSelect} />
+      {/* Agent chain timeline (expandable) */}
+      {showAgentChain && hasAgentChainData && (
+        <AgentChainTimeline agent={agent} childAgents={childAgents} onSelectAgent={onSelect} />
       )}
 
       {agent.error && (

@@ -436,18 +436,18 @@ timeout = "10m"
 required = true
 ```
 
-## Worker Chains and Parent-Child Agent Relationships
+## Agent Chains and Parent-Child Agent Relationships
 
-Worker chains track the relationship between agents that work together to complete a task. When an implementor agent finishes and validation fails, child agents (resolver, repair) are spawned to fix issues.
+Agent chains track the relationship between agents that work together to complete a task. When an implementor agent finishes and validation fails, child agents (resolver, repair) are spawned to fix issues.
 
-### What is a Worker Chain?
+### What is an Agent Chain?
 
-A worker chain is the sequence of agents that work on a single task:
+An agent chain is the sequence of agents that work on a single task:
 
 ```
 ┌─────────────────┐
-│  Worker Agent   │  ← Original implementor
-│  (implementor)  │
+│ Implementor     │  ← Original implementor
+│     Agent       │
 └────────┬────────┘
          │
     ┌────┴────────────────────────────┐
@@ -517,10 +517,10 @@ The daemon tracks parent-child relationships:
 
 1. **On agent_start**: If `parent_agent_id` is present, add child to parent's `child_agent_ids` list
 2. **On restore**: `RebuildAgentChildLinks()` reconstructs relationships from `parent_agent_id` fields
-3. **In the dashboard**: `WorkerChainTimeline` component queries all agents, filtering by `parent_agent_id`
+3. **In the dashboard**: `AgentChainTimeline` component queries all agents, filtering by `parent_agent_id`
 
 ```typescript
-// From WorkerChainTimeline.tsx
+// From AgentChainTimeline.tsx
 const resolverAgents = childAgents.filter(child =>
   child.parent_agent_id === agent.id && !child.task_id.includes('repair')
 );
@@ -532,10 +532,10 @@ const repairAgents = childAgents.filter(child =>
 
 ### Timeline Visualization
 
-The dashboard's `WorkerChainTimeline` component renders the worker chain as a vertical timeline:
+The dashboard's `AgentChainTimeline` component renders the agent chain as a vertical timeline:
 
 ```
-● Worker Agent          completed    2m 15s
+● Implementor Agent     completed    2m 15s
 │
 ├─● Conflict Resolver   resolved     45s
 │

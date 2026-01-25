@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { ChevronDown, ChevronRight, Check, X, Clock, Loader2, Wrench, GitMerge, Play } from 'lucide-react';
 import type { AgentState, ValidationStep } from '../../stores/stateStore';
 
-interface WorkerChainTimelineProps {
+interface AgentChainTimelineProps {
   agent: AgentState;
   childAgents?: AgentState[];
   onSelectAgent?: (agentId: string) => void;
@@ -158,12 +158,12 @@ const TimelineItem: React.FC<TimelineItemProps> = ({
   );
 };
 
-export const WorkerChainTimeline: React.FC<WorkerChainTimelineProps> = ({
+export const AgentChainTimeline: React.FC<AgentChainTimelineProps> = ({
   agent,
   childAgents = [],
   onSelectAgent,
 }) => {
-  // Build the worker chain from agent state
+  // Build the agent chain from agent state
   const items: Array<{
     type: 'agent' | 'resolver' | 'validation' | 'repair';
     title: string;
@@ -175,10 +175,10 @@ export const WorkerChainTimeline: React.FC<WorkerChainTimelineProps> = ({
     agentId?: string | undefined;
   }> = [];
 
-  // 1. Original worker agent
+  // 1. Original implementor agent
   items.push({
     type: 'agent',
-    title: 'Worker Agent',
+    title: 'Implementor Agent',
     status: agent.status,
     duration: agent.duration * 1000, // Convert seconds to ms
   });
@@ -243,7 +243,7 @@ export const WorkerChainTimeline: React.FC<WorkerChainTimelineProps> = ({
   // The repair_attempts field on the parent agent is for tracking purposes,
   // but we don't create phantom repair items from it.
 
-  // Don't render if there's just the worker agent with no special status
+  // Don't render if there's just the implementor agent with no special status
   if (items.length === 1 && !agent.merge_status && !agent.validation_status) {
     return null;
   }
@@ -252,7 +252,7 @@ export const WorkerChainTimeline: React.FC<WorkerChainTimelineProps> = ({
     <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
       <div className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2 flex items-center gap-1.5">
         <Play className="w-3 h-3" />
-        Worker Chain
+        Agent Chain
       </div>
       <div className="ml-1">
         {items.map((item, index) => {
@@ -299,4 +299,4 @@ export const WorkerChainTimeline: React.FC<WorkerChainTimelineProps> = ({
   );
 };
 
-export default WorkerChainTimeline;
+export default AgentChainTimeline;
