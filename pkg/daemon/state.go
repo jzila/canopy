@@ -494,6 +494,8 @@ func (a *AgentState) Update(fn func(*AgentState)) {
 
 // GetSnapshot returns a copy of the agent state (thread-safe)
 // Note: This returns a copy without the mutex to avoid copylocks issues.
+// Status, MergeStatus, and ValidationStatus are derived from the Lifecycle
+// state machine if available, ensuring a single source of truth.
 func (a *AgentState) GetSnapshot() AgentState {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -501,11 +503,20 @@ func (a *AgentState) GetSnapshot() AgentState {
 	// Get output buffer values safely
 	stdout, stderr := a.Output.Get()
 
-	// Derive lifecycle state from the state machine if available
+	// Derive all status fields from the lifecycle state machine if available.
+	// This ensures the lifecycle state machine is the single source of truth.
 	var lifecycleState string
 	var lifecycleHistory []LifecycleHistoryEntry
+	var status AgentStatus
+	var mergeStatus MergeStatus
+	var validationStatus string
+
 	if a.Lifecycle != nil {
 		lifecycleState = a.Lifecycle.State().String()
+		// Derive legacy status fields from lifecycle state machine
+		status = AgentStatus(a.Lifecycle.LegacyStatus())
+		mergeStatus = MergeStatus(a.Lifecycle.LegacyMergeStatus())
+		validationStatus = a.Lifecycle.LegacyValidationStatus()
 		// Copy history entries
 		for _, h := range a.Lifecycle.History() {
 			lifecycleHistory = append(lifecycleHistory, LifecycleHistoryEntry{
@@ -515,6 +526,13 @@ func (a *AgentState) GetSnapshot() AgentState {
 				Timestamp: h.Timestamp.Format(time.RFC3339),
 			})
 		}
+	} else {
+		// Fallback to stored fields if lifecycle state machine not available
+		// (e.g., for historical data loaded from persistence)
+		status = a.Status
+		mergeStatus = a.MergeStatus
+		validationStatus = a.ValidationStatus
+		lifecycleState = a.LifecycleState
 	}
 
 	// Copy all fields except mutexes
@@ -527,8 +545,8 @@ func (a *AgentState) GetSnapshot() AgentState {
 		RepoID:             a.RepoID,
 		ParentAgentID:      a.ParentAgentID,
 		ChildAgentIDs:      append([]string(nil), a.ChildAgentIDs...),
-		Status:             a.Status,
-		MergeStatus:        a.MergeStatus,
+		Status:             status,
+		MergeStatus:        mergeStatus,
 		LifecycleState:     lifecycleState,
 		LifecycleHistory:   lifecycleHistory,
 		MergeQueuePos:      a.MergeQueuePos,
@@ -551,7 +569,7 @@ func (a *AgentState) GetSnapshot() AgentState {
 		Archived:           a.Archived,
 		RepairAttempts:     a.RepairAttempts,
 		LastRepairOutput:   a.LastRepairOutput,
-		ValidationStatus:   a.ValidationStatus,
+		ValidationStatus:   validationStatus,
 		ValidationSteps:    append([]ValidationStep(nil), a.ValidationSteps...),
 		ValidationDuration: a.ValidationDuration,
 		ValidationError:    a.ValidationError,
@@ -854,7 +872,15 @@ func (r *RuntimeState) UpdateStats() {
 	for _, agent := range r.Agents {
 		agent.mu.RLock()
 
-		switch agent.Status {
+		// Derive status from lifecycle state machine if available
+		var status AgentStatus
+		if agent.Lifecycle != nil {
+			status = AgentStatus(agent.Lifecycle.LegacyStatus())
+		} else {
+			status = agent.Status
+		}
+
+		switch status {
 		case AgentStatusCompleted:
 			stats.CompletedTasks++
 			completedCount++
@@ -913,13 +939,21 @@ func (r *RuntimeState) Resume() {
 }
 
 // CountRunningAgents returns the number of agents currently in "running" status.
+// Uses the lifecycle state machine as the source of truth if available.
 func (r *RuntimeState) CountRunningAgents() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	count := 0
 	for _, agent := range r.Agents {
-		if agent.Status == "running" {
+		// Check lifecycle state if available, otherwise fall back to Status field
+		if agent.Lifecycle != nil {
+			state := agent.Lifecycle.State()
+			// Running includes: running, queued_for_merge, merging, resolving, validating, repairing
+			if !state.IsTerminal() && state != lifecycle.StateStarting {
+				count++
+			}
+		} else if agent.Status == AgentStatusRunning {
 			count++
 		}
 	}
@@ -1159,91 +1193,6 @@ func (s *RuntimeStateSnapshot) recalculateStats() {
 	s.Stats = stats
 }
 
-// expectedLifecycleState returns the lifecycle state that corresponds to the legacy
-// Status and MergeStatus fields. Used to detect divergence during parallel rollout.
-func expectedLifecycleState(status AgentStatus, mergeStatus MergeStatus, validationStatus string) lifecycle.AgentLifecycleState {
-	// First check validation status if merge is complete
-	if mergeStatus == MergeStatusMerged || mergeStatus == MergeStatusResolved {
-		switch validationStatus {
-		case "running":
-			return lifecycle.StateValidating
-		case "repairing":
-			return lifecycle.StateRepairing
-		case "failed":
-			return lifecycle.StateNeedsAttention
-		case "passed", "skipped", "":
-			// Fall through to check agent status
-		}
-	}
-
-	// Check merge status
-	switch mergeStatus {
-	case MergeStatusPending:
-		return lifecycle.StateQueuedForMerge
-	case MergeStatusAcquiring, MergeStatusMerging:
-		return lifecycle.StateMerging
-	case MergeStatusResolving:
-		return lifecycle.StateResolving
-	case MergeStatusFailed:
-		return lifecycle.StateMergeFailed
-	}
-
-	// Check agent status
-	switch status {
-	case AgentStatusStarting:
-		return lifecycle.StateStarting
-	case AgentStatusRunning:
-		// If we have a merge status indicating queue, use that
-		if mergeStatus == MergeStatusPending {
-			return lifecycle.StateQueuedForMerge
-		}
-		return lifecycle.StateRunning
-	case AgentStatusCompleted:
-		return lifecycle.StateCompleted
-	case AgentStatusFailed:
-		return lifecycle.StateFailed
-	case AgentStatusCancelled:
-		return lifecycle.StateCancelled
-	case AgentStatusTimedOut:
-		return lifecycle.StateTimedOut
-	}
-
-	// Default to running if we can't determine
-	return lifecycle.StateRunning
-}
-
-// checkLifecycleDivergence compares the lifecycle state machine state against the
-// legacy status fields and logs a warning + records a metric if they diverge.
-// This is used during the parallel rollout phase to detect inconsistencies.
-func checkLifecycleDivergence(agent *AgentState, event string) {
-	if agent == nil || agent.Lifecycle == nil {
-		return
-	}
-
-	// Read legacy fields under lock
-	agent.mu.RLock()
-	legacyStatus := agent.Status
-	mergeStatus := agent.MergeStatus
-	validationStatus := agent.ValidationStatus
-	agentID := agent.ID
-	agent.mu.RUnlock()
-
-	lifecycleState := agent.Lifecycle.State()
-	expected := expectedLifecycleState(legacyStatus, mergeStatus, validationStatus)
-
-	if lifecycleState != expected {
-		logging.Warn("lifecycle state divergence detected",
-			"agent_id", agentID,
-			"event", event,
-			"legacy_status", string(legacyStatus),
-			"merge_status", string(mergeStatus),
-			"validation_status", validationStatus,
-			"lifecycle_state", lifecycleState.String(),
-			"expected_lifecycle_state", expected.String(),
-		)
-		metrics.RecordLifecycleDivergence(string(legacyStatus), lifecycleState.String(), event)
-	}
-}
 
 // makeLifecycleCallback creates a callback that publishes lifecycle state transitions
 // to the EventBus for real-time UI updates. All lifecycle state changes are published
@@ -1413,9 +1362,6 @@ func (r *RuntimeState) handleAgentStarted(payload map[string]interface{}, timest
 			"error", err,
 		)
 	}
-
-	// Check for divergence between legacy and lifecycle state
-	checkLifecycleDivergence(agent, "agent_started")
 
 	// Link child to parent agent if parent exists
 	if parentAgentID != "" {
@@ -1673,13 +1619,10 @@ func (r *RuntimeState) handleAgentMergeStatus(payload map[string]interface{}) {
 		}
 	})
 
-	// Update lifecycle state machine (parallel with legacy fields)
+	// Update lifecycle state machine
 	if agent.Lifecycle != nil {
 		transitionLifecycleForMergeStatus(agent, mergeStatus, hadConflict, validationStatus, repairAttempts)
 	}
-
-	// Check for divergence after all updates
-	checkLifecycleDivergence(agent, "merge_status_"+mergeStatus)
 
 	// Update task status for terminal merge states
 	if taskID != "" {
@@ -2034,16 +1977,25 @@ func (r *RuntimeState) handleAgentCompleted(payload map[string]interface{}, time
 		transitionLifecycleForCompletion(agent, payload)
 	}
 
-	// Check for divergence after all updates
-	checkLifecycleDivergence(agent, "agent_completed")
-
-	// Update task status
+	// Update task status based on lifecycle state (source of truth) or legacy status
 	if agent.TaskID != "" {
-		status := "completed"
-		if agent.Status == AgentStatusFailed {
-			status = "failed"
+		var taskStatus string
+		if agent.Lifecycle != nil {
+			status := AgentStatus(agent.Lifecycle.LegacyStatus())
+			if status == AgentStatusFailed {
+				taskStatus = "failed"
+			} else {
+				taskStatus = "completed"
+			}
+		} else {
+			// Fall back to legacy field for agents without lifecycle
+			if agent.Status == AgentStatusFailed {
+				taskStatus = "failed"
+			} else {
+				taskStatus = "completed"
+			}
 		}
-		r.UpdateTaskStatus(agent.TaskID, status, agentID)
+		r.UpdateTaskStatus(agent.TaskID, taskStatus, agentID)
 	}
 
 	r.UpdateStats()

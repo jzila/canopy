@@ -388,6 +388,38 @@ const initialStats: Stats = {
   all_git_commits: [],
 };
 
+// Helper function to derive AgentStatus from LifecycleState
+// Mirrors the Go backend's LegacyStatusFromState function
+function getEffectiveStatus(agent: AgentState): AgentStatus {
+  if (agent.lifecycle_state) {
+    switch (agent.lifecycle_state) {
+      case 'starting':
+        return 'starting';
+      case 'running':
+      case 'queued_for_merge':
+      case 'merging':
+      case 'resolving':
+      case 'validating':
+      case 'repairing':
+        return 'running';
+      case 'completed':
+        return 'completed';
+      case 'failed':
+      case 'merge_failed':
+      case 'needs_attention':
+        return 'failed';
+      case 'cancelled':
+        return 'cancelled';
+      case 'timed_out':
+        return 'timed_out';
+      default:
+        return 'running';
+    }
+  }
+  // Fall back to status field for backwards compatibility
+  return agent.status;
+}
+
 // Helper function to recalculate stats from agents
 function recalculateStats(agents: Record<string, AgentState>): Stats {
   const stats: Stats = { ...initialStats, all_git_commits: [] };
@@ -395,7 +427,9 @@ function recalculateStats(agents: Record<string, AgentState>): Stats {
   let completedCount = 0;
 
   for (const agent of Object.values(agents)) {
-    switch (agent.status) {
+    // Use lifecycle_state as source of truth, falling back to status
+    const effectiveStatus = getEffectiveStatus(agent);
+    switch (effectiveStatus) {
       case 'completed':
         stats.completed_tasks++;
         completedCount++;

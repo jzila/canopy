@@ -54,6 +54,8 @@ func (h *PersistenceHandler) handleEvent(event Event) {
 		h.handleRunCompleted(event)
 	case EventTaskUpdated:
 		h.handleTaskUpdated(event)
+	case EventLifecycleStateChanged:
+		h.handleLifecycleStateChanged(event)
 	}
 }
 
@@ -550,6 +552,43 @@ func (h *PersistenceHandler) handleTaskUpdated(event Event) {
 		logging.Debug("persisted task",
 			"task_id", taskID,
 			"status", status,
+			"component", "persistence")
+	}
+}
+
+// handleLifecycleStateChanged persists lifecycle state transitions to the store.
+// This ensures lifecycle_state is the primary source of truth in persistence.
+func (h *PersistenceHandler) handleLifecycleStateChanged(event Event) {
+	payload, ok := event.Payload.(map[string]interface{})
+	if !ok {
+		logging.Warn("invalid lifecycle state changed payload type", "component", "persistence")
+		return
+	}
+
+	agentID, _ := payload["agent_id"].(string)
+	if agentID == "" {
+		logging.Warn("missing agent_id in lifecycle state changed event", "component", "persistence")
+		return
+	}
+
+	lifecycleState, _ := payload["lifecycle_state"].(string)
+	if lifecycleState == "" {
+		logging.Warn("missing lifecycle_state in lifecycle state changed event",
+			"agent_id", agentID,
+			"component", "persistence")
+		return
+	}
+
+	if err := h.store.UpdateAgentLifecycleState(agentID, lifecycleState); err != nil {
+		logging.Error("failed to update agent lifecycle state",
+			"agent_id", agentID,
+			"lifecycle_state", lifecycleState,
+			"error", err,
+			"component", "persistence")
+	} else {
+		logging.Debug("persisted lifecycle state",
+			"agent_id", agentID,
+			"lifecycle_state", lifecycleState,
 			"component", "persistence")
 	}
 }
