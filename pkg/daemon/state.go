@@ -789,6 +789,16 @@ func (r *RuntimeState) ClearTasksForRepo(repoID string) {
 	}
 }
 
+// RemoveTask removes a task from all task maps (persistent, runtime, and legacy).
+// This is used during garbage collection when a task no longer exists in beads.
+func (r *RuntimeState) RemoveTask(taskID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.Tasks, taskID)
+	delete(r.persistentTasks, taskID)
+	delete(r.runtimeTasks, taskID)
+}
+
 // UpdateTaskStatus updates the status of a task.
 // This updates both the legacy Tasks map and the runtime overlay.
 func (r *RuntimeState) UpdateTaskStatus(taskID, status, agentID string) {

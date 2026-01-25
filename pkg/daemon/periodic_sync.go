@@ -197,7 +197,11 @@ func (m *PeriodicSyncManager) syncRepo(ctx context.Context, repoID string) error
 		existingByID[t.ID] = struct{}{}
 	}
 
+	// Build set of current beads task IDs (source of truth)
+	beadsTaskIDs := make(map[string]struct{}, len(tasks))
 	for i := range tasks {
+		beadsTaskIDs[tasks[i].ID] = struct{}{}
+
 		// Check if task is new or changed
 		if _, exists := existingByID[tasks[i].ID]; !exists {
 			changed = true
@@ -219,6 +223,19 @@ func (m *PeriodicSyncManager) syncRepo(ctx context.Context, repoID string) error
 					"task_id", tasks[i].ID,
 					"error", err)
 			}
+		}
+	}
+
+	// Garbage collect: remove tasks from RuntimeState that no longer exist in beads.
+	// Beads is the source of truth - if a task is closed/deleted via 'bd close',
+	// it should be removed from canopy's in-memory state.
+	for taskID := range existingByID {
+		if _, exists := beadsTaskIDs[taskID]; !exists {
+			state.RemoveTask(taskID)
+			changed = true
+			logging.Debug("periodic sync: removed stale task",
+				"task_id", taskID,
+				"repo_id", repoID)
 		}
 	}
 
