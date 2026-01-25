@@ -113,6 +113,34 @@ interface ValidationStep {
   duration_ms: number;
   output?: string;
 }
+
+// Maps lifecycle state to legacy AgentStatus, mirroring Go backend's LegacyStatusFromState (lifecycle/legacy.go)
+type AgentStatus = 'starting' | 'running' | 'completed' | 'failed' | 'timed_out' | 'cancelled';
+function lifecycleStateToStatus(state: LifecycleState): AgentStatus {
+  switch (state) {
+    case 'starting':
+      return 'starting';
+    case 'running':
+    case 'queued_for_merge':
+    case 'merging':
+    case 'resolving':
+    case 'validating':
+    case 'repairing':
+      return 'running';
+    case 'completed':
+      return 'completed';
+    case 'failed':
+    case 'merge_failed':
+    case 'needs_attention':
+      return 'failed';
+    case 'cancelled':
+      return 'cancelled';
+    case 'timed_out':
+      return 'timed_out';
+    default:
+      return 'running';
+  }
+}
 interface AgentMergeStatusEvent {
   type: 'agent:merge_status';
   timestamp: string;
@@ -865,9 +893,13 @@ export function useWebSocket() {
             case 'lifecycle:state_changed': {
               const { agent_id, lifecycle_state, previous_state } = message.payload;
               console.log('[WebSocket] Lifecycle state changed:', agent_id, previous_state, '->', lifecycle_state);
-              // Update the agent's lifecycle_state for real-time UI updates
+              // Update the agent's lifecycle_state and derive status for real-time UI updates
+              // Status is derived from lifecycle_state using the same logic as Go backend's LegacyStatusFromState
+              const typedLifecycleState = lifecycle_state as LifecycleState;
+              const derivedStatus = lifecycleStateToStatus(typedLifecycleState);
               updateAgent(agent_id, {
-                lifecycle_state: lifecycle_state as import('../stores/stateStore').LifecycleState,
+                lifecycle_state: typedLifecycleState as import('../stores/stateStore').LifecycleState,
+                status: derivedStatus as import('../stores/stateStore').AgentStatus,
               });
               break;
             }
