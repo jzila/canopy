@@ -214,7 +214,7 @@ export const AgentChainTimeline: React.FC<AgentChainTimelineProps> = ({
   const currentAttempt = agent.attempt ?? (priorAttempts.length + 1);
   items.push({
     type: 'agent',
-    title: hasRetries ? 'Worker' : 'Implementor Agent',
+    title: hasRetries ? 'Worker' : 'Implementor',
     status: agent.status,
     duration: agent.duration * 1000, // Convert seconds to ms
     agentId: agent.id,
@@ -229,7 +229,7 @@ export const AgentChainTimeline: React.FC<AgentChainTimelineProps> = ({
   for (const resolver of resolverAgents) {
     items.push({
       type: 'resolver',
-      title: 'Conflict Resolver',
+      title: 'Resolver',
       status: resolver.status === 'completed' ? 'resolved' : resolver.status,
       duration: resolver.duration * 1000,
       output: resolver.error || undefined,
@@ -259,7 +259,7 @@ export const AgentChainTimeline: React.FC<AgentChainTimelineProps> = ({
     repairAttempt++;
     items.push({
       type: 'repair',
-      title: `Repair Agent #${repairAttempt}`,
+      title: `Repair #${repairAttempt}`,
       status: repair.status === 'completed' ? 'fixed' : repair.status,
       duration: repair.duration * 1000,
       output: repair.error || agent.last_repair_output,
