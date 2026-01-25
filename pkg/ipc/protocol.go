@@ -176,16 +176,23 @@ type AgentLiveFeedPayload struct {
 	Data      map[string]interface{} `json:"data"`
 }
 
+// MaxPatchSize is the maximum size of the patch/diff field in AgentCommitPayload.
+// Set conservatively below MaxPayloadSize to leave room for other fields.
+// Diffs exceeding this will be truncated with a note.
+const MaxPatchSize = 400 << 10 // 400KB
+
 // AgentCommitPayload is sent when an agent creates a git commit
 type AgentCommitPayload struct {
 	AgentID      string   `json:"agent_id"`
-	Hash         string   `json:"hash"`           // Full commit hash
-	ShortHash    string   `json:"short_hash"`     // Short (7-char) commit hash
-	Message      string   `json:"message"`        // Commit message (first line)
-	Author       string   `json:"author"`         // Author name
-	AuthorEmail  string   `json:"author_email"`   // Author email
-	Timestamp    string   `json:"timestamp"`      // ISO 8601 timestamp
-	FilesChanged []string `json:"files_changed"`  // List of files modified in this commit
+	Hash         string   `json:"hash"`                    // Full commit hash
+	ShortHash    string   `json:"short_hash"`              // Short (7-char) commit hash
+	Message      string   `json:"message"`                 // Commit message (first line)
+	Author       string   `json:"author"`                  // Author name
+	AuthorEmail  string   `json:"author_email"`            // Author email
+	Timestamp    string   `json:"timestamp"`               // ISO 8601 timestamp
+	FilesChanged []string `json:"files_changed"`           // List of files modified in this commit
+	Patch        string   `json:"patch,omitempty"`         // Git diff/patch for this commit (may be truncated if large)
+	Truncated    bool     `json:"truncated,omitempty"`     // True if Patch was truncated due to size limits
 }
 
 // MergeStatus is an alias to types.MergeStatus for backwards compatibility.
