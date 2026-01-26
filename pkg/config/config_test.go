@@ -339,16 +339,16 @@ func TestRulesSettingsValidateConcurrency(t *testing.T) {
 		expectError bool
 	}{
 		{
-			name: "valid max_concurrent",
+			name: "valid max_concurrent_tasks",
 			rules: RulesSettings{
-				MaxConcurrent: 4,
+				MaxConcurrentTasks: 4,
 			},
 			expectError: false,
 		},
 		{
-			name: "negative max_concurrent",
+			name: "negative max_concurrent_tasks",
 			rules: RulesSettings{
-				MaxConcurrent: -1,
+				MaxConcurrentTasks: -1,
 			},
 			expectError: true,
 		},
@@ -480,7 +480,7 @@ labels = ["frontend"]
 exclude_labels = ["wip"]
 assignee = "*"
 stop_when_empty = false
-max_concurrent = 4
+max_concurrent_tasks = 4
 `
 	configPath := filepath.Join(configDir, "config.toml")
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
@@ -513,8 +513,8 @@ max_concurrent = 4
 	if cfg.Rules.Assignee != "*" {
 		t.Errorf("expected assignee '*', got %q", cfg.Rules.Assignee)
 	}
-	if cfg.Rules.MaxConcurrent != 4 {
-		t.Errorf("expected max_concurrent 4, got %d", cfg.Rules.MaxConcurrent)
+	if cfg.Rules.MaxConcurrentTasks != 4 {
+		t.Errorf("expected max_concurrent_tasks 4, got %d", cfg.Rules.MaxConcurrentTasks)
 	}
 }
 

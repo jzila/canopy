@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback } from 'react';
-import { useStateStore } from '../stores/stateStore';
+import { useStateStore, type RuleOverride } from '../stores/stateStore';
 // Event types that match the Go backend (wire_events.go)
 // Backend sends: { type, timestamp, payload, sequence }
 interface WebSocketEvent {
@@ -66,6 +66,7 @@ interface AgentCommitEvent {
     author_email: string;
     timestamp: string;
     files_changed: string[];
+    patch?: string;
   };
 }
 interface AgentCompletedEvent {
@@ -112,6 +113,34 @@ interface ValidationStep {
   duration_ms: number;
   output?: string;
 }
+
+// Maps lifecycle state to legacy AgentStatus, mirroring Go backend's LegacyStatusFromState (lifecycle/legacy.go)
+type AgentStatus = 'starting' | 'running' | 'completed' | 'failed' | 'timed_out' | 'cancelled';
+function lifecycleStateToStatus(state: LifecycleState): AgentStatus {
+  switch (state) {
+    case 'starting':
+      return 'starting';
+    case 'running':
+    case 'queued_for_merge':
+    case 'merging':
+    case 'resolving':
+    case 'validating':
+    case 'repairing':
+      return 'running';
+    case 'completed':
+      return 'completed';
+    case 'failed':
+    case 'merge_failed':
+    case 'needs_attention':
+      return 'failed';
+    case 'cancelled':
+      return 'cancelled';
+    case 'timed_out':
+      return 'timed_out';
+    default:
+      return 'running';
+  }
+}
 interface AgentMergeStatusEvent {
   type: 'agent:merge_status';
   timestamp: string;
@@ -145,6 +174,7 @@ interface RunStartedEvent {
     repo_id?: string;
     repo_path?: string;
     repo_name?: string;
+    rule_overrides?: RuleOverride[];
   };
 }
 interface RunCompletedEvent {
@@ -212,6 +242,7 @@ interface BackendGitCommit {
   author_email: string;
   timestamp: string;
   files_changed: string[];
+  patch?: string;
 }
 // Backend RuntimeState format (snake_case)
 interface BackendAgentState {
@@ -410,6 +441,9 @@ export function useWebSocket() {
     confirmResume,
     // Config updates
     updateRunConfigFromServer,
+    // Active run overrides
+    setActiveRunOverrides,
+    clearActiveRunOverrides,
   } = useStateStore();
 
   // Helper to check if an event is stale (occurred before the last state:sync snapshot)
@@ -681,7 +715,7 @@ export function useWebSocket() {
               break;
             }
             case 'agent:commit': {
-              const { agent_id, hash, short_hash, message: commitMessage, author, author_email, timestamp, files_changed } = message.payload;
+              const { agent_id, hash, short_hash, message: commitMessage, author, author_email, timestamp, files_changed, patch } = message.payload;
               console.log('[WebSocket] Agent commit:', agent_id, short_hash, commitMessage);
               appendGitCommit(agent_id, {
                 hash,
@@ -691,13 +725,18 @@ export function useWebSocket() {
                 author_email,
                 timestamp,
                 files_changed: files_changed || [],
+                ...(patch && { patch }),
               });
               break;
             }
             case 'agent:completed': {
               const { agent_id, error, exit_code, duration, input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, cost_usd, files_changed, commits_created } = message.payload;
+              // Determine status and corresponding lifecycle state
+              const status = error ? 'failed' : 'completed';
+              const lifecycle_state = status as import('../stores/stateStore').LifecycleState;
               updateAgent(agent_id, {
-                status: error ? 'failed' : 'completed',
+                status,
+                lifecycle_state,  // Also update lifecycle_state for consistency
                 end_time: message.timestamp,
                 duration,
                 exit_code,
@@ -788,10 +827,14 @@ export function useWebSocket() {
               break;
             }
             case 'run:started': {
-              const { run_id, task_count, repo_id, repo_path, repo_name } = message.payload;
-              console.log('[WebSocket] Run started:', run_id, 'tasks:', task_count);
+              const { run_id, task_count, repo_id, repo_path, repo_name, rule_overrides } = message.payload;
+              console.log('[WebSocket] Run started:', run_id, 'tasks:', task_count, 'rule_overrides:', rule_overrides?.length ?? 0);
               // Set the current run ID for the orchestrator
               setCurrentRunId(run_id);
+              // Set active run overrides if present
+              if (rule_overrides && rule_overrides.length > 0) {
+                setActiveRunOverrides(rule_overrides);
+              }
               addRun({
                 id: run_id,
                 started_at: message.timestamp,
@@ -820,6 +863,8 @@ export function useWebSocket() {
               console.log('[WebSocket] Run completed:', run_id, 'succeeded:', succeeded_tasks, 'failed:', failed_tasks);
               // Clear the current run ID as the run has completed
               setCurrentRunId('');
+              // Clear active run overrides as the run has ended
+              clearActiveRunOverrides();
               // Determine status based on results
               const status = failed_tasks > 0 ? 'partial' : 'completed';
               updateRun(run_id, {
@@ -848,9 +893,13 @@ export function useWebSocket() {
             case 'lifecycle:state_changed': {
               const { agent_id, lifecycle_state, previous_state } = message.payload;
               console.log('[WebSocket] Lifecycle state changed:', agent_id, previous_state, '->', lifecycle_state);
-              // Update the agent's lifecycle_state for real-time UI updates
+              // Update the agent's lifecycle_state and derive status for real-time UI updates
+              // Status is derived from lifecycle_state using the same logic as Go backend's LegacyStatusFromState
+              const typedLifecycleState = lifecycle_state as LifecycleState;
+              const derivedStatus = lifecycleStateToStatus(typedLifecycleState);
               updateAgent(agent_id, {
-                lifecycle_state: lifecycle_state as import('../stores/stateStore').LifecycleState,
+                lifecycle_state: typedLifecycleState as import('../stores/stateStore').LifecycleState,
+                status: derivedStatus as import('../stores/stateStore').AgentStatus,
               });
               break;
             }
@@ -891,7 +940,7 @@ export function useWebSocket() {
         }, backoffTime);
       }
     }
-  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, appendGitCommit, syncState, setPauseState, setActiveRepo, updateAgentMergeStatus, addRun, updateRun, clearOutput, setCurrentRunId, setOrchestratorState, confirmPause, confirmResume, isStaleEvent, updateRunConfigFromServer]);
+  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, appendGitCommit, syncState, setPauseState, setActiveRepo, updateAgentMergeStatus, addRun, updateRun, clearOutput, setCurrentRunId, setOrchestratorState, confirmPause, confirmResume, isStaleEvent, updateRunConfigFromServer, setActiveRunOverrides, clearActiveRunOverrides]);
   const disconnect = useCallback(() => {
     isManuallyClosedRef.current = true;
     if (reconnectTimeoutRef.current !== null) {

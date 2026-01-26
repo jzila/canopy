@@ -322,29 +322,6 @@ export const RunConfigDialog: React.FC<RunConfigDialogProps> = ({
             </p>
           </div>
 
-          {/* Max Priority */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-              Max Priority (P0-P4)
-            </label>
-            <div className="flex items-center gap-3">
-              <input
-                type="range"
-                min="0"
-                max="4"
-                value={config.max_priority}
-                onChange={(e) => setConfig({ ...config, max_priority: Number(e.target.value) })}
-                className="flex-1 h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer"
-              />
-              <span className="w-8 text-center font-mono text-sm text-gray-900 dark:text-gray-100">
-                P{config.max_priority}
-              </span>
-            </div>
-            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              Only process tasks up to this priority level
-            </p>
-          </div>
-
           {/* Max Retries */}
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">

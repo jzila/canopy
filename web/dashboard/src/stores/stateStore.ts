@@ -44,8 +44,8 @@ export interface ValidationStep {
   output?: string;        // Output or error message
 }
 
-// WorkerChainItem represents an item in the worker chain timeline
-export interface WorkerChainItem {
+// AgentChainItem represents an item in the agent chain timeline
+export interface AgentChainItem {
   type: 'agent' | 'resolver' | 'validation' | 'repair';
   status: 'pending' | 'running' | 'success' | 'failed';
   duration_ms?: number;
@@ -82,6 +82,7 @@ export interface GitCommit {
   author_email: string;
   timestamp: string;
   files_changed: string[];
+  patch?: string;
 }
 
 export interface AgentState {
@@ -124,7 +125,7 @@ export interface AgentState {
   validation_error?: string;                 // Error message if validation failed
   repair_attempts?: number;                  // Number of repair attempts made (0 = no repairs)
   last_repair_output?: string;               // Output/error from last repair attempt
-  worker_chain?: WorkerChainItem[];          // Full worker chain timeline
+  agent_chain?: AgentChainItem[];             // Full agent chain timeline
 }
 
 export interface TaskState {
@@ -272,6 +273,8 @@ interface StateStore {
   rulesPersistedState: boolean; // list-level persisted flag
   isRulesLoading: boolean;
   showAddRuleDialog: boolean;
+  // Active run overrides (transient, cleared when run ends)
+  activeRunOverrides: RuleOverride[];
 
   // Optimistic update state
   pendingOperations: OptimisticOperation[];
@@ -338,6 +341,9 @@ interface StateStore {
   updateRule: (name: string, update: Partial<Rule>) => void;
   removeRule: (name: string) => void;
   reorderRules: (fromIndex: number, toIndex: number) => void;
+  // Active run overrides actions
+  setActiveRunOverrides: (overrides: RuleOverride[]) => void;
+  clearActiveRunOverrides: () => void;
 
   // Optimistic update actions
   startOptimisticRun: (tempRunId: string) => void;
@@ -382,6 +388,38 @@ const initialStats: Stats = {
   all_git_commits: [],
 };
 
+// Helper function to derive AgentStatus from LifecycleState
+// Mirrors the Go backend's LegacyStatusFromState function
+function getEffectiveStatus(agent: AgentState): AgentStatus {
+  if (agent.lifecycle_state) {
+    switch (agent.lifecycle_state) {
+      case 'starting':
+        return 'starting';
+      case 'running':
+      case 'queued_for_merge':
+      case 'merging':
+      case 'resolving':
+      case 'validating':
+      case 'repairing':
+        return 'running';
+      case 'completed':
+        return 'completed';
+      case 'failed':
+      case 'merge_failed':
+      case 'needs_attention':
+        return 'failed';
+      case 'cancelled':
+        return 'cancelled';
+      case 'timed_out':
+        return 'timed_out';
+      default:
+        return 'running';
+    }
+  }
+  // Fall back to status field for backwards compatibility
+  return agent.status;
+}
+
 // Helper function to recalculate stats from agents
 function recalculateStats(agents: Record<string, AgentState>): Stats {
   const stats: Stats = { ...initialStats, all_git_commits: [] };
@@ -389,7 +427,9 @@ function recalculateStats(agents: Record<string, AgentState>): Stats {
   let completedCount = 0;
 
   for (const agent of Object.values(agents)) {
-    switch (agent.status) {
+    // Use lifecycle_state as source of truth, falling back to status
+    const effectiveStatus = getEffectiveStatus(agent);
+    switch (effectiveStatus) {
       case 'completed':
         stats.completed_tasks++;
         completedCount++;
@@ -466,6 +506,8 @@ export const useStateStore = create<StateStore>((set) => ({
   rulesPersistedState: false,
   isRulesLoading: false,
   showAddRuleDialog: false,
+  // Active run overrides
+  activeRunOverrides: [],
 
   // Optimistic update state
   pendingOperations: [],
@@ -755,8 +797,14 @@ export const useStateStore = create<StateStore>((set) => ({
       if (state.runs.some((r) => r.id === run.id)) {
         return state;
       }
-      // Add new run at the beginning (most recent first)
-      return { runs: [run, ...state.runs] };
+      // Add new run and sort by started_at descending (most recent first)
+      // This ensures correct ordering regardless of WebSocket/API timing
+      const runs = [run, ...state.runs].sort((a, b) => {
+        const aTime = a.started_at ? new Date(a.started_at).getTime() : 0;
+        const bTime = b.started_at ? new Date(b.started_at).getTime() : 0;
+        return bTime - aTime;
+      });
+      return { runs };
     }),
 
   updateRun: (runId, update) =>
@@ -829,6 +877,10 @@ export const useStateStore = create<StateStore>((set) => ({
         rulesPersistedState: false, // Reordering changes persisted state
       };
     }),
+
+  // Active run overrides actions
+  setActiveRunOverrides: (overrides) => set({ activeRunOverrides: overrides }),
+  clearActiveRunOverrides: () => set({ activeRunOverrides: [] }),
 
   // Optimistic update actions - Start Run
   startOptimisticRun: (tempRunId) =>

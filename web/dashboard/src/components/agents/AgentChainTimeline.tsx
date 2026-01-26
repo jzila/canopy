@@ -2,9 +2,10 @@ import React, { useState } from 'react';
 import { ChevronDown, ChevronRight, Check, X, Clock, Loader2, Wrench, GitMerge, Play } from 'lucide-react';
 import type { AgentState, ValidationStep } from '../../stores/stateStore';
 
-interface WorkerChainTimelineProps {
+interface AgentChainTimelineProps {
   agent: AgentState;
   childAgents?: AgentState[];
+  priorAttempts?: AgentState[];  // Agents with same task_id but earlier attempts
   onSelectAgent?: (agentId: string) => void;
 }
 
@@ -17,6 +18,16 @@ const formatDuration = (ms: number): string => {
     return `${minutes}m ${remainingSeconds}s`;
   }
   return `${seconds}s`;
+};
+
+const formatTimestamp = (isoString: string): string => {
+  const date = new Date(isoString);
+  return date.toLocaleTimeString('en-US', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
 };
 
 const getStatusIcon = (status: string) => {
@@ -42,51 +53,73 @@ const getStatusIcon = (status: string) => {
   }
 };
 
-const getStatusColor = (status: string) => {
-  switch (status) {
-    case 'completed':
-    case 'success':
-    case 'passed':
-    case 'merged':
-      return 'text-green-600 dark:text-green-400';
-    case 'failed':
-      return 'text-red-600 dark:text-red-400';
-    case 'running':
-    case 'pending':
-    case 'acquiring':
-    case 'merging':
-      return 'text-blue-600 dark:text-blue-400';
-    case 'repairing':
-      return 'text-orange-600 dark:text-orange-400';
-    case 'skipped':
-      return 'text-gray-500 dark:text-gray-400';
-    default:
-      return 'text-gray-500 dark:text-gray-400';
-  }
+// Icon-only status indicator for compact display in agent chain
+const StatusDot: React.FC<{ status: string; attempt?: number | undefined }> = ({ status, attempt }) => {
+  const getStatusInfo = (status: string): { icon: string; color: string; label: string } => {
+    switch (status) {
+      case 'completed':
+      case 'success':
+      case 'passed':
+      case 'merged':
+      case 'resolved':
+      case 'fixed':
+        return { icon: '●', color: 'text-green-500', label: 'Success' };
+      case 'failed':
+        return { icon: '⊘', color: 'text-red-500', label: 'Failed' };
+      case 'running':
+      case 'pending':
+      case 'acquiring':
+      case 'merging':
+        return { icon: '◐', color: 'text-blue-500', label: 'In Progress' };
+      case 'repairing':
+        return { icon: '◐', color: 'text-orange-500', label: 'Repairing' };
+      case 'skipped':
+        return { icon: '○', color: 'text-gray-400', label: 'Skipped' };
+      default:
+        return { icon: '○', color: 'text-gray-400', label: status };
+    }
+  };
+
+  const { icon, color, label } = getStatusInfo(status);
+  const tooltipText = attempt !== undefined && attempt >= 1 ? `${label} (attempt ${attempt})` : label;
+
+  return (
+    <span
+      className={`${color} text-sm font-mono leading-none cursor-default`}
+      title={tooltipText}
+      aria-label={tooltipText}
+    >
+      {icon}
+    </span>
+  );
 };
 
 interface TimelineItemProps {
   icon: React.ReactNode;
   title: string;
   status: string;
+  startTime?: string | undefined;
   duration?: number | undefined;
   output?: string | undefined;
   isLast?: boolean;
   children?: React.ReactNode;
   onClick?: (() => void) | undefined;
   isClickable?: boolean;
+  attempt?: number | undefined;
 }
 
 const TimelineItem: React.FC<TimelineItemProps> = ({
   icon,
   title,
   status,
+  startTime,
   duration,
   output,
   isLast = false,
   children,
   onClick,
   isClickable = false,
+  attempt,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const hasExpandableContent = output || children;
@@ -131,12 +164,12 @@ const TimelineItem: React.FC<TimelineItemProps> = ({
                 : <ChevronRight className="w-3 h-3 text-gray-400" />
             )}
             <span className={`text-xs font-medium ${isClickable ? 'text-amber-700 dark:text-amber-300' : 'text-gray-700 dark:text-gray-300'}`}>{title}</span>
-            <span className={`text-xs ${getStatusColor(status)}`}>{status}</span>
-            {duration !== undefined && (
-              <span className="text-xs text-gray-400 font-mono tabular-nums ml-auto">
-                {formatDuration(duration)}
-              </span>
-            )}
+            <StatusDot status={status} attempt={attempt} />
+            <span className="text-xs text-gray-400 font-mono tabular-nums ml-auto">
+              {startTime && formatTimestamp(startTime)}
+              {startTime && duration !== undefined && ' · '}
+              {duration !== undefined && formatDuration(duration)}
+            </span>
             {isClickable && (
               <span className="text-xs text-amber-500 dark:text-amber-400 ml-1">→</span>
             )}
@@ -158,16 +191,18 @@ const TimelineItem: React.FC<TimelineItemProps> = ({
   );
 };
 
-export const WorkerChainTimeline: React.FC<WorkerChainTimelineProps> = ({
+export const AgentChainTimeline: React.FC<AgentChainTimelineProps> = ({
   agent,
   childAgents = [],
+  priorAttempts = [],
   onSelectAgent,
 }) => {
-  // Build the worker chain from agent state
+  // Build the agent chain from agent state
   const items: Array<{
     type: 'agent' | 'resolver' | 'validation' | 'repair';
     title: string;
     status: string;
+    startTime?: string | undefined;
     duration?: number | undefined;
     output?: string | undefined;
     steps?: ValidationStep[] | undefined;
@@ -175,31 +210,59 @@ export const WorkerChainTimeline: React.FC<WorkerChainTimelineProps> = ({
     agentId?: string | undefined;
   }> = [];
 
-  // 1. Original worker agent
+  // Sort prior attempts by attempt number ascending
+  const sortedPriorAttempts = [...priorAttempts].sort((a, b) =>
+    (a.attempt ?? 1) - (b.attempt ?? 1)
+  );
+
+  // 1. Prior attempt agents (failed attempts before the current one)
+  for (const priorAgent of sortedPriorAttempts) {
+    const attemptNum = priorAgent.attempt ?? 1;
+    items.push({
+      type: 'agent',
+      title: 'Worker',
+      status: priorAgent.status,
+      startTime: priorAgent.start_time,
+      duration: priorAgent.duration * 1000,
+      output: priorAgent.error || undefined,
+      agentId: priorAgent.id,
+      attempt: attemptNum,
+    });
+  }
+
+  // 2. Current implementor agent
+  const hasRetries = priorAttempts.length > 0 || (agent.attempt !== undefined && agent.attempt > 1);
+  const currentAttempt = agent.attempt ?? (priorAttempts.length + 1);
   items.push({
     type: 'agent',
-    title: 'Worker Agent',
+    title: hasRetries ? 'Worker' : 'Implementor',
     status: agent.status,
+    startTime: agent.start_time,
     duration: agent.duration * 1000, // Convert seconds to ms
+    agentId: agent.id,
+    attempt: hasRetries ? currentAttempt : undefined,
   });
 
-  // 2. Check for resolver (child agent that resolves conflicts)
+  // 3. Check for resolver (child agent that resolves conflicts)
+  // Note: Both resolver and repair agents have the same task_id (the original task),
+  // so we must distinguish by agent ID: resolvers have "-resolver" suffix, repairs have "-repair" suffix
   const resolverAgents = childAgents.filter(child =>
-    child.parent_agent_id === agent.id && !child.task_id.includes('repair')
+    child.parent_agent_id === agent.id && child.id.includes('-resolver')
   );
 
   for (const resolver of resolverAgents) {
     items.push({
       type: 'resolver',
-      title: 'Conflict Resolver',
+      title: 'Resolver',
       status: resolver.status === 'completed' ? 'resolved' : resolver.status,
+      startTime: resolver.start_time,
       duration: resolver.duration * 1000,
       output: resolver.error || undefined,
       agentId: resolver.id,
     });
   }
 
-  // 3. Validation (if applicable)
+  // 4. Validation (if applicable)
   if (agent.validation_status) {
     items.push({
       type: 'validation',
@@ -211,9 +274,11 @@ export const WorkerChainTimeline: React.FC<WorkerChainTimelineProps> = ({
     });
   }
 
-  // 4. Repair agents (if any) - only match agents with 'repair' in task_id
+  // 5. Repair agents (if any) - only match agents with '-repair' in agent ID
+  // Note: Both resolver and repair agents have the same task_id (the original task),
+  // so we must distinguish by agent ID: repairs have "-repair-{n}" suffix
   const repairAgents = childAgents.filter(child =>
-    child.task_id.includes('repair')
+    child.id.includes('-repair')
   ).sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
 
   let repairAttempt = 0;
@@ -221,11 +286,13 @@ export const WorkerChainTimeline: React.FC<WorkerChainTimelineProps> = ({
     repairAttempt++;
     items.push({
       type: 'repair',
-      title: `Repair Agent #${repairAttempt}`,
+      title: `Repair #${repairAttempt}`,
       status: repair.status === 'completed' ? 'fixed' : repair.status,
+      startTime: repair.start_time,
       duration: repair.duration * 1000,
       output: repair.error || agent.last_repair_output,
       attempt: repairAttempt,
+      agentId: repair.id,
     });
 
     // If repair was successful, add a validation pass after it
@@ -243,7 +310,7 @@ export const WorkerChainTimeline: React.FC<WorkerChainTimelineProps> = ({
   // The repair_attempts field on the parent agent is for tracking purposes,
   // but we don't create phantom repair items from it.
 
-  // Don't render if there's just the worker agent with no special status
+  // Don't render if there's just the implementor agent with no special status
   if (items.length === 1 && !agent.merge_status && !agent.validation_status) {
     return null;
   }
@@ -252,11 +319,16 @@ export const WorkerChainTimeline: React.FC<WorkerChainTimelineProps> = ({
     <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
       <div className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2 flex items-center gap-1.5">
         <Play className="w-3 h-3" />
-        Worker Chain
+        Agent Chain
       </div>
       <div className="ml-1">
         {items.map((item, index) => {
-          const isResolverClickable = item.type === 'resolver' && item.agentId && onSelectAgent;
+          // Make resolvers, prior attempt agents, and repair agents clickable
+          const isClickable = item.agentId && onSelectAgent && (
+            item.type === 'resolver' ||
+            item.type === 'repair' ||
+            (item.type === 'agent' && item.agentId !== agent.id) // Prior attempts
+          );
           return (
           <TimelineItem
             key={`${item.type}-${index}`}
@@ -268,20 +340,21 @@ export const WorkerChainTimeline: React.FC<WorkerChainTimelineProps> = ({
             }
             title={item.title}
             status={item.status}
+            startTime={item.startTime}
             duration={item.duration}
             output={item.output}
             isLast={index === items.length - 1}
-            isClickable={Boolean(isResolverClickable)}
-            onClick={isResolverClickable ? () => onSelectAgent(item.agentId!) : undefined}
+            isClickable={Boolean(isClickable)}
+            onClick={isClickable ? () => onSelectAgent(item.agentId!) : undefined}
+            attempt={item.attempt}
           >
             {/* Render validation steps if available */}
             {item.type === 'validation' && item.steps && item.steps.length > 0 && (
               <div className="mt-2 space-y-1">
                 {item.steps.map((step, stepIndex) => (
                   <div key={stepIndex} className="flex items-center gap-2 text-xs">
-                    {getStatusIcon(step.status)}
                     <span className="text-gray-600 dark:text-gray-400">{step.name}</span>
-                    <span className={getStatusColor(step.status)}>{step.status}</span>
+                    <StatusDot status={step.status} />
                     {step.duration_ms > 0 && (
                       <span className="text-gray-400 font-mono tabular-nums ml-auto">
                         {formatDuration(step.duration_ms)}
@@ -299,4 +372,4 @@ export const WorkerChainTimeline: React.FC<WorkerChainTimelineProps> = ({
   );
 };
 
-export default WorkerChainTimeline;
+export default AgentChainTimeline;

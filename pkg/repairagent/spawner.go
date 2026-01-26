@@ -9,7 +9,6 @@ import (
 
 	"github.com/jzila/canopy/pkg/agent"
 	"github.com/jzila/canopy/pkg/beads"
-	"github.com/jzila/canopy/pkg/ipc"
 	"github.com/jzila/canopy/pkg/sandbox"
 )
 
@@ -20,7 +19,7 @@ type Config struct {
 	Verbose       bool                   // Verbose logging
 	UseBwrap      bool                   // Use bubblewrap sandbox
 	SandboxConfig *sandbox.SandboxConfig // Sandbox configuration
-	RepoID        string                 // Repository ID for IPC tracking
+	RepoID        string                 // Repository ID for tracking
 	RunID         string                 // Run ID for unique agent ID generation
 }
 
@@ -38,11 +37,40 @@ type Result struct {
 	RepairAgentID string
 }
 
+// AgentCallback is called for agent lifecycle events (start, done, fail).
+type AgentCallback func(event AgentEvent)
+
+// AgentEvent contains data for agent lifecycle callbacks.
+// This allows the daemon to receive agent events from repair agents
+// without requiring an IPC client.
+type AgentEvent struct {
+	AgentID         string
+	RunID           string
+	TaskID          string
+	TaskTitle       string
+	TaskDescription string
+	ParentAgentID   string
+	RepoID          string
+	EventType       string // "started", "completed", "failed"
+	// Completion fields (only set for completed/failed events)
+	ExitCode        int
+	DurationSeconds float64
+	FilesChanged    int
+	InputTokens     int
+	OutputTokens    int
+	CostUSD         float64
+	DurationMS      int64
+	DurationAPIMS   int64
+	NumTurns        int
+	CommitsCreated  int
+	Error           string // Only for failed events
+}
+
 // RepairAgent manages repair agents for fixing validation failures.
 type RepairAgent struct {
-	config    *Config
-	executor  *agent.Executor
-	ipcClient *ipc.Client
+	config        *Config
+	executor      *agent.Executor
+	agentCallback AgentCallback
 }
 
 // New creates a new RepairAgent.
@@ -59,13 +87,13 @@ func New(config *Config) *RepairAgent {
 	}
 }
 
-// SetIPCClient sets the IPC client for sending repair agent events to the daemon.
-// This enables parent-child agent tracking in the UI.
-func (r *RepairAgent) SetIPCClient(client *ipc.Client) {
-	r.ipcClient = client
+// SetAgentCallback sets the callback for agent lifecycle events.
+// The callback is invoked for agent start, done, and fail events.
+func (r *RepairAgent) SetAgentCallback(callback AgentCallback) {
+	r.agentCallback = callback
 }
 
-// SetRepoID sets the repository ID for IPC tracking.
+// SetRepoID sets the repository ID for tracking.
 func (r *RepairAgent) SetRepoID(repoID string) {
 	r.config.RepoID = repoID
 }
@@ -125,19 +153,18 @@ func (r *RepairAgent) Repair(ctx context.Context, repairCtx *RepairContext, pare
 		Description: prompt,
 	}
 
-	// Send IPC event for repair agent start (child of original agent)
-	if r.ipcClient != nil {
-		if err := r.ipcClient.SendAgentStart(
-			repairAgentID,
-			r.config.RunID,            // Run ID for historical filtering
-			repairCtx.TaskID,          // TaskID is the original task
-			repairTask.Title,
-			repairCtx.TaskTitle,       // Task description from original task
-			parentAgentID,             // Parent is the implementor agent
-			r.config.RepoID,           // Repository ID for tracking
-		); err != nil && r.config.Verbose {
-			fmt.Fprintf(os.Stderr, "warning: failed to send repair start event: %v\n", err)
-		}
+	// Send event for repair agent start (child of original agent)
+	if r.agentCallback != nil {
+		r.agentCallback(AgentEvent{
+			AgentID:         repairAgentID,
+			RunID:           r.config.RunID,
+			TaskID:          repairCtx.TaskID,
+			TaskTitle:       repairTask.Title,
+			TaskDescription: repairCtx.TaskTitle,
+			ParentAgentID:   parentAgentID,
+			RepoID:          r.config.RepoID,
+			EventType:       "started",
+		})
 	}
 
 	// Create a direct overlay that wraps the working directory without isolation.
@@ -159,9 +186,16 @@ func (r *RepairAgent) Repair(ctx context.Context, repairCtx *RepairContext, pare
 		result.Error = agentResult.Error
 	}
 
-	// Send IPC event for repair agent completion
-	if r.ipcClient != nil {
-		ipcResult := &ipc.AgentResult{
+	// Send event for repair agent completion
+	if r.agentCallback != nil {
+		event := AgentEvent{
+			AgentID:         repairAgentID,
+			RunID:           r.config.RunID,
+			TaskID:          repairCtx.TaskID,
+			TaskTitle:       repairTask.Title,
+			TaskDescription: repairCtx.TaskTitle,
+			ParentAgentID:   parentAgentID,
+			RepoID:          r.config.RepoID,
 			ExitCode:        agentResult.ExitCode,
 			DurationSeconds: result.Duration.Seconds(),
 			FilesChanged:    len(agentResult.Changes),
@@ -169,36 +203,26 @@ func (r *RepairAgent) Repair(ctx context.Context, repairCtx *RepairContext, pare
 
 		// Add token usage if available
 		if agentResult.Output != nil {
-			ipcResult.InputTokens = agentResult.Output.TotalInputTokens
-			ipcResult.OutputTokens = agentResult.Output.TotalOutputTokens
-			ipcResult.CostUSD = agentResult.Output.CostUSD
-			ipcResult.DurationMS = agentResult.Output.DurationMS
-			ipcResult.DurationAPIMS = agentResult.Output.DurationAPIMS
-			ipcResult.NumTurns = agentResult.Output.NumTurns
+			event.InputTokens = agentResult.Output.TotalInputTokens
+			event.OutputTokens = agentResult.Output.TotalOutputTokens
+			event.CostUSD = agentResult.Output.CostUSD
+			event.DurationMS = agentResult.Output.DurationMS
+			event.DurationAPIMS = agentResult.Output.DurationAPIMS
+			event.NumTurns = agentResult.Output.NumTurns
 		}
 
 		if agentResult.GitState != nil {
-			ipcResult.CommitsCreated = len(agentResult.GitState.NewCommits)
+			event.CommitsCreated = len(agentResult.GitState.NewCommits)
 		}
 
 		if result.Success {
-			if err := r.ipcClient.SendAgentDone(
-				repairAgentID,
-				parentAgentID,
-				ipcResult,
-			); err != nil && r.config.Verbose {
-				fmt.Fprintf(os.Stderr, "warning: failed to send repair done event: %v\n", err)
-			}
+			event.EventType = "completed"
 		} else {
-			if err := r.ipcClient.SendAgentFail(
-				repairAgentID,
-				parentAgentID,
-				fmt.Errorf("%s", result.Error),
-				ipcResult,
-			); err != nil && r.config.Verbose {
-				fmt.Fprintf(os.Stderr, "warning: failed to send repair fail event: %v\n", err)
-			}
+			event.EventType = "failed"
+			event.Error = result.Error
 		}
+
+		r.agentCallback(event)
 	}
 
 	return result, nil
@@ -250,19 +274,18 @@ func (r *RepairAgent) RepairPreCommit(ctx context.Context, repairCtx *PreCommitR
 		Description: prompt,
 	}
 
-	// Send IPC event for repair agent start (child of original agent)
-	if r.ipcClient != nil {
-		if err := r.ipcClient.SendAgentStart(
-			repairAgentID,
-			r.config.RunID,             // Run ID for historical filtering
-			repairCtx.TaskID,           // TaskID is the original task
-			repairTask.Title,
-			repairCtx.TaskDescription,  // Task description from original task
-			parentAgentID,              // Parent is the implementor agent
-			r.config.RepoID,            // Repository ID for tracking
-		); err != nil && r.config.Verbose {
-			fmt.Fprintf(os.Stderr, "warning: failed to send pre-commit repair start event: %v\n", err)
-		}
+	// Send event for repair agent start (child of original agent)
+	if r.agentCallback != nil {
+		r.agentCallback(AgentEvent{
+			AgentID:         repairAgentID,
+			RunID:           r.config.RunID,
+			TaskID:          repairCtx.TaskID,
+			TaskTitle:       repairTask.Title,
+			TaskDescription: repairCtx.TaskDescription,
+			ParentAgentID:   parentAgentID,
+			RepoID:          r.config.RepoID,
+			EventType:       "started",
+		})
 	}
 
 	// Create a direct overlay that wraps the working directory without isolation.
@@ -283,9 +306,16 @@ func (r *RepairAgent) RepairPreCommit(ctx context.Context, repairCtx *PreCommitR
 		result.Error = agentResult.Error
 	}
 
-	// Send IPC event for repair agent completion
-	if r.ipcClient != nil {
-		ipcResult := &ipc.AgentResult{
+	// Send event for repair agent completion
+	if r.agentCallback != nil {
+		event := AgentEvent{
+			AgentID:         repairAgentID,
+			RunID:           r.config.RunID,
+			TaskID:          repairCtx.TaskID,
+			TaskTitle:       repairTask.Title,
+			TaskDescription: repairCtx.TaskDescription,
+			ParentAgentID:   parentAgentID,
+			RepoID:          r.config.RepoID,
 			ExitCode:        agentResult.ExitCode,
 			DurationSeconds: result.Duration.Seconds(),
 			FilesChanged:    len(agentResult.Changes),
@@ -293,36 +323,26 @@ func (r *RepairAgent) RepairPreCommit(ctx context.Context, repairCtx *PreCommitR
 
 		// Add token usage if available
 		if agentResult.Output != nil {
-			ipcResult.InputTokens = agentResult.Output.TotalInputTokens
-			ipcResult.OutputTokens = agentResult.Output.TotalOutputTokens
-			ipcResult.CostUSD = agentResult.Output.CostUSD
-			ipcResult.DurationMS = agentResult.Output.DurationMS
-			ipcResult.DurationAPIMS = agentResult.Output.DurationAPIMS
-			ipcResult.NumTurns = agentResult.Output.NumTurns
+			event.InputTokens = agentResult.Output.TotalInputTokens
+			event.OutputTokens = agentResult.Output.TotalOutputTokens
+			event.CostUSD = agentResult.Output.CostUSD
+			event.DurationMS = agentResult.Output.DurationMS
+			event.DurationAPIMS = agentResult.Output.DurationAPIMS
+			event.NumTurns = agentResult.Output.NumTurns
 		}
 
 		if agentResult.GitState != nil {
-			ipcResult.CommitsCreated = len(agentResult.GitState.NewCommits)
+			event.CommitsCreated = len(agentResult.GitState.NewCommits)
 		}
 
 		if result.Success {
-			if err := r.ipcClient.SendAgentDone(
-				repairAgentID,
-				parentAgentID,
-				ipcResult,
-			); err != nil && r.config.Verbose {
-				fmt.Fprintf(os.Stderr, "warning: failed to send pre-commit repair done event: %v\n", err)
-			}
+			event.EventType = "completed"
 		} else {
-			if err := r.ipcClient.SendAgentFail(
-				repairAgentID,
-				parentAgentID,
-				fmt.Errorf("%s", result.Error),
-				ipcResult,
-			); err != nil && r.config.Verbose {
-				fmt.Fprintf(os.Stderr, "warning: failed to send pre-commit repair fail event: %v\n", err)
-			}
+			event.EventType = "failed"
+			event.Error = result.Error
 		}
+
+		r.agentCallback(event)
 	}
 
 	return result, nil

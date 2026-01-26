@@ -54,16 +54,17 @@ type ExecuteRunRequest struct {
 	DryRun            bool                  `json:"dry_run,omitempty"`
 	UseBwrap          bool                  `json:"use_bwrap,omitempty"`
 	MaxRetries        int                   `json:"max_retries,omitempty"`
-	MaxPriority       int                   `json:"max_priority,omitempty"`
 	ResolverTimeoutMS int64                 `json:"resolver_timeout_ms,omitempty"`
 	RepoID            string                `json:"repo_id,omitempty"`
 	PollIntervalMS    int64                 `json:"poll_interval_ms,omitempty"`
-	Types             []string              `json:"types,omitempty"`
-	ExcludeTypes      []string              `json:"exclude_types,omitempty"`
-	Labels            []string              `json:"labels,omitempty"`
-	ExcludeLabels     []string              `json:"exclude_labels,omitempty"`
-	Assignee          string                `json:"assignee,omitempty"`
-	RuleOverrides     []RuleOverrideRequest `json:"rule_overrides,omitempty"`
+	// Task selection parameters (applied to RulesSettings)
+	PriorityMax   int                   `json:"priority_max,omitempty"`
+	Types         []string              `json:"types,omitempty"`
+	ExcludeTypes  []string              `json:"exclude_types,omitempty"`
+	Labels        []string              `json:"labels,omitempty"`
+	ExcludeLabels []string              `json:"exclude_labels,omitempty"`
+	Assignee      string                `json:"assignee,omitempty"`
+	RuleOverrides []RuleOverrideRequest `json:"rule_overrides,omitempty"`
 }
 
 // ExecuteRunResponse is the JSON response for starting a run.
@@ -109,9 +110,10 @@ type RunStatusResponse struct {
 }
 
 // UpdateRunConfigRequest is the JSON request body for updating run configuration.
+// Note: Task selection parameters (priority, types, labels) are updated via the rules API,
+// not through this endpoint.
 type UpdateRunConfigRequest struct {
 	Concurrency  *int `json:"concurrency,omitempty"`
-	MaxPriority  *int `json:"max_priority,omitempty"`
 	PollInterval *int `json:"poll_interval_ms,omitempty"` // milliseconds
 }
 
@@ -180,16 +182,17 @@ func (h *OrchestrationHandler) HandleExecuteRun(w http.ResponseWriter, r *http.R
 		DryRun:          req.DryRun,
 		UseBwrap:        req.UseBwrap,
 		MaxRetries:      req.MaxRetries,
-		MaxPriority:     req.MaxPriority,
 		ResolverTimeout: time.Duration(req.ResolverTimeoutMS) * time.Millisecond,
 		PollInterval:    time.Duration(req.PollIntervalMS) * time.Millisecond,
 		RepoID:          req.RepoID,
-		Types:           req.Types,
-		ExcludeTypes:    req.ExcludeTypes,
-		Labels:          req.Labels,
-		ExcludeLabels:   req.ExcludeLabels,
-		Assignee:        req.Assignee,
-		RuleOverrides:   ruleOverrides,
+		// Task selection parameters
+		PriorityMax:   req.PriorityMax,
+		Types:         req.Types,
+		ExcludeTypes:  req.ExcludeTypes,
+		Labels:        req.Labels,
+		ExcludeLabels: req.ExcludeLabels,
+		Assignee:      req.Assignee,
+		RuleOverrides: ruleOverrides,
 	}
 
 	// Start the run with a background context (not tied to request)
@@ -458,7 +461,7 @@ func (h *OrchestrationHandler) HandleUpdateRunConfig(w http.ResponseWriter, r *h
 		return
 	}
 
-	err := h.manager.UpdateRunConfig(runID, req.Concurrency, req.MaxPriority)
+	err := h.manager.UpdateRunConfig(runID, req.Concurrency)
 	if err != nil {
 		logging.Warn("failed to update run config",
 			"run_id", runID,
@@ -507,7 +510,7 @@ func runStateToWire(rs *RunState) *RunStatusWire {
 // This uses the persistence.RunConfig fields but with omitempty for optional updates.
 type RunConfigRequest struct {
 	Concurrency int  `json:"concurrency"`
-	MaxPriority int  `json:"max_priority"`
+	PriorityMax int  `json:"priority_max"` // Max priority filter for task selection
 	UseBwrap    bool `json:"use_bwrap"`
 	MaxRetries  int  `json:"max_retries"`
 }
@@ -515,7 +518,7 @@ type RunConfigRequest struct {
 // RunConfigResponse is the JSON response for GET /api/config.
 type RunConfigResponse struct {
 	Concurrency int    `json:"concurrency"`
-	MaxPriority int    `json:"max_priority"`
+	PriorityMax int    `json:"priority_max"` // Max priority filter for task selection
 	UseBwrap    bool   `json:"use_bwrap"`
 	MaxRetries  int    `json:"max_retries"`
 	Error       string `json:"error,omitempty"`
@@ -545,7 +548,7 @@ func (h *OrchestrationHandler) HandleGetConfig(w http.ResponseWriter, r *http.Re
 		config := persistence.DefaultRunConfig(repoID)
 		writeJSON(w, http.StatusOK, RunConfigResponse{
 			Concurrency: config.Concurrency,
-			MaxPriority: config.MaxPriority,
+			PriorityMax: config.PriorityMax,
 			UseBwrap:    config.UseBwrap,
 			MaxRetries:  config.MaxRetries,
 		})
@@ -564,7 +567,7 @@ func (h *OrchestrationHandler) HandleGetConfig(w http.ResponseWriter, r *http.Re
 
 	writeJSON(w, http.StatusOK, RunConfigResponse{
 		Concurrency: config.Concurrency,
-		MaxPriority: config.MaxPriority,
+		PriorityMax: config.PriorityMax,
 		UseBwrap:    config.UseBwrap,
 		MaxRetries:  config.MaxRetries,
 	})
@@ -609,7 +612,7 @@ func (h *OrchestrationHandler) HandlePutConfig(w http.ResponseWriter, r *http.Re
 	config := &persistence.RunConfig{
 		RepoID:      repoID,
 		Concurrency: req.Concurrency,
-		MaxPriority: req.MaxPriority,
+		PriorityMax: req.PriorityMax,
 		UseBwrap:    req.UseBwrap,
 		MaxRetries:  req.MaxRetries,
 	}
@@ -625,7 +628,7 @@ func (h *OrchestrationHandler) HandlePutConfig(w http.ResponseWriter, r *http.Re
 
 	logging.Info("saved run config via HTTP", "repo_id", repoID,
 		"concurrency", config.Concurrency,
-		"max_priority", config.MaxPriority,
+		"priority_max", config.PriorityMax,
 		"use_bwrap", config.UseBwrap,
 		"max_retries", config.MaxRetries)
 
@@ -636,7 +639,7 @@ func (h *OrchestrationHandler) HandlePutConfig(w http.ResponseWriter, r *http.Re
 			Timestamp: time.Now(),
 			Payload: RunConfigResponse{
 				Concurrency: config.Concurrency,
-				MaxPriority: config.MaxPriority,
+				PriorityMax: config.PriorityMax,
 				UseBwrap:    config.UseBwrap,
 				MaxRetries:  config.MaxRetries,
 			},
@@ -646,7 +649,7 @@ func (h *OrchestrationHandler) HandlePutConfig(w http.ResponseWriter, r *http.Re
 	// Return the saved configuration
 	writeJSON(w, http.StatusOK, RunConfigResponse{
 		Concurrency: config.Concurrency,
-		MaxPriority: config.MaxPriority,
+		PriorityMax: config.PriorityMax,
 		UseBwrap:    config.UseBwrap,
 		MaxRetries:  config.MaxRetries,
 	})

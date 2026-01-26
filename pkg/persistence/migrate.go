@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-const currentSchemaVersion = 17
+const currentSchemaVersion = 18
 
 // migrate runs all pending database migrations
 func (s *Store) migrate() error {
@@ -111,6 +111,10 @@ func (s *Store) runMigration(version int) error {
 		}
 	case 17:
 		if err := s.migrateV17(tx); err != nil {
+			return err
+		}
+	case 18:
+		if err := s.migrateV18(tx); err != nil {
 			return err
 		}
 	default:
@@ -504,6 +508,36 @@ func (s *Store) migrateV17(tx *sql.Tx) error {
 		if _, err := tx.Exec(m); err != nil {
 			return fmt.Errorf("failed to execute migration: %s: %w", m, err)
 		}
+	}
+
+	return nil
+}
+
+// migrateV18 creates the agent_commits table for persisting git commits per agent.
+// Commits were previously only stored in-memory and lost on daemon restart.
+func (s *Store) migrateV18(tx *sql.Tx) error {
+	schema := `
+		CREATE TABLE IF NOT EXISTS agent_commits (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			agent_id TEXT NOT NULL,
+			hash TEXT NOT NULL,
+			short_hash TEXT NOT NULL,
+			message TEXT NOT NULL,
+			author TEXT,
+			author_email TEXT,
+			timestamp TEXT,
+			files_changed TEXT,
+			created_at INTEGER DEFAULT (strftime('%s', 'now')),
+			FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_agent_commits_agent_id ON agent_commits(agent_id);
+		CREATE INDEX IF NOT EXISTS idx_agent_commits_hash ON agent_commits(hash);
+	`
+
+	_, err := tx.Exec(schema)
+	if err != nil {
+		return fmt.Errorf("failed to create agent_commits table: %w", err)
 	}
 
 	return nil

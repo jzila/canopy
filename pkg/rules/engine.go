@@ -538,14 +538,27 @@ func (e *Engine) AddRuleWithValidation(rule config.CustomRule) error {
 
 // AddRuleWithValidationAndSource adds a rule with explicit source after validating it.
 // Returns an error if validation fails or if a rule with the same name exists.
+// Validates rule name length, condition syntax, and reason length before adding.
 func (e *Engine) AddRuleWithValidationAndSource(rule config.CustomRule, source config.RuleSource) error {
-	// Validate the rule
-	if rule.Name == "" {
-		return fmt.Errorf("rule name is required")
+	// Validate rule name (required and length limit)
+	if err := ValidateRuleName(rule.Name); err != nil {
+		return err
 	}
+
+	// Validate condition (required and syntax)
 	if rule.Condition == "" {
 		return fmt.Errorf("rule condition is required")
 	}
+	if err := ValidateConditionSyntax(rule.Condition); err != nil {
+		return fmt.Errorf("invalid condition: %w", err)
+	}
+
+	// Validate reason length if present
+	if err := ValidateReason(rule.Reason); err != nil {
+		return err
+	}
+
+	// Validate action format
 	if rule.Action == "" {
 		return fmt.Errorf("rule action is required")
 	}
@@ -648,11 +661,11 @@ func (e *Engine) UpdateConfigSettings(update ConfigSettingsUpdate) error {
 		e.settings.Assignee = *update.Assignee
 	}
 
-	if update.MaxConcurrent != nil {
-		if *update.MaxConcurrent < 0 {
-			return fmt.Errorf("max_concurrent must be >= 0, got %d", *update.MaxConcurrent)
+	if update.MaxConcurrentTasks != nil {
+		if *update.MaxConcurrentTasks < 0 {
+			return fmt.Errorf("max_concurrent_tasks must be >= 0, got %d", *update.MaxConcurrentTasks)
 		}
-		e.settings.MaxConcurrent = *update.MaxConcurrent
+		e.settings.MaxConcurrentTasks = *update.MaxConcurrentTasks
 	}
 
 	if update.MaxConcurrentPerType != nil {
@@ -676,7 +689,7 @@ type ConfigSettingsUpdate struct {
 	Labels                *[]string         `json:"labels,omitempty"`
 	ExcludeLabels         *[]string         `json:"exclude_labels,omitempty"`
 	Assignee              *string           `json:"assignee,omitempty"`
-	MaxConcurrent         *int              `json:"max_concurrent,omitempty"`
+	MaxConcurrentTasks    *int              `json:"max_concurrent_tasks,omitempty"`
 	MaxConcurrentPerType  *map[string]int   `json:"max_concurrent_per_type,omitempty"`
 	MaxConcurrentPerLabel *map[string]int   `json:"max_concurrent_per_label,omitempty"`
 }

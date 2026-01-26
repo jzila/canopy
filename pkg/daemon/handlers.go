@@ -468,13 +468,28 @@ func (h *Handler) HandlePauseOrch(w http.ResponseWriter, r *http.Request) {
 		h.mergeQueue.Pause()
 	}
 
-	// Build event payload with detailed pause state
-	payload := map[string]interface{}{
-		"paused":         true,
-		"paused_by_user": true,
+	// Update the OrchestratorLifecycle state to paused
+	if h.daemon != nil {
+		if repo := h.daemon.GetActiveRepository(); repo != nil {
+			if orchMgr := h.daemon.GetOrchestratorManager(); orchMgr != nil {
+				orchMgr.SetOrchestratorPaused(repo.Path, true)
+			}
+		}
 	}
+
+	// Build event payload with detailed pause state
+	// Use field names matching OrchPauseStatusPayload for frontend compatibility
+	isPausedByAgent := false
+	pauseState := "paused_user"
 	if h.mergeQueue != nil {
-		payload["pause_state"] = h.mergeQueue.PauseStateString()
+		isPausedByAgent = h.mergeQueue.IsAgentActive()
+		pauseState = h.mergeQueue.PauseStateString()
+	}
+	payload := map[string]interface{}{
+		"is_paused":          true,
+		"is_paused_by_user":  true,
+		"is_paused_by_agent": isPausedByAgent,
+		"pause_state":        pauseState,
 	}
 
 	// Publish pause event to notify WebSocket clients
@@ -483,6 +498,15 @@ func (h *Handler) HandlePauseOrch(w http.ResponseWriter, r *http.Request) {
 			Type:      EventOrchPaused,
 			Timestamp: time.Now(),
 			Payload:   payload,
+		})
+		// Publish orchestrator state change event so UI and canopy ps reflect paused state
+		h.eventBus.Publish(Event{
+			Type:      EventOrchStateChanged,
+			Timestamp: time.Now(),
+			Payload: map[string]interface{}{
+				"state":              string(OrchestratorPaused),
+				"active_agent_count": h.state.CountRunningAgents(),
+			},
 		})
 	}
 
@@ -519,21 +543,47 @@ func (h *Handler) HandleResumeOrch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build event payload with detailed pause state
-	// After user resume, we may still be paused by resolver
+	// Use field names matching OrchPauseStatusPayload for frontend compatibility
+	// After user resume, we may still be paused by resolver/agent
 	isPaused := false
-	pausedByResolver := false
+	isPausedByAgent := false
+	pauseState := "running"
 	if h.mergeQueue != nil {
 		isPaused = h.mergeQueue.IsPaused()
-		pausedByResolver = isPaused && !h.mergeQueue.IsPausedByUser()
+		isPausedByAgent = h.mergeQueue.IsAgentActive()
+		pauseState = h.mergeQueue.PauseStateString()
+	}
+
+	// Determine the new orchestrator state after resume
+	// If still paused by agent, stay paused; otherwise restore to active/idle
+	var newOrchState OrchestratorState
+	if isPaused {
+		// Still paused (by agent), stay in paused state
+		newOrchState = OrchestratorPaused
+	} else {
+		// Fully resumed, determine active/idle based on running agents
+		if h.state.CountRunningAgents() > 0 {
+			newOrchState = OrchestratorActive
+		} else {
+			newOrchState = OrchestratorIdle
+		}
+	}
+
+	// Update the OrchestratorLifecycle state
+	if h.daemon != nil {
+		if repo := h.daemon.GetActiveRepository(); repo != nil {
+			if orchMgr := h.daemon.GetOrchestratorManager(); orchMgr != nil {
+				// isPaused here means we're still paused by agent, so don't fully unpause
+				orchMgr.SetOrchestratorPaused(repo.Path, isPaused)
+			}
+		}
 	}
 
 	payload := map[string]interface{}{
-		"paused":             isPaused,
-		"paused_by_user":     false,
-		"paused_by_resolver": pausedByResolver,
-	}
-	if h.mergeQueue != nil {
-		payload["pause_state"] = h.mergeQueue.PauseStateString()
+		"is_paused":          isPaused,
+		"is_paused_by_user":  false,
+		"is_paused_by_agent": isPausedByAgent,
+		"pause_state":        pauseState,
 	}
 
 	// Publish resume event to notify WebSocket clients
@@ -542,6 +592,15 @@ func (h *Handler) HandleResumeOrch(w http.ResponseWriter, r *http.Request) {
 			Type:      EventOrchResumed,
 			Timestamp: time.Now(),
 			Payload:   payload,
+		})
+		// Publish orchestrator state change event so UI and canopy ps reflect resumed state
+		h.eventBus.Publish(Event{
+			Type:      EventOrchStateChanged,
+			Timestamp: time.Now(),
+			Payload: map[string]interface{}{
+				"state":              string(newOrchState),
+				"active_agent_count": h.state.CountRunningAgents(),
+			},
 		})
 	}
 

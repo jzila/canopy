@@ -81,8 +81,8 @@ func TestNewRepairAgent(t *testing.T) {
 	if agent.executor == nil {
 		t.Error("New() did not create executor")
 	}
-	if agent.ipcClient != nil {
-		t.Error("New() should not set ipcClient by default")
+	if agent.agentCallback != nil {
+		t.Error("New() should not set agentCallback by default")
 	}
 }
 

@@ -1,6 +1,218 @@
-import React, { useState } from 'react';
-import { GitCommit, ChevronDown, ChevronRight, FileText, Copy, Check } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { GitCommit, ChevronDown, ChevronRight, FileText, Copy, Check, Code } from 'lucide-react';
 import type { GitCommit as GitCommitType } from '../../stores/stateStore';
+
+// Parse a unified diff into per-file hunks
+interface DiffHunk {
+  header: string;
+  lines: string[];
+}
+
+interface FileDiff {
+  filename: string;
+  hunks: DiffHunk[];
+}
+
+const parseDiff = (patch: string): FileDiff[] => {
+  if (!patch || patch.trim() === '') return [];
+
+  const files: FileDiff[] = [];
+  const lines = patch.split('\n');
+  let currentFile: FileDiff | null = null;
+  let currentHunk: DiffHunk | null = null;
+
+  for (const line of lines) {
+    // New file header (diff --git a/... b/...)
+    if (line.startsWith('diff --git')) {
+      if (currentFile) {
+        if (currentHunk) currentFile.hunks.push(currentHunk);
+        files.push(currentFile);
+      }
+      // Extract filename from "diff --git a/path b/path"
+      const match = line.match(/diff --git a\/(.+?) b\//);
+      currentFile = {
+        filename: (match && match[1]) ? match[1] : 'unknown',
+        hunks: [],
+      };
+      currentHunk = null;
+      continue;
+    }
+
+    // Hunk header (@@ -x,y +a,b @@)
+    if (line.startsWith('@@')) {
+      if (currentHunk && currentFile) {
+        currentFile.hunks.push(currentHunk);
+      }
+      currentHunk = {
+        header: line,
+        lines: [],
+      };
+      continue;
+    }
+
+    // Skip file metadata lines (---, +++, index, etc.)
+    if (line.startsWith('---') || line.startsWith('+++') ||
+        line.startsWith('index ') || line.startsWith('new file') ||
+        line.startsWith('deleted file') || line.startsWith('Binary files')) {
+      continue;
+    }
+
+    // Add content lines to current hunk
+    if (currentHunk) {
+      currentHunk.lines.push(line);
+    }
+  }
+
+  // Push final file and hunk
+  if (currentFile) {
+    if (currentHunk) currentFile.hunks.push(currentHunk);
+    files.push(currentFile);
+  }
+
+  return files;
+};
+
+// Get line style based on diff prefix
+const getDiffLineStyle = (line: string): string => {
+  if (line.startsWith('+')) {
+    return 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-200';
+  }
+  if (line.startsWith('-')) {
+    return 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-200';
+  }
+  return 'text-gray-700 dark:text-gray-300';
+};
+
+// Component for rendering a single file's diff
+interface FileDiffViewProps {
+  file: FileDiff;
+  defaultExpanded?: boolean;
+}
+
+const FileDiffView: React.FC<FileDiffViewProps> = ({ file, defaultExpanded = true }) => {
+  const [isExpanded, setIsExpanded] = useState(defaultExpanded);
+
+  const lineCount = file.hunks.reduce((acc, hunk) => acc + hunk.lines.length, 0);
+  const additions = file.hunks.reduce(
+    (acc, hunk) => acc + hunk.lines.filter(l => l.startsWith('+')).length, 0
+  );
+  const deletions = file.hunks.reduce(
+    (acc, hunk) => acc + hunk.lines.filter(l => l.startsWith('-')).length, 0
+  );
+
+  return (
+    <div className="border border-gray-200 dark:border-gray-700 rounded mb-2 overflow-hidden">
+      {/* File header */}
+      <div
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="flex items-center gap-2 px-3 py-2 bg-gray-100 dark:bg-gray-800 cursor-pointer hover:bg-gray-150 dark:hover:bg-gray-750 transition-colors"
+      >
+        <div className="text-gray-400 dark:text-gray-500">
+          {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+        </div>
+        <Code className="w-3 h-3 text-purple-600 dark:text-purple-400" />
+        <code className="text-xs font-mono text-gray-700 dark:text-gray-300 flex-1 truncate" title={file.filename}>
+          {file.filename}
+        </code>
+        <div className="flex items-center gap-2 text-xs">
+          {additions > 0 && (
+            <span className="text-green-600 dark:text-green-400">+{additions}</span>
+          )}
+          {deletions > 0 && (
+            <span className="text-red-600 dark:text-red-400">-{deletions}</span>
+          )}
+          <span className="text-gray-400 dark:text-gray-500">({lineCount} lines)</span>
+        </div>
+      </div>
+
+      {/* File diff content */}
+      {isExpanded && (
+        <div className="overflow-x-auto">
+          <pre className="text-xs font-mono p-0 m-0 bg-gray-50 dark:bg-gray-900/50">
+            {file.hunks.map((hunk, hunkIdx) => (
+              <div key={hunkIdx}>
+                {/* Hunk header */}
+                <div className="px-3 py-1 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 border-y border-gray-200 dark:border-gray-700">
+                  {hunk.header}
+                </div>
+                {/* Hunk lines */}
+                {hunk.lines.map((line, lineIdx) => (
+                  <div
+                    key={lineIdx}
+                    className={`px-3 py-0.5 whitespace-pre ${getDiffLineStyle(line)}`}
+                  >
+                    {line || ' '}
+                  </div>
+                ))}
+              </div>
+            ))}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Component for the full diff view
+interface DiffViewProps {
+  patch?: string | undefined;
+}
+
+const DiffView: React.FC<DiffViewProps> = ({ patch }) => {
+  const [allExpanded, setAllExpanded] = useState(true);
+
+  const fileDiffs = useMemo(() => parseDiff(patch || ''), [patch]);
+
+  // Handle empty or no patch
+  if (!patch || patch.trim() === '') {
+    return (
+      <div className="text-xs text-gray-400 dark:text-gray-500 italic py-2">
+        No diff available for this commit
+      </div>
+    );
+  }
+
+  if (fileDiffs.length === 0) {
+    return (
+      <div className="text-xs text-gray-400 dark:text-gray-500 italic py-2">
+        Unable to parse diff
+      </div>
+    );
+  }
+
+  const totalFiles = fileDiffs.length;
+  const shouldCollapseByDefault = totalFiles > 3;
+
+  return (
+    <div>
+      {/* Diff header with expand/collapse all */}
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-xs text-gray-500">
+          Diff ({totalFiles} file{totalFiles !== 1 ? 's' : ''})
+        </div>
+        {totalFiles > 1 && (
+          <button
+            onClick={() => setAllExpanded(!allExpanded)}
+            className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 transition-colors"
+          >
+            {allExpanded ? 'Collapse all' : 'Expand all'}
+          </button>
+        )}
+      </div>
+
+      {/* Per-file diffs */}
+      <div className="max-h-96 overflow-y-auto">
+        {fileDiffs.map((file, idx) => (
+          <FileDiffView
+            key={`${file.filename}-${idx}`}
+            file={file}
+            defaultExpanded={allExpanded && !shouldCollapseByDefault}
+          />
+        ))}
+      </div>
+    </div>
+  );
+};
 
 interface CommitListProps {
   commits: GitCommitType[];
@@ -162,9 +374,9 @@ const CommitItem: React.FC<CommitItemProps> = ({ commit, isExpanded, onToggle })
             </code>
           </div>
 
-          {/* Files changed */}
-          {hasFiles && (
-            <div>
+          {/* Files changed (shown only when no patch available) */}
+          {hasFiles && !commit.patch && (
+            <div className="mb-3">
               <div className="text-xs text-gray-500 mb-2">
                 Files changed ({commit.files_changed.length})
               </div>
@@ -183,6 +395,9 @@ const CommitItem: React.FC<CommitItemProps> = ({ commit, isExpanded, onToggle })
               </div>
             </div>
           )}
+
+          {/* Diff view */}
+          <DiffView patch={commit.patch} />
         </div>
       )}
     </div>

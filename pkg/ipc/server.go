@@ -377,19 +377,26 @@ func (s *Server) convertToEvent(msg *Message) *events.Event {
 		if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 			return nil
 		}
+		eventPayload := map[string]interface{}{
+			"agent_id":      payload.AgentID,
+			"hash":          payload.Hash,
+			"short_hash":    payload.ShortHash,
+			"message":       payload.Message,
+			"author":        payload.Author,
+			"author_email":  payload.AuthorEmail,
+			"timestamp":     payload.Timestamp,
+			"files_changed": payload.FilesChanged,
+		}
+		if payload.Patch != "" {
+			eventPayload["patch"] = payload.Patch
+		}
+		if payload.Truncated {
+			eventPayload["truncated"] = payload.Truncated
+		}
 		return &events.Event{
 			Type:      events.EventAgentCommit,
 			Timestamp: msg.Timestamp,
-			Payload: map[string]interface{}{
-				"agent_id":      payload.AgentID,
-				"hash":          payload.Hash,
-				"short_hash":    payload.ShortHash,
-				"message":       payload.Message,
-				"author":        payload.Author,
-				"author_email":  payload.AuthorEmail,
-				"timestamp":     payload.Timestamp,
-				"files_changed": payload.FilesChanged,
-			},
+			Payload:   eventPayload,
 		}
 
 	case MessageTypeAgentMergeStatus:

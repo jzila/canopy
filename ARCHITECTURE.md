@@ -116,8 +116,8 @@ type Config struct {
     Concurrency     int           // Parallel agents (default: 4)
     UseBwrap        bool          // Full sandbox isolation
     MaxRetries      int           // Retry failed tasks (default: 3)
-    MaxPriority     int           // Only run tasks with priority <= this (-1 = no filter)
     ResolverTimeout time.Duration // Timeout for resolver agents
+    Rules           *RulesSettings // Task selection rules (priority, type, labels)
 }
 ```
 

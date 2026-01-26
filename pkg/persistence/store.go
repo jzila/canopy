@@ -96,6 +96,20 @@ type Task struct {
 	UpdatedAt int64  `json:"updated_at"`
 }
 
+// AgentCommit represents a git commit made by an agent, persisted in the database
+type AgentCommit struct {
+	ID           int64    `json:"id"`
+	AgentID      string   `json:"agent_id"`
+	Hash         string   `json:"hash"`
+	ShortHash    string   `json:"short_hash"`
+	Message      string   `json:"message"`
+	Author       string   `json:"author,omitempty"`
+	AuthorEmail  string   `json:"author_email,omitempty"`
+	Timestamp    string   `json:"timestamp,omitempty"`
+	FilesChanged []string `json:"files_changed,omitempty"`
+	CreatedAt    int64    `json:"created_at,omitempty"`
+}
+
 // ActiveOverlay represents an overlay filesystem being tracked for agent resumability
 type ActiveOverlay struct {
 	AgentID   string `json:"agent_id"`
@@ -110,11 +124,13 @@ type ActiveOverlay struct {
 	Status    string `json:"status"` // active, completed, orphaned
 }
 
-// RunConfig represents persisted orchestrator settings for a repository
+// RunConfig represents saved orchestrator configuration for a repository.
+// Note: Task selection parameters (priority_max, types, labels) are stored in
+// RulesSettings and persisted via the rules API, not in RunConfig.
 type RunConfig struct {
 	RepoID      string `json:"repo_id"`
 	Concurrency int    `json:"concurrency"`
-	MaxPriority int    `json:"max_priority"`
+	PriorityMax int    `json:"priority_max"` // Max priority filter for task selection
 	UseBwrap    bool   `json:"use_bwrap"`
 	MaxRetries  int    `json:"max_retries"`
 	UpdatedAt   int64  `json:"updated_at,omitempty"`
@@ -2134,7 +2150,7 @@ func DefaultRunConfig(repoID string) *RunConfig {
 	return &RunConfig{
 		RepoID:      repoID,
 		Concurrency: 4,
-		MaxPriority: 4,
+		PriorityMax: 4,
 		UseBwrap:    true,
 		MaxRetries:  3,
 	}
@@ -2153,7 +2169,7 @@ func (s *Store) GetRunConfig(repoID string) (*RunConfig, error) {
 	err := row.Scan(
 		&config.RepoID,
 		&config.Concurrency,
-		&config.MaxPriority,
+		&config.PriorityMax,
 		&useBwrap,
 		&config.MaxRetries,
 		&updatedAt,
@@ -2188,7 +2204,7 @@ func (s *Store) SaveRunConfig(repoID string, config *RunConfig) error {
 	_, err := s.db.Exec(query,
 		repoID,
 		config.Concurrency,
-		config.MaxPriority,
+		config.PriorityMax,
 		boolToInt(config.UseBwrap),
 		config.MaxRetries,
 	)
@@ -2196,4 +2212,119 @@ func (s *Store) SaveRunConfig(repoID string, config *RunConfig) error {
 		return fmt.Errorf("failed to save run config: %w", err)
 	}
 	return nil
+}
+
+// CreateAgentCommit persists a git commit made by an agent.
+// The files_changed field is stored as a comma-separated string.
+func (s *Store) CreateAgentCommit(commit *AgentCommit) error {
+	query := `
+		INSERT INTO agent_commits (agent_id, hash, short_hash, message, author, author_email, timestamp, files_changed)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`
+	filesChanged := strings.Join(commit.FilesChanged, ",")
+	_, err := s.db.Exec(query,
+		commit.AgentID,
+		commit.Hash,
+		commit.ShortHash,
+		commit.Message,
+		nullString(commit.Author),
+		nullString(commit.AuthorEmail),
+		nullString(commit.Timestamp),
+		nullString(filesChanged),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create agent commit: %w", err)
+	}
+	return nil
+}
+
+// GetAgentCommits retrieves all commits for a specific agent, ordered by creation time.
+func (s *Store) GetAgentCommits(agentID string) ([]AgentCommit, error) {
+	query := `SELECT id, agent_id, hash, short_hash, message, author, author_email, timestamp, files_changed, created_at
+		FROM agent_commits WHERE agent_id = ? ORDER BY created_at ASC`
+	rows, err := s.db.Query(query, agentID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query agent commits: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var commits []AgentCommit
+	for rows.Next() {
+		commit, err := s.scanAgentCommitFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		commits = append(commits, *commit)
+	}
+	return commits, nil
+}
+
+// GetAllAgentCommits retrieves all commits for multiple agents at once.
+// Returns a map of agent_id -> []AgentCommit for efficient bulk loading.
+func (s *Store) GetAllAgentCommits(agentIDs []string) (map[string][]AgentCommit, error) {
+	if len(agentIDs) == 0 {
+		return make(map[string][]AgentCommit), nil
+	}
+
+	// Build IN clause
+	placeholders := make([]string, len(agentIDs))
+	args := make([]interface{}, len(agentIDs))
+	for i, id := range agentIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+
+	query := fmt.Sprintf(`SELECT id, agent_id, hash, short_hash, message, author, author_email, timestamp, files_changed, created_at
+		FROM agent_commits WHERE agent_id IN (%s) ORDER BY created_at ASC`,
+		strings.Join(placeholders, ","))
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query agent commits: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	result := make(map[string][]AgentCommit)
+	for rows.Next() {
+		commit, err := s.scanAgentCommitFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		result[commit.AgentID] = append(result[commit.AgentID], *commit)
+	}
+	return result, nil
+}
+
+func (s *Store) scanAgentCommitFromRows(rows *sql.Rows) (*AgentCommit, error) {
+	var commit AgentCommit
+	var author, authorEmail, timestamp, filesChanged sql.NullString
+	var createdAt sql.NullInt64
+
+	err := rows.Scan(
+		&commit.ID,
+		&commit.AgentID,
+		&commit.Hash,
+		&commit.ShortHash,
+		&commit.Message,
+		&author,
+		&authorEmail,
+		&timestamp,
+		&filesChanged,
+		&createdAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan agent commit: %w", err)
+	}
+
+	commit.Author = author.String
+	commit.AuthorEmail = authorEmail.String
+	commit.Timestamp = timestamp.String
+	commit.CreatedAt = createdAt.Int64
+
+	// Parse comma-separated files_changed
+	if filesChanged.Valid && filesChanged.String != "" {
+		commit.FilesChanged = strings.Split(filesChanged.String, ",")
+	}
+
+	return &commit, nil
 }

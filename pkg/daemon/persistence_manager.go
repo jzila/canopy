@@ -131,11 +131,12 @@ func (m *PersistenceManager) GetAllTasks() ([]persistence.Task, error) {
 }
 
 // RestoreState restores daemon state from the database.
-// Returns the restored run (if any), agents, and tasks.
+// Returns the restored run (if any), agents, tasks, and commits.
 type RestoredState struct {
-	Run    *persistence.Run
-	Agents []persistence.Agent
-	Tasks  []persistence.Task
+	Run     *persistence.Run
+	Agents  []persistence.Agent
+	Tasks   []persistence.Task
+	Commits map[string][]persistence.AgentCommit // agentID -> commits
 }
 
 // RestoreState loads state from the database for daemon initialization.
@@ -190,6 +191,30 @@ func (m *PersistenceManager) RestoreState() (*RestoredState, error) {
 
 	if len(tasks) > 0 {
 		logging.Debug("found tasks to restore", "count", len(tasks))
+	}
+
+	// Load commits for all agents in bulk
+	if len(agents) > 0 {
+		agentIDs := make([]string, len(agents))
+		for i, a := range agents {
+			agentIDs[i] = a.ID
+		}
+
+		commits, err := m.store.GetAllAgentCommits(agentIDs)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get agent commits: %w", err)
+		}
+		state.Commits = commits
+
+		totalCommits := 0
+		for _, c := range commits {
+			totalCommits += len(c)
+		}
+		if totalCommits > 0 {
+			logging.Debug("found commits to restore", "count", totalCommits, "agents", len(commits))
+		}
+	} else {
+		state.Commits = make(map[string][]persistence.AgentCommit)
 	}
 
 	return state, nil
@@ -504,6 +529,23 @@ func ApplyRestoredState(state *RuntimeState, restored *RestoredState) {
 	for i := range restored.Agents {
 		agentState := ConvertPersistenceAgentToState(&restored.Agents[i])
 
+		// Restore git commits from the commits map
+		if commits, ok := restored.Commits[agentState.ID]; ok && len(commits) > 0 {
+			agentState.GitCommits = make([]GitCommit, len(commits))
+			for j, c := range commits {
+				agentState.GitCommits[j] = GitCommit{
+					Hash:         c.Hash,
+					ShortHash:    c.ShortHash,
+					Message:      c.Message,
+					Author:       c.Author,
+					AuthorEmail:  c.AuthorEmail,
+					Timestamp:    c.Timestamp,
+					FilesChanged: c.FilesChanged,
+				}
+			}
+			agentState.Commits = len(agentState.GitCommits) // Keep legacy count in sync
+		}
+
 		// Wire up lifecycle callbacks for non-terminal agents so any future
 		// transitions publish events to the EventBus for real-time UI updates.
 		if agentState.Lifecycle != nil && !agentState.Lifecycle.IsTerminal() {
@@ -520,7 +562,8 @@ func ApplyRestoredState(state *RuntimeState, restored *RestoredState) {
 			"task_id", restored.Agents[i].TaskID,
 			"status", restored.Agents[i].Status,
 			"run_id", restored.Agents[i].RunID,
-			"parent_agent_id", restored.Agents[i].ParentAgentID)
+			"parent_agent_id", restored.Agents[i].ParentAgentID,
+			"commits", len(agentState.GitCommits))
 	}
 
 	// Rebuild parent-child links after all agents are added

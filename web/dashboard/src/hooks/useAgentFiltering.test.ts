@@ -433,5 +433,50 @@ describe('useAgentFiltering', () => {
       expect(result.current.groupedAgents).toHaveLength(2);
       expect(result.current.groupedAgents.every((g) => g.children.length === 0)).toBe(true);
     });
+
+    it('includes children with visible parent regardless of child status filter', () => {
+      // Scenario: parent is completed, child (resolver) is running, filter is 'completed'
+      // The child should still be included with its parent so the agent chain shows it
+      const agents = {
+        'parent-1': createMockAgent({ id: 'parent-1', status: 'completed' }),
+        'child-1': createMockAgent({ id: 'child-1', parent_agent_id: 'parent-1', status: 'running' }),
+      };
+
+      const { result } = renderHook(() =>
+        useAgentFiltering({
+          agents,
+          statusFilter: 'completed',
+          showArchived: false,
+          activeRunId: '',
+        })
+      );
+
+      // Parent should be shown with the child grouped under it
+      expect(result.current.groupedAgents).toHaveLength(1);
+      expect(result.current.groupedAgents[0]!.parent.id).toBe('parent-1');
+      expect(result.current.groupedAgents[0]!.children).toHaveLength(1);
+      expect(result.current.groupedAgents[0]!.children[0]!.id).toBe('child-1');
+    });
+
+    it('does not show child when both parent and child are filtered out', () => {
+      // Scenario: parent is running, child (resolver) is starting, filter is 'completed'
+      // Neither should be shown
+      const agents = {
+        'parent-1': createMockAgent({ id: 'parent-1', status: 'running' }),
+        'child-1': createMockAgent({ id: 'child-1', parent_agent_id: 'parent-1', status: 'starting' }),
+      };
+
+      const { result } = renderHook(() =>
+        useAgentFiltering({
+          agents,
+          statusFilter: 'completed',
+          showArchived: false,
+          activeRunId: '',
+        })
+      );
+
+      // Nothing should be shown since both are filtered out
+      expect(result.current.groupedAgents).toHaveLength(0);
+    });
   });
 });

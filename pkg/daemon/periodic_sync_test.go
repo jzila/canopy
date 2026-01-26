@@ -361,3 +361,111 @@ func TestDaemonConfig_PeriodicSyncConfig(t *testing.T) {
 		t.Error("expected SyncAllRepos to be true")
 	}
 }
+
+func TestPeriodicSyncManager_GarbageCollectsRemovedTasks(t *testing.T) {
+	// Start with two tasks
+	initialTasks := []beads.Task{
+		{ID: "task-1", Title: "Task 1", Status: "open", Priority: 2},
+		{ID: "task-2", Title: "Task 2", Status: "open", Priority: 1},
+	}
+
+	mockClient := &mockBeadsClientForSync{
+		listTasks: initialTasks,
+	}
+
+	daemon := newDaemonForTest(Config{}, nil, mockClient)
+	daemon.repoManager.SetActiveRepositoryDirect("test-repo-id")
+	daemon.repoManager.mu.Lock()
+	daemon.repoManager.clients["test-repo-id"] = mockClient
+	daemon.repoManager.mu.Unlock()
+
+	config := PeriodicSyncConfig{
+		Interval: 50 * time.Millisecond,
+		Enabled:  true,
+	}
+
+	manager := NewPeriodicSyncManager(config, daemon)
+	manager.Start()
+
+	// Wait for first sync
+	time.Sleep(75 * time.Millisecond)
+
+	// Verify both tasks exist
+	state := daemon.GetRuntimeState()
+	if len(state.Tasks) != 2 {
+		t.Fatalf("expected 2 tasks after first sync, got %d", len(state.Tasks))
+	}
+	if _, exists := state.Tasks["task-1"]; !exists {
+		t.Error("task-1 should exist after first sync")
+	}
+	if _, exists := state.Tasks["task-2"]; !exists {
+		t.Error("task-2 should exist after first sync")
+	}
+
+	// Simulate closing task-1 in beads (remove from list)
+	mockClient.setTasks([]beads.Task{
+		{ID: "task-2", Title: "Task 2", Status: "open", Priority: 1},
+	})
+
+	// Wait for another sync to garbage collect the removed task
+	time.Sleep(75 * time.Millisecond)
+	manager.Stop()
+
+	// Verify task-1 is garbage collected, task-2 remains
+	if len(state.Tasks) != 1 {
+		t.Errorf("expected 1 task after garbage collection, got %d", len(state.Tasks))
+	}
+	if _, exists := state.Tasks["task-1"]; exists {
+		t.Error("task-1 should be removed after garbage collection")
+	}
+	if _, exists := state.Tasks["task-2"]; !exists {
+		t.Error("task-2 should still exist after garbage collection")
+	}
+}
+
+func TestPeriodicSyncManager_GarbageCollectsAllTasks(t *testing.T) {
+	// Start with tasks, then simulate all being closed
+	initialTasks := []beads.Task{
+		{ID: "task-1", Title: "Task 1", Status: "open", Priority: 2},
+		{ID: "task-2", Title: "Task 2", Status: "open", Priority: 1},
+	}
+
+	mockClient := &mockBeadsClientForSync{
+		listTasks: initialTasks,
+	}
+
+	daemon := newDaemonForTest(Config{}, nil, mockClient)
+	daemon.repoManager.SetActiveRepositoryDirect("test-repo-id")
+	daemon.repoManager.mu.Lock()
+	daemon.repoManager.clients["test-repo-id"] = mockClient
+	daemon.repoManager.mu.Unlock()
+
+	config := PeriodicSyncConfig{
+		Interval: 50 * time.Millisecond,
+		Enabled:  true,
+	}
+
+	manager := NewPeriodicSyncManager(config, daemon)
+	manager.Start()
+
+	// Wait for first sync
+	time.Sleep(75 * time.Millisecond)
+
+	// Verify tasks exist
+	state := daemon.GetRuntimeState()
+	if len(state.Tasks) != 2 {
+		t.Fatalf("expected 2 tasks after first sync, got %d", len(state.Tasks))
+	}
+
+	// Simulate all tasks being closed in beads
+	mockClient.setTasks([]beads.Task{})
+
+	// Wait for another sync to garbage collect
+	time.Sleep(75 * time.Millisecond)
+	manager.Stop()
+
+	// Verify all tasks are removed
+	if len(state.Tasks) != 0 {
+		t.Errorf("expected 0 tasks after all closed, got %d", len(state.Tasks))
+	}
+}

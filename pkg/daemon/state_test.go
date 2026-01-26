@@ -262,3 +262,73 @@ func TestHandleAgentStartedWithRepoID(t *testing.T) {
 		t.Errorf("expected repo ID 'test-repo-id', got '%s'", agent.RepoID)
 	}
 }
+
+func TestRemoveTask(t *testing.T) {
+	state := NewRuntimeState()
+
+	// Add tasks to all maps using AddTaskWithRepo (populates persistentTasks and Tasks)
+	task1 := &beads.Task{ID: "task-1", Title: "Task 1", Status: "open"}
+	task2 := &beads.Task{ID: "task-2", Title: "Task 2", Status: "open"}
+	state.AddTaskWithRepo(task1, "repo-a")
+	state.AddTaskWithRepo(task2, "repo-a")
+
+	// Also set runtime status for task-1
+	state.SetRuntimeTaskStatus("task-1", "in_progress", "agent-1")
+
+	// Verify initial state
+	state.mu.RLock()
+	if len(state.Tasks) != 2 {
+		t.Errorf("expected 2 tasks in Tasks, got %d", len(state.Tasks))
+	}
+	if len(state.persistentTasks) != 2 {
+		t.Errorf("expected 2 tasks in persistentTasks, got %d", len(state.persistentTasks))
+	}
+	if len(state.runtimeTasks) != 1 {
+		t.Errorf("expected 1 task in runtimeTasks, got %d", len(state.runtimeTasks))
+	}
+	state.mu.RUnlock()
+
+	// Remove task-1
+	state.RemoveTask("task-1")
+
+	// Verify task-1 is removed from all maps
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+
+	if _, exists := state.Tasks["task-1"]; exists {
+		t.Error("task-1 should be removed from Tasks")
+	}
+	if _, exists := state.persistentTasks["task-1"]; exists {
+		t.Error("task-1 should be removed from persistentTasks")
+	}
+	if _, exists := state.runtimeTasks["task-1"]; exists {
+		t.Error("task-1 should be removed from runtimeTasks")
+	}
+
+	// Verify task-2 is still present
+	if _, exists := state.Tasks["task-2"]; !exists {
+		t.Error("task-2 should still exist in Tasks")
+	}
+	if _, exists := state.persistentTasks["task-2"]; !exists {
+		t.Error("task-2 should still exist in persistentTasks")
+	}
+}
+
+func TestRemoveTask_NonExistent(t *testing.T) {
+	state := NewRuntimeState()
+
+	// Add a task
+	task1 := &beads.Task{ID: "task-1", Title: "Task 1", Status: "open"}
+	state.AddTaskWithRepo(task1, "repo-a")
+
+	// Remove a non-existent task (should not panic or error)
+	state.RemoveTask("non-existent-task")
+
+	// Verify original task is unchanged
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+
+	if _, exists := state.Tasks["task-1"]; !exists {
+		t.Error("task-1 should still exist")
+	}
+}

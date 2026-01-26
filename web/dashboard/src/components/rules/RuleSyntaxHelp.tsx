@@ -86,7 +86,7 @@ export const RuleSyntaxHelp: React.FC<RuleSyntaxHelpProps> = ({ onInsertExample 
             <h4 className="text-xs font-mono text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
               Examples {onInsertExample && '(click to insert)'}
             </h4>
-            <div className="flex flex-wrap gap-1">
+            <div className="flex flex-wrap gap-1.5">
               {EXAMPLES.map((ex) => (
                 <button
                   key={ex.value}
@@ -100,9 +100,10 @@ export const RuleSyntaxHelp: React.FC<RuleSyntaxHelpProps> = ({ onInsertExample 
                       : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 cursor-default'
                     }
                   `}
-                  title={ex.description}
+                  title={`${ex.label}: ${ex.description}`}
+                  aria-label={ex.label}
                 >
-                  {ex.label}
+                  {ex.value}
                 </button>
               ))}
             </div>

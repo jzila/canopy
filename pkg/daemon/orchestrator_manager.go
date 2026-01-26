@@ -18,12 +18,15 @@ import (
 	"github.com/jzila/canopy/pkg/logging"
 	"github.com/jzila/canopy/pkg/mergequeue"
 	"github.com/jzila/canopy/pkg/orchestrator"
+	"github.com/jzila/canopy/pkg/resolver"
 	"github.com/jzila/canopy/pkg/rules"
 	"github.com/jzila/canopy/pkg/types"
 )
 
 // RunConfig holds configuration for starting a new orchestration run.
 // This mirrors orchestrator.Config but is used at the IPC/daemon boundary.
+// Task selection parameters (priority, type, labels, assignee) are handled via
+// RuleOverrides or direct RulesSettings fields, not as top-level config.
 type RunConfig struct {
 	WorkDir         string        `json:"work_dir"`
 	OutputDir       string        `json:"output_dir,omitempty"`
@@ -32,15 +35,16 @@ type RunConfig struct {
 	DryRun          bool          `json:"dry_run,omitempty"`
 	UseBwrap        bool          `json:"use_bwrap,omitempty"`
 	MaxRetries      int           `json:"max_retries,omitempty"`
-	MaxPriority     int           `json:"max_priority,omitempty"`
 	ResolverTimeout time.Duration `json:"resolver_timeout,omitempty"`
 	PollInterval    time.Duration `json:"poll_interval,omitempty"`
 	RepoID          string        `json:"repo_id,omitempty"`
-	Types           []string      `json:"types,omitempty"`
-	ExcludeTypes    []string      `json:"exclude_types,omitempty"`
-	Labels          []string      `json:"labels,omitempty"`
-	ExcludeLabels   []string      `json:"exclude_labels,omitempty"`
-	Assignee        string        `json:"assignee,omitempty"`
+	// Task selection settings (applied to RulesSettings)
+	PriorityMax   int      `json:"priority_max,omitempty"` // Max priority filter (-1 = no filter)
+	Types         []string `json:"types,omitempty"`
+	ExcludeTypes  []string `json:"exclude_types,omitempty"`
+	Labels        []string `json:"labels,omitempty"`
+	ExcludeLabels []string `json:"exclude_labels,omitempty"`
+	Assignee      string   `json:"assignee,omitempty"`
 	// RuleOverrides contains custom rules to apply for this run only.
 	// These rules are applied with the highest precedence (above config.toml rules).
 	// When the run ends, these overrides are discarded unless persisted.
@@ -275,6 +279,39 @@ func (m *OrchestratorManager) GetOrchestratorState(repoPath string) Orchestrator
 		return lifecycle.State
 	}
 	return ""
+}
+
+// SetOrchestratorPaused transitions the orchestrator to paused or unpaused state.
+// When paused=true, state transitions to OrchestratorPaused.
+// When paused=false, state transitions to OrchestratorActive (or OrchestratorIdle if no agents).
+// Returns false if the repo is not registered or not in an active state.
+func (m *OrchestratorManager) SetOrchestratorPaused(repoPath string, paused bool) bool {
+	lifecycle := m.GetOrchestratorLifecycle(repoPath)
+	if lifecycle == nil {
+		return false
+	}
+
+	lifecycle.mu.Lock()
+	defer lifecycle.mu.Unlock()
+
+	// Only allow pausing/resuming when orchestrator is active, idle, or already paused
+	if lifecycle.State == OrchestratorOff {
+		return false
+	}
+
+	if paused {
+		lifecycle.State = OrchestratorPaused
+	} else {
+		// When resuming, determine state based on active agents
+		activeCount := m.countActiveAgents()
+		if activeCount > 0 {
+			lifecycle.State = OrchestratorActive
+		} else {
+			lifecycle.State = OrchestratorIdle
+		}
+	}
+
+	return true
 }
 
 // ListRegisteredRepos returns the paths of all registered repositories.
@@ -516,9 +553,6 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 	if config.MaxRetries == 0 {
 		config.MaxRetries = 3
 	}
-	if config.MaxPriority == 0 {
-		config.MaxPriority = -1 // No filter by default
-	}
 
 	// Update OrchestratorLifecycle state before releasing lock
 	lifecycle.State = OrchestratorActive
@@ -541,14 +575,15 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 		DryRun:          config.DryRun,
 		UseBwrap:        config.UseBwrap,
 		MaxRetries:      config.MaxRetries,
-		MaxPriority:     config.MaxPriority,
 		ResolverTimeout: config.ResolverTimeout,
 		PollInterval:    config.PollInterval,
 	}
 
 	// Apply CLI rules overrides if any were provided
+	// All task selection parameters go through the rules system
 	if hasRulesOverrides(&config) {
 		orchConfig.Rules = &cfgpkg.RulesSettings{
+			PriorityMax:   config.PriorityMax,
 			Types:         config.Types,
 			ExcludeTypes:  config.ExcludeTypes,
 			Labels:        config.Labels,
@@ -556,6 +591,7 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 			Assignee:      config.Assignee,
 		}
 		orchConfig.RulesOverrides = &orchestrator.RulesOverrides{
+			PriorityMax:   config.PriorityMax != 0,
 			Types:         len(config.Types) > 0,
 			ExcludeTypes:  len(config.ExcludeTypes) > 0,
 			Labels:        len(config.Labels) > 0,
@@ -617,6 +653,10 @@ func (m *OrchestratorManager) StartRun(ctx context.Context, config RunConfig) (s
 	// Register commit callback to publish commit events to EventBus
 	// This replaces the IPC-based commit events when running in daemon mode
 	orch.SetCommitCallback(m.createCommitCallback())
+
+	// Register agent callback to publish resolver/repair agent events to EventBus
+	// This replaces the IPC-based agent events when running in daemon mode
+	orch.SetAgentCallback(m.createAgentCallback(runID, config.RepoID))
 
 	// Register state callbacks to track Idle/Active transitions
 	orch.SetStateCallbacks(m.createStateCallbacks(lifecycle))
@@ -817,9 +857,10 @@ func (m *OrchestratorManager) GetActiveRunForRepo(repoPath string) (*RunState, e
 }
 
 // UpdateRunConfig updates the configuration of a running orchestration.
-// Supports modifying concurrency and max priority filter.
+// Supports modifying concurrency. Task selection parameters (priority, types, labels)
+// are updated through the rules engine via the rules API, not this method.
 // Returns an error if the run is not found or not active.
-func (m *OrchestratorManager) UpdateRunConfig(runID string, concurrency *int, maxPriority *int) error {
+func (m *OrchestratorManager) UpdateRunConfig(runID string, concurrency *int) error {
 	runStateI, ok := m.runs.Load(runID)
 	if !ok {
 		return fmt.Errorf("run not found: %s", runID)
@@ -842,13 +883,6 @@ func (m *OrchestratorManager) UpdateRunConfig(runID string, concurrency *int, ma
 		// The new concurrency will take effect on the next run.
 		// TODO: Implement SetConcurrency on scheduler if dynamic resizing is needed.
 		logging.Info("updated run concurrency", "run_id", runID, "concurrency", *concurrency)
-	}
-
-	// Update max priority filter if specified
-	if maxPriority != nil {
-		runState.Config.MaxPriority = *maxPriority
-		// Note: MaxPriority changes will take effect on next task selection
-		logging.Info("updated run max priority", "run_id", runID, "max_priority", *maxPriority)
 	}
 
 	return nil
@@ -1233,6 +1267,132 @@ func (m *OrchestratorManager) createCommitCallback() mergequeue.CommitCallback {
 	}
 }
 
+// createAgentCallback creates a callback that publishes resolver/repair agent events to the EventBus.
+// This replaces the IPC-based agent events when the orchestrator runs in daemon mode.
+// It handles agent started, completed, and failed events from child agents (resolvers, repair agents).
+func (m *OrchestratorManager) createAgentCallback(runID, repoID string) func(event interface{}) {
+	return func(eventI interface{}) {
+		if m.eventBus == nil {
+			return
+		}
+
+		// Type-assert to resolver.AgentEvent
+		event, ok := eventI.(resolver.AgentEvent)
+		if !ok {
+			logging.Warn("createAgentCallback: unexpected event type", "type", fmt.Sprintf("%T", eventI))
+			return
+		}
+
+		switch event.EventType {
+		case "started":
+			// Publish agent started event
+			payload := map[string]interface{}{
+				"agent_id":         event.AgentID,
+				"run_id":           event.RunID,
+				"task_id":          event.TaskID,
+				"task_title":       event.TaskTitle,
+				"task_description": event.TaskDescription,
+				"parent_agent_id":  event.ParentAgentID,
+				"repo_id":          event.RepoID,
+			}
+			m.eventBus.Publish(events.Event{
+				Type:      events.EventAgentStarted,
+				Timestamp: time.Now(),
+				Payload:   payload,
+			})
+
+			// Transition lifecycle to running state
+			if m.state != nil {
+				if agent := m.state.GetAgent(event.AgentID); agent != nil && agent.Lifecycle != nil {
+					if err := agent.Lifecycle.Transition(lifecycle.EventAgentSpawned, lifecycle.TransitionContext{}); err != nil {
+						logging.Warn("lifecycle transition failed on resolver agent start",
+							"agent_id", event.AgentID,
+							"event", lifecycle.EventAgentSpawned,
+							"error", err,
+						)
+					}
+				}
+			}
+
+		case "completed":
+			// Build completion payload
+			payload := map[string]interface{}{
+				"agent_id":        event.AgentID,
+				"parent_agent_id": event.ParentAgentID,
+				"exit_code":       event.ExitCode,
+				"duration":        event.DurationSeconds,
+				"files_changed":   event.FilesChanged,
+				"input_tokens":    event.InputTokens,
+				"output_tokens":   event.OutputTokens,
+				"cost_usd":        event.CostUSD,
+				"duration_ms":     event.DurationMS,
+				"duration_api_ms": event.DurationAPIMS,
+				"num_turns":       event.NumTurns,
+				"commits_created": event.CommitsCreated,
+			}
+
+			m.eventBus.Publish(events.Event{
+				Type:      events.EventAgentCompleted,
+				Timestamp: time.Now(),
+				Payload:   payload,
+			})
+
+			// Transition lifecycle to queued_for_merge state
+			if m.state != nil {
+				if agent := m.state.GetAgent(event.AgentID); agent != nil && agent.Lifecycle != nil {
+					if err := agent.Lifecycle.Transition(lifecycle.EventWorkComplete, lifecycle.TransitionContext{}); err != nil {
+						logging.Warn("lifecycle transition failed on resolver agent done",
+							"agent_id", event.AgentID,
+							"event", lifecycle.EventWorkComplete,
+							"error", err,
+						)
+					}
+				}
+			}
+
+		case "failed":
+			// Build failure payload
+			payload := map[string]interface{}{
+				"agent_id":        event.AgentID,
+				"parent_agent_id": event.ParentAgentID,
+				"exit_code":       event.ExitCode,
+				"duration":        event.DurationSeconds,
+				"files_changed":   event.FilesChanged,
+				"input_tokens":    event.InputTokens,
+				"output_tokens":   event.OutputTokens,
+				"cost_usd":        event.CostUSD,
+				"duration_ms":     event.DurationMS,
+				"duration_api_ms": event.DurationAPIMS,
+				"num_turns":       event.NumTurns,
+				"commits_created": event.CommitsCreated,
+				"error":           event.Error,
+			}
+
+			m.eventBus.Publish(events.Event{
+				Type:      events.EventAgentFailed,
+				Timestamp: time.Now(),
+				Payload:   payload,
+			})
+
+			// Transition lifecycle to failed state
+			if m.state != nil {
+				if agent := m.state.GetAgent(event.AgentID); agent != nil && agent.Lifecycle != nil {
+					if err := agent.Lifecycle.Transition(lifecycle.EventWorkFailed, lifecycle.TransitionContext{
+						AttemptsRemaining: 0,
+						Error:             event.Error,
+					}); err != nil {
+						logging.Warn("lifecycle transition failed on resolver agent fail",
+							"agent_id", event.AgentID,
+							"event", lifecycle.EventWorkFailed,
+							"error", err,
+						)
+					}
+				}
+			}
+		}
+	}
+}
+
 // publishStateChange publishes an orchestrator state change event to the event bus.
 func (m *OrchestratorManager) publishStateChange(state OrchestratorState, activeAgentCount int) {
 	if m.eventBus == nil {
@@ -1309,15 +1469,22 @@ func (m *OrchestratorManager) buildCompletionPayload(agentID string, result *age
 
 // publishRunStarted publishes a run started event.
 func (m *OrchestratorManager) publishRunStarted(runID string, taskCount int, config RunConfig) {
+	payload := map[string]interface{}{
+		"run_id":     runID,
+		"task_count": taskCount,
+		"repo_id":    config.RepoID,
+		"repo_path":  config.WorkDir,
+	}
+
+	// Include rule overrides if present
+	if len(config.RuleOverrides) > 0 {
+		payload["rule_overrides"] = config.RuleOverrides
+	}
+
 	m.eventBus.Publish(events.Event{
 		Type:      events.EventRunStarted,
 		Timestamp: time.Now(),
-		Payload: map[string]interface{}{
-			"run_id":     runID,
-			"task_count": taskCount,
-			"repo_id":    config.RepoID,
-			"repo_path":  config.WorkDir,
-		},
+		Payload:   payload,
 	})
 }
 
@@ -1405,7 +1572,8 @@ func (m *OrchestratorManager) KillAgent(agentID string) error {
 
 // hasRulesOverrides checks if any CLI rules overrides were provided in the RunConfig.
 func hasRulesOverrides(cfg *RunConfig) bool {
-	return len(cfg.Types) > 0 ||
+	return cfg.PriorityMax != 0 ||
+		len(cfg.Types) > 0 ||
 		len(cfg.ExcludeTypes) > 0 ||
 		len(cfg.Labels) > 0 ||
 		len(cfg.ExcludeLabels) > 0 ||
