@@ -940,7 +940,7 @@ export function useWebSocket() {
         }, backoffTime);
       }
     }
-  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, appendGitCommit, syncState, setPauseState, setActiveRepo, updateAgentMergeStatus, addRun, updateRun, clearOutput, setCurrentRunId, setOrchestratorState, confirmPause, confirmResume, isStaleEvent, updateRunConfigFromServer]);
+  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, appendGitCommit, syncState, setPauseState, setActiveRepo, updateAgentMergeStatus, addRun, updateRun, clearOutput, setCurrentRunId, setOrchestratorState, confirmPause, confirmResume, isStaleEvent, updateRunConfigFromServer, setActiveRunOverrides, clearActiveRunOverrides]);
   const disconnect = useCallback(() => {
     isManuallyClosedRef.current = true;
     if (reconnectTimeoutRef.current !== null) {
