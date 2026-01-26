@@ -101,6 +101,7 @@ export const RuleSyntaxHelp: React.FC<RuleSyntaxHelpProps> = ({ onInsertExample 
                     }
                   `}
                   title={`${ex.label}: ${ex.description}`}
+                  aria-label={ex.label}
                 >
                   {ex.value}
                 </button>
