@@ -96,7 +96,8 @@ type Config struct {
 	Rules           *cfgpkg.RulesSettings // CLI overrides for rules (nil = use config.toml only)
 	RulesOverrides  *RulesOverrides       // Tracks which rules fields were explicitly set via CLI
 	PollInterval    time.Duration // Interval between polling for new tasks when idle (default: 5s)
-	Model           string        // Model to use for agents (empty = use Claude CLI default)
+	Model           string        // Model to use for agents (empty = use Claude CLI default). Overrides config.toml agent settings.
+	AgentSettings   *cfgpkg.AgentSettings // Per-agent-type settings from config.toml (passed from daemon, or loaded automatically)
 }
 
 // RulesOverrides tracks which rules fields were explicitly set via CLI flags.
@@ -185,12 +186,24 @@ func New(config *Config) (*Orchestrator, error) {
 		}
 	}
 
+	// Use AgentSettings from config if provided, otherwise use from repoConfig
+	agentSettings := config.AgentSettings
+	if agentSettings == nil {
+		agentSettings = &repoConfig.Agents
+	}
+
+	// Determine worker model: CLI flag takes precedence, then config.toml agent settings
+	workerModel := config.Model
+	if workerModel == "" {
+		workerModel = agentSettings.GetWorkerModel()
+	}
+
 	// Create agent executor
 	executor := agent.NewExecutor(&agent.Config{
 		Verbose:       config.Verbose,
 		UseBwrap:      config.UseBwrap,
 		SandboxConfig: sandboxConfig,
-		Model:         config.Model,
+		Model:         workerModel,
 	})
 
 	// Create scheduler
@@ -207,6 +220,18 @@ func New(config *Config) (*Orchestrator, error) {
 		config.MaxRetries = 3
 	}
 
+	// Determine resolver model: CLI flag takes precedence, then config.toml agent settings
+	resolverModel := config.Model
+	if resolverModel == "" {
+		resolverModel = agentSettings.GetResolverModel()
+	}
+
+	// Determine repair model: CLI flag takes precedence, then config.toml agent settings
+	repairModel := config.Model
+	if repairModel == "" {
+		repairModel = agentSettings.GetRepairModel()
+	}
+
 	// Create merge coordinator to handle all merge operations
 	mc, err := mergecoordinator.New(&mergecoordinator.Config{
 		WorkDir:         config.WorkDir,
@@ -217,7 +242,8 @@ func New(config *Config) (*Orchestrator, error) {
 		UseBwrap:        config.UseBwrap,
 		SandboxConfig:   sandboxConfig,
 		ResolverTimeout: config.ResolverTimeout,
-		Model:           config.Model,
+		ResolverModel:   resolverModel,
+		RepairModel:     repairModel,
 	}, beadsClient)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create merge coordinator: %w", err)

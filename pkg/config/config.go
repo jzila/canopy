@@ -431,6 +431,33 @@ func (a *AgentSettings) Validate() ValidationErrors {
 	return errs
 }
 
+// GetWorkerModel returns the effective model for worker agents.
+// Priority: Worker.Model > DefaultModel > empty (use CLI default)
+func (a *AgentSettings) GetWorkerModel() string {
+	if a.Worker.Model != "" {
+		return a.Worker.Model
+	}
+	return a.DefaultModel
+}
+
+// GetResolverModel returns the effective model for resolver agents.
+// Priority: Resolver.Model > DefaultModel > empty (use CLI default)
+func (a *AgentSettings) GetResolverModel() string {
+	if a.Resolver.Model != "" {
+		return a.Resolver.Model
+	}
+	return a.DefaultModel
+}
+
+// GetRepairModel returns the effective model for repair agents.
+// Priority: Repair.Model > DefaultModel > empty (use CLI default)
+func (a *AgentSettings) GetRepairModel() string {
+	if a.Repair.Model != "" {
+		return a.Repair.Model
+	}
+	return a.DefaultModel
+}
+
 // GetResolverTimeout parses and returns the resolver timeout duration from config.
 // Returns 0 if not set (caller should use default).
 func (c *Config) GetResolverTimeout() time.Duration {
