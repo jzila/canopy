@@ -427,7 +427,7 @@ export type RuleSource = 'default' | 'config' | 'override';
 // Unified Rule interface - single format for all rules
 export interface Rule {
   name: string;
-  conditions: string[];
+  condition: string;
   action: 'deny' | 'allow';
   enabled: boolean;
   persisted: boolean;
@@ -448,9 +448,10 @@ export interface RulesResponse {
 
 export interface AddRuleRequest {
   name: string;
-  conditions: string[];
+  condition: string;
   action: 'deny' | 'allow';
-  enabled?: boolean;
+  description?: string;
+  reason?: string;
 }
 
 export interface AddRuleResponse {
@@ -461,8 +462,6 @@ export interface AddRuleResponse {
 
 export interface UpdateRuleRequest {
   enabled?: boolean;
-  conditions?: string[];
-  action?: 'deny' | 'allow';
 }
 
 export interface UpdateRuleResponse {

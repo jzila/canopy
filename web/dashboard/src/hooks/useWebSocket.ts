@@ -200,7 +200,7 @@ interface RunCompletedEvent {
 // Rules configuration types - unified format
 interface Rule {
   name: string;
-  conditions: string[];
+  condition: string;
   action: 'deny' | 'allow';
   enabled: boolean;
   persisted: boolean;

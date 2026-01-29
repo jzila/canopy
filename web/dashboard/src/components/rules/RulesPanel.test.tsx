@@ -28,7 +28,7 @@ vi.stubGlobal('crypto', {
 
 const createMockRule = (overrides: Partial<Rule> = {}): Rule => ({
   name: 'test-rule',
-  conditions: ['priority >= 2'],
+  condition: 'priority >= 2',
   action: 'deny',
   enabled: true,
   persisted: true,
@@ -149,8 +149,8 @@ describe('RulesPanel', () => {
 
     it('displays rules when loaded', async () => {
       const mockRules = [
-        createMockRule({ name: 'high-priority-rule', conditions: ['priority <= 1'] }),
-        createMockRule({ name: 'bug-filter', conditions: ['type == "bug"'] }),
+        createMockRule({ name: 'high-priority-rule', condition: 'priority <= 1' }),
+        createMockRule({ name: 'bug-filter', condition: 'type == "bug"' }),
       ];
 
       vi.mocked(client.getRules).mockResolvedValue({ rules: mockRules, persisted: true });

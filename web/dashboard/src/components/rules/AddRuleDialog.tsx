@@ -81,15 +81,9 @@ export const AddRuleDialog: React.FC<AddRuleDialogProps> = ({
       return;
     }
 
-    // Parse conditions - support comma or newline separated
-    const conditions = condition
-      .split(/[,\n]/)
-      .map((c) => c.trim())
-      .filter((c) => c.length > 0);
-
     const request: AddRuleRequest = {
       name: name.trim(),
-      conditions,
+      condition: condition.trim(),
       action,
     };
     const result = await onAdd(request);

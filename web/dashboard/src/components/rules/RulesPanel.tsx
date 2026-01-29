@@ -207,7 +207,7 @@ export const RulesPanel: React.FC<RulesPanelProps> = ({
   // Handle saving edited rule from modal
   const handleSaveEditedRule = (updatedRule: Rule) => {
     storeUpdateRule(updatedRule.name, {
-      conditions: updatedRule.conditions,
+      condition: updatedRule.condition,
       action: updatedRule.action,
       enabled: updatedRule.enabled,
       persisted: false, // Mark as modified

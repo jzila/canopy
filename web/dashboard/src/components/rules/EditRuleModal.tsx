@@ -91,8 +91,11 @@ export const EditRuleModal: React.FC<EditRuleModalProps> = ({
   // Initialize form when rule changes or dialog opens
   useEffect(() => {
     if (isOpen && rule) {
-      const parsedConditions = rule.conditions.length > 0
-        ? rule.conditions.map(parseCondition)
+      const conditionParts = rule.condition
+        ? rule.condition.split(/,\s*/).filter((c) => c.length > 0)
+        : [];
+      const parsedConditions = conditionParts.length > 0
+        ? conditionParts.map(parseCondition)
         : [{ id: crypto.randomUUID(), field: '', operator: '==', value: '' }];
       setConditions(parsedConditions);
       setAction(rule.action);
@@ -180,7 +183,7 @@ export const EditRuleModal: React.FC<EditRuleModalProps> = ({
     // Keep the original source if editing, otherwise default to override
     const updatedRule: Rule = {
       name: rule.name,
-      conditions: validConditions,
+      condition: validConditions.join(', '),
       action,
       enabled,
       persisted: false,
