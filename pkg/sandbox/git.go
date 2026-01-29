@@ -203,6 +203,27 @@ func GetDiffBetween(repoDir, fromCommit, toCommit string) (string, error) {
 	return string(out), nil
 }
 
+// GetFilesChangedBetween returns the list of files modified between two commits.
+// Uses `git diff --name-only fromCommit..toCommit` to efficiently get just filenames.
+func GetFilesChangedBetween(repoDir, fromCommit, toCommit string) ([]string, error) {
+	cmd := exec.Command("git", "diff", "--name-only", fromCommit+".."+toCommit)
+	cmd.Dir = repoDir
+
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git diff --name-only failed: %w", err)
+	}
+
+	raw := strings.Split(strings.TrimSpace(string(out)), "\n")
+	var files []string
+	for _, f := range raw {
+		if f != "" {
+			files = append(files, f)
+		}
+	}
+	return files, nil
+}
+
 // CommitInfo holds detailed information about a git commit
 type CommitInfo struct {
 	Hash         string   // Full commit hash
