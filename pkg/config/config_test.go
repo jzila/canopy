@@ -583,3 +583,165 @@ action = "skip"
 		t.Error("expected rule.Enabled to be nil (defaults to enabled)")
 	}
 }
+
+func TestDefaultAgentSettings(t *testing.T) {
+	agents := DefaultAgentSettings()
+
+	if agents.DefaultModel != "" {
+		t.Errorf("expected default_model to be empty, got %q", agents.DefaultModel)
+	}
+	if agents.Worker.Model != "" {
+		t.Errorf("expected worker.model to be empty, got %q", agents.Worker.Model)
+	}
+	if agents.Worker.Enabled != nil {
+		t.Error("expected worker.enabled to be nil (defaults to enabled)")
+	}
+	if agents.Resolver.Model != "" {
+		t.Errorf("expected resolver.model to be empty, got %q", agents.Resolver.Model)
+	}
+	if agents.Repair.Model != "" {
+		t.Errorf("expected repair.model to be empty, got %q", agents.Repair.Model)
+	}
+}
+
+func TestAgentSettingsValidate(t *testing.T) {
+	tests := []struct {
+		name        string
+		agents      AgentSettings
+		expectError bool
+	}{
+		{
+			name:        "valid defaults",
+			agents:      DefaultAgentSettings(),
+			expectError: false,
+		},
+		{
+			name: "valid custom model",
+			agents: AgentSettings{
+				DefaultModel: "claude-sonnet",
+				Worker: AgentTypeSettings{
+					Model:   "claude-opus",
+					Timeout: "30m",
+				},
+			},
+			expectError: false,
+		},
+		{
+			name: "valid timeout formats",
+			agents: AgentSettings{
+				Worker:   AgentTypeSettings{Timeout: "10m"},
+				Resolver: AgentTypeSettings{Timeout: "1h"},
+				Repair:   AgentTypeSettings{Timeout: "30s"},
+			},
+			expectError: false,
+		},
+		{
+			name: "invalid worker timeout",
+			agents: AgentSettings{
+				Worker: AgentTypeSettings{Timeout: "invalid"},
+			},
+			expectError: true,
+		},
+		{
+			name: "invalid resolver timeout",
+			agents: AgentSettings{
+				Resolver: AgentTypeSettings{Timeout: "notaduration"},
+			},
+			expectError: true,
+		},
+		{
+			name: "invalid repair timeout",
+			agents: AgentSettings{
+				Repair: AgentTypeSettings{Timeout: "abc"},
+			},
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := tt.agents.Validate()
+			if tt.expectError && len(errs) == 0 {
+				t.Error("expected validation error, got none")
+			}
+			if !tt.expectError && len(errs) > 0 {
+				t.Errorf("unexpected validation error: %v", errs)
+			}
+		})
+	}
+}
+
+func TestLoadConfigWithAgents(t *testing.T) {
+	tmpDir := t.TempDir()
+	configDir := filepath.Join(tmpDir, ".canopy")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("failed to create config dir: %v", err)
+	}
+
+	configContent := `[resolver]
+timeout = "10m"
+
+[agents]
+default_model = "claude-sonnet"
+
+[agents.worker]
+model = "claude-opus"
+timeout = "30m"
+
+[agents.resolver]
+model = "claude-haiku"
+enabled = false
+
+[agents.repair]
+timeout = "15m"
+`
+	configPath := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("failed to write config file: %v", err)
+	}
+
+	cfg, err := LoadConfig(tmpDir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if cfg.Agents.DefaultModel != "claude-sonnet" {
+		t.Errorf("expected default_model 'claude-sonnet', got %q", cfg.Agents.DefaultModel)
+	}
+	if cfg.Agents.Worker.Model != "claude-opus" {
+		t.Errorf("expected worker.model 'claude-opus', got %q", cfg.Agents.Worker.Model)
+	}
+	if cfg.Agents.Worker.Timeout != "30m" {
+		t.Errorf("expected worker.timeout '30m', got %q", cfg.Agents.Worker.Timeout)
+	}
+	if cfg.Agents.Resolver.Model != "claude-haiku" {
+		t.Errorf("expected resolver.model 'claude-haiku', got %q", cfg.Agents.Resolver.Model)
+	}
+	if cfg.Agents.Resolver.Enabled == nil || *cfg.Agents.Resolver.Enabled != false {
+		t.Error("expected resolver.enabled to be false")
+	}
+	if cfg.Agents.Repair.Timeout != "15m" {
+		t.Errorf("expected repair.timeout '15m', got %q", cfg.Agents.Repair.Timeout)
+	}
+}
+
+func TestLoadConfigWithInvalidAgentTimeout(t *testing.T) {
+	tmpDir := t.TempDir()
+	configDir := filepath.Join(tmpDir, ".canopy")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("failed to create config dir: %v", err)
+	}
+
+	configContent := `[agents.worker]
+timeout = "invalid"
+`
+	configPath := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
+		t.Fatalf("failed to write config file: %v", err)
+	}
+
+	_, err := LoadConfig(tmpDir)
+	if err == nil {
+		t.Fatal("expected error for invalid agent timeout, got nil")
+	}
+}
