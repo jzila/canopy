@@ -96,6 +96,7 @@ type Config struct {
 	Rules           *cfgpkg.RulesSettings // CLI overrides for rules (nil = use config.toml only)
 	RulesOverrides  *RulesOverrides       // Tracks which rules fields were explicitly set via CLI
 	PollInterval    time.Duration // Interval between polling for new tasks when idle (default: 5s)
+	Model           string        // Model to use for agents (empty = use Claude CLI default)
 }
 
 // RulesOverrides tracks which rules fields were explicitly set via CLI flags.
@@ -189,6 +190,7 @@ func New(config *Config) (*Orchestrator, error) {
 		Verbose:       config.Verbose,
 		UseBwrap:      config.UseBwrap,
 		SandboxConfig: sandboxConfig,
+		Model:         config.Model,
 	})
 
 	// Create scheduler
@@ -215,6 +217,7 @@ func New(config *Config) (*Orchestrator, error) {
 		UseBwrap:        config.UseBwrap,
 		SandboxConfig:   sandboxConfig,
 		ResolverTimeout: config.ResolverTimeout,
+		Model:           config.Model,
 	}, beadsClient)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create merge coordinator: %w", err)

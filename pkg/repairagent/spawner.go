@@ -21,6 +21,7 @@ type Config struct {
 	SandboxConfig *sandbox.SandboxConfig // Sandbox configuration
 	RepoID        string                 // Repository ID for tracking
 	RunID         string                 // Run ID for unique agent ID generation
+	Model         string                 // Model to use (empty = use Claude CLI default)
 }
 
 // Result holds the outcome of a repair agent execution.
@@ -79,6 +80,7 @@ func New(config *Config) *RepairAgent {
 		Verbose:       config.Verbose,
 		UseBwrap:      config.UseBwrap,
 		SandboxConfig: config.SandboxConfig,
+		Model:         config.Model,
 	})
 
 	return &RepairAgent{

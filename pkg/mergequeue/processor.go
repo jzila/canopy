@@ -81,6 +81,7 @@ type Processor struct {
 	repairAgent      *repairagent.RepairAgent     // Repair agent for fixing validation failures
 	historyRecorder  *HistoryRecorder             // History recorder for audit trail
 	sandboxConfig    *sandbox.SandboxConfig       // Sandbox configuration for repair agents
+	model            string                       // Model to use for repair agents (empty = use Claude CLI default)
 }
 
 // NewProcessor creates a new merge processor.
@@ -158,6 +159,11 @@ func (p *Processor) SetSandboxConfig(config *sandbox.SandboxConfig) {
 	p.sandboxConfig = config
 }
 
+// SetModel sets the model to use for repair agents.
+func (p *Processor) SetModel(model string) {
+	p.model = model
+}
+
 // InitializeRepairAgent creates the repair agent with current configuration.
 // Must be called after SetRunID, SetRepoID, and SetSandboxConfig.
 func (p *Processor) InitializeRepairAgent() {
@@ -171,6 +177,7 @@ func (p *Processor) InitializeRepairAgent() {
 		SandboxConfig: p.sandboxConfig,
 		RepoID:        p.repoID,
 		RunID:         p.runID,
+		Model:         p.model,
 	})
 
 	if p.repairAgentCallback != nil {

@@ -46,6 +46,10 @@ type Config struct {
 	// ResolverTimeout is the timeout for resolver agent operations.
 	// If 0, uses the default timeout of 10 minutes.
 	ResolverTimeout time.Duration
+
+	// Model is the model to use for resolver/repair agents.
+	// If empty, uses the Claude CLI default.
+	Model string
 }
 
 // MergeCoordinator coordinates all merge operations including:
@@ -92,6 +96,7 @@ func New(config *Config, beadsClient beads.BeadsClient) (*MergeCoordinator, erro
 		Verbose:       config.Verbose,
 		UseBwrap:      config.UseBwrap,
 		SandboxConfig: config.SandboxConfig,
+		Model:         config.Model,
 	})
 
 	// Initialize merge queue with buffer size equal to concurrency
@@ -156,6 +161,11 @@ func (mc *MergeCoordinator) SetRunID(runID string) {
 	if mc.resolver != nil {
 		mc.resolver.SetRunID(runID)
 	}
+}
+
+// SetModel sets the model to use for repair agents.
+func (mc *MergeCoordinator) SetModel(model string) {
+	mc.processor.SetModel(model)
 }
 
 // SetCleanupCallback sets a callback to cleanup overlays after merge.

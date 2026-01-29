@@ -84,6 +84,7 @@ type Config struct {
 	Verbose       bool
 	UseBwrap      bool                   // Use bubblewrap sandbox for isolation (auto-detected if not set)
 	SandboxConfig *sandbox.SandboxConfig // Sandbox configuration from .canopy/sandbox.toml
+	Model         string                 // Model to use (empty = use Claude CLI default)
 }
 
 // NewConfig creates a default agent config
@@ -177,8 +178,14 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 		"--output-format", "stream-json",
 		"--verbose", // Required for stream-json
 		"--dangerously-skip-permissions", // Safe in sandbox
-		prompt,
 	}
+
+	// Add model flag if specified
+	if e.config.Model != "" {
+		args = append(args, "--model", e.config.Model)
+	}
+
+	args = append(args, prompt)
 
 	// Determine timeout: per-task > sandbox config > executor config > default
 	timeout := task.GetTimeout()
@@ -514,6 +521,11 @@ func (e *Executor) ExecuteResume(ctx context.Context, task *beads.Task, overlay 
 		"--output-format", "stream-json",
 		"--verbose",
 		"--dangerously-skip-permissions",
+	}
+
+	// Add model flag if specified
+	if e.config.Model != "" {
+		args = append(args, "--model", e.config.Model)
 	}
 
 	// Determine timeout

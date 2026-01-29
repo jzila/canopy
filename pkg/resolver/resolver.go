@@ -24,6 +24,7 @@ type Config struct {
 	SandboxConfig *sandbox.SandboxConfig // Sandbox configuration
 	RepoID        string                 // Repository ID for IPC tracking
 	RunID         string                 // Run ID for unique agent ID generation
+	Model         string                 // Model to use (empty = use Claude CLI default)
 }
 
 // ConflictContext provides information about the failed merge
@@ -111,6 +112,7 @@ func New(config *Config) *Resolver {
 		Verbose:       config.Verbose,
 		UseBwrap:      config.UseBwrap,
 		SandboxConfig: config.SandboxConfig,
+		Model:         config.Model,
 	})
 
 	return &Resolver{
