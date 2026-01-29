@@ -47,6 +47,8 @@ type CommitEvent struct {
 	AuthorEmail  string
 	Timestamp    string
 	FilesChanged []string
+	Patch        string
+	Truncated    bool
 }
 
 // CommitCallback is called when a commit is created during merge.
@@ -881,6 +883,12 @@ func (p *Processor) sendMergedCommits(taskID string, mergeResult *merge.Result) 
 
 	agentID := p.makeAgentID(taskID)
 	for _, commitInfo := range mergeResult.MergedCommits {
+		patch := commitInfo.Patch
+		truncated := false
+		if len(patch) > ipc.MaxPatchSize {
+			patch = patch[:ipc.MaxPatchSize]
+			truncated = true
+		}
 		p.commitCallback(CommitEvent{
 			AgentID:      agentID,
 			Hash:         commitInfo.Hash,
@@ -890,6 +898,8 @@ func (p *Processor) sendMergedCommits(taskID string, mergeResult *merge.Result) 
 			AuthorEmail:  commitInfo.AuthorEmail,
 			Timestamp:    commitInfo.Timestamp,
 			FilesChanged: commitInfo.FilesChanged,
+			Patch:        patch,
+			Truncated:    truncated,
 		})
 	}
 }

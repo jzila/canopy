@@ -1257,6 +1257,8 @@ func (m *OrchestratorManager) createCommitCallback() mergequeue.CommitCallback {
 			"author_email":  event.AuthorEmail,
 			"timestamp":     event.Timestamp,
 			"files_changed": event.FilesChanged,
+			"patch":         event.Patch,
+			"truncated":     event.Truncated,
 		}
 
 		m.eventBus.Publish(events.Event{
