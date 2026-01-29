@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useStateStore, type RuleOverride } from '../stores/stateStore';
+import { getRules, type Rule as ApiRule } from '../api/client';
 // Event types that match the Go backend (wire_events.go)
 // Backend sends: { type, timestamp, payload, sequence }
 interface WebSocketEvent {
@@ -197,20 +198,12 @@ interface RunCompletedEvent {
     conflicts_resolved: number;
   };
 }
-// Rules configuration types - unified format
-interface Rule {
-  name: string;
-  condition: string;
-  action: 'deny' | 'allow';
-  enabled: boolean;
-  persisted: boolean;
-}
 interface RulesChangedEvent {
   type: 'rules:changed';
   timestamp: string;
   payload: {
-    action: 'added' | 'updated' | 'deleted';
-    rule?: Rule;
+    action: 'added' | 'updated' | 'deleted' | 'persisted' | 'config_updated' | 'persisted_all' | 'reordered';
+    rule?: ApiRule;
   };
 }
 interface ConfigUpdatedEvent {
@@ -444,6 +437,11 @@ export function useWebSocket() {
     // Active run overrides
     setActiveRunOverrides,
     clearActiveRunOverrides,
+    // Rules actions
+    addRule,
+    updateRule,
+    removeRule,
+    setRulesState,
   } = useStateStore();
 
   // Helper to check if an event is stale (occurred before the last state:sync snapshot)
@@ -881,7 +879,24 @@ export function useWebSocket() {
             case 'rules:changed': {
               const { action, rule } = message.payload;
               console.log('[WebSocket] Rules changed:', action, rule?.name);
-              // Rules changes are informational for now - UI can fetch updated rules if needed
+              if (action === 'added' && rule) {
+                addRule(rule);
+              } else if ((action === 'updated' || action === 'persisted') && rule) {
+                updateRule(rule.name, rule);
+              } else if (action === 'deleted' && rule) {
+                removeRule(rule.name);
+              } else if (action === 'config_updated' || action === 'persisted_all' || action === 'reordered') {
+                // Bulk change — refetch full rules list from API
+                const state = useStateStore.getState();
+                const repo = state.repositories.find((r) => r.id === state.activeRepoId);
+                if (repo?.path) {
+                  getRules(repo.path).then((response) => {
+                    setRulesState(response.rules, response.persisted);
+                  }).catch((err) => {
+                    console.error('[WebSocket] Failed to refetch rules:', err);
+                  });
+                }
+              }
               break;
             }
             case 'config:updated': {
