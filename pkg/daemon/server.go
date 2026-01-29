@@ -18,20 +18,21 @@ import (
 
 // Server manages the HTTP server that serves the web UI and REST API
 type Server struct {
-	port          int
-	httpServer    *http.Server
-	hub           *Hub
-	handler       *Handler
-	runsHandler   *RunsHandler
-	repoHandler   *RepoHandler
-	beadsHandler  *BeadsHandler
-	orchHandler   *OrchestrationHandler
-	rulesHandler  *RulesHandler
-	configHandler *ConfigHandler
-	state         *RuntimeState
-	eventBus      *EventBus
-	upgrader      websocket.Upgrader
-	daemon        *Daemon
+	port               int
+	httpServer         *http.Server
+	hub                *Hub
+	handler            *Handler
+	runsHandler        *RunsHandler
+	repoHandler        *RepoHandler
+	beadsHandler       *BeadsHandler
+	orchHandler        *OrchestrationHandler
+	rulesHandler       *RulesHandler
+	configHandler      *ConfigHandler
+	agentConfigHandler *AgentConfigHandler
+	state              *RuntimeState
+	eventBus           *EventBus
+	upgrader           websocket.Upgrader
+	daemon             *Daemon
 }
 
 // NewServer creates a new HTTP server instance
@@ -106,6 +107,12 @@ func NewServerWithDaemon(port int, state *RuntimeState, eventBus *EventBus, sche
 		configHandler = NewConfigHandler(daemon)
 	}
 
+	// Create agent config handler for agent settings management (requires daemon reference)
+	var agentConfigHandler *AgentConfigHandler
+	if daemon != nil {
+		agentConfigHandler = NewAgentConfigHandler(daemon)
+	}
+
 	// Configure WebSocket upgrader
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:  1024,
@@ -117,19 +124,20 @@ func NewServerWithDaemon(port int, state *RuntimeState, eventBus *EventBus, sche
 	}
 
 	return &Server{
-		port:          port,
-		hub:           hub,
-		handler:       handler,
-		runsHandler:   runsHandler,
-		repoHandler:   repoHandler,
-		beadsHandler:  beadsHandler,
-		orchHandler:   orchHandler,
-		rulesHandler:  rulesHandler,
-		configHandler: configHandler,
-		state:         state,
-		eventBus:      eventBus,
-		upgrader:      upgrader,
-		daemon:        daemon,
+		port:               port,
+		hub:                hub,
+		handler:            handler,
+		runsHandler:        runsHandler,
+		repoHandler:        repoHandler,
+		beadsHandler:       beadsHandler,
+		orchHandler:        orchHandler,
+		rulesHandler:       rulesHandler,
+		configHandler:      configHandler,
+		agentConfigHandler: agentConfigHandler,
+		state:              state,
+		eventBus:           eventBus,
+		upgrader:           upgrader,
+		daemon:             daemon,
 	}
 }
 

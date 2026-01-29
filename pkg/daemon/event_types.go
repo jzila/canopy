@@ -33,6 +33,7 @@ const (
 	EventRulesChanged          = events.EventRulesChanged
 	EventLifecycleStateChanged = events.EventLifecycleStateChanged
 	EventConfigUpdated         = events.EventConfigUpdated
+	EventAgentConfigChanged    = events.EventAgentConfigChanged
 )
 
 // NewEventBus creates a new EventBus instance.
