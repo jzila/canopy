@@ -305,10 +305,38 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 					fmt.Fprintf(os.Stderr, "warning: failed to get merge-base for %s: %v\n", taskID, err)
 				}
 			} else if mergeBase == baseCommit {
-				// HEAD is ahead of the overlay's base - must use resolver for 3-way merge
-				needsResolver = true
-				resolverReason = fmt.Sprintf("overlay stale (base %s, HEAD now %s)", baseCommit[:8], preMergeCommit[:8])
-				if p.verbose {
+				// HEAD is ahead of the overlay's base - check if files overlap before spawning resolver
+				var agentPatches []string
+				if req.Result.GitState != nil {
+					agentPatches = req.Result.GitState.Patches
+				}
+				agentFiles := sandbox.ExtractFilesFromPatches(agentPatches)
+				concurrentFiles, filesErr := sandbox.GetFilesChangedBetween(p.outputDir, baseCommit, preMergeCommit)
+				if filesErr != nil {
+					// Can't determine overlap - fall back to resolver for safety
+					needsResolver = true
+					resolverReason = fmt.Sprintf("overlay stale (base %s, HEAD now %s), file overlap check failed: %v", baseCommit[:8], preMergeCommit[:8], filesErr)
+				} else {
+					// Check for file intersection
+					concurrentSet := make(map[string]bool, len(concurrentFiles))
+					for _, f := range concurrentFiles {
+						concurrentSet[f] = true
+					}
+					var overlapping []string
+					for _, f := range agentFiles {
+						if concurrentSet[f] {
+							overlapping = append(overlapping, f)
+						}
+					}
+					if len(overlapping) > 0 {
+						needsResolver = true
+						resolverReason = fmt.Sprintf("overlay stale (base %s, HEAD now %s), %d file(s) overlap", baseCommit[:8], preMergeCommit[:8], len(overlapping))
+					} else if p.verbose {
+						fmt.Printf("[%s] Stale overlay but no file overlap (%d agent files, %d concurrent files) - using fast path\n",
+							taskID, len(agentFiles), len(concurrentFiles))
+					}
+				}
+				if p.verbose && needsResolver {
 					fmt.Printf("[%s] Detected stale overlay: base=%s, current HEAD=%s, merge-base=%s\n",
 						taskID, baseCommit[:8], preMergeCommit[:8], mergeBase[:8])
 				}
