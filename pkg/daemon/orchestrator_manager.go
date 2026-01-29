@@ -181,7 +181,7 @@ func (m *OrchestratorManager) RegisterRepo(repoPath string, repoID string) (*Orc
 	}
 
 	// Create rules engine from config
-	rulesEngine := rules.NewEngine(&cfg.Rules)
+	rulesEngine := rules.NewEngineWithDefaults(&cfg.Rules, cfgpkg.DefaultCustomRules)
 
 	// Create the OrchestratorLifecycle in OFF state (registered but not activated)
 	lifecycle := &OrchestratorLifecycle{

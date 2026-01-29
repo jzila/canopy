@@ -59,22 +59,50 @@ func NewEngine(cfg *config.RulesSettings) *Engine {
 // NewEngineWithDefaults creates a new rule evaluation engine with explicit default rules.
 // This allows establishing a baseline ruleset that is always present.
 // Precedence: override rules > config rules > default rules.
+//
+// Config rules can shadow default rules by name: if a config rule has the same name as a
+// default rule, the config rule's enabled state takes precedence. This allows users to
+// disable built-in defaults by adding a rule with the same name and enabled = false.
 func NewEngineWithDefaults(cfg *config.RulesSettings, defaults []config.CustomRule) *Engine {
 	e := NewEngine(cfg)
 
-	// Store default rules
+	// Build a map of config rule names for shadowing lookup
+	configRuleByName := make(map[string]*config.CustomRule)
+	if cfg != nil {
+		for i := range cfg.Custom {
+			configRuleByName[cfg.Custom[i].Name] = &cfg.Custom[i]
+		}
+	}
+
+	// Store default rules (after applying shadowing)
 	if len(defaults) > 0 {
 		e.defaultRules = make([]config.CustomRule, len(defaults))
 		copy(e.defaultRules, defaults)
 
 		// Prepend defaults to rules slice (lowest priority, evaluated first)
 		// Note: rules are evaluated in order, so defaults come first
-		defaultInternals := make([]internalRule, len(defaults))
-		for i, r := range defaults {
-			defaultInternals[i] = internalRule{
-				CustomRule: r,
-				Source:     config.RuleSourceDefault,
+		var defaultInternals []internalRule
+		for _, r := range defaults {
+			rule := r // copy
+
+			// Check if this default is shadowed by a config rule
+			if configRule, shadowed := configRuleByName[r.Name]; shadowed {
+				// Config rule shadows this default - use config's enabled state
+				// If the config rule explicitly sets enabled=false, the default is disabled
+				if configRule.Enabled != nil && !*configRule.Enabled {
+					// Skip this default rule entirely - it's been disabled by config
+					continue
+				}
+				// Otherwise, use the config rule's enabled state (true or default)
+				if configRule.Enabled != nil {
+					rule.Enabled = configRule.Enabled
+				}
 			}
+
+			defaultInternals = append(defaultInternals, internalRule{
+				CustomRule: rule,
+				Source:     config.RuleSourceDefault,
+			})
 		}
 		e.rules = append(defaultInternals, e.rules...)
 	}

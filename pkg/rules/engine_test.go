@@ -1175,3 +1175,249 @@ func TestEngineReorderRule_AffectsListPersisted(t *testing.T) {
 		t.Error("individual rules should still be marked as persisted")
 	}
 }
+
+func TestNewEngineWithDefaults(t *testing.T) {
+	defaults := []config.CustomRule{
+		{Name: "default-rule-1", Condition: "priority > 3", Action: "deny", Reason: "Low priority"},
+		{Name: "default-rule-2", Condition: "'wip' in labels", Action: "deny", Reason: "Work in progress"},
+	}
+
+	t.Run("defaults are applied when no config rules", func(t *testing.T) {
+		cfg := &config.RulesSettings{
+			PriorityMax: -1,
+			Assignee:    "*",
+		}
+
+		engine := NewEngineWithDefaults(cfg, defaults)
+		snapshot := engine.GetSnapshot()
+
+		if len(snapshot.Rules) != 2 {
+			t.Fatalf("expected 2 default rules, got %d", len(snapshot.Rules))
+		}
+
+		// Verify default rules are present with correct source
+		if snapshot.Rules[0].Name != "default-rule-1" {
+			t.Errorf("expected first rule to be default-rule-1, got %s", snapshot.Rules[0].Name)
+		}
+		if snapshot.Rules[0].Source != config.RuleSourceDefault {
+			t.Errorf("expected source to be default, got %s", snapshot.Rules[0].Source)
+		}
+		if snapshot.Rules[1].Name != "default-rule-2" {
+			t.Errorf("expected second rule to be default-rule-2, got %s", snapshot.Rules[1].Name)
+		}
+	})
+
+	t.Run("config rules are added after defaults", func(t *testing.T) {
+		cfg := &config.RulesSettings{
+			PriorityMax: -1,
+			Assignee:    "*",
+			Custom: []config.CustomRule{
+				{Name: "config-rule", Condition: "type == bug", Action: "allow"},
+			},
+		}
+
+		engine := NewEngineWithDefaults(cfg, defaults)
+		snapshot := engine.GetSnapshot()
+
+		if len(snapshot.Rules) != 3 {
+			t.Fatalf("expected 3 rules (2 defaults + 1 config), got %d", len(snapshot.Rules))
+		}
+
+		// Defaults come first
+		if snapshot.Rules[0].Name != "default-rule-1" || snapshot.Rules[1].Name != "default-rule-2" {
+			t.Error("default rules should come first")
+		}
+		// Config rule comes after
+		if snapshot.Rules[2].Name != "config-rule" {
+			t.Errorf("expected config-rule last, got %s", snapshot.Rules[2].Name)
+		}
+		if snapshot.Rules[2].Source != config.RuleSourceConfig {
+			t.Errorf("expected config rule source to be config, got %s", snapshot.Rules[2].Source)
+		}
+	})
+
+	t.Run("config rule shadows default by name with enabled=false", func(t *testing.T) {
+		enabled := false
+		cfg := &config.RulesSettings{
+			PriorityMax: -1,
+			Assignee:    "*",
+			Custom: []config.CustomRule{
+				{Name: "default-rule-1", Enabled: &enabled}, // Shadow default-rule-1 with enabled=false
+			},
+		}
+
+		engine := NewEngineWithDefaults(cfg, defaults)
+		snapshot := engine.GetSnapshot()
+
+		// default-rule-1 should be excluded because config rule disables it
+		// default-rule-2 should still be present
+		// The config rule "default-rule-1" itself should still be in the list (from config)
+		if len(snapshot.Rules) != 2 {
+			t.Fatalf("expected 2 rules (1 default + 1 config shadow), got %d", len(snapshot.Rules))
+		}
+
+		// First should be default-rule-2 (the remaining default)
+		if snapshot.Rules[0].Name != "default-rule-2" {
+			t.Errorf("expected first rule to be default-rule-2, got %s", snapshot.Rules[0].Name)
+		}
+		if snapshot.Rules[0].Source != config.RuleSourceDefault {
+			t.Errorf("expected source to be default, got %s", snapshot.Rules[0].Source)
+		}
+
+		// Second should be the config rule that shadowed the default
+		if snapshot.Rules[1].Name != "default-rule-1" {
+			t.Errorf("expected second rule to be default-rule-1 (config), got %s", snapshot.Rules[1].Name)
+		}
+		if snapshot.Rules[1].Source != config.RuleSourceConfig {
+			t.Errorf("expected source to be config, got %s", snapshot.Rules[1].Source)
+		}
+	})
+
+	t.Run("default rules are evaluated and deny tasks", func(t *testing.T) {
+		cfg := &config.RulesSettings{
+			PriorityMax: -1,
+			Assignee:    "*",
+		}
+
+		engine := NewEngineWithDefaults(cfg, defaults)
+
+		// Task with priority 4 should be denied by default-rule-1
+		task := &beads.Task{ID: "1", Priority: 4}
+		result := engine.Evaluate(task, nil, nil)
+		if !result.Skip {
+			t.Error("expected task with priority 4 to be skipped by default rule")
+		}
+		if result.SkipReason != "Low priority" {
+			t.Errorf("expected skip reason 'Low priority', got %q", result.SkipReason)
+		}
+
+		// Task with 'wip' label should be denied by default-rule-2
+		task = &beads.Task{ID: "2", Priority: 1, Labels: []string{"wip"}}
+		result = engine.Evaluate(task, nil, nil)
+		if !result.Skip {
+			t.Error("expected task with 'wip' label to be skipped by default rule")
+		}
+		if result.SkipReason != "Work in progress" {
+			t.Errorf("expected skip reason 'Work in progress', got %q", result.SkipReason)
+		}
+
+		// Task without issues should be allowed
+		task = &beads.Task{ID: "3", Priority: 2, Labels: []string{"ready"}}
+		result = engine.Evaluate(task, nil, nil)
+		if result.Skip {
+			t.Errorf("expected task to be allowed, but was skipped: %s", result.SkipReason)
+		}
+	})
+
+	t.Run("disabled default rule does not evaluate", func(t *testing.T) {
+		enabled := false
+		cfg := &config.RulesSettings{
+			PriorityMax: -1,
+			Assignee:    "*",
+			Custom: []config.CustomRule{
+				{Name: "default-rule-1", Enabled: &enabled}, // Disable the priority > 3 rule
+			},
+		}
+
+		engine := NewEngineWithDefaults(cfg, defaults)
+
+		// Task with priority 4 should NOT be denied because default-rule-1 is disabled
+		task := &beads.Task{ID: "1", Priority: 4}
+		result := engine.Evaluate(task, nil, nil)
+		if result.Skip {
+			t.Errorf("expected task with priority 4 to be allowed (default rule disabled), but was skipped: %s", result.SkipReason)
+		}
+
+		// Task with 'wip' label should still be denied by default-rule-2
+		task = &beads.Task{ID: "2", Priority: 4, Labels: []string{"wip"}}
+		result = engine.Evaluate(task, nil, nil)
+		if !result.Skip {
+			t.Error("expected task with 'wip' label to be skipped by default rule")
+		}
+	})
+}
+
+func TestDefaultNeedsLabelRule(t *testing.T) {
+	// Test with the actual default rules from config package
+	defaults := config.DefaultCustomRules
+
+	t.Run("exclude-needs-labels rule is present", func(t *testing.T) {
+		if len(defaults) == 0 {
+			t.Fatal("expected at least one default rule")
+		}
+
+		found := false
+		for _, rule := range defaults {
+			if rule.Name == "exclude-needs-labels" {
+				found = true
+				if rule.Condition != "'needs-*' in labels" {
+					t.Errorf("expected condition to be \"'needs-*' in labels\", got %q", rule.Condition)
+				}
+				if rule.Action != "deny" {
+					t.Errorf("expected action to be deny, got %q", rule.Action)
+				}
+				break
+			}
+		}
+		if !found {
+			t.Error("expected to find exclude-needs-labels rule in defaults")
+		}
+	})
+
+	t.Run("needs-* labels are denied", func(t *testing.T) {
+		cfg := &config.RulesSettings{
+			PriorityMax: -1,
+			Assignee:    "*",
+		}
+
+		engine := NewEngineWithDefaults(cfg, defaults)
+
+		testCases := []struct {
+			name       string
+			labels     []string
+			wantSkip   bool
+			skipReason string
+		}{
+			{"needs-investigation label", []string{"needs-investigation"}, true, "Tasks with needs-* labels require manual attention"},
+			{"needs-input label", []string{"needs-input"}, true, "Tasks with needs-* labels require manual attention"},
+			{"needs-review label", []string{"needs-review"}, true, "Tasks with needs-* labels require manual attention"},
+			{"needs-triage label", []string{"needs-triage"}, true, "Tasks with needs-* labels require manual attention"},
+			{"no needs label", []string{"frontend", "urgent"}, false, ""},
+			{"empty labels", []string{}, false, ""},
+			{"mixed labels with needs", []string{"frontend", "needs-investigation"}, true, "Tasks with needs-* labels require manual attention"},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				task := &beads.Task{ID: "1", Priority: 2, Labels: tc.labels}
+				result := engine.Evaluate(task, nil, nil)
+				if result.Skip != tc.wantSkip {
+					t.Errorf("expected Skip=%v, got %v (reason: %s)", tc.wantSkip, result.Skip, result.SkipReason)
+				}
+				if tc.wantSkip && result.SkipReason != tc.skipReason {
+					t.Errorf("expected SkipReason=%q, got %q", tc.skipReason, result.SkipReason)
+				}
+			})
+		}
+	})
+
+	t.Run("user can disable exclude-needs-labels rule", func(t *testing.T) {
+		enabled := false
+		cfg := &config.RulesSettings{
+			PriorityMax: -1,
+			Assignee:    "*",
+			Custom: []config.CustomRule{
+				{Name: "exclude-needs-labels", Enabled: &enabled},
+			},
+		}
+
+		engine := NewEngineWithDefaults(cfg, defaults)
+
+		// Task with needs-investigation should be allowed now
+		task := &beads.Task{ID: "1", Priority: 2, Labels: []string{"needs-investigation"}}
+		result := engine.Evaluate(task, nil, nil)
+		if result.Skip {
+			t.Errorf("expected task with needs-investigation to be allowed (rule disabled), but was skipped: %s", result.SkipReason)
+		}
+	})
+}

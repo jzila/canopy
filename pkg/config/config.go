@@ -215,6 +215,19 @@ var validCustomRuleActions = map[string]bool{
 	"include": true, // backwards compat: treated as "allow"
 }
 
+// DefaultCustomRules contains built-in rules that are always present unless explicitly disabled.
+// These rules provide sensible defaults for common filtering scenarios.
+// Users can disable a default rule by adding a rule with the same name and enabled = false
+// in their config.
+var DefaultCustomRules = []CustomRule{
+	{
+		Name:      "exclude-needs-labels",
+		Condition: "'needs-*' in labels",
+		Action:    "deny",
+		Reason:    "Tasks with needs-* labels require manual attention",
+	},
+}
+
 // Validate checks the rules settings for errors
 func (r *RulesSettings) Validate() ValidationErrors {
 	var errs ValidationErrors

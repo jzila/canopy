@@ -227,8 +227,8 @@ func New(config *Config) (*Orchestrator, error) {
 		effectiveRules = mergeRulesSettings(&repoConfig.Rules, config.Rules, config.RulesOverrides)
 	}
 
-	// Create rules engine from effective rules
-	rulesEngine := rules.NewEngine(&effectiveRules)
+	// Create rules engine from effective rules with default rules
+	rulesEngine := rules.NewEngineWithDefaults(&effectiveRules, cfgpkg.DefaultCustomRules)
 
 	o := &Orchestrator{
 		config:           config,
