@@ -222,7 +222,8 @@ func (m *MockClient) Fail(_ context.Context, taskID string, reason string) error
 	return nil
 }
 
-// FailPermanently marks a task as permanently failed by closing it and adding needs-investigation label
+// FailPermanently marks a task as permanently failed by adding needs-investigation label.
+// The task remains open for human investigation.
 func (m *MockClient) FailPermanently(_ context.Context, taskID string, reason string) error {
 	m.mu.Lock()
 	m.Calls.FailPermanently = append(m.Calls.FailPermanently, struct {
@@ -239,7 +240,7 @@ func (m *MockClient) FailPermanently(_ context.Context, taskID string, reason st
 	defer m.mu.Unlock()
 
 	if task, ok := m.Tasks[taskID]; ok {
-		task.Status = "closed"
+		// Task stays open - do NOT change status to closed
 		// Add needs-investigation label if not already present
 		hasLabel := false
 		for _, label := range task.Labels {
