@@ -216,6 +216,13 @@ interface ConfigUpdatedEvent {
     max_retries: number;
   };
 }
+interface AgentConfigChangedEvent {
+  type: 'agent_config:changed';
+  timestamp: string;
+  payload: {
+    action: string;
+  };
+}
 interface LifecycleStateChangedEvent {
   type: 'lifecycle:state_changed';
   timestamp: string;
@@ -396,7 +403,8 @@ type EventType =
   | RunCompletedEvent
   | RulesChangedEvent
   | LifecycleStateChangedEvent
-  | ConfigUpdatedEvent;
+  | ConfigUpdatedEvent
+  | AgentConfigChangedEvent;
 const MAX_BACKOFF = 30000; // 30 seconds
 const INITIAL_BACKOFF = 1000; // 1 second
 function getWebSocketURL(): string {
@@ -903,6 +911,12 @@ export function useWebSocket() {
               const { concurrency, max_priority, use_bwrap, max_retries } = message.payload;
               console.log('[WebSocket] Config updated:', concurrency, max_priority, use_bwrap, max_retries);
               updateRunConfigFromServer({ concurrency, max_priority, use_bwrap, max_retries });
+              break;
+            }
+            case 'agent_config:changed': {
+              console.log('[WebSocket] Agent config changed');
+              // Dispatch a custom DOM event so the AgentConfigPanel can react
+              window.dispatchEvent(new CustomEvent('agent_config:changed'));
               break;
             }
             case 'lifecycle:state_changed': {

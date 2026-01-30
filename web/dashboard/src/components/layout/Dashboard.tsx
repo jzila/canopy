@@ -11,6 +11,7 @@ import { TerminalPanel } from './TerminalPanel';
 import { AgentGrid } from '../agents/AgentGrid';
 import { RunConfigDialog } from '../runs/RunConfigDialog';
 import { RulesPanel } from '../rules/RulesPanel';
+import { AgentConfigPanel } from '../agents/AgentConfigPanel';
 
 const SHOW_ARCHIVED_AGENTS_KEY = 'canopy-show-archived-agents';
 const SHOW_COMPLETED_BEADS_KEY = 'canopy-show-completed-beads';
@@ -28,6 +29,8 @@ export const Dashboard: React.FC = () => {
   // Rules state for run config dialog
   const [configRulesForDialog, setConfigRulesForDialog] = useState<Rule[]>([]);
   const [isLoadingConfigRules, setIsLoadingConfigRules] = useState(false);
+  // Agent config panel state
+  const [showAgentConfig, setShowAgentConfig] = useState(false);
 
   // Theme state
   const [isDark, setIsDark] = useState(() => {
@@ -519,6 +522,7 @@ export const Dashboard: React.FC = () => {
         onPause={handlePause}
         onResume={handleResume}
         onConfigure={handleConfigure}
+        onAgentConfig={() => setShowAgentConfig(true)}
         stats={stats}
       />
 
@@ -584,6 +588,12 @@ export const Dashboard: React.FC = () => {
           )}
         </main>
       </div>
+
+      {/* Agent Configuration Panel */}
+      <AgentConfigPanel
+        isOpen={showAgentConfig}
+        onClose={() => setShowAgentConfig(false)}
+      />
 
       {/* Run Configuration Dialog */}
       <RunConfigDialog
