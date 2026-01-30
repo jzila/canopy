@@ -1145,17 +1145,20 @@ func (s *Store) MarkOrphanedRunsFailed() (int64, error) {
 	return result.RowsAffected()
 }
 
-// MarkOrphanedAgentsFailed marks all agents with status "starting" or "running" as "failed".
-// This is used on daemon startup to handle agents that were interrupted by a crash.
+// MarkOrphanedAgentsFailed marks all agents with status "starting" or "running" as "failed",
+// and also marks agents stuck in non-terminal merge-related lifecycle states as "failed".
+// This handles agents interrupted by daemon crashes during merge, validation, or repair.
 // Returns the number of agents marked as failed.
 func (s *Store) MarkOrphanedAgentsFailed() (int64, error) {
 	now := time.Now().Unix()
 	query := `
 		UPDATE agents SET
 			status = 'failed',
+			lifecycle_state = 'failed',
 			finished_at = ?,
 			error_message = 'daemon terminated unexpectedly'
 		WHERE status IN ('starting', 'running')
+		   OR lifecycle_state IN ('merging', 'queued_for_merge', 'validating', 'repairing', 'resolving')
 	`
 	result, err := s.db.Exec(query, now)
 	if err != nil {
