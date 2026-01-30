@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jzila/canopy/pkg/beads"
+	"github.com/jzila/canopy/pkg/lifecycle"
 	"github.com/jzila/canopy/pkg/persistence"
 	"github.com/jzila/canopy/pkg/repository"
 )
@@ -252,9 +253,44 @@ func (h *Handler) HandleKillAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if killErr != nil {
-		// Check if error is "agent not found" in scheduler
 		errMsg := killErr.Error()
 		if strings.Contains(errMsg, "not found") {
+			// Agent exists in RuntimeState but not in orchestrator (orphaned).
+			// Mark it as failed directly so it doesn't remain stuck.
+			isNonTerminal := false
+			if agent.Lifecycle != nil {
+				isNonTerminal = !agent.Lifecycle.IsTerminal()
+			} else {
+				isNonTerminal = agent.Status != AgentStatusCompleted &&
+					agent.Status != AgentStatusFailed &&
+					agent.Status != AgentStatusTimedOut &&
+					agent.Status != AgentStatusCancelled
+			}
+
+			if isNonTerminal {
+				agent.Update(func(a *AgentState) {
+					a.Status = AgentStatusFailed
+					now := time.Now()
+					a.EndTime = &now
+					a.Error = "killed: agent had no running process (orphaned)"
+				})
+				if agent.Lifecycle != nil {
+					_ = agent.Lifecycle.Transition(lifecycle.EventCancel, lifecycle.TransitionContext{})
+				}
+				// Persist the update
+				if h.persistenceStore != nil {
+					_ = h.persistenceStore.MarkAgentFailed(agentID, "killed: agent had no running process (orphaned)")
+				}
+				h.state.UpdateStats()
+
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(map[string]string{
+					"status":   "killed",
+					"agent_id": agentID,
+				})
+				return
+			}
 			http.Error(w, fmt.Sprintf("Agent %s not found in scheduler", agentID), http.StatusNotFound)
 		} else {
 			http.Error(w, fmt.Sprintf("Failed to kill agent: %v", killErr), http.StatusInternalServerError)
