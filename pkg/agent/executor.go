@@ -795,7 +795,7 @@ func (e *Executor) buildPrompt(task *beads.Task, deps []DependencyContext) strin
 	var parts []string
 
 	// Add system prompt for autonomous operation
-	parts = append(parts, WorkerSystemPrompt)
+	parts = append(parts, ImplementorSystemPrompt)
 
 	// Add dependency context if present
 	if len(deps) > 0 {
