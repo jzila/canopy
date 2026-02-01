@@ -395,6 +395,66 @@ func TestInputBlockedDetection(t *testing.T) {
 	})
 }
 
+func TestSetModelAndTimeout(t *testing.T) {
+	t.Run("SetModel updates model", func(t *testing.T) {
+		e := NewExecutor(&Config{Timeout: DefaultTimeout})
+		e.SetModel("claude-3-opus")
+		model, _ := e.getModelAndTimeout()
+		if model != "claude-3-opus" {
+			t.Errorf("Expected model 'claude-3-opus', got %q", model)
+		}
+	})
+
+	t.Run("SetTimeout updates timeout", func(t *testing.T) {
+		e := NewExecutor(&Config{Timeout: DefaultTimeout})
+		e.SetTimeout(30 * time.Minute)
+		_, timeout := e.getModelAndTimeout()
+		if timeout != 30*time.Minute {
+			t.Errorf("Expected 30m timeout, got %v", timeout)
+		}
+	})
+
+	t.Run("SetTimeout zero resets to default", func(t *testing.T) {
+		e := NewExecutor(&Config{Timeout: 30 * time.Minute})
+		e.SetTimeout(0)
+		_, timeout := e.getModelAndTimeout()
+		if timeout != DefaultTimeout {
+			t.Errorf("Expected default timeout %v, got %v", DefaultTimeout, timeout)
+		}
+	})
+
+	t.Run("SetTimeout negative is ignored", func(t *testing.T) {
+		e := NewExecutor(&Config{Timeout: 30 * time.Minute})
+		e.SetTimeout(-5 * time.Minute)
+		_, timeout := e.getModelAndTimeout()
+		if timeout != 30*time.Minute {
+			t.Errorf("Expected 30m timeout unchanged, got %v", timeout)
+		}
+	})
+
+	t.Run("concurrent SetModel and getModelAndTimeout", func(t *testing.T) {
+		e := NewExecutor(&Config{Timeout: DefaultTimeout})
+		done := make(chan struct{})
+
+		// Writer goroutine
+		go func() {
+			defer close(done)
+			for i := 0; i < 1000; i++ {
+				e.SetModel("model-a")
+				e.SetModel("model-b")
+			}
+		}()
+
+		// Reader goroutine
+		for i := 0; i < 1000; i++ {
+			model, _ := e.getModelAndTimeout()
+			// Just verify no panic; value can be any of the set values
+			_ = model
+		}
+		<-done
+	})
+}
+
 func TestBuildPrompt(t *testing.T) {
 	t.Run("basic task", func(t *testing.T) {
 		executor := &Executor{

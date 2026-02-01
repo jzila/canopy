@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jzila/canopy/pkg/beads"
@@ -102,7 +103,8 @@ func NewConfig() *Config {
 
 // Executor runs Claude CLI agents in sandboxed environments
 type Executor struct {
-	config *Config
+	config   *Config
+	configMu sync.RWMutex // Protects config.Model and config.Timeout from concurrent access
 }
 
 // NewExecutor creates a new agent executor
@@ -127,14 +129,29 @@ func NewExecutor(config *Config) *Executor {
 
 // SetModel updates the model used for new agent executions.
 func (e *Executor) SetModel(model string) {
+	e.configMu.Lock()
+	defer e.configMu.Unlock()
 	e.config.Model = model
 }
 
 // SetTimeout updates the timeout used for new agent executions.
+// A positive duration sets the timeout; zero clears it back to DefaultTimeout.
 func (e *Executor) SetTimeout(timeout time.Duration) {
+	e.configMu.Lock()
+	defer e.configMu.Unlock()
 	if timeout > 0 {
 		e.config.Timeout = timeout
+	} else if timeout == 0 {
+		e.config.Timeout = DefaultTimeout
 	}
+}
+
+// getModelAndTimeout returns a snapshot of the current model and timeout settings.
+// This is safe to call concurrently with SetModel/SetTimeout.
+func (e *Executor) getModelAndTimeout() (string, time.Duration) {
+	e.configMu.RLock()
+	defer e.configMu.RUnlock()
+	return e.config.Model, e.config.Timeout
 }
 
 // LiveFeedCallback is the type for live feed event callbacks
@@ -184,6 +201,9 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 	// Build the prompt from task title, description, and dependency context
 	prompt := e.buildPrompt(task, deps)
 
+	// Snapshot dynamic config (model, timeout) under lock to avoid races with SetModel/SetTimeout
+	currentModel, currentTimeout := e.getModelAndTimeout()
+
 	// Build command arguments
 	args := []string{
 		"--print",
@@ -193,8 +213,8 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 	}
 
 	// Add model flag if specified
-	if e.config.Model != "" {
-		args = append(args, "--model", e.config.Model)
+	if currentModel != "" {
+		args = append(args, "--model", currentModel)
 	}
 
 	args = append(args, prompt)
@@ -205,7 +225,7 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 		timeout = e.config.SandboxConfig.GetTimeout()
 	}
 	if timeout <= 0 {
-		timeout = e.config.Timeout
+		timeout = currentTimeout
 	}
 	if timeout <= 0 {
 		timeout = DefaultTimeout
@@ -526,6 +546,9 @@ func (e *Executor) ExecuteResume(ctx context.Context, task *beads.Task, overlay 
 		}
 	}
 
+	// Snapshot dynamic config (model, timeout) under lock to avoid races with SetModel/SetTimeout
+	currentModel, currentTimeout := e.getModelAndTimeout()
+
 	// Build command arguments for resume - no prompt, just --resume
 	args := []string{
 		"--resume", sessionID,
@@ -536,8 +559,8 @@ func (e *Executor) ExecuteResume(ctx context.Context, task *beads.Task, overlay 
 	}
 
 	// Add model flag if specified
-	if e.config.Model != "" {
-		args = append(args, "--model", e.config.Model)
+	if currentModel != "" {
+		args = append(args, "--model", currentModel)
 	}
 
 	// Determine timeout
@@ -546,7 +569,7 @@ func (e *Executor) ExecuteResume(ctx context.Context, task *beads.Task, overlay 
 		timeout = e.config.SandboxConfig.GetTimeout()
 	}
 	if timeout <= 0 {
-		timeout = e.config.Timeout
+		timeout = currentTimeout
 	}
 	if timeout <= 0 {
 		timeout = DefaultTimeout

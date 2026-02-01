@@ -201,7 +201,9 @@ func New(config *Config) (*Orchestrator, error) {
 	// Parse worker timeout from agent settings
 	var workerTimeout time.Duration
 	if agentSettings.Worker.Timeout != "" {
-		if d, err := time.ParseDuration(agentSettings.Worker.Timeout); err == nil {
+		if d, err := time.ParseDuration(agentSettings.Worker.Timeout); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: invalid worker timeout %q in config: %v\n", agentSettings.Worker.Timeout, err)
+		} else {
 			workerTimeout = d
 		}
 	}
@@ -446,22 +448,27 @@ func (o *Orchestrator) UpdateAgentSettings(settings *cfgpkg.AgentSettings) {
 
 	// Only apply config-based models when no CLI override is present
 	if o.config.Model == "" {
-		// Update worker model on the scheduler's executor
-		workerModel := settings.GetWorkerModel()
-		o.scheduler.GetExecutor().SetModel(workerModel)
+		// Update worker model on the scheduler's executor (only if non-empty)
+		if workerModel := settings.GetWorkerModel(); workerModel != "" {
+			o.scheduler.GetExecutor().SetModel(workerModel)
+		}
 
-		// Update resolver model on the merge coordinator
-		resolverModel := settings.GetResolverModel()
-		o.mergeCoordinator.SetResolverModel(resolverModel)
+		// Update resolver model on the merge coordinator (only if non-empty)
+		if resolverModel := settings.GetResolverModel(); resolverModel != "" {
+			o.mergeCoordinator.SetResolverModel(resolverModel)
+		}
 
-		// Update repair model on the merge coordinator
-		repairModel := settings.GetRepairModel()
-		o.mergeCoordinator.SetModel(repairModel)
+		// Update repair model on the merge coordinator (only if non-empty)
+		if repairModel := settings.GetRepairModel(); repairModel != "" {
+			o.mergeCoordinator.SetModel(repairModel)
+		}
 	}
 
 	// Apply worker timeout if specified
 	if settings.Worker.Timeout != "" {
-		if d, err := time.ParseDuration(settings.Worker.Timeout); err == nil {
+		if d, err := time.ParseDuration(settings.Worker.Timeout); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: invalid worker timeout %q: %v\n", settings.Worker.Timeout, err)
+		} else {
 			o.scheduler.GetExecutor().SetTimeout(d)
 		}
 	}
