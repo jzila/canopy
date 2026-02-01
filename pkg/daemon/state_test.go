@@ -332,3 +332,93 @@ func TestRemoveTask_NonExistent(t *testing.T) {
 		t.Error("task-1 should still exist")
 	}
 }
+
+func TestHandleAgentCommitPreservesPatchAndTruncated(t *testing.T) {
+	state := NewRuntimeState()
+
+	agent := &AgentState{
+		ID:     "agent-1",
+		TaskID: "task-1",
+		Status: AgentStatusRunning,
+	}
+	state.AddAgent(agent)
+
+	payload := map[string]interface{}{
+		"agent_id":      "agent-1",
+		"hash":          "abc123def456",
+		"short_hash":    "abc123d",
+		"message":       "feat: add widget",
+		"author":        "Test Author",
+		"author_email":  "test@example.com",
+		"timestamp":     "2025-01-01T00:00:00Z",
+		"files_changed": []interface{}{"main.go", "main_test.go"},
+		"patch":         "diff --git a/main.go b/main.go\n--- a/main.go\n+++ b/main.go\n@@ -1 +1 @@\n-old\n+new",
+		"truncated":     true,
+	}
+
+	state.handleAgentCommit(payload)
+
+	updatedAgent := state.GetAgent("agent-1")
+	if updatedAgent == nil {
+		t.Fatal("agent not found after handleAgentCommit")
+	}
+
+	snapshot := updatedAgent.GetSnapshot()
+	if len(snapshot.GitCommits) != 1 {
+		t.Fatalf("expected 1 commit, got %d", len(snapshot.GitCommits))
+	}
+
+	commit := snapshot.GitCommits[0]
+	if commit.Hash != "abc123def456" {
+		t.Errorf("hash = %q, want %q", commit.Hash, "abc123def456")
+	}
+	if commit.Patch == "" {
+		t.Error("patch field is empty, expected diff content")
+	}
+	if commit.Patch != payload["patch"].(string) {
+		t.Errorf("patch = %q, want %q", commit.Patch, payload["patch"])
+	}
+	if !commit.Truncated {
+		t.Error("truncated = false, want true")
+	}
+	if len(commit.FilesChanged) != 2 {
+		t.Errorf("files_changed length = %d, want 2", len(commit.FilesChanged))
+	}
+	if snapshot.Commits != 1 {
+		t.Errorf("legacy Commits field = %d, want 1", snapshot.Commits)
+	}
+}
+
+func TestHandleAgentCommitMissingPatchFields(t *testing.T) {
+	state := NewRuntimeState()
+
+	agent := &AgentState{
+		ID:     "agent-2",
+		TaskID: "task-2",
+		Status: AgentStatusRunning,
+	}
+	state.AddAgent(agent)
+
+	// Payload without patch or truncated fields
+	payload := map[string]interface{}{
+		"agent_id":   "agent-2",
+		"hash":       "def456",
+		"short_hash": "def456",
+		"message":    "fix: something",
+	}
+
+	state.handleAgentCommit(payload)
+
+	snapshot := state.GetAgent("agent-2").GetSnapshot()
+	if len(snapshot.GitCommits) != 1 {
+		t.Fatalf("expected 1 commit, got %d", len(snapshot.GitCommits))
+	}
+
+	commit := snapshot.GitCommits[0]
+	if commit.Patch != "" {
+		t.Errorf("patch should be empty when not provided, got %q", commit.Patch)
+	}
+	if commit.Truncated {
+		t.Error("truncated should be false when not provided")
+	}
+}
