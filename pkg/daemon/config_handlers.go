@@ -15,13 +15,15 @@ import (
 // ConfigHandler handles HTTP requests for configuration queries.
 // These endpoints expose the RepoAPI config query methods.
 type ConfigHandler struct {
-	daemon *Daemon
+	daemon             *Daemon
+	agentConfigHandler *AgentConfigHandler
 }
 
 // NewConfigHandler creates a new config handler.
 func NewConfigHandler(daemon *Daemon) *ConfigHandler {
 	return &ConfigHandler{
-		daemon: daemon,
+		daemon:             daemon,
+		agentConfigHandler: NewAgentConfigHandler(daemon),
 	}
 }
 
@@ -69,24 +71,48 @@ func (h *ConfigHandler) RouteConfig(w http.ResponseWriter, r *http.Request) {
 // Handles /api/repos/:repo_id/config/* where repo_id is already extracted.
 // The suffix contains remaining path parts after /api/repos/:repo_id/config
 func (h *ConfigHandler) RouteRepoConfig(w http.ResponseWriter, r *http.Request, suffix []string) {
-	// Only GET requests are supported for config queries
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	if len(suffix) != 1 {
+	if len(suffix) == 0 {
 		http.Error(w, "Not found", http.StatusNotFound)
 		return
 	}
 
 	switch suffix[0] {
 	case "rules":
+		// Only GET requests are supported for rules config queries
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if len(suffix) != 1 {
+			http.Error(w, "Not found", http.StatusNotFound)
+			return
+		}
 		h.HandleGetRulesSettings(w, r)
 	case "sandbox":
+		// Only GET requests are supported for sandbox config queries
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if len(suffix) != 1 {
+			http.Error(w, "Not found", http.StatusNotFound)
+			return
+		}
 		h.HandleGetSandboxConfig(w, r)
 	case "validation":
+		// Only GET requests are supported for validation config queries
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if len(suffix) != 1 {
+			http.Error(w, "Not found", http.StatusNotFound)
+			return
+		}
 		h.HandleGetValidationConfig(w, r)
+	case "agents":
+		// Agent config supports GET, POST, and POST /persist
+		h.RouteAgentConfig(w, r, suffix[1:])
 	default:
 		http.Error(w, "Not found", http.StatusNotFound)
 	}
@@ -218,4 +244,14 @@ func (h *ConfigHandler) writeJSON(w http.ResponseWriter, status int, data interf
 	if err := json.NewEncoder(w).Encode(data); err != nil {
 		fmt.Printf("Error encoding JSON response: %v\n", err)
 	}
+}
+
+// RouteAgentConfig routes agent config requests to the AgentConfigHandler.
+// Handles /api/repos/:repo_id/config/agents and /api/repos/:repo_id/config/agents/persist
+func (h *ConfigHandler) RouteAgentConfig(w http.ResponseWriter, r *http.Request, suffix []string) {
+	if h.agentConfigHandler == nil {
+		http.Error(w, "Agent config management not available", http.StatusServiceUnavailable)
+		return
+	}
+	h.agentConfigHandler.RouteAgentConfig(w, r, suffix)
 }

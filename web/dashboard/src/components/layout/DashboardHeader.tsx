@@ -6,6 +6,7 @@ import {
   FileEdit,
   Sun,
   Moon,
+  Bot,
 } from 'lucide-react';
 import type { Repository, Run } from '../../api/client';
 import type { Stats, OrchestratorState, PauseState } from '../../stores/stateStore';
@@ -46,6 +47,7 @@ export interface DashboardHeaderProps {
   onPause: () => void;
   onResume: () => void;
   onConfigure: () => void;
+  onAgentConfig: () => void;
 
   // Stats
   stats: Stats;
@@ -96,6 +98,7 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
   onPause,
   onResume,
   onConfigure,
+  onAgentConfig,
   stats,
 }) => {
   return (
@@ -149,6 +152,13 @@ export const DashboardHeader: React.FC<DashboardHeaderProps> = ({
             isLoading={isRunsLoading}
             disabled={!connected || isRepoSwitching}
           />
+          <button
+            onClick={onAgentConfig}
+            className="header-control justify-center w-12 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+            title="Agent Configuration"
+          >
+            <Bot className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+          </button>
           <button
             onClick={onToggleTheme}
             className="header-control justify-center w-12 rounded-lg bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"

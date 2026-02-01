@@ -119,6 +119,10 @@ func (m *mockPersistenceStore) SetAgentArchived(agentID string, archived bool) e
 	return nil
 }
 
+func (m *mockPersistenceStore) MarkAgentFailed(agentID string, errorMessage string) error {
+	return nil
+}
+
 func TestHandleListRuns(t *testing.T) {
 	store := newMockPersistenceStore()
 	now := time.Now()

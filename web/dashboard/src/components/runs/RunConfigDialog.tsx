@@ -9,7 +9,7 @@ type DialogMode = 'start' | 'configure';
 // Extended rule for the dialog that tracks config rules and their override state
 interface DialogRule {
   name: string;
-  conditions: string[];
+  condition: string;
   action: 'deny' | 'allow';
   enabled: boolean;
   source: 'config' | 'override'; // Where the rule came from
@@ -42,7 +42,7 @@ const DEFAULT_RULE: RuleOverride = {
 function configRulesToDialogRules(configRules: Rule[]): DialogRule[] {
   return configRules.map((rule) => ({
     name: rule.name,
-    conditions: rule.conditions,
+    condition: rule.condition,
     action: rule.action,
     enabled: rule.enabled,
     source: 'config' as const,
@@ -54,7 +54,7 @@ function configRulesToDialogRules(configRules: Rule[]): DialogRule[] {
 function overridesToDialogRules(overrides: RuleOverride[]): DialogRule[] {
   return overrides.map((override) => ({
     name: override.name,
-    conditions: [override.condition],
+    condition: override.condition,
     action: override.action,
     enabled: override.enabled !== false,
     source: 'override' as const,
@@ -71,7 +71,7 @@ function dialogRulesToOverrides(dialogRules: DialogRule[], originalConfigRules: 
       // Runtime-only rules always get included
       overrides.push({
         name: dialogRule.name,
-        condition: dialogRule.conditions.join(' AND '),
+        condition: dialogRule.condition,
         action: dialogRule.action,
         enabled: dialogRule.enabled,
       });
@@ -84,7 +84,7 @@ function dialogRulesToOverrides(dialogRules: DialogRule[], originalConfigRules: 
             originalRule.action !== dialogRule.action) {
           overrides.push({
             name: dialogRule.name,
-            condition: dialogRule.conditions.join(' AND '),
+            condition: dialogRule.condition,
             action: dialogRule.action,
             enabled: dialogRule.enabled,
           });
@@ -155,7 +155,7 @@ export const RunConfigDialog: React.FC<RunConfigDialogProps> = ({
     if (!newRule.name || !newRule.condition) return;
     const newDialogRule: DialogRule = {
       name: newRule.name,
-      conditions: [newRule.condition],
+      condition: newRule.condition,
       action: newRule.action,
       enabled: newRule.enabled !== false,
       source: 'override',
@@ -199,7 +199,7 @@ export const RunConfigDialog: React.FC<RunConfigDialogProps> = ({
         const newRules = [...dialogRules];
         newRules[index] = {
           name: originalRule.name,
-          conditions: originalRule.conditions,
+          condition: originalRule.condition,
           action: originalRule.action,
           enabled: originalRule.enabled,
           source: 'config',
@@ -482,7 +482,7 @@ export const RunConfigDialog: React.FC<RunConfigDialogProps> = ({
                               {rule.action.toUpperCase()}
                             </span>
                             <code className="bg-gray-200 dark:bg-gray-600 px-1 rounded">
-                              {rule.conditions.join(' AND ')}
+                              {rule.condition}
                             </code>
                           </div>
                         </div>
@@ -543,7 +543,7 @@ export const RunConfigDialog: React.FC<RunConfigDialogProps> = ({
                               {rule.action.toUpperCase()}
                             </span>
                             <code className="bg-gray-200 dark:bg-gray-600 px-1 rounded">
-                              {rule.conditions.join(' AND ')}
+                              {rule.condition}
                             </code>
                           </div>
                         </div>

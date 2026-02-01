@@ -21,6 +21,8 @@ interface BeadsPaneProps {
   selectedBeadId?: string | null;
   /** Callback when a bead is selected/deselected */
   onBeadSelect?: (beadId: string | null) => void;
+  /** When true, renders only content without outer shell/resize/collapse (for embedding in SidebarPanel) */
+  embedded?: boolean;
 }
 
 type ViewMode = 'hierarchy' | 'flat';
@@ -203,7 +205,7 @@ const truncateId = (id: string, length: number = 11): string => {
   return id.length > length ? id.slice(0, length) : id;
 };
 
-export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTaskClick, showCompleted = false, onToggleShowCompleted, width = 320, isResizing = false, onResizeStart, selectedBeadId, onBeadSelect }) => {
+export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTaskClick, showCompleted = false, onToggleShowCompleted, width = 320, isResizing = false, onResizeStart, selectedBeadId, onBeadSelect, embedded = false }) => {
   const tasks = useStateStore((state) => state.tasks);
   const highlightedTaskId = useStateStore((state) => state.highlightedTaskId);
   const [viewMode, setViewMode] = useState<ViewMode>('hierarchy');
@@ -385,6 +387,171 @@ export const BeadsPane: React.FC<BeadsPaneProps> = ({ isExpanded, onToggle, onTa
     });
     return counts;
   }, [incompleteBeads]);
+
+  // Embedded mode - render content only (for SidebarPanel accordion)
+  if (embedded) {
+    return (
+      <div className="flex flex-col min-h-0 flex-1">
+        {/* Merge Queue Status */}
+        <MergeQueueStatus
+          completed={mergeQueueData.completed}
+          resolvers={mergeQueueData.resolvers}
+          pending={mergeQueueData.pending}
+          active_workers={mergeQueueData.active_workers}
+          {...(onTaskClick && { onTaskClick })}
+        />
+
+        {/* Status Summary */}
+        <div className="flex items-center gap-5 px-5 py-3.5 border-b border-gray-100 dark:border-gray-700/50 bg-gray-50 dark:bg-gray-800/50 min-h-[44px]">
+          {statusCounts.running > 0 && (
+            <div className="flex items-center gap-2.5 text-xs">
+              <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
+              <span className="font-mono tabular-nums tracking-mono-normal text-blue-600 dark:text-blue-400">{statusCounts.running}</span>
+            </div>
+          )}
+          {statusCounts.blocked > 0 && (
+            <div className="flex items-center gap-2.5 text-xs">
+              <Clock className="w-4 h-4 text-yellow-500" />
+              <span className="font-mono tabular-nums tracking-mono-normal text-yellow-600 dark:text-yellow-400">{statusCounts.blocked}</span>
+            </div>
+          )}
+          {statusCounts.ready > 0 && (
+            <div className="flex items-center gap-2.5 text-xs">
+              <Circle className="w-4 h-4 text-gray-400" />
+              <span className="font-mono tabular-nums tracking-mono-normal text-gray-600 dark:text-gray-400">{statusCounts.ready}</span>
+            </div>
+          )}
+          {statusCounts.failed > 0 && (
+            <div className="flex items-center gap-2.5 text-xs">
+              <AlertCircle className="w-4 h-4 text-red-500" />
+              <span className="font-mono tabular-nums tracking-mono-normal text-red-600 dark:text-red-400">{statusCounts.failed}</span>
+            </div>
+          )}
+          {incompleteBeads.length === 0 && !showCompleted && (
+            <span className="text-xs tracking-wider text-gray-500 dark:text-gray-400">All done!</span>
+          )}
+          {showCompleted && completedBeadsCount > 0 && (
+            <div className="flex items-center gap-2.5 text-xs">
+              <CheckCircle2 className="w-4 h-4 text-green-500" />
+              <span className="font-mono tabular-nums tracking-mono-normal text-green-600 dark:text-green-400">{completedBeadsCount}</span>
+            </div>
+          )}
+        </div>
+
+        {/* Beads List */}
+        <div ref={listContainerRef} className="flex-1 overflow-y-auto">
+          {filteredBeads.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-8 text-center px-4">
+              <div className="w-12 h-12 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center mb-3">
+                <svg className="w-6 h-6 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              </div>
+              <p className="text-sm font-medium text-gray-700 dark:text-gray-300">No pending beads</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">All tasks are complete</p>
+            </div>
+          ) : viewMode === 'flat' ? (
+            <div className="divide-y divide-gray-100 dark:divide-gray-700/50">
+              {filteredBeads.map((task: TaskState) => {
+                const statusConfig = getStatusConfig(task.status);
+                const priorityStyle = getPriorityStyle(task.priority);
+                const isHighlighted = highlightedTaskId === task.id;
+                const isSelected = selectedBeadId === task.id;
+                const isCompletedOrArchived = task.status.toLowerCase() === 'done' || task.status.toLowerCase() === 'completed' || task.archived;
+
+                return (
+                  <div
+                    key={task.id}
+                    ref={(el) => { if (el) { taskRefs.current.set(task.id, el); } else { taskRefs.current.delete(task.id); } }}
+                    onClick={(e) => handleBeadClick(task.id, e)}
+                    className={`px-5 py-4 transition-all cursor-pointer ${
+                      isSelected ? 'bg-indigo-100 dark:bg-indigo-900/50 ring-2 ring-indigo-500 ring-inset'
+                        : isHighlighted ? 'bg-blue-100 dark:bg-blue-900/50 ring-2 ring-blue-500 ring-inset'
+                        : isCompletedOrArchived ? 'bg-gray-50 dark:bg-gray-800/50 opacity-75 hover:bg-gray-100 dark:hover:bg-gray-700/50'
+                        : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3 mb-3 min-h-6">
+                      <span className={`px-2.5 py-1 rounded text-2xs font-mono font-semibold tracking-mono-normal ${priorityStyle.bg} ${priorityStyle.text}`}>{priorityStyle.label}</span>
+                      <span className={`inline-flex items-center gap-2 px-2.5 py-1 rounded text-2xs font-medium tracking-wider ${statusConfig.bg} ${statusConfig.text}`}>{statusConfig.icon}{statusConfig.label}</span>
+                      {task.archived && (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-2xs font-medium tracking-wider bg-purple-100 dark:bg-purple-900/50 text-purple-600 dark:text-purple-400"><Archive className="w-3 h-3" />Archived</span>
+                      )}
+                      <code className="ml-auto text-2xs font-mono tracking-mono-normal text-gray-400 dark:text-gray-500">{truncateId(task.id)}</code>
+                    </div>
+                    <p className={`text-sm leading-relaxed tracking-wide line-clamp-2 ${isCompletedOrArchived ? 'text-gray-500 dark:text-gray-400' : 'text-gray-800 dark:text-gray-200'}`}>{task.title}</p>
+                    {task.dependencies && task.dependencies.length > 0 && (
+                      <div className="mt-3 flex items-center gap-2.5 text-2xs text-gray-500 dark:text-gray-400">
+                        <span className="font-medium tracking-wider">Blocked by:</span>
+                        <span className="font-mono tracking-mono-normal truncate">{task.dependencies.map(d => truncateId(d, 8)).join(', ')}</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="py-1">
+              {flattenedTree.map((node) => {
+                const { task, children, depth } = node;
+                const statusConfig = getStatusConfig(task.status);
+                const priorityStyle = getPriorityStyle(task.priority);
+                const hasChildren = children.length > 0;
+                const isCollapsed = collapsedNodes.has(task.id);
+                const isHighlighted = highlightedTaskId === task.id;
+                const isSelected = selectedBeadId === task.id;
+                const isCompletedOrArchived = task.status.toLowerCase() === 'done' || task.status.toLowerCase() === 'completed' || task.archived;
+
+                return (
+                  <div
+                    key={task.id}
+                    ref={(el) => { if (el) { taskRefs.current.set(task.id, el); } else { taskRefs.current.delete(task.id); } }}
+                    onClick={(e) => handleBeadClick(task.id, e)}
+                    className={`transition-all cursor-pointer ${
+                      isSelected ? 'bg-indigo-100 dark:bg-indigo-900/50 ring-2 ring-indigo-500 ring-inset'
+                        : isHighlighted ? 'bg-blue-100 dark:bg-blue-900/50 ring-2 ring-blue-500 ring-inset'
+                        : isCompletedOrArchived ? 'bg-gray-50 dark:bg-gray-800/50 opacity-75 hover:bg-gray-100 dark:hover:bg-gray-700/50'
+                        : 'hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                    }`}
+                    style={{ paddingLeft: `${depth * 16 + 12}px` }}
+                  >
+                    <div className="py-3 pr-4">
+                      <div className="flex items-start gap-1">
+                        <div className="flex-shrink-0 w-4 h-4 flex items-center justify-center">
+                          {hasChildren ? (
+                            <button onClick={() => toggleNodeCollapsed(task.id)} className="p-0.5 rounded hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors">
+                              {isCollapsed ? <ChevronRight className="w-3 h-3 text-gray-400" /> : <ChevronDown className="w-3 h-3 text-gray-400" />}
+                            </button>
+                          ) : depth > 0 ? (
+                            <div className="w-3 h-3 flex items-center justify-center"><div className="w-1.5 h-1.5 rounded-full bg-gray-300 dark:bg-gray-600" /></div>
+                          ) : null}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2.5 mb-2 flex-wrap min-h-6">
+                            <span className={`px-2 py-0.5 rounded text-2xs font-mono font-semibold tracking-mono-normal ${priorityStyle.bg} ${priorityStyle.text}`}>{priorityStyle.label}</span>
+                            <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-2xs font-medium tracking-wider ${statusConfig.bg} ${statusConfig.text}`}>{statusConfig.icon}{statusConfig.label}</span>
+                            {task.archived && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs font-medium tracking-wider bg-purple-100 dark:bg-purple-900/50 text-purple-600 dark:text-purple-400"><Archive className="w-3 h-3" />Archived</span>
+                            )}
+                            <code className="ml-auto text-2xs font-mono tracking-mono-normal text-gray-400 dark:text-gray-500">{truncateId(task.id)}</code>
+                          </div>
+                          <p className={`text-sm leading-relaxed tracking-wide line-clamp-2 ${isCompletedOrArchived ? 'text-gray-500 dark:text-gray-400' : 'text-gray-800 dark:text-gray-200'}`}>{task.title}</p>
+                          {hasChildren && isCollapsed && (
+                            <div className="mt-2 text-2xs tracking-wider text-gray-400 dark:text-gray-500">{children.length} blocked task{children.length !== 1 ? 's' : ''} hidden</div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="border-b border-gray-100 dark:border-gray-700/50" style={{ marginLeft: depth > 0 ? '20px' : '0' }} />
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   // Collapsed view - just show the toggle button with count
   if (!isExpanded) {

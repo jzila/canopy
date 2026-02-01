@@ -335,6 +335,8 @@ type GitCommit struct {
 	AuthorEmail  string   `json:"author_email"`  // Author email
 	Timestamp    string   `json:"timestamp"`     // ISO 8601 timestamp
 	FilesChanged []string `json:"files_changed"` // List of files modified in this commit
+	Patch        string   `json:"patch"`         // Unified diff patch content
+	Truncated    bool     `json:"truncated"`     // Whether patch was truncated due to size
 }
 
 // LifecycleHistoryEntry represents a single state transition in the agent lifecycle.
@@ -1486,6 +1488,10 @@ func (r *RuntimeState) handleAgentCommit(payload map[string]interface{}) {
 		}
 	}
 
+	// Extract patch data
+	patch, _ := payload["patch"].(string)
+	truncated, _ := payload["truncated"].(bool)
+
 	commit := GitCommit{
 		Hash:         hash,
 		ShortHash:   shortHash,
@@ -1494,6 +1500,8 @@ func (r *RuntimeState) handleAgentCommit(payload map[string]interface{}) {
 		AuthorEmail:  authorEmail,
 		Timestamp:    timestamp,
 		FilesChanged: filesChanged,
+		Patch:        patch,
+		Truncated:    truncated,
 	}
 
 	agent.Update(func(a *AgentState) {

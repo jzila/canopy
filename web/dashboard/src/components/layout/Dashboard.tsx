@@ -8,9 +8,11 @@ import type { Rule } from '../../api/client';
 import { BeadsPane } from '../beads/BeadsPane';
 import { DashboardHeader } from './DashboardHeader';
 import { TerminalPanel } from './TerminalPanel';
+import { SidebarPanel } from './SidebarPanel';
 import { AgentGrid } from '../agents/AgentGrid';
 import { RunConfigDialog } from '../runs/RunConfigDialog';
 import { RulesPanel } from '../rules/RulesPanel';
+import { AgentConfigPanel } from '../agents/AgentConfigPanel';
 
 const SHOW_ARCHIVED_AGENTS_KEY = 'canopy-show-archived-agents';
 const SHOW_COMPLETED_BEADS_KEY = 'canopy-show-completed-beads';
@@ -28,6 +30,8 @@ export const Dashboard: React.FC = () => {
   // Rules state for run config dialog
   const [configRulesForDialog, setConfigRulesForDialog] = useState<Rule[]>([]);
   const [isLoadingConfigRules, setIsLoadingConfigRules] = useState(false);
+  // Agent config panel state
+  const [showAgentConfig, setShowAgentConfig] = useState(false);
 
   // Theme state
   const [isDark, setIsDark] = useState(() => {
@@ -43,9 +47,9 @@ export const Dashboard: React.FC = () => {
     return saved === 'true';
   });
 
-  // Beads pane state
-  const [beadsPaneExpanded, setBeadsPaneExpanded] = useState(() => {
-    const saved = localStorage.getItem('beadsPaneExpanded');
+  // Sidebar state (unified left panel with beads + rules accordion)
+  const [sidebarExpanded, setSidebarExpanded] = useState(() => {
+    const saved = localStorage.getItem('sidebarPanelExpanded');
     return saved !== null ? saved === 'true' : true;
   });
   const [showCompletedBeads, setShowCompletedBeads] = useState(() => {
@@ -61,37 +65,18 @@ export const Dashboard: React.FC = () => {
     maxHeightRatio: 0.8,
   });
 
-  // Resizable beads pane width
-  const { width: beadsPaneWidth, isResizing: isBeadsResizing, handleResizeStart: handleBeadsResizeStart } = useResizableWidth({
-    storageKey: 'beadsPaneWidth',
-    defaultWidth: 320,
-    minWidth: 200,
+  // Resizable sidebar width
+  const { width: sidebarWidth, isResizing: isSidebarResizing, handleResizeStart: handleSidebarResizeStart } = useResizableWidth({
+    storageKey: 'sidebarPanelWidth',
+    defaultWidth: 340,
+    minWidth: 240,
     maxWidthRatio: 0.5,
   });
 
-  // Rules pane state
-  const [rulesPaneExpanded, setRulesPaneExpanded] = useState(() => {
-    const saved = localStorage.getItem('rulesPaneExpanded');
-    return saved !== null ? saved === 'true' : false;
-  });
-
-  // Resizable rules pane width
-  const { width: rulesPaneWidth, isResizing: isRulesResizing, handleResizeStart: handleRulesResizeStart } = useResizableWidth({
-    storageKey: 'rulesPaneWidth',
-    defaultWidth: 280,
-    minWidth: 200,
-    maxWidthRatio: 0.4,
-  });
-
-  // Persist beads pane state
+  // Persist sidebar state
   useEffect(() => {
-    localStorage.setItem('beadsPaneExpanded', String(beadsPaneExpanded));
-  }, [beadsPaneExpanded]);
-
-  // Persist rules pane state
-  useEffect(() => {
-    localStorage.setItem('rulesPaneExpanded', String(rulesPaneExpanded));
-  }, [rulesPaneExpanded]);
+    localStorage.setItem('sidebarPanelExpanded', String(sidebarExpanded));
+  }, [sidebarExpanded]);
 
   // Persist show completed beads state
   useEffect(() => {
@@ -519,55 +504,104 @@ export const Dashboard: React.FC = () => {
         onPause={handlePause}
         onResume={handleResume}
         onConfigure={handleConfigure}
+        onAgentConfig={() => setShowAgentConfig(true)}
         stats={stats}
       />
 
-      {/* Main Content Area with Beads Pane */}
+      {/* Main Content Area with Sidebar */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Beads Left Pane */}
-        <BeadsPane
-          isExpanded={beadsPaneExpanded}
-          onToggle={() => setBeadsPaneExpanded(!beadsPaneExpanded)}
-          onTaskClick={handleMergeTaskClick}
-          showCompleted={showCompletedBeads}
-          onToggleShowCompleted={() => setShowCompletedBeads(!showCompletedBeads)}
-          width={beadsPaneWidth}
-          isResizing={isBeadsResizing}
-          onResizeStart={handleBeadsResizeStart}
-          selectedBeadId={selectedBeadId}
-          onBeadSelect={setSelectedBead}
+        {/* Unified Left Sidebar (Beads + Rules) */}
+        <SidebarPanel
+          isExpanded={sidebarExpanded}
+          onToggle={() => setSidebarExpanded(!sidebarExpanded)}
+          width={sidebarWidth}
+          isResizing={isSidebarResizing}
+          onResizeStart={handleSidebarResizeStart}
+          sections={[
+            {
+              id: 'beads',
+              title: 'Beads',
+              badge: (
+                <span className="px-2.5 py-1 text-xs font-mono font-medium tabular-nums tracking-mono-normal rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
+                  {Object.keys(tasks).length}
+                </span>
+              ),
+              headerActions: (
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setShowCompletedBeads(!showCompletedBeads)}
+                    className={`px-2 py-1 rounded text-xs font-medium transition-all ${
+                      showCompletedBeads
+                        ? 'bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300'
+                        : 'hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400'
+                    }`}
+                    title={showCompletedBeads ? 'Hide completed' : 'Show completed'}
+                  >
+                    {showCompletedBeads ? 'All' : 'Active'}
+                  </button>
+                </div>
+              ),
+              content: (
+                <BeadsPane
+                  isExpanded={true}
+                  onToggle={() => {}}
+                  onTaskClick={handleMergeTaskClick}
+                  showCompleted={showCompletedBeads}
+                  onToggleShowCompleted={() => setShowCompletedBeads(!showCompletedBeads)}
+                  selectedBeadId={selectedBeadId}
+                  onBeadSelect={setSelectedBead}
+                  embedded
+                />
+              ),
+              collapsedIndicator: (
+                <div className="flex flex-col items-center gap-1">
+                  <span className="text-sm font-bold text-gray-700 dark:text-gray-300">{Object.keys(tasks).length}</span>
+                  <span className="text-2xs text-gray-500 dark:text-gray-400" style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}>beads</span>
+                </div>
+              ),
+            },
+            {
+              id: 'rules',
+              title: 'Rules',
+              badge: undefined,
+              content: (
+                <RulesPanel
+                  isExpanded={true}
+                  onToggle={() => {}}
+                  width={sidebarWidth}
+                  isResizing={false}
+                  onResizeStart={() => { /* no-op in embedded mode */ }}
+                  embedded
+                />
+              ),
+              collapsedIndicator: (
+                <div className="flex flex-col items-center gap-1">
+                  <span className="text-2xs text-gray-500 dark:text-gray-400" style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}>rules</span>
+                </div>
+              ),
+            },
+          ]}
         />
 
         {/* Main Content */}
         <main className="flex-1 flex flex-col overflow-hidden">
-          <div className="flex-1 flex overflow-hidden">
-            {/* Agent Grid */}
-            <div className="flex-1 overflow-y-auto p-8">
-              <AgentGrid
-                groupedAgents={groupedAgents}
-                totalAgentCount={totalAgentCount}
-                statusFilter={statusFilter}
-                onStatusFilterChange={setStatusFilter}
-                stats={stats}
-                showArchivedAgents={showArchivedAgents}
-                archivedAgentCount={archivedCount}
-                onToggleShowArchived={() => setShowArchivedAgents(!showArchivedAgents)}
-                selectedAgentId={selectedAgentId}
-                onSelectAgent={handleSelectAgent}
-                onArchiveToggle={handleAgentArchiveToggle}
-                selectedBeadId={selectedBeadId}
-                selectedBeadTitle={selectedBeadId ? tasks[selectedBeadId]?.title : undefined}
-                onClearBeadFilter={() => setSelectedBead(null)}
-              />
-            </div>
-
-            {/* Rules Panel (Right Side) */}
-            <RulesPanel
-              isExpanded={rulesPaneExpanded}
-              onToggle={() => setRulesPaneExpanded(!rulesPaneExpanded)}
-              width={rulesPaneWidth}
-              isResizing={isRulesResizing}
-              onResizeStart={handleRulesResizeStart}
+          {/* Agent Grid */}
+          <div className="flex-1 overflow-y-auto p-8">
+            <AgentGrid
+              groupedAgents={groupedAgents}
+              totalAgentCount={totalAgentCount}
+              statusFilter={statusFilter}
+              onStatusFilterChange={setStatusFilter}
+              stats={stats}
+              showArchivedAgents={showArchivedAgents}
+              archivedAgentCount={archivedCount}
+              onToggleShowArchived={() => setShowArchivedAgents(!showArchivedAgents)}
+              selectedAgentId={selectedAgentId}
+              onSelectAgent={handleSelectAgent}
+              onArchiveToggle={handleAgentArchiveToggle}
+              selectedBeadId={selectedBeadId}
+              selectedBeadTitle={selectedBeadId ? tasks[selectedBeadId]?.title : undefined}
+              onClearBeadFilter={() => setSelectedBead(null)}
             />
           </div>
 
@@ -584,6 +618,12 @@ export const Dashboard: React.FC = () => {
           )}
         </main>
       </div>
+
+      {/* Agent Configuration Panel */}
+      <AgentConfigPanel
+        isOpen={showAgentConfig}
+        onClose={() => setShowAgentConfig(false)}
+      />
 
       {/* Run Configuration Dialog */}
       <RunConfigDialog

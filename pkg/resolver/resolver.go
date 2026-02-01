@@ -24,6 +24,7 @@ type Config struct {
 	SandboxConfig *sandbox.SandboxConfig // Sandbox configuration
 	RepoID        string                 // Repository ID for IPC tracking
 	RunID         string                 // Run ID for unique agent ID generation
+	Model         string                 // Model to use (empty = use Claude CLI default)
 }
 
 // ConflictContext provides information about the failed merge
@@ -111,12 +112,25 @@ func New(config *Config) *Resolver {
 		Verbose:       config.Verbose,
 		UseBwrap:      config.UseBwrap,
 		SandboxConfig: config.SandboxConfig,
+		Model:         config.Model,
 	})
 
 	return &Resolver{
 		config:   config,
 		executor: executor,
 	}
+}
+
+// SetModel updates the model used for new resolver agent executions.
+func (r *Resolver) SetModel(model string) {
+	r.config.Model = model
+	r.executor.SetModel(model)
+}
+
+// GetModel returns the current model used for resolver agents.
+func (r *Resolver) GetModel() string {
+	model, _ := r.executor.GetModelAndTimeout()
+	return model
 }
 
 // SetAgentCallback sets the callback for agent lifecycle events.

@@ -111,7 +111,7 @@ export const RuleItem: React.FC<RuleItemProps> = ({
           <div className="mt-2 flex items-start gap-2">
             <Terminal className="w-3.5 h-3.5 text-gray-400 dark:text-gray-500 mt-0.5 flex-shrink-0" />
             <code className="text-xs font-mono text-gray-600 dark:text-gray-400 break-all">
-              {rule.conditions.length > 0 ? rule.conditions.join(' && ') : '(always)'}
+              {rule.condition || '(always)'}
             </code>
           </div>
         </div>

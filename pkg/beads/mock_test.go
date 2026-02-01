@@ -144,9 +144,9 @@ func TestMockClient_FailPermanently(t *testing.T) {
 		t.Errorf("FailPermanently() reason = %s, want 'max retries exceeded'", mock.Calls.FailPermanently[0].Reason)
 	}
 
-	// Verify status is closed (not open)
-	if mock.Tasks["task-1"].Status != "closed" {
-		t.Errorf("Task status = %s, want closed (permanently failed tasks should be closed)", mock.Tasks["task-1"].Status)
+	// Verify status remains unchanged (task stays open for investigation)
+	if mock.Tasks["task-1"].Status != "in_progress" {
+		t.Errorf("Task status = %s, want in_progress (permanently failed tasks should stay open)", mock.Tasks["task-1"].Status)
 	}
 
 	// Verify needs-investigation label was added

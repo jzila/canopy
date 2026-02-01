@@ -1,9 +1,9 @@
 // Package agent provides worker agent functionality for executing tasks.
 package agent
 
-// WorkerSystemPrompt is the system-level prompt prepended to all worker agent tasks.
+// ImplementorSystemPrompt is the system-level prompt prepended to all implementor agent tasks.
 // It establishes the agent's role and behavioral expectations for autonomous operation.
-const WorkerSystemPrompt = `## Worker Agent
+const ImplementorSystemPrompt = `## Implementor Agent
 
 **You are an autonomous worker agent executing a task in a headless environment with no user interaction.**
 

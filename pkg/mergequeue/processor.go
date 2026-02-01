@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jzila/canopy/pkg/beads"
@@ -47,6 +48,8 @@ type CommitEvent struct {
 	AuthorEmail  string
 	Timestamp    string
 	FilesChanged []string
+	Patch        string
+	Truncated    bool
 }
 
 // CommitCallback is called when a commit is created during merge.
@@ -81,6 +84,8 @@ type Processor struct {
 	repairAgent      *repairagent.RepairAgent     // Repair agent for fixing validation failures
 	historyRecorder  *HistoryRecorder             // History recorder for audit trail
 	sandboxConfig    *sandbox.SandboxConfig       // Sandbox configuration for repair agents
+	model            string                       // Model to use for repair agents (empty = use Claude CLI default)
+	modelMu          sync.RWMutex                 // Protects model field
 }
 
 // NewProcessor creates a new merge processor.
@@ -158,6 +163,20 @@ func (p *Processor) SetSandboxConfig(config *sandbox.SandboxConfig) {
 	p.sandboxConfig = config
 }
 
+// SetModel sets the model to use for repair agents.
+func (p *Processor) SetModel(model string) {
+	p.modelMu.Lock()
+	defer p.modelMu.Unlock()
+	p.model = model
+}
+
+// GetModel returns the current model for repair agents.
+func (p *Processor) GetModel() string {
+	p.modelMu.RLock()
+	defer p.modelMu.RUnlock()
+	return p.model
+}
+
 // InitializeRepairAgent creates the repair agent with current configuration.
 // Must be called after SetRunID, SetRepoID, and SetSandboxConfig.
 func (p *Processor) InitializeRepairAgent() {
@@ -171,6 +190,7 @@ func (p *Processor) InitializeRepairAgent() {
 		SandboxConfig: p.sandboxConfig,
 		RepoID:        p.repoID,
 		RunID:         p.runID,
+		Model:         p.GetModel(),
 	})
 
 	if p.repairAgentCallback != nil {
@@ -298,10 +318,38 @@ func (p *Processor) processMerge(ctx context.Context, req *MergeRequest) *MergeR
 					fmt.Fprintf(os.Stderr, "warning: failed to get merge-base for %s: %v\n", taskID, err)
 				}
 			} else if mergeBase == baseCommit {
-				// HEAD is ahead of the overlay's base - must use resolver for 3-way merge
-				needsResolver = true
-				resolverReason = fmt.Sprintf("overlay stale (base %s, HEAD now %s)", baseCommit[:8], preMergeCommit[:8])
-				if p.verbose {
+				// HEAD is ahead of the overlay's base - check if files overlap before spawning resolver
+				var agentPatches []string
+				if req.Result.GitState != nil {
+					agentPatches = req.Result.GitState.Patches
+				}
+				agentFiles := sandbox.ExtractFilesFromPatches(agentPatches)
+				concurrentFiles, filesErr := sandbox.GetFilesChangedBetween(p.outputDir, baseCommit, preMergeCommit)
+				if filesErr != nil {
+					// Can't determine overlap - fall back to resolver for safety
+					needsResolver = true
+					resolverReason = fmt.Sprintf("overlay stale (base %s, HEAD now %s), file overlap check failed: %v", baseCommit[:8], preMergeCommit[:8], filesErr)
+				} else {
+					// Check for file intersection
+					concurrentSet := make(map[string]bool, len(concurrentFiles))
+					for _, f := range concurrentFiles {
+						concurrentSet[f] = true
+					}
+					var overlapping []string
+					for _, f := range agentFiles {
+						if concurrentSet[f] {
+							overlapping = append(overlapping, f)
+						}
+					}
+					if len(overlapping) > 0 {
+						needsResolver = true
+						resolverReason = fmt.Sprintf("overlay stale (base %s, HEAD now %s), %d file(s) overlap", baseCommit[:8], preMergeCommit[:8], len(overlapping))
+					} else if p.verbose {
+						fmt.Printf("[%s] Stale overlay but no file overlap (%d agent files, %d concurrent files) - using fast path\n",
+							taskID, len(agentFiles), len(concurrentFiles))
+					}
+				}
+				if p.verbose && needsResolver {
 					fmt.Printf("[%s] Detected stale overlay: base=%s, current HEAD=%s, merge-base=%s\n",
 						taskID, baseCommit[:8], preMergeCommit[:8], mergeBase[:8])
 				}
@@ -846,6 +894,12 @@ func (p *Processor) sendMergedCommits(taskID string, mergeResult *merge.Result) 
 
 	agentID := p.makeAgentID(taskID)
 	for _, commitInfo := range mergeResult.MergedCommits {
+		patch := commitInfo.Patch
+		truncated := false
+		if len(patch) > ipc.MaxPatchSize {
+			patch = patch[:ipc.MaxPatchSize]
+			truncated = true
+		}
 		p.commitCallback(CommitEvent{
 			AgentID:      agentID,
 			Hash:         commitInfo.Hash,
@@ -855,6 +909,8 @@ func (p *Processor) sendMergedCommits(taskID string, mergeResult *merge.Result) 
 			AuthorEmail:  commitInfo.AuthorEmail,
 			Timestamp:    commitInfo.Timestamp,
 			FilesChanged: commitInfo.FilesChanged,
+			Patch:        patch,
+			Truncated:    truncated,
 		})
 	}
 }

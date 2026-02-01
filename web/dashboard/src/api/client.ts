@@ -427,7 +427,7 @@ export type RuleSource = 'default' | 'config' | 'override';
 // Unified Rule interface - single format for all rules
 export interface Rule {
   name: string;
-  conditions: string[];
+  condition: string;
   action: 'deny' | 'allow';
   enabled: boolean;
   persisted: boolean;
@@ -448,9 +448,10 @@ export interface RulesResponse {
 
 export interface AddRuleRequest {
   name: string;
-  conditions: string[];
+  condition: string;
   action: 'deny' | 'allow';
-  enabled?: boolean;
+  description?: string;
+  reason?: string;
 }
 
 export interface AddRuleResponse {
@@ -461,8 +462,6 @@ export interface AddRuleResponse {
 
 export interface UpdateRuleRequest {
   enabled?: boolean;
-  conditions?: string[];
-  action?: 'deny' | 'allow';
 }
 
 export interface UpdateRuleResponse {
@@ -476,7 +475,7 @@ export interface DeleteRuleResponse {
   error?: string;
 }
 
-// SaveRulesRequest for POST /api/rules/save
+// SaveRulesRequest for POST /api/rules/persist-all
 export interface SaveRulesRequest {
   rules: Rule[];
 }
@@ -513,7 +512,7 @@ export async function deleteRule(repoPath: string, name: string): Promise<Delete
 }
 
 export async function saveRules(repoPath: string, request: SaveRulesRequest): Promise<SaveRulesResponse> {
-  return fetchJson<SaveRulesResponse>(`/api/repos/${encodeURIComponent(repoPath)}/rules/save`, {
+  return fetchJson<SaveRulesResponse>(`/api/repos/${encodeURIComponent(repoPath)}/rules/persist-all`, {
     method: 'POST',
     body: JSON.stringify(request),
   });
@@ -675,6 +674,65 @@ export async function saveRunConfig(config: RunConfigApiRequest): Promise<RunCon
   return fetchJson<RunConfigApiResponse>('/api/config', {
     method: 'PUT',
     body: JSON.stringify(config),
+  });
+}
+
+// Agent configuration types - matches Go backend (pkg/daemon/agent_config_handlers.go)
+
+export interface AgentTypeSettings {
+  model: string;
+  enabled?: boolean;
+  timeout: string;
+}
+
+export interface AgentConfigResponse {
+  default_model: string;
+  worker: AgentTypeSettings;
+  resolver: AgentTypeSettings;
+  repair: AgentTypeSettings;
+  persisted: boolean;
+  error?: string;
+}
+
+export interface AgentConfigUpdateRequest {
+  default_model?: string;
+  worker?: Partial<AgentTypeSettings>;
+  resolver?: Partial<AgentTypeSettings>;
+  repair?: Partial<AgentTypeSettings>;
+}
+
+export interface AgentConfigUpdateResponse {
+  success: boolean;
+  settings?: AgentConfigResponse;
+  error?: string;
+}
+
+export interface AgentConfigPersistResponse {
+  success: boolean;
+  config_path?: string;
+  error?: string;
+}
+
+// Agent config API functions
+// URL structure: /api/repos/:repo_id/config/agents
+
+export async function getAgentConfig(repoPath: string): Promise<AgentConfigResponse> {
+  return fetchJson<AgentConfigResponse>(`/api/repos/${encodeURIComponent(repoPath)}/config/agents`);
+}
+
+export async function updateAgentConfig(
+  repoPath: string,
+  request: AgentConfigUpdateRequest
+): Promise<AgentConfigUpdateResponse> {
+  return fetchJson<AgentConfigUpdateResponse>(`/api/repos/${encodeURIComponent(repoPath)}/config/agents`, {
+    method: 'POST',
+    body: JSON.stringify(request),
+  });
+}
+
+export async function persistAgentConfig(repoPath: string): Promise<AgentConfigPersistResponse> {
+  return fetchJson<AgentConfigPersistResponse>(`/api/repos/${encodeURIComponent(repoPath)}/config/agents/persist`, {
+    method: 'POST',
   });
 }
 

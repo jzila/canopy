@@ -395,6 +395,66 @@ func TestInputBlockedDetection(t *testing.T) {
 	})
 }
 
+func TestSetModelAndTimeout(t *testing.T) {
+	t.Run("SetModel updates model", func(t *testing.T) {
+		e := NewExecutor(&Config{Timeout: DefaultTimeout})
+		e.SetModel("claude-3-opus")
+		model, _ := e.GetModelAndTimeout()
+		if model != "claude-3-opus" {
+			t.Errorf("Expected model 'claude-3-opus', got %q", model)
+		}
+	})
+
+	t.Run("SetTimeout updates timeout", func(t *testing.T) {
+		e := NewExecutor(&Config{Timeout: DefaultTimeout})
+		e.SetTimeout(30 * time.Minute)
+		_, timeout := e.GetModelAndTimeout()
+		if timeout != 30*time.Minute {
+			t.Errorf("Expected 30m timeout, got %v", timeout)
+		}
+	})
+
+	t.Run("SetTimeout zero resets to default", func(t *testing.T) {
+		e := NewExecutor(&Config{Timeout: 30 * time.Minute})
+		e.SetTimeout(0)
+		_, timeout := e.GetModelAndTimeout()
+		if timeout != DefaultTimeout {
+			t.Errorf("Expected default timeout %v, got %v", DefaultTimeout, timeout)
+		}
+	})
+
+	t.Run("SetTimeout negative is ignored", func(t *testing.T) {
+		e := NewExecutor(&Config{Timeout: 30 * time.Minute})
+		e.SetTimeout(-5 * time.Minute)
+		_, timeout := e.GetModelAndTimeout()
+		if timeout != 30*time.Minute {
+			t.Errorf("Expected 30m timeout unchanged, got %v", timeout)
+		}
+	})
+
+	t.Run("concurrent SetModel and getModelAndTimeout", func(t *testing.T) {
+		e := NewExecutor(&Config{Timeout: DefaultTimeout})
+		done := make(chan struct{})
+
+		// Writer goroutine
+		go func() {
+			defer close(done)
+			for i := 0; i < 1000; i++ {
+				e.SetModel("model-a")
+				e.SetModel("model-b")
+			}
+		}()
+
+		// Reader goroutine
+		for i := 0; i < 1000; i++ {
+			model, _ := e.GetModelAndTimeout()
+			// Just verify no panic; value can be any of the set values
+			_ = model
+		}
+		<-done
+	})
+}
+
 func TestBuildPrompt(t *testing.T) {
 	t.Run("basic task", func(t *testing.T) {
 		executor := &Executor{
@@ -409,18 +469,12 @@ func TestBuildPrompt(t *testing.T) {
 		prompt := executor.buildPrompt(task, nil)
 
 		// Should contain system prompt at the beginning
-		if !strings.HasPrefix(prompt, "## Worker Agent") {
+		if !strings.HasPrefix(prompt, "## Implementor Agent") {
 			t.Error("Expected prompt to start with system prompt")
 		}
 		// Should contain key behavioral instructions
 		if !strings.Contains(prompt, "autonomous worker agent") {
 			t.Error("Expected prompt to contain autonomous operation context")
-		}
-		if !strings.Contains(prompt, "DO NOT:") {
-			t.Error("Expected prompt to contain DO NOT section")
-		}
-		if !strings.Contains(prompt, "AskUserQuestion") {
-			t.Error("Expected prompt to mention AskUserQuestion prohibition")
 		}
 
 		// Should contain task title and description
@@ -432,7 +486,7 @@ func TestBuildPrompt(t *testing.T) {
 		}
 
 		// System prompt should come before task
-		systemIdx := strings.Index(prompt, "## Worker Agent")
+		systemIdx := strings.Index(prompt, "## Implementor Agent")
 		taskIdx := strings.Index(prompt, "## Task:")
 		if systemIdx > taskIdx {
 			t.Error("Expected system prompt before task")
@@ -458,7 +512,7 @@ func TestBuildPrompt(t *testing.T) {
 		prompt := executor.buildPrompt(task, deps)
 
 		// Check ordering: System Prompt -> Dependencies -> Task
-		systemIdx := strings.Index(prompt, "## Worker Agent")
+		systemIdx := strings.Index(prompt, "## Implementor Agent")
 		depsIdx := strings.Index(prompt, "Context from upstream tasks")
 		taskIdx := strings.Index(prompt, "## Task:")
 

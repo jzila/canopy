@@ -15,6 +15,7 @@ import (
 type Config struct {
 	Resolver ResolverSettings `toml:"resolver"`
 	Rules    RulesSettings    `toml:"rules"`
+	Agents   AgentSettings    `toml:"agents"`
 }
 
 // RulesSettings contains task selection filter settings.
@@ -95,13 +96,39 @@ type ResolverSettings struct {
 	Timeout string `toml:"timeout"`
 }
 
+// AgentSettings holds configuration for all agent types
+type AgentSettings struct {
+	// DefaultModel is the model to use for all agents unless overridden per-type
+	// Empty string means use Claude CLI default
+	DefaultModel string `toml:"default_model"`
+	// Worker holds configuration for worker agents (primary task execution)
+	Worker AgentTypeSettings `toml:"worker"`
+	// Resolver holds configuration for resolver agents (conflict resolution)
+	Resolver AgentTypeSettings `toml:"resolver"`
+	// Repair holds configuration for repair agents (post-merge validation fixes)
+	Repair AgentTypeSettings `toml:"repair"`
+}
+
+// AgentTypeSettings holds configuration for a specific agent type
+type AgentTypeSettings struct {
+	// Model overrides the default model for this agent type
+	// Empty string means use DefaultModel or CLI default
+	Model string `toml:"model,omitempty" json:"model"`
+	// Enabled controls whether this agent type is active
+	// nil means enabled (default), false disables the agent type
+	Enabled *bool `toml:"enabled,omitempty" json:"enabled,omitempty"`
+	// Timeout overrides the default timeout for this agent type (e.g., "10m", "30m", "1h")
+	Timeout string `toml:"timeout,omitempty" json:"timeout"`
+}
+
 // DefaultConfig returns a config with default values
 func DefaultConfig() *Config {
 	return &Config{
 		Resolver: ResolverSettings{
 			Timeout: "10m",
 		},
-		Rules: DefaultRulesSettings(),
+		Rules:  DefaultRulesSettings(),
+		Agents: DefaultAgentSettings(),
 	}
 }
 
@@ -112,6 +139,17 @@ func DefaultRulesSettings() RulesSettings {
 		PriorityMax:   -1, // -1 = no filter (include all priorities)
 		Assignee:      "*", // "*" = any assignee
 		StopWhenEmpty: false,
+	}
+}
+
+// DefaultAgentSettings returns agent settings with sensible defaults
+// All models default to empty (use Claude CLI default), all agent types enabled
+func DefaultAgentSettings() AgentSettings {
+	return AgentSettings{
+		DefaultModel: "", // empty = use Claude CLI default
+		Worker:       AgentTypeSettings{},
+		Resolver:     AgentTypeSettings{},
+		Repair:       AgentTypeSettings{},
 	}
 }
 
@@ -191,6 +229,9 @@ func (c *Config) Validate() error {
 	// Validate rules settings
 	errs = append(errs, c.Rules.Validate()...)
 
+	// Validate agent settings
+	errs = append(errs, c.Agents.Validate()...)
+
 	if len(errs) > 0 {
 		return errs
 	}
@@ -213,6 +254,25 @@ var validCustomRuleActions = map[string]bool{
 	"allow":   true,
 	"skip":    true, // backwards compat: treated as "deny"
 	"include": true, // backwards compat: treated as "allow"
+}
+
+// DefaultCustomRules contains built-in rules that are always present unless explicitly disabled.
+// These rules provide sensible defaults for common filtering scenarios.
+// Users can disable a default rule by adding a rule with the same name and enabled = false
+// in their config.
+var DefaultCustomRules = []CustomRule{
+	{
+		Name:      "exclude-needs-labels",
+		Condition: "'needs-*' in labels",
+		Action:    "deny",
+		Reason:    "Tasks with needs-* labels require manual attention",
+	},
+	{
+		Name:      "exclude-epics",
+		Condition: "type == epic",
+		Action:    "deny",
+		Reason:    "Epics define acceptance criteria; work their child tasks instead",
+	},
 }
 
 // Validate checks the rules settings for errors
@@ -347,6 +407,61 @@ func (r *RulesSettings) Validate() ValidationErrors {
 	}
 
 	return errs
+}
+
+// Validate checks the agent settings for errors
+func (a *AgentSettings) Validate() ValidationErrors {
+	var errs ValidationErrors
+
+	// Validate timeout format for each agent type
+	agentTypes := []struct {
+		name     string
+		settings AgentTypeSettings
+	}{
+		{"worker", a.Worker},
+		{"resolver", a.Resolver},
+		{"repair", a.Repair},
+	}
+
+	for _, at := range agentTypes {
+		if at.settings.Timeout != "" {
+			if _, err := time.ParseDuration(at.settings.Timeout); err != nil {
+				errs = append(errs, ValidationError{
+					Field:   fmt.Sprintf("agents.%s.timeout", at.name),
+					Message: fmt.Sprintf("invalid duration %q (expected e.g., \"10m\", \"30m\", \"1h\")", at.settings.Timeout),
+				})
+			}
+		}
+	}
+
+	return errs
+}
+
+// GetWorkerModel returns the effective model for worker agents.
+// Priority: Worker.Model > DefaultModel > empty (use CLI default)
+func (a *AgentSettings) GetWorkerModel() string {
+	if a.Worker.Model != "" {
+		return a.Worker.Model
+	}
+	return a.DefaultModel
+}
+
+// GetResolverModel returns the effective model for resolver agents.
+// Priority: Resolver.Model > DefaultModel > empty (use CLI default)
+func (a *AgentSettings) GetResolverModel() string {
+	if a.Resolver.Model != "" {
+		return a.Resolver.Model
+	}
+	return a.DefaultModel
+}
+
+// GetRepairModel returns the effective model for repair agents.
+// Priority: Repair.Model > DefaultModel > empty (use CLI default)
+func (a *AgentSettings) GetRepairModel() string {
+	if a.Repair.Model != "" {
+		return a.Repair.Model
+	}
+	return a.DefaultModel
 }
 
 // GetResolverTimeout parses and returns the resolver timeout duration from config.

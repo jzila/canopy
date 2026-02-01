@@ -181,7 +181,7 @@ func (m *OrchestratorManager) RegisterRepo(repoPath string, repoID string) (*Orc
 	}
 
 	// Create rules engine from config
-	rulesEngine := rules.NewEngine(&cfg.Rules)
+	rulesEngine := rules.NewEngineWithDefaults(&cfg.Rules, cfgpkg.DefaultCustomRules)
 
 	// Create the OrchestratorLifecycle in OFF state (registered but not activated)
 	lifecycle := &OrchestratorLifecycle{
@@ -1257,6 +1257,8 @@ func (m *OrchestratorManager) createCommitCallback() mergequeue.CommitCallback {
 			"author_email":  event.AuthorEmail,
 			"timestamp":     event.Timestamp,
 			"files_changed": event.FilesChanged,
+			"patch":         event.Patch,
+			"truncated":     event.Truncated,
 		}
 
 		m.eventBus.Publish(events.Event{

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jzila/canopy/pkg/beads"
@@ -84,6 +85,7 @@ type Config struct {
 	Verbose       bool
 	UseBwrap      bool                   // Use bubblewrap sandbox for isolation (auto-detected if not set)
 	SandboxConfig *sandbox.SandboxConfig // Sandbox configuration from .canopy/sandbox.toml
+	Model         string                 // Model to use (empty = use Claude CLI default)
 }
 
 // NewConfig creates a default agent config
@@ -101,7 +103,8 @@ func NewConfig() *Config {
 
 // Executor runs Claude CLI agents in sandboxed environments
 type Executor struct {
-	config *Config
+	config   *Config
+	configMu sync.RWMutex // Protects config.Model and config.Timeout from concurrent access
 }
 
 // NewExecutor creates a new agent executor
@@ -122,6 +125,35 @@ func NewExecutor(config *Config) *Executor {
 		config.Timeout = DefaultTimeout
 	}
 	return &Executor{config: config}
+}
+
+// SetModel updates the model used for new agent executions.
+func (e *Executor) SetModel(model string) {
+	e.configMu.Lock()
+	defer e.configMu.Unlock()
+	e.config.Model = model
+}
+
+// SetTimeout updates the timeout used for new agent executions.
+// A positive duration sets the timeout; zero clears it back to DefaultTimeout.
+// Negative durations are ignored.
+func (e *Executor) SetTimeout(timeout time.Duration) {
+	e.configMu.Lock()
+	defer e.configMu.Unlock()
+	if timeout > 0 {
+		e.config.Timeout = timeout
+	} else if timeout == 0 {
+		e.config.Timeout = DefaultTimeout
+	}
+	// Negative durations are silently ignored
+}
+
+// GetModelAndTimeout returns a snapshot of the current model and timeout settings.
+// This is safe to call concurrently with SetModel/SetTimeout.
+func (e *Executor) GetModelAndTimeout() (string, time.Duration) {
+	e.configMu.RLock()
+	defer e.configMu.RUnlock()
+	return e.config.Model, e.config.Timeout
 }
 
 // LiveFeedCallback is the type for live feed event callbacks
@@ -171,14 +203,23 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 	// Build the prompt from task title, description, and dependency context
 	prompt := e.buildPrompt(task, deps)
 
+	// Snapshot dynamic config (model, timeout) under lock to avoid races with SetModel/SetTimeout
+	currentModel, currentTimeout := e.GetModelAndTimeout()
+
 	// Build command arguments
 	args := []string{
 		"--print",
 		"--output-format", "stream-json",
 		"--verbose", // Required for stream-json
 		"--dangerously-skip-permissions", // Safe in sandbox
-		prompt,
 	}
+
+	// Add model flag if specified
+	if currentModel != "" {
+		args = append(args, "--model", currentModel)
+	}
+
+	args = append(args, prompt)
 
 	// Determine timeout: per-task > sandbox config > executor config > default
 	timeout := task.GetTimeout()
@@ -186,7 +227,7 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 		timeout = e.config.SandboxConfig.GetTimeout()
 	}
 	if timeout <= 0 {
-		timeout = e.config.Timeout
+		timeout = currentTimeout
 	}
 	if timeout <= 0 {
 		timeout = DefaultTimeout
@@ -507,6 +548,9 @@ func (e *Executor) ExecuteResume(ctx context.Context, task *beads.Task, overlay 
 		}
 	}
 
+	// Snapshot dynamic config (model, timeout) under lock to avoid races with SetModel/SetTimeout
+	currentModel, currentTimeout := e.GetModelAndTimeout()
+
 	// Build command arguments for resume - no prompt, just --resume
 	args := []string{
 		"--resume", sessionID,
@@ -516,13 +560,18 @@ func (e *Executor) ExecuteResume(ctx context.Context, task *beads.Task, overlay 
 		"--dangerously-skip-permissions",
 	}
 
+	// Add model flag if specified
+	if currentModel != "" {
+		args = append(args, "--model", currentModel)
+	}
+
 	// Determine timeout
 	timeout := task.GetTimeout()
 	if timeout <= 0 && e.config.SandboxConfig != nil {
 		timeout = e.config.SandboxConfig.GetTimeout()
 	}
 	if timeout <= 0 {
-		timeout = e.config.Timeout
+		timeout = currentTimeout
 	}
 	if timeout <= 0 {
 		timeout = DefaultTimeout
@@ -783,7 +832,7 @@ func (e *Executor) buildPrompt(task *beads.Task, deps []DependencyContext) strin
 	var parts []string
 
 	// Add system prompt for autonomous operation
-	parts = append(parts, WorkerSystemPrompt)
+	parts = append(parts, ImplementorSystemPrompt)
 
 	// Add dependency context if present
 	if len(deps) > 0 {

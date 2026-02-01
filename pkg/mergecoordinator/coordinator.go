@@ -46,6 +46,14 @@ type Config struct {
 	// ResolverTimeout is the timeout for resolver agent operations.
 	// If 0, uses the default timeout of 10 minutes.
 	ResolverTimeout time.Duration
+
+	// ResolverModel is the model to use for resolver agents.
+	// If empty, uses the Claude CLI default.
+	ResolverModel string
+
+	// RepairModel is the model to use for repair agents.
+	// If empty, uses the Claude CLI default.
+	RepairModel string
 }
 
 // MergeCoordinator coordinates all merge operations including:
@@ -92,6 +100,7 @@ func New(config *Config, beadsClient beads.BeadsClient) (*MergeCoordinator, erro
 		Verbose:       config.Verbose,
 		UseBwrap:      config.UseBwrap,
 		SandboxConfig: config.SandboxConfig,
+		Model:         config.ResolverModel,
 	})
 
 	// Initialize merge queue with buffer size equal to concurrency
@@ -113,6 +122,9 @@ func New(config *Config, beadsClient beads.BeadsClient) (*MergeCoordinator, erro
 		config.Verbose,
 		config.ResolverTimeout, // Use configured resolver timeout (0 = default 10 minutes)
 	)
+
+	// Set the repair model on the processor
+	processor.SetModel(config.RepairModel)
 
 	return &MergeCoordinator{
 		config:      config,
@@ -156,6 +168,36 @@ func (mc *MergeCoordinator) SetRunID(runID string) {
 	if mc.resolver != nil {
 		mc.resolver.SetRunID(runID)
 	}
+}
+
+// SetModel sets the model to use for repair agents.
+// Note: This is typically set via the Config.RepairModel field in New().
+// This method exists for runtime updates or when the model wasn't known at construction time.
+func (mc *MergeCoordinator) SetModel(model string) {
+	mc.processor.SetModel(model)
+}
+
+// SetResolverModel updates the model used for resolver agents at runtime.
+func (mc *MergeCoordinator) SetResolverModel(model string) {
+	if mc.resolver != nil {
+		mc.resolver.SetModel(model)
+	}
+}
+
+// GetResolverModel returns the current model used for resolver agents.
+func (mc *MergeCoordinator) GetResolverModel() string {
+	if mc.resolver != nil {
+		return mc.resolver.GetModel()
+	}
+	return ""
+}
+
+// GetRepairModel returns the current model used for repair agents.
+func (mc *MergeCoordinator) GetRepairModel() string {
+	if mc.processor != nil {
+		return mc.processor.GetModel()
+	}
+	return ""
 }
 
 // SetCleanupCallback sets a callback to cleanup overlays after merge.

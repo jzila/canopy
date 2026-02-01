@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useStateStore, type RuleOverride } from '../stores/stateStore';
+import { getRules, type Rule as ApiRule } from '../api/client';
 // Event types that match the Go backend (wire_events.go)
 // Backend sends: { type, timestamp, payload, sequence }
 interface WebSocketEvent {
@@ -197,20 +198,12 @@ interface RunCompletedEvent {
     conflicts_resolved: number;
   };
 }
-// Rules configuration types - unified format
-interface Rule {
-  name: string;
-  conditions: string[];
-  action: 'deny' | 'allow';
-  enabled: boolean;
-  persisted: boolean;
-}
 interface RulesChangedEvent {
   type: 'rules:changed';
   timestamp: string;
   payload: {
-    action: 'added' | 'updated' | 'deleted';
-    rule?: Rule;
+    action: 'added' | 'updated' | 'deleted' | 'persisted' | 'config_updated' | 'persisted_all' | 'reordered';
+    rule?: ApiRule;
   };
 }
 interface ConfigUpdatedEvent {
@@ -221,6 +214,13 @@ interface ConfigUpdatedEvent {
     max_priority: number;
     use_bwrap: boolean;
     max_retries: number;
+  };
+}
+interface AgentConfigChangedEvent {
+  type: 'agent_config:changed';
+  timestamp: string;
+  payload: {
+    action: string;
   };
 }
 interface LifecycleStateChangedEvent {
@@ -403,7 +403,8 @@ type EventType =
   | RunCompletedEvent
   | RulesChangedEvent
   | LifecycleStateChangedEvent
-  | ConfigUpdatedEvent;
+  | ConfigUpdatedEvent
+  | AgentConfigChangedEvent;
 const MAX_BACKOFF = 30000; // 30 seconds
 const INITIAL_BACKOFF = 1000; // 1 second
 function getWebSocketURL(): string {
@@ -444,6 +445,11 @@ export function useWebSocket() {
     // Active run overrides
     setActiveRunOverrides,
     clearActiveRunOverrides,
+    // Rules actions
+    addRule,
+    updateRule,
+    removeRule,
+    setRulesState,
   } = useStateStore();
 
   // Helper to check if an event is stale (occurred before the last state:sync snapshot)
@@ -881,13 +887,36 @@ export function useWebSocket() {
             case 'rules:changed': {
               const { action, rule } = message.payload;
               console.log('[WebSocket] Rules changed:', action, rule?.name);
-              // Rules changes are informational for now - UI can fetch updated rules if needed
+              if (action === 'added' && rule) {
+                addRule(rule);
+              } else if ((action === 'updated' || action === 'persisted') && rule) {
+                updateRule(rule.name, rule);
+              } else if (action === 'deleted' && rule) {
+                removeRule(rule.name);
+              } else if (action === 'config_updated' || action === 'persisted_all' || action === 'reordered') {
+                // Bulk change — refetch full rules list from API
+                const state = useStateStore.getState();
+                const repo = state.repositories.find((r) => r.id === state.activeRepoId);
+                if (repo?.path) {
+                  getRules(repo.path).then((response) => {
+                    setRulesState(response.rules, response.persisted);
+                  }).catch((err) => {
+                    console.error('[WebSocket] Failed to refetch rules:', err);
+                  });
+                }
+              }
               break;
             }
             case 'config:updated': {
               const { concurrency, max_priority, use_bwrap, max_retries } = message.payload;
               console.log('[WebSocket] Config updated:', concurrency, max_priority, use_bwrap, max_retries);
               updateRunConfigFromServer({ concurrency, max_priority, use_bwrap, max_retries });
+              break;
+            }
+            case 'agent_config:changed': {
+              console.log('[WebSocket] Agent config changed');
+              // Dispatch a custom DOM event so the AgentConfigPanel can react
+              window.dispatchEvent(new CustomEvent('agent_config:changed'));
               break;
             }
             case 'lifecycle:state_changed': {
@@ -940,7 +969,7 @@ export function useWebSocket() {
         }, backoffTime);
       }
     }
-  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, appendGitCommit, syncState, setPauseState, setActiveRepo, updateAgentMergeStatus, addRun, updateRun, clearOutput, setCurrentRunId, setOrchestratorState, confirmPause, confirmResume, isStaleEvent, updateRunConfigFromServer, setActiveRunOverrides, clearActiveRunOverrides]);
+  }, [setConnected, updateAgent, updateTask, appendOutput, appendLiveFeedEvent, appendGitCommit, syncState, setPauseState, setActiveRepo, updateAgentMergeStatus, addRun, updateRun, clearOutput, setCurrentRunId, setOrchestratorState, confirmPause, confirmResume, isStaleEvent, updateRunConfigFromServer, setActiveRunOverrides, clearActiveRunOverrides, addRule, removeRule, setRulesState, updateRule]);
   const disconnect = useCallback(() => {
     isManuallyClosedRef.current = true;
     if (reconnectTimeoutRef.current !== null) {

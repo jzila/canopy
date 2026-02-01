@@ -94,6 +94,11 @@ func (s *Scheduler) SetCallbacks(callbacks CallbackHandler) {
 	s.callbacks = callbacks
 }
 
+// GetExecutor returns the underlying agent executor for runtime configuration updates.
+func (s *Scheduler) GetExecutor() *agent.Executor {
+	return s.executor
+}
+
 // ExecuteBatch runs a batch of tasks in parallel
 // Returns the results for all tasks in the batch
 func (s *Scheduler) ExecuteBatch(ctx context.Context, tasks []beads.Task) ([]*agent.Result, error) {

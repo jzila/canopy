@@ -12,7 +12,7 @@ vi.stubGlobal('crypto', {
 
 const createMockRule = (overrides: Partial<Rule> = {}): Rule => ({
   name: 'test-rule',
-  conditions: ['priority >= 2'],
+  condition: 'priority >= 2',
   action: 'deny',
   enabled: true,
   persisted: true,
@@ -163,7 +163,7 @@ describe('EditRuleModal', () => {
       render(
         <EditRuleModal
           isOpen={true}
-          rule={createMockRule({ action: 'deny', conditions: ['priority >= 1'] })}
+          rule={createMockRule({ action: 'deny', condition: 'priority >= 1' })}
           onClose={mockOnClose}
           onSave={mockOnSave}
         />
@@ -188,7 +188,7 @@ describe('EditRuleModal', () => {
       render(
         <EditRuleModal
           isOpen={true}
-          rule={createMockRule({ conditions: ['priority >= 2', 'type == "bug"'] })}
+          rule={createMockRule({ condition: 'priority >= 2, type == "bug"' })}
           onClose={mockOnClose}
           onSave={mockOnSave}
         />
@@ -209,7 +209,7 @@ describe('EditRuleModal', () => {
       render(
         <EditRuleModal
           isOpen={true}
-          rule={createMockRule({ conditions: ['priority >= 1'] })}
+          rule={createMockRule({ condition: 'priority >= 1' })}
           onClose={mockOnClose}
           onSave={mockOnSave}
         />
@@ -232,7 +232,7 @@ describe('EditRuleModal', () => {
       render(
         <EditRuleModal
           isOpen={true}
-          rule={createMockRule({ conditions: ['priority >= 1', 'type == "bug"'] })}
+          rule={createMockRule({ condition: 'priority >= 1, type == "bug"' })}
           onClose={mockOnClose}
           onSave={mockOnSave}
         />
@@ -255,7 +255,7 @@ describe('EditRuleModal', () => {
       render(
         <EditRuleModal
           isOpen={true}
-          rule={createMockRule({ conditions: ['priority >= 1'] })}
+          rule={createMockRule({ condition: 'priority >= 1' })}
           onClose={mockOnClose}
           onSave={mockOnSave}
         />
@@ -271,7 +271,7 @@ describe('EditRuleModal', () => {
       render(
         <EditRuleModal
           isOpen={true}
-          rule={createMockRule({ conditions: ['priority >= 1'] })}
+          rule={createMockRule({ condition: 'priority >= 1' })}
           onClose={mockOnClose}
           onSave={mockOnSave}
         />
@@ -299,7 +299,7 @@ describe('EditRuleModal', () => {
       render(
         <EditRuleModal
           isOpen={true}
-          rule={createMockRule({ conditions: ['"frontend" in labels'] })}
+          rule={createMockRule({ condition: '"frontend" in labels' })}
           onClose={mockOnClose}
           onSave={mockOnSave}
         />
@@ -322,7 +322,7 @@ describe('EditRuleModal', () => {
       render(
         <EditRuleModal
           isOpen={true}
-          rule={createMockRule({ conditions: [] })}
+          rule={createMockRule({ condition: '' })}
           onClose={mockOnClose}
           onSave={mockOnSave}
         />
@@ -336,7 +336,7 @@ describe('EditRuleModal', () => {
       render(
         <EditRuleModal
           isOpen={true}
-          rule={createMockRule({ conditions: ['priority >= 1'] })}
+          rule={createMockRule({ condition: 'priority >= 1' })}
           onClose={mockOnClose}
           onSave={mockOnSave}
         />
@@ -351,7 +351,7 @@ describe('EditRuleModal', () => {
       render(
         <EditRuleModal
           isOpen={true}
-          rule={createMockRule({ conditions: ['priority >= 1'] })}
+          rule={createMockRule({ condition: 'priority >= 1' })}
           onClose={mockOnClose}
           onSave={mockOnSave}
         />
@@ -371,7 +371,7 @@ describe('EditRuleModal', () => {
       render(
         <EditRuleModal
           isOpen={true}
-          rule={createMockRule({ conditions: ['priority >= 1'] })}
+          rule={createMockRule({ condition: 'priority >= 1' })}
           onClose={mockOnClose}
           onSave={mockOnSave}
         />
@@ -385,7 +385,7 @@ describe('EditRuleModal', () => {
 
       expect(mockOnSave).toHaveBeenCalledWith(
         expect.objectContaining({
-          conditions: ['priority >= 1'],
+          condition: 'priority >= 1',
         })
       );
     });
@@ -399,7 +399,7 @@ describe('EditRuleModal', () => {
           isOpen={true}
           rule={createMockRule({
             name: 'my-rule',
-            conditions: ['priority >= 1'],
+            condition: 'priority >= 1',
             action: 'deny',
             enabled: true,
           })}
@@ -412,7 +412,7 @@ describe('EditRuleModal', () => {
 
       expect(mockOnSave).toHaveBeenCalledWith({
         name: 'my-rule',
-        conditions: ['priority >= 1'],
+        condition: 'priority >= 1',
         action: 'deny',
         enabled: true,
         persisted: false, // Always false after edit
@@ -425,7 +425,7 @@ describe('EditRuleModal', () => {
       render(
         <EditRuleModal
           isOpen={true}
-          rule={createMockRule({ persisted: true, conditions: ['priority >= 1'] })}
+          rule={createMockRule({ persisted: true, condition: 'priority >= 1' })}
           onClose={mockOnClose}
           onSave={mockOnSave}
         />
@@ -445,7 +445,7 @@ describe('EditRuleModal', () => {
       render(
         <EditRuleModal
           isOpen={true}
-          rule={createMockRule({ conditions: ['priority >= 1'] })}
+          rule={createMockRule({ condition: 'priority >= 1' })}
           onClose={mockOnClose}
           onSave={mockOnSave}
         />
@@ -461,7 +461,7 @@ describe('EditRuleModal', () => {
       render(
         <EditRuleModal
           isOpen={true}
-          rule={createMockRule({ enabled: true, conditions: ['priority >= 1'] })}
+          rule={createMockRule({ enabled: true, condition: 'priority >= 1' })}
           onClose={mockOnClose}
           onSave={mockOnSave}
         />
@@ -622,7 +622,7 @@ describe('EditRuleModal', () => {
       render(
         <EditRuleModal
           isOpen={true}
-          rule={createMockRule({ conditions: [] })}
+          rule={createMockRule({ condition: '' })}
           onClose={mockOnClose}
           onSave={mockOnSave}
         />
@@ -697,7 +697,7 @@ describe('EditRuleModal', () => {
       render(
         <EditRuleModal
           isOpen={true}
-          rule={createMockRule({ conditions: ['priority >= 2'] })}
+          rule={createMockRule({ condition: 'priority >= 2' })}
           onClose={mockOnClose}
           onSave={mockOnSave}
         />
@@ -707,7 +707,7 @@ describe('EditRuleModal', () => {
 
       expect(mockOnSave).toHaveBeenCalledWith(
         expect.objectContaining({
-          conditions: ['priority >= 2'],
+          condition: 'priority >= 2',
         })
       );
     });
@@ -717,7 +717,7 @@ describe('EditRuleModal', () => {
       render(
         <EditRuleModal
           isOpen={true}
-          rule={createMockRule({ conditions: ['type == "bug"'] })}
+          rule={createMockRule({ condition: 'type == "bug"' })}
           onClose={mockOnClose}
           onSave={mockOnSave}
         />
@@ -727,7 +727,7 @@ describe('EditRuleModal', () => {
 
       expect(mockOnSave).toHaveBeenCalledWith(
         expect.objectContaining({
-          conditions: ['type == "bug"'],
+          condition: 'type == "bug"',
         })
       );
     });
@@ -737,7 +737,7 @@ describe('EditRuleModal', () => {
       render(
         <EditRuleModal
           isOpen={true}
-          rule={createMockRule({ conditions: ['"frontend" in labels'] })}
+          rule={createMockRule({ condition: '"frontend" in labels' })}
           onClose={mockOnClose}
           onSave={mockOnSave}
         />
@@ -747,7 +747,7 @@ describe('EditRuleModal', () => {
 
       expect(mockOnSave).toHaveBeenCalledWith(
         expect.objectContaining({
-          conditions: ['"frontend" in labels'],
+          condition: '"frontend" in labels',
         })
       );
     });

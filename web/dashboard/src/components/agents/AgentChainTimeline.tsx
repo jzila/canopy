@@ -220,7 +220,7 @@ export const AgentChainTimeline: React.FC<AgentChainTimelineProps> = ({
     const attemptNum = priorAgent.attempt ?? 1;
     items.push({
       type: 'agent',
-      title: 'Worker',
+      title: 'Implementor',
       status: priorAgent.status,
       startTime: priorAgent.start_time,
       duration: priorAgent.duration * 1000,
@@ -235,7 +235,7 @@ export const AgentChainTimeline: React.FC<AgentChainTimelineProps> = ({
   const currentAttempt = agent.attempt ?? (priorAttempts.length + 1);
   items.push({
     type: 'agent',
-    title: hasRetries ? 'Worker' : 'Implementor',
+    title: 'Implementor',
     status: agent.status,
     startTime: agent.start_time,
     duration: agent.duration * 1000, // Convert seconds to ms

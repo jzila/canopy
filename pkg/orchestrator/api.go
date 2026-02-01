@@ -49,6 +49,29 @@ type RuleUpdate struct {
 	Position *int `json:"position,omitempty"`
 }
 
+// AgentConfigSnapshot represents the current state of agent settings.
+type AgentConfigSnapshot struct {
+	Settings  config.AgentSettings `json:"settings"`
+	Persisted bool                 `json:"persisted"` // true if runtime matches config on disk
+}
+
+// AgentConfigUpdate contains fields for updating agent settings.
+// Only non-nil fields are applied.
+type AgentConfigUpdate struct {
+	DefaultModel *string                   `json:"default_model,omitempty"`
+	Worker       *AgentTypeSettingsUpdate  `json:"worker,omitempty"`
+	Resolver     *AgentTypeSettingsUpdate  `json:"resolver,omitempty"`
+	Repair       *AgentTypeSettingsUpdate  `json:"repair,omitempty"`
+}
+
+// AgentTypeSettingsUpdate contains fields for updating a specific agent type.
+// Only non-nil fields are applied.
+type AgentTypeSettingsUpdate struct {
+	Model   *string `json:"model,omitempty"`
+	Enabled *bool   `json:"enabled,omitempty"`
+	Timeout *string `json:"timeout,omitempty"`
+}
+
 // RepoAPI defines the interface for interacting with a repository's orchestrator.
 // The orchestrator is always running (as a goroutine) for any repo in daemon scope.
 // This interface formalizes the boundary between daemon and orchestrator.
@@ -126,6 +149,19 @@ type RepoAPI interface {
 	// Returns a default config with validation disabled if not defined.
 	GetValidationConfig(ctx context.Context) (*validation.ValidationConfig, error)
 
+	// Agent settings management (works in any state)
+
+	// GetAgentConfig returns the current agent settings.
+	GetAgentConfig(ctx context.Context) (*AgentConfigSnapshot, error)
+
+	// UpdateAgentConfig updates agent settings at runtime.
+	// Only non-nil fields in the update are applied.
+	UpdateAgentConfig(ctx context.Context, update AgentConfigUpdate) error
+
+	// PersistAgentConfig saves runtime agent settings to config.toml.
+	// Returns the config path, or an error.
+	PersistAgentConfig(ctx context.Context) (string, error)
+
 	// Runtime adjustment (only meaningful when ACTIVE)
 
 	// SetConcurrency updates the number of parallel agents.
@@ -138,6 +174,9 @@ type repoAPIImpl struct {
 	orchestrator *Orchestrator
 	workDir      string
 	state        OrchestratorState
+	// Agent settings runtime state
+	runtimeAgentSettings *config.AgentSettings // Runtime-modified settings (nil = use config)
+	agentSettingsDirty   bool                  // True if runtime differs from persisted
 }
 
 // NewRepoAPI creates a RepoAPI wrapper around an existing Orchestrator.
@@ -398,11 +437,124 @@ func (r *repoAPIImpl) SetConcurrency(ctx context.Context, n int) error {
 	return nil
 }
 
+// GetAgentConfig returns the current agent settings.
+func (r *repoAPIImpl) GetAgentConfig(ctx context.Context) (*AgentConfigSnapshot, error) {
+	// Use runtime settings if modified, otherwise get from orchestrator's config
+	var settings config.AgentSettings
+	if r.runtimeAgentSettings != nil {
+		settings = *r.runtimeAgentSettings
+	} else {
+		repoConfig := r.orchestrator.GetRepoConfig()
+		if repoConfig != nil {
+			settings = repoConfig.Agents
+		} else {
+			settings = config.DefaultAgentSettings()
+		}
+	}
+
+	return &AgentConfigSnapshot{
+		Settings:  settings,
+		Persisted: !r.agentSettingsDirty,
+	}, nil
+}
+
+// UpdateAgentConfig updates agent settings at runtime.
+func (r *repoAPIImpl) UpdateAgentConfig(ctx context.Context, update AgentConfigUpdate) error {
+	// Get current settings as base
+	var settings config.AgentSettings
+	if r.runtimeAgentSettings != nil {
+		settings = *r.runtimeAgentSettings
+	} else {
+		repoConfig := r.orchestrator.GetRepoConfig()
+		if repoConfig != nil {
+			settings = repoConfig.Agents
+		} else {
+			settings = config.DefaultAgentSettings()
+		}
+	}
+
+	// Apply updates
+	if update.DefaultModel != nil {
+		settings.DefaultModel = *update.DefaultModel
+	}
+	if update.Worker != nil {
+		applyAgentTypeSettingsUpdate(&settings.Worker, update.Worker)
+	}
+	if update.Resolver != nil {
+		applyAgentTypeSettingsUpdate(&settings.Resolver, update.Resolver)
+	}
+	if update.Repair != nil {
+		applyAgentTypeSettingsUpdate(&settings.Repair, update.Repair)
+	}
+
+	// Validate the updated settings
+	if errs := settings.Validate(); len(errs) > 0 {
+		return errs
+	}
+
+	// Store runtime settings and mark as dirty
+	r.runtimeAgentSettings = &settings
+	r.agentSettingsDirty = true
+
+	// Propagate to running orchestrator so changes take effect immediately
+	r.orchestrator.UpdateAgentSettings(&settings)
+
+	return nil
+}
+
+// PersistAgentConfig saves runtime agent settings to config.toml.
+func (r *repoAPIImpl) PersistAgentConfig(ctx context.Context) (string, error) {
+	if r.runtimeAgentSettings == nil {
+		return "", fmt.Errorf("no runtime changes to persist")
+	}
+
+	// Load existing config
+	cfg, err := config.LoadConfig(r.workDir)
+	if err != nil {
+		return "", fmt.Errorf("load config: %w", err)
+	}
+
+	// Update agent settings
+	cfg.Agents = *r.runtimeAgentSettings
+
+	// Save the config
+	if err := config.SaveConfig(r.workDir, cfg); err != nil {
+		return "", fmt.Errorf("save config: %w", err)
+	}
+
+	// Update orchestrator's config to match
+	repoConfig := r.orchestrator.GetRepoConfig()
+	if repoConfig != nil {
+		repoConfig.Agents = *r.runtimeAgentSettings
+	}
+
+	// Mark as persisted
+	r.agentSettingsDirty = false
+
+	return fmt.Sprintf("%s/.canopy/config.toml", r.workDir), nil
+}
+
+// applyAgentTypeSettingsUpdate applies partial updates to agent type settings.
+func applyAgentTypeSettingsUpdate(settings *config.AgentTypeSettings, update *AgentTypeSettingsUpdate) {
+	if update.Model != nil {
+		settings.Model = *update.Model
+	}
+	if update.Enabled != nil {
+		settings.Enabled = update.Enabled
+	}
+	if update.Timeout != nil {
+		settings.Timeout = *update.Timeout
+	}
+}
+
 // standaloneRepoAPI implements RepoAPI for repos without an active orchestrator run.
 // It provides access to rules and config, but state transitions are not supported.
 type standaloneRepoAPI struct {
 	engine  *rules.Engine
 	workDir string
+	// Agent settings runtime state
+	runtimeAgentSettings *config.AgentSettings // Runtime-modified settings (nil = use config)
+	agentSettingsDirty   bool                  // True if runtime differs from persisted
 }
 
 // NewStandaloneRepoAPI creates a RepoAPI backed by a standalone rules engine.
@@ -601,4 +753,93 @@ func (s *standaloneRepoAPI) GetValidationConfig(ctx context.Context) (*validatio
 // SetConcurrency is not supported without an orchestrator.
 func (s *standaloneRepoAPI) SetConcurrency(ctx context.Context, n int) error {
 	return fmt.Errorf("cannot set concurrency: no active orchestrator for this repository")
+}
+
+// GetAgentConfig returns the current agent settings.
+func (s *standaloneRepoAPI) GetAgentConfig(ctx context.Context) (*AgentConfigSnapshot, error) {
+	// Use runtime settings if modified, otherwise load from config
+	var settings config.AgentSettings
+	if s.runtimeAgentSettings != nil {
+		settings = *s.runtimeAgentSettings
+	} else {
+		cfg, err := config.LoadConfig(s.workDir)
+		if err != nil {
+			// Use defaults if config can't be loaded
+			settings = config.DefaultAgentSettings()
+		} else {
+			settings = cfg.Agents
+		}
+	}
+
+	return &AgentConfigSnapshot{
+		Settings:  settings,
+		Persisted: !s.agentSettingsDirty,
+	}, nil
+}
+
+// UpdateAgentConfig updates agent settings at runtime.
+func (s *standaloneRepoAPI) UpdateAgentConfig(ctx context.Context, update AgentConfigUpdate) error {
+	// Get current settings as base
+	var settings config.AgentSettings
+	if s.runtimeAgentSettings != nil {
+		settings = *s.runtimeAgentSettings
+	} else {
+		cfg, err := config.LoadConfig(s.workDir)
+		if err != nil {
+			settings = config.DefaultAgentSettings()
+		} else {
+			settings = cfg.Agents
+		}
+	}
+
+	// Apply updates
+	if update.DefaultModel != nil {
+		settings.DefaultModel = *update.DefaultModel
+	}
+	if update.Worker != nil {
+		applyAgentTypeSettingsUpdate(&settings.Worker, update.Worker)
+	}
+	if update.Resolver != nil {
+		applyAgentTypeSettingsUpdate(&settings.Resolver, update.Resolver)
+	}
+	if update.Repair != nil {
+		applyAgentTypeSettingsUpdate(&settings.Repair, update.Repair)
+	}
+
+	// Validate the updated settings
+	if errs := settings.Validate(); len(errs) > 0 {
+		return errs
+	}
+
+	// Store runtime settings and mark as dirty
+	s.runtimeAgentSettings = &settings
+	s.agentSettingsDirty = true
+
+	return nil
+}
+
+// PersistAgentConfig saves runtime agent settings to config.toml.
+func (s *standaloneRepoAPI) PersistAgentConfig(ctx context.Context) (string, error) {
+	if s.runtimeAgentSettings == nil {
+		return "", fmt.Errorf("no runtime changes to persist")
+	}
+
+	// Load existing config
+	cfg, err := config.LoadConfig(s.workDir)
+	if err != nil {
+		return "", fmt.Errorf("load config: %w", err)
+	}
+
+	// Update agent settings
+	cfg.Agents = *s.runtimeAgentSettings
+
+	// Save the config
+	if err := config.SaveConfig(s.workDir, cfg); err != nil {
+		return "", fmt.Errorf("save config: %w", err)
+	}
+
+	// Mark as persisted
+	s.agentSettingsDirty = false
+
+	return fmt.Sprintf("%s/.canopy/config.toml", s.workDir), nil
 }

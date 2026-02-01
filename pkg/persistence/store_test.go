@@ -1047,6 +1047,79 @@ func TestMarkOrphanedAgentsFailed(t *testing.T) {
 	}
 }
 
+func TestMarkOrphanedAgentsFailed_LifecycleStates(t *testing.T) {
+	store := createTestStore(t)
+	defer func() { _ = store.Close() }()
+
+	now := time.Now()
+
+	// Create a run
+	run := &Run{ID: "run-lifecycle-orphan-test", StartedAt: now, Status: RunStatusRunning}
+	if err := store.CreateRun(run); err != nil {
+		t.Fatalf("failed to create run: %v", err)
+	}
+
+	// Create agents with merge-related lifecycle states that should be marked as orphaned
+	agents := []*Agent{
+		{ID: "agent-merging", RunID: "run-lifecycle-orphan-test", TaskID: "task-1", TaskTitle: "Merging Task", Status: AgentStatusRunning, LifecycleState: "merging", StartedAt: now},
+		{ID: "agent-queued", RunID: "run-lifecycle-orphan-test", TaskID: "task-2", TaskTitle: "Queued Task", Status: AgentStatusRunning, LifecycleState: "queued_for_merge", StartedAt: now},
+		{ID: "agent-validating", RunID: "run-lifecycle-orphan-test", TaskID: "task-3", TaskTitle: "Validating Task", Status: AgentStatusRunning, LifecycleState: "validating", StartedAt: now},
+		{ID: "agent-repairing", RunID: "run-lifecycle-orphan-test", TaskID: "task-4", TaskTitle: "Repairing Task", Status: AgentStatusRunning, LifecycleState: "repairing", StartedAt: now},
+		{ID: "agent-resolving", RunID: "run-lifecycle-orphan-test", TaskID: "task-5", TaskTitle: "Resolving Task", Status: AgentStatusRunning, LifecycleState: "resolving", StartedAt: now},
+		{ID: "agent-completed", RunID: "run-lifecycle-orphan-test", TaskID: "task-6", TaskTitle: "Completed Task", Status: AgentStatusCompleted, LifecycleState: "completed", StartedAt: now},
+	}
+
+	for _, agent := range agents {
+		if err := store.CreateAgent(agent); err != nil {
+			t.Fatalf("failed to create agent: %v", err)
+		}
+	}
+
+	// Mark orphaned agents as failed
+	count, err := store.MarkOrphanedAgentsFailed()
+	if err != nil {
+		t.Fatalf("failed to mark orphaned agents: %v", err)
+	}
+
+	// Should mark 5 agents: merging, queued_for_merge, validating, repairing, resolving
+	if count != 5 {
+		t.Errorf("expected 5 agents marked as failed (all merge-related lifecycle states), got %d", count)
+	}
+
+	// Verify all orphaned lifecycle state agents are now failed
+	orphanedIDs := []string{"agent-merging", "agent-queued", "agent-validating", "agent-repairing", "agent-resolving"}
+	for _, id := range orphanedIDs {
+		agent, err := store.GetAgent(id)
+		if err != nil {
+			t.Fatalf("failed to get agent %s: %v", id, err)
+		}
+		if agent.Status != AgentStatusFailed {
+			t.Errorf("expected agent %s status to be failed, got %s", id, agent.Status)
+		}
+		if agent.LifecycleState != "failed" {
+			t.Errorf("expected agent %s lifecycle_state to be failed, got %s", id, agent.LifecycleState)
+		}
+		if agent.FinishedAt == nil {
+			t.Errorf("expected agent %s to have finished_at set", id)
+		}
+		if agent.ErrorMessage != "daemon terminated unexpectedly" {
+			t.Errorf("expected error message 'daemon terminated unexpectedly' for agent %s, got %s", id, agent.ErrorMessage)
+		}
+	}
+
+	// Verify completed agent is unchanged
+	completedAgent, err := store.GetAgent("agent-completed")
+	if err != nil {
+		t.Fatalf("failed to get agent: %v", err)
+	}
+	if completedAgent.Status != AgentStatusCompleted {
+		t.Errorf("expected agent-completed to remain completed, got %s", completedAgent.Status)
+	}
+	if completedAgent.LifecycleState != "completed" {
+		t.Errorf("expected agent-completed lifecycle_state to remain completed, got %s", completedAgent.LifecycleState)
+	}
+}
+
 func TestMarkOrphanedAgentsFailed_NoOrphans(t *testing.T) {
 	store := createTestStore(t)
 	defer func() { _ = store.Close() }()

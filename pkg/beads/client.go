@@ -198,18 +198,16 @@ func (c *Client) Fail(ctx context.Context, taskID string, reason string) error {
 	return err
 }
 
-// FailPermanently marks a task as permanently failed by closing it and adding needs-investigation label.
-// This prevents the task from being automatically retried by the orchestrator.
-// The failure reason is recorded in the close event.
+// FailPermanently marks a task as permanently failed by adding needs-investigation label.
+// The task remains open for human investigation. This prevents the orchestrator from
+// automatically retrying, but keeps the task visible for manual review.
+// The failure reason is recorded in the notes field.
 func (c *Client) FailPermanently(ctx context.Context, taskID string, reason string) error {
-	// Close the task with the failure reason
-	if _, err := c.run(ctx, "close", taskID, "--reason", "FAILED PERMANENTLY: "+reason); err != nil {
-		return fmt.Errorf("failed to close task: %w", err)
-	}
-
-	// Add needs-investigation label to exclude from future runs
-	if _, err := c.run(ctx, "update", taskID, "--labels", "needs-investigation"); err != nil {
-		return fmt.Errorf("failed to add needs-investigation label: %w", err)
+	// Add needs-investigation label and record failure reason in notes
+	// Task stays open for human investigation
+	noteContent := "FAILED PERMANENTLY: " + reason
+	if _, err := c.run(ctx, "update", taskID, "--add-label", "needs-investigation", "--notes", noteContent); err != nil {
+		return fmt.Errorf("failed to mark task as needing investigation: %w", err)
 	}
 
 	return nil

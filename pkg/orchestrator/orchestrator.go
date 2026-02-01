@@ -96,6 +96,8 @@ type Config struct {
 	Rules           *cfgpkg.RulesSettings // CLI overrides for rules (nil = use config.toml only)
 	RulesOverrides  *RulesOverrides       // Tracks which rules fields were explicitly set via CLI
 	PollInterval    time.Duration // Interval between polling for new tasks when idle (default: 5s)
+	Model           string        // Model to use for agents (empty = use Claude CLI default). Overrides config.toml agent settings.
+	AgentSettings   *cfgpkg.AgentSettings // Per-agent-type settings from config.toml (passed from daemon, or loaded automatically)
 }
 
 // RulesOverrides tracks which rules fields were explicitly set via CLI flags.
@@ -184,11 +186,35 @@ func New(config *Config) (*Orchestrator, error) {
 		}
 	}
 
+	// Use AgentSettings from config if provided, otherwise use from repoConfig
+	agentSettings := config.AgentSettings
+	if agentSettings == nil {
+		agentSettings = &repoConfig.Agents
+	}
+
+	// Determine worker model: CLI flag takes precedence, then config.toml agent settings
+	workerModel := config.Model
+	if workerModel == "" {
+		workerModel = agentSettings.GetWorkerModel()
+	}
+
+	// Parse worker timeout from agent settings
+	var workerTimeout time.Duration
+	if agentSettings.Worker.Timeout != "" {
+		if d, err := time.ParseDuration(agentSettings.Worker.Timeout); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: invalid worker timeout %q in config: %v\n", agentSettings.Worker.Timeout, err)
+		} else {
+			workerTimeout = d
+		}
+	}
+
 	// Create agent executor
 	executor := agent.NewExecutor(&agent.Config{
 		Verbose:       config.Verbose,
 		UseBwrap:      config.UseBwrap,
 		SandboxConfig: sandboxConfig,
+		Model:         workerModel,
+		Timeout:       workerTimeout,
 	})
 
 	// Create scheduler
@@ -205,6 +231,18 @@ func New(config *Config) (*Orchestrator, error) {
 		config.MaxRetries = 3
 	}
 
+	// Determine resolver model: CLI flag takes precedence, then config.toml agent settings
+	resolverModel := config.Model
+	if resolverModel == "" {
+		resolverModel = agentSettings.GetResolverModel()
+	}
+
+	// Determine repair model: CLI flag takes precedence, then config.toml agent settings
+	repairModel := config.Model
+	if repairModel == "" {
+		repairModel = agentSettings.GetRepairModel()
+	}
+
 	// Create merge coordinator to handle all merge operations
 	mc, err := mergecoordinator.New(&mergecoordinator.Config{
 		WorkDir:         config.WorkDir,
@@ -215,6 +253,8 @@ func New(config *Config) (*Orchestrator, error) {
 		UseBwrap:        config.UseBwrap,
 		SandboxConfig:   sandboxConfig,
 		ResolverTimeout: config.ResolverTimeout,
+		ResolverModel:   resolverModel,
+		RepairModel:     repairModel,
 	}, beadsClient)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create merge coordinator: %w", err)
@@ -227,8 +267,8 @@ func New(config *Config) (*Orchestrator, error) {
 		effectiveRules = mergeRulesSettings(&repoConfig.Rules, config.Rules, config.RulesOverrides)
 	}
 
-	// Create rules engine from effective rules
-	rulesEngine := rules.NewEngine(&effectiveRules)
+	// Create rules engine from effective rules with default rules
+	rulesEngine := rules.NewEngineWithDefaults(&effectiveRules, cfgpkg.DefaultCustomRules)
 
 	o := &Orchestrator{
 		config:           config,
@@ -395,6 +435,38 @@ func (o *Orchestrator) GetRulesEngine() *rules.Engine {
 // GetRepoConfig returns the loaded repository config (.canopy/config.toml).
 func (o *Orchestrator) GetRepoConfig() *cfgpkg.Config {
 	return o.repoConfig
+}
+
+// UpdateAgentSettings propagates updated agent settings to the running executor,
+// resolver, and repair agents. This function expects fully-merged settings (not
+// partial updates); the caller (UpdateAgentConfig) is responsible for merging
+// partial PATCH-style updates into the complete AgentSettings before calling this.
+// Empty model values are treated as explicit clears (revert to default).
+// Timeout values from AgentTypeSettings are parsed and applied when valid.
+// CLI model override (config.Model) takes precedence and is not overwritten.
+func (o *Orchestrator) UpdateAgentSettings(settings *cfgpkg.AgentSettings) {
+	if settings == nil {
+		return
+	}
+
+	// Only apply config-based models when no CLI override is present.
+	// Empty model values are applied as explicit clears (return to CLI default).
+	if o.config.Model == "" {
+		o.scheduler.GetExecutor().SetModel(settings.GetWorkerModel())
+		o.mergeCoordinator.SetResolverModel(settings.GetResolverModel())
+		o.mergeCoordinator.SetModel(settings.GetRepairModel())
+	}
+
+	// Apply worker timeout if specified
+	if settings.Worker.Timeout != "" {
+		if d, err := time.ParseDuration(settings.Worker.Timeout); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: invalid worker timeout %q: %v\n", settings.Worker.Timeout, err)
+		} else if d < 0 {
+			fmt.Fprintf(os.Stderr, "warning: negative worker timeout %q ignored\n", settings.Worker.Timeout)
+		} else {
+			o.scheduler.GetExecutor().SetTimeout(d)
+		}
+	}
 }
 
 // SetAgentID records the agentID for a taskID, enabling parent-child tracking for resolvers.
