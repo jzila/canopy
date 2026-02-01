@@ -15,6 +15,10 @@ import (
 type AgentConfigHandler struct {
 	daemon   *Daemon
 	eventBus *EventBus
+
+	// repoAPIOverride, if set, bypasses getRepoAPI and returns this directly.
+	// Used only in tests.
+	repoAPIOverride orchestrator.RepoAPI
 }
 
 // NewAgentConfigHandler creates a new agent config handler
@@ -252,6 +256,9 @@ func (h *AgentConfigHandler) HandlePersistAgentConfig(w http.ResponseWriter, r *
 // getRepoAPI returns the RepoAPI for the specified repo or run.
 // It extracts repo_id, repo_path, or run_id from the query parameters.
 func (h *AgentConfigHandler) getRepoAPI(r *http.Request) (orchestrator.RepoAPI, string) {
+	if h.repoAPIOverride != nil {
+		return h.repoAPIOverride, ""
+	}
 	if h.daemon == nil {
 		return nil, "daemon not available"
 	}

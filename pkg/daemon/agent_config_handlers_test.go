@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -36,6 +37,9 @@ func (m *mockRepoAPIForConfig) UpdateAgentConfig(_ context.Context, update orche
 	m.lastUpdate = update
 	if m.updateErr != nil {
 		return m.updateErr
+	}
+	if m.snapshot == nil {
+		return fmt.Errorf("snapshot is nil")
 	}
 	// Apply update to snapshot so subsequent GetAgentConfig reflects changes
 	if update.DefaultModel != nil {
@@ -74,23 +78,12 @@ func applyUpdate(s *config.AgentTypeSettings, u *orchestrator.AgentTypeSettingsU
 	}
 }
 
-// newTestHandler creates an AgentConfigHandler that uses a mock RepoAPI.
-// It bypasses the daemon/orchestrator manager by overriding getRepoAPI.
-type testAgentConfigHandler struct {
-	*AgentConfigHandler
-	mockAPI *mockRepoAPIForConfig
-}
-
-func newTestHandler(mock *mockRepoAPIForConfig) *testAgentConfigHandler {
-	return &testAgentConfigHandler{
-		AgentConfigHandler: &AgentConfigHandler{},
-		mockAPI:            mock,
+// newTestHandlerWithMock creates an AgentConfigHandler with a mock RepoAPI injected.
+func newTestHandlerWithMock(mock *mockRepoAPIForConfig) *AgentConfigHandler {
+	return &AgentConfigHandler{
+		repoAPIOverride: mock,
 	}
 }
-
-// We need to test the handlers directly, but they call getRepoAPI which requires
-// a full daemon. Instead, test at the HTTP handler level by creating a wrapper
-// that injects the mock.
 
 func TestAgentConfigJSONCasing(t *testing.T) {
 	t.Run("GET response uses snake_case keys", func(t *testing.T) {
@@ -470,6 +463,167 @@ func TestBroadcastAgentConfigChanged(t *testing.T) {
 		handler := &AgentConfigHandler{eventBus: nil}
 		// Should not panic
 		handler.broadcastAgentConfigChanged("updated")
+	})
+}
+
+func TestHandlerGetAgentConfig(t *testing.T) {
+	t.Run("success returns 200 with config", func(t *testing.T) {
+		mock := &mockRepoAPIForConfig{
+			snapshot: &orchestrator.AgentConfigSnapshot{
+				Settings: config.AgentSettings{
+					DefaultModel: "claude-3-opus",
+					Worker:       config.AgentTypeSettings{Model: "claude-3-haiku"},
+				},
+				Persisted: true,
+			},
+		}
+		handler := newTestHandlerWithMock(mock)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/repos/r/config/agents", nil)
+		w := httptest.NewRecorder()
+		handler.HandleGetAgentConfig(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("Expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var resp AgentConfigResponse
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("Failed to decode response: %v", err)
+		}
+		if resp.DefaultModel != "claude-3-opus" {
+			t.Errorf("Expected default_model claude-3-opus, got %q", resp.DefaultModel)
+		}
+		if !resp.Persisted {
+			t.Error("Expected persisted=true")
+		}
+	})
+
+	t.Run("GetAgentConfig error returns 500", func(t *testing.T) {
+		mock := &mockRepoAPIForConfig{
+			getErr: fmt.Errorf("database unavailable"),
+		}
+		handler := newTestHandlerWithMock(mock)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/repos/r/config/agents", nil)
+		w := httptest.NewRecorder()
+		handler.HandleGetAgentConfig(w, req)
+
+		if w.Code != http.StatusInternalServerError {
+			t.Errorf("Expected 500, got %d", w.Code)
+		}
+	})
+}
+
+func TestHandlerUpdateAgentConfig(t *testing.T) {
+	t.Run("success returns 200 with updated settings", func(t *testing.T) {
+		mock := &mockRepoAPIForConfig{
+			snapshot: &orchestrator.AgentConfigSnapshot{
+				Settings: config.AgentSettings{
+					DefaultModel: "claude-3-sonnet",
+				},
+				Persisted: true,
+			},
+		}
+		handler := newTestHandlerWithMock(mock)
+
+		body := bytes.NewBufferString(`{"default_model": "claude-3-opus"}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/repos/r/config/agents", body)
+		w := httptest.NewRecorder()
+		handler.HandleUpdateAgentConfig(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("Expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var resp AgentConfigUpdateResponse
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("Failed to decode: %v", err)
+		}
+		if !resp.Success {
+			t.Error("Expected success=true")
+		}
+		if resp.Settings == nil || resp.Settings.DefaultModel != "claude-3-opus" {
+			t.Errorf("Expected updated default_model, got %+v", resp.Settings)
+		}
+	})
+
+	t.Run("invalid JSON returns 400", func(t *testing.T) {
+		mock := &mockRepoAPIForConfig{
+			snapshot: &orchestrator.AgentConfigSnapshot{},
+		}
+		handler := newTestHandlerWithMock(mock)
+
+		body := bytes.NewBufferString(`{invalid json}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/repos/r/config/agents", body)
+		w := httptest.NewRecorder()
+		handler.HandleUpdateAgentConfig(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("Expected 400, got %d", w.Code)
+		}
+	})
+
+	t.Run("UpdateAgentConfig error returns 400", func(t *testing.T) {
+		mock := &mockRepoAPIForConfig{
+			snapshot:  &orchestrator.AgentConfigSnapshot{},
+			updateErr: fmt.Errorf("invalid model"),
+		}
+		handler := newTestHandlerWithMock(mock)
+
+		body := bytes.NewBufferString(`{"default_model": "bad"}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/repos/r/config/agents", body)
+		w := httptest.NewRecorder()
+		handler.HandleUpdateAgentConfig(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("Expected 400, got %d", w.Code)
+		}
+	})
+}
+
+func TestHandlerPersistAgentConfig(t *testing.T) {
+	t.Run("success returns 200 with config path", func(t *testing.T) {
+		mock := &mockRepoAPIForConfig{
+			snapshot:   &orchestrator.AgentConfigSnapshot{},
+			configPath: "/repo/.canopy/config.toml",
+		}
+		handler := newTestHandlerWithMock(mock)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/repos/r/config/agents/persist", nil)
+		w := httptest.NewRecorder()
+		handler.HandlePersistAgentConfig(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("Expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var resp AgentConfigPersistResponse
+		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+			t.Fatalf("Failed to decode: %v", err)
+		}
+		if !resp.Success {
+			t.Error("Expected success=true")
+		}
+		if resp.ConfigPath != "/repo/.canopy/config.toml" {
+			t.Errorf("Expected config path, got %q", resp.ConfigPath)
+		}
+	})
+
+	t.Run("persist error returns 500", func(t *testing.T) {
+		mock := &mockRepoAPIForConfig{
+			snapshot:   &orchestrator.AgentConfigSnapshot{},
+			persistErr: fmt.Errorf("write failed"),
+		}
+		handler := newTestHandlerWithMock(mock)
+
+		req := httptest.NewRequest(http.MethodPost, "/api/repos/r/config/agents/persist", nil)
+		w := httptest.NewRecorder()
+		handler.HandlePersistAgentConfig(w, req)
+
+		if w.Code != http.StatusInternalServerError {
+			t.Errorf("Expected 500, got %d", w.Code)
+		}
 	})
 }
 
