@@ -121,6 +121,12 @@ func New(config *Config) *Resolver {
 	}
 }
 
+// SetModel updates the model used for new resolver agent executions.
+func (r *Resolver) SetModel(model string) {
+	r.config.Model = model
+	r.executor.SetModel(model)
+}
+
 // SetAgentCallback sets the callback for agent lifecycle events.
 // The callback is invoked for agent start, done, and fail events.
 func (r *Resolver) SetAgentCallback(callback AgentCallback) {

@@ -125,6 +125,18 @@ func NewExecutor(config *Config) *Executor {
 	return &Executor{config: config}
 }
 
+// SetModel updates the model used for new agent executions.
+func (e *Executor) SetModel(model string) {
+	e.config.Model = model
+}
+
+// SetTimeout updates the timeout used for new agent executions.
+func (e *Executor) SetTimeout(timeout time.Duration) {
+	if timeout > 0 {
+		e.config.Timeout = timeout
+	}
+}
+
 // LiveFeedCallback is the type for live feed event callbacks
 type LiveFeedCallback func(taskID string, event *LiveFeedEvent)
 

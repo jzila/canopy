@@ -177,6 +177,13 @@ func (mc *MergeCoordinator) SetModel(model string) {
 	mc.processor.SetModel(model)
 }
 
+// SetResolverModel updates the model used for resolver agents at runtime.
+func (mc *MergeCoordinator) SetResolverModel(model string) {
+	if mc.resolver != nil {
+		mc.resolver.SetModel(model)
+	}
+}
+
 // SetCleanupCallback sets a callback to cleanup overlays after merge.
 func (mc *MergeCoordinator) SetCleanupCallback(callback func(ctx context.Context, result *agent.Result)) {
 	mc.cleanupCallback = callback

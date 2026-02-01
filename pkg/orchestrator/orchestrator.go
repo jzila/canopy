@@ -198,12 +198,21 @@ func New(config *Config) (*Orchestrator, error) {
 		workerModel = agentSettings.GetWorkerModel()
 	}
 
+	// Parse worker timeout from agent settings
+	var workerTimeout time.Duration
+	if agentSettings.Worker.Timeout != "" {
+		if d, err := time.ParseDuration(agentSettings.Worker.Timeout); err == nil {
+			workerTimeout = d
+		}
+	}
+
 	// Create agent executor
 	executor := agent.NewExecutor(&agent.Config{
 		Verbose:       config.Verbose,
 		UseBwrap:      config.UseBwrap,
 		SandboxConfig: sandboxConfig,
 		Model:         workerModel,
+		Timeout:       workerTimeout,
 	})
 
 	// Create scheduler
@@ -424,6 +433,38 @@ func (o *Orchestrator) GetRulesEngine() *rules.Engine {
 // GetRepoConfig returns the loaded repository config (.canopy/config.toml).
 func (o *Orchestrator) GetRepoConfig() *cfgpkg.Config {
 	return o.repoConfig
+}
+
+// UpdateAgentSettings propagates updated agent settings to the running executor,
+// resolver, and repair agents. Only non-default (non-empty) model values are applied;
+// timeout values from AgentTypeSettings are parsed and applied when valid.
+// CLI model override (config.Model) takes precedence and is not overwritten.
+func (o *Orchestrator) UpdateAgentSettings(settings *cfgpkg.AgentSettings) {
+	if settings == nil {
+		return
+	}
+
+	// Only apply config-based models when no CLI override is present
+	if o.config.Model == "" {
+		// Update worker model on the scheduler's executor
+		workerModel := settings.GetWorkerModel()
+		o.scheduler.GetExecutor().SetModel(workerModel)
+
+		// Update resolver model on the merge coordinator
+		resolverModel := settings.GetResolverModel()
+		o.mergeCoordinator.SetResolverModel(resolverModel)
+
+		// Update repair model on the merge coordinator
+		repairModel := settings.GetRepairModel()
+		o.mergeCoordinator.SetModel(repairModel)
+	}
+
+	// Apply worker timeout if specified
+	if settings.Worker.Timeout != "" {
+		if d, err := time.ParseDuration(settings.Worker.Timeout); err == nil {
+			o.scheduler.GetExecutor().SetTimeout(d)
+		}
+	}
 }
 
 // SetAgentID records the agentID for a taskID, enabling parent-child tracking for resolvers.

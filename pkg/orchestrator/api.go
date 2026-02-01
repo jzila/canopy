@@ -496,6 +496,9 @@ func (r *repoAPIImpl) UpdateAgentConfig(ctx context.Context, update AgentConfigU
 	r.runtimeAgentSettings = &settings
 	r.agentSettingsDirty = true
 
+	// Propagate to running orchestrator so changes take effect immediately
+	r.orchestrator.UpdateAgentSettings(&settings)
+
 	return nil
 }
 
