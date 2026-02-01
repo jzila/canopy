@@ -194,7 +194,10 @@ func (mc *MergeCoordinator) GetResolverModel() string {
 
 // GetRepairModel returns the current model used for repair agents.
 func (mc *MergeCoordinator) GetRepairModel() string {
-	return mc.processor.GetModel()
+	if mc.processor != nil {
+		return mc.processor.GetModel()
+	}
+	return ""
 }
 
 // SetCleanupCallback sets a callback to cleanup overlays after merge.

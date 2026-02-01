@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jzila/canopy/pkg/beads"
@@ -84,6 +85,7 @@ type Processor struct {
 	historyRecorder  *HistoryRecorder             // History recorder for audit trail
 	sandboxConfig    *sandbox.SandboxConfig       // Sandbox configuration for repair agents
 	model            string                       // Model to use for repair agents (empty = use Claude CLI default)
+	modelMu          sync.RWMutex                 // Protects model field
 }
 
 // NewProcessor creates a new merge processor.
@@ -163,11 +165,15 @@ func (p *Processor) SetSandboxConfig(config *sandbox.SandboxConfig) {
 
 // SetModel sets the model to use for repair agents.
 func (p *Processor) SetModel(model string) {
+	p.modelMu.Lock()
+	defer p.modelMu.Unlock()
 	p.model = model
 }
 
 // GetModel returns the current model for repair agents.
 func (p *Processor) GetModel() string {
+	p.modelMu.RLock()
+	defer p.modelMu.RUnlock()
 	return p.model
 }
 
@@ -184,7 +190,7 @@ func (p *Processor) InitializeRepairAgent() {
 		SandboxConfig: p.sandboxConfig,
 		RepoID:        p.repoID,
 		RunID:         p.runID,
-		Model:         p.model,
+		Model:         p.GetModel(),
 	})
 
 	if p.repairAgentCallback != nil {
