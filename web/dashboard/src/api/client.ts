@@ -475,7 +475,7 @@ export interface DeleteRuleResponse {
   error?: string;
 }
 
-// SaveRulesRequest for POST /api/rules/save
+// SaveRulesRequest for POST /api/rules/persist-all
 export interface SaveRulesRequest {
   rules: Rule[];
 }
@@ -512,7 +512,7 @@ export async function deleteRule(repoPath: string, name: string): Promise<Delete
 }
 
 export async function saveRules(repoPath: string, request: SaveRulesRequest): Promise<SaveRulesResponse> {
-  return fetchJson<SaveRulesResponse>(`/api/repos/${encodeURIComponent(repoPath)}/rules/save`, {
+  return fetchJson<SaveRulesResponse>(`/api/repos/${encodeURIComponent(repoPath)}/rules/persist-all`, {
     method: 'POST',
     body: JSON.stringify(request),
   });
