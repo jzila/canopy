@@ -146,9 +146,9 @@ func (e *Executor) SetTimeout(timeout time.Duration) {
 	}
 }
 
-// getModelAndTimeout returns a snapshot of the current model and timeout settings.
+// GetModelAndTimeout returns a snapshot of the current model and timeout settings.
 // This is safe to call concurrently with SetModel/SetTimeout.
-func (e *Executor) getModelAndTimeout() (string, time.Duration) {
+func (e *Executor) GetModelAndTimeout() (string, time.Duration) {
 	e.configMu.RLock()
 	defer e.configMu.RUnlock()
 	return e.config.Model, e.config.Timeout
@@ -202,7 +202,7 @@ func (e *Executor) Execute(ctx context.Context, task *beads.Task, overlay *sandb
 	prompt := e.buildPrompt(task, deps)
 
 	// Snapshot dynamic config (model, timeout) under lock to avoid races with SetModel/SetTimeout
-	currentModel, currentTimeout := e.getModelAndTimeout()
+	currentModel, currentTimeout := e.GetModelAndTimeout()
 
 	// Build command arguments
 	args := []string{
@@ -547,7 +547,7 @@ func (e *Executor) ExecuteResume(ctx context.Context, task *beads.Task, overlay 
 	}
 
 	// Snapshot dynamic config (model, timeout) under lock to avoid races with SetModel/SetTimeout
-	currentModel, currentTimeout := e.getModelAndTimeout()
+	currentModel, currentTimeout := e.GetModelAndTimeout()
 
 	// Build command arguments for resume - no prompt, just --resume
 	args := []string{

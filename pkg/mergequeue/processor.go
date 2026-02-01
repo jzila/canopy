@@ -166,6 +166,11 @@ func (p *Processor) SetModel(model string) {
 	p.model = model
 }
 
+// GetModel returns the current model for repair agents.
+func (p *Processor) GetModel() string {
+	return p.model
+}
+
 // InitializeRepairAgent creates the repair agent with current configuration.
 // Must be called after SetRunID, SetRepoID, and SetSandboxConfig.
 func (p *Processor) InitializeRepairAgent() {

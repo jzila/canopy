@@ -399,7 +399,7 @@ func TestSetModelAndTimeout(t *testing.T) {
 	t.Run("SetModel updates model", func(t *testing.T) {
 		e := NewExecutor(&Config{Timeout: DefaultTimeout})
 		e.SetModel("claude-3-opus")
-		model, _ := e.getModelAndTimeout()
+		model, _ := e.GetModelAndTimeout()
 		if model != "claude-3-opus" {
 			t.Errorf("Expected model 'claude-3-opus', got %q", model)
 		}
@@ -408,7 +408,7 @@ func TestSetModelAndTimeout(t *testing.T) {
 	t.Run("SetTimeout updates timeout", func(t *testing.T) {
 		e := NewExecutor(&Config{Timeout: DefaultTimeout})
 		e.SetTimeout(30 * time.Minute)
-		_, timeout := e.getModelAndTimeout()
+		_, timeout := e.GetModelAndTimeout()
 		if timeout != 30*time.Minute {
 			t.Errorf("Expected 30m timeout, got %v", timeout)
 		}
@@ -417,7 +417,7 @@ func TestSetModelAndTimeout(t *testing.T) {
 	t.Run("SetTimeout zero resets to default", func(t *testing.T) {
 		e := NewExecutor(&Config{Timeout: 30 * time.Minute})
 		e.SetTimeout(0)
-		_, timeout := e.getModelAndTimeout()
+		_, timeout := e.GetModelAndTimeout()
 		if timeout != DefaultTimeout {
 			t.Errorf("Expected default timeout %v, got %v", DefaultTimeout, timeout)
 		}
@@ -426,7 +426,7 @@ func TestSetModelAndTimeout(t *testing.T) {
 	t.Run("SetTimeout negative is ignored", func(t *testing.T) {
 		e := NewExecutor(&Config{Timeout: 30 * time.Minute})
 		e.SetTimeout(-5 * time.Minute)
-		_, timeout := e.getModelAndTimeout()
+		_, timeout := e.GetModelAndTimeout()
 		if timeout != 30*time.Minute {
 			t.Errorf("Expected 30m timeout unchanged, got %v", timeout)
 		}
@@ -447,7 +447,7 @@ func TestSetModelAndTimeout(t *testing.T) {
 
 		// Reader goroutine
 		for i := 0; i < 1000; i++ {
-			model, _ := e.getModelAndTimeout()
+			model, _ := e.GetModelAndTimeout()
 			// Just verify no panic; value can be any of the set values
 			_ = model
 		}

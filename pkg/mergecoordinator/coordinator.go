@@ -184,6 +184,19 @@ func (mc *MergeCoordinator) SetResolverModel(model string) {
 	}
 }
 
+// GetResolverModel returns the current model used for resolver agents.
+func (mc *MergeCoordinator) GetResolverModel() string {
+	if mc.resolver != nil {
+		return mc.resolver.GetModel()
+	}
+	return ""
+}
+
+// GetRepairModel returns the current model used for repair agents.
+func (mc *MergeCoordinator) GetRepairModel() string {
+	return mc.processor.GetModel()
+}
+
 // SetCleanupCallback sets a callback to cleanup overlays after merge.
 func (mc *MergeCoordinator) SetCleanupCallback(callback func(ctx context.Context, result *agent.Result)) {
 	mc.cleanupCallback = callback

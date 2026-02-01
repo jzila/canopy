@@ -127,6 +127,12 @@ func (r *Resolver) SetModel(model string) {
 	r.executor.SetModel(model)
 }
 
+// GetModel returns the current model used for resolver agents.
+func (r *Resolver) GetModel() string {
+	model, _ := r.executor.GetModelAndTimeout()
+	return model
+}
+
 // SetAgentCallback sets the callback for agent lifecycle events.
 // The callback is invoked for agent start, done, and fail events.
 func (r *Resolver) SetAgentCallback(callback AgentCallback) {
