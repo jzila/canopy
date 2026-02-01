@@ -446,28 +446,20 @@ func (o *Orchestrator) UpdateAgentSettings(settings *cfgpkg.AgentSettings) {
 		return
 	}
 
-	// Only apply config-based models when no CLI override is present
+	// Only apply config-based models when no CLI override is present.
+	// Empty model values are applied as explicit clears (return to CLI default).
 	if o.config.Model == "" {
-		// Update worker model on the scheduler's executor (only if non-empty)
-		if workerModel := settings.GetWorkerModel(); workerModel != "" {
-			o.scheduler.GetExecutor().SetModel(workerModel)
-		}
-
-		// Update resolver model on the merge coordinator (only if non-empty)
-		if resolverModel := settings.GetResolverModel(); resolverModel != "" {
-			o.mergeCoordinator.SetResolverModel(resolverModel)
-		}
-
-		// Update repair model on the merge coordinator (only if non-empty)
-		if repairModel := settings.GetRepairModel(); repairModel != "" {
-			o.mergeCoordinator.SetModel(repairModel)
-		}
+		o.scheduler.GetExecutor().SetModel(settings.GetWorkerModel())
+		o.mergeCoordinator.SetResolverModel(settings.GetResolverModel())
+		o.mergeCoordinator.SetModel(settings.GetRepairModel())
 	}
 
 	// Apply worker timeout if specified
 	if settings.Worker.Timeout != "" {
 		if d, err := time.ParseDuration(settings.Worker.Timeout); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: invalid worker timeout %q: %v\n", settings.Worker.Timeout, err)
+		} else if d < 0 {
+			fmt.Fprintf(os.Stderr, "warning: negative worker timeout %q ignored\n", settings.Worker.Timeout)
 		} else {
 			o.scheduler.GetExecutor().SetTimeout(d)
 		}

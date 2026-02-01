@@ -136,6 +136,7 @@ func (e *Executor) SetModel(model string) {
 
 // SetTimeout updates the timeout used for new agent executions.
 // A positive duration sets the timeout; zero clears it back to DefaultTimeout.
+// Negative durations are ignored.
 func (e *Executor) SetTimeout(timeout time.Duration) {
 	e.configMu.Lock()
 	defer e.configMu.Unlock()
@@ -144,6 +145,7 @@ func (e *Executor) SetTimeout(timeout time.Duration) {
 	} else if timeout == 0 {
 		e.config.Timeout = DefaultTimeout
 	}
+	// Negative durations are silently ignored
 }
 
 // GetModelAndTimeout returns a snapshot of the current model and timeout settings.

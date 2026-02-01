@@ -20,3 +20,6 @@ devenv.local.yaml
 .claude.json.backup
 # Go module cache (downloaded dependencies)
 go/
+
+# Codex local artifacts
+.codex/

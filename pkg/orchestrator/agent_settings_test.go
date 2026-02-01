@@ -475,6 +475,55 @@ func TestRepoAPI_PersistAgentConfig_Roundtrip(t *testing.T) {
 	}
 }
 
+// TestUpdateAgentSettings_EmptyModelClearsPrevious verifies that when config
+// removes a model (empty string), the running model is cleared back to empty.
+func TestUpdateAgentSettings_EmptyModelClearsPrevious(t *testing.T) {
+	workDir := t.TempDir()
+	o := createOrchestratorWithAgents(t, &Config{WorkDir: workDir})
+
+	// Set models first
+	o.scheduler.GetExecutor().SetModel("old-model")
+	o.mergeCoordinator.SetResolverModel("old-resolver")
+	o.mergeCoordinator.SetModel("old-repair")
+
+	// Update with empty models — should clear them
+	settings := &config.AgentSettings{}
+	o.UpdateAgentSettings(settings)
+
+	model, _ := o.scheduler.GetExecutor().GetModelAndTimeout()
+	if model != "" {
+		t.Errorf("worker model = %q, want empty (should be cleared)", model)
+	}
+	if got := o.mergeCoordinator.GetResolverModel(); got != "" {
+		t.Errorf("resolver model = %q, want empty (should be cleared)", got)
+	}
+	if got := o.mergeCoordinator.GetRepairModel(); got != "" {
+		t.Errorf("repair model = %q, want empty (should be cleared)", got)
+	}
+}
+
+// TestUpdateAgentSettings_NegativeTimeoutIgnored verifies that a negative
+// timeout string is treated as invalid and does not change the current timeout.
+func TestUpdateAgentSettings_NegativeTimeoutIgnored(t *testing.T) {
+	workDir := t.TempDir()
+	o := createOrchestratorWithAgents(t, &Config{WorkDir: workDir})
+
+	// Set a known timeout first
+	o.scheduler.GetExecutor().SetTimeout(20 * time.Minute)
+
+	settings := &config.AgentSettings{
+		Worker: config.AgentTypeSettings{
+			Timeout: "-5m",
+		},
+	}
+	o.UpdateAgentSettings(settings)
+
+	_, timeout := o.scheduler.GetExecutor().GetModelAndTimeout()
+	if timeout != 20*time.Minute {
+		t.Errorf("timeout after negative update = %v, want %v (should be unchanged)", timeout, 20*time.Minute)
+	}
+}
+
 // TestUpdateAgentSettings_AllThreeAgentTypes verifies that a single call to
 // UpdateAgentSettings correctly updates worker, resolver, and repair simultaneously.
 func TestUpdateAgentSettings_AllThreeAgentTypes(t *testing.T) {
