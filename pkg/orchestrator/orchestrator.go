@@ -438,8 +438,11 @@ func (o *Orchestrator) GetRepoConfig() *cfgpkg.Config {
 }
 
 // UpdateAgentSettings propagates updated agent settings to the running executor,
-// resolver, and repair agents. Only non-default (non-empty) model values are applied;
-// timeout values from AgentTypeSettings are parsed and applied when valid.
+// resolver, and repair agents. This function expects fully-merged settings (not
+// partial updates); the caller (UpdateAgentConfig) is responsible for merging
+// partial PATCH-style updates into the complete AgentSettings before calling this.
+// Empty model values are treated as explicit clears (revert to default).
+// Timeout values from AgentTypeSettings are parsed and applied when valid.
 // CLI model override (config.Model) takes precedence and is not overwritten.
 func (o *Orchestrator) UpdateAgentSettings(settings *cfgpkg.AgentSettings) {
 	if settings == nil {
