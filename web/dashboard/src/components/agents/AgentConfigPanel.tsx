@@ -6,9 +6,9 @@ import type { AgentConfigUpdateRequest, AgentTypeSettings } from '../../api/clie
 // Known model IDs for the dropdown
 const KNOWN_MODELS = [
   '',
-  'claude-sonnet-4-20250514',
-  'claude-opus-4-20250514',
-  'claude-haiku-3-5-20241022',
+  'claude-opus-4-5',
+  'claude-sonnet-4-5',
+  'claude-haiku-4-5',
 ];
 
 interface AgentConfigPanelProps {
