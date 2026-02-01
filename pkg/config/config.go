@@ -267,6 +267,12 @@ var DefaultCustomRules = []CustomRule{
 		Action:    "deny",
 		Reason:    "Tasks with needs-* labels require manual attention",
 	},
+	{
+		Name:      "exclude-epics",
+		Condition: "type == epic",
+		Action:    "deny",
+		Reason:    "Epics define acceptance criteria; work their child tasks instead",
+	},
 }
 
 // Validate checks the rules settings for errors
