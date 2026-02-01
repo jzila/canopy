@@ -25,10 +25,10 @@ interface AgentTypeFormState {
 
 function settingsToFormState(settings: AgentTypeSettings, defaultModel: string): AgentTypeFormState {
   return {
-    model: settings.Model || '',
-    useDefault: !settings.Model,
-    enabled: settings.Enabled !== false,
-    timeout: settings.Timeout || '',
+    model: settings.model || '',
+    useDefault: !settings.model,
+    enabled: settings.enabled !== false,
+    timeout: settings.timeout || '',
   };
 }
 
@@ -63,18 +63,18 @@ export const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({ isOpen, onCl
     const effectiveDefault = defaultModel === 'custom' ? customDefaultModel : defaultModel;
     const changed =
       effectiveDefault !== (config.default_model || '') ||
-      worker.model !== (config.worker.Model || '') ||
-      worker.useDefault !== !config.worker.Model ||
-      worker.enabled !== (config.worker.Enabled !== false) ||
-      worker.timeout !== (config.worker.Timeout || '') ||
-      resolver.model !== (config.resolver.Model || '') ||
-      resolver.useDefault !== !config.resolver.Model ||
-      resolver.enabled !== (config.resolver.Enabled !== false) ||
-      resolver.timeout !== (config.resolver.Timeout || '') ||
-      repair.model !== (config.repair.Model || '') ||
-      repair.useDefault !== !config.repair.Model ||
-      repair.enabled !== (config.repair.Enabled !== false) ||
-      repair.timeout !== (config.repair.Timeout || '');
+      worker.model !== (config.worker.model || '') ||
+      worker.useDefault !== !config.worker.model ||
+      worker.enabled !== (config.worker.enabled !== false) ||
+      worker.timeout !== (config.worker.timeout || '') ||
+      resolver.model !== (config.resolver.model || '') ||
+      resolver.useDefault !== !config.resolver.model ||
+      resolver.enabled !== (config.resolver.enabled !== false) ||
+      resolver.timeout !== (config.resolver.timeout || '') ||
+      repair.model !== (config.repair.model || '') ||
+      repair.useDefault !== !config.repair.model ||
+      repair.enabled !== (config.repair.enabled !== false) ||
+      repair.timeout !== (config.repair.timeout || '');
     setHasChanges(changed);
   }, [config, defaultModel, customDefaultModel, worker, resolver, repair]);
 
@@ -109,19 +109,19 @@ export const AgentConfigPanel: React.FC<AgentConfigPanelProps> = ({ isOpen, onCl
     const req: AgentConfigUpdateRequest = {
       default_model: effectiveDefault,
       worker: {
-        Model: worker.useDefault ? '' : worker.model,
-        Enabled: worker.enabled,
-        ...(worker.timeout && { Timeout: worker.timeout }),
+        model: worker.useDefault ? '' : worker.model,
+        enabled: worker.enabled,
+        ...(worker.timeout && { timeout: worker.timeout }),
       },
       resolver: {
-        Model: resolver.useDefault ? '' : resolver.model,
-        Enabled: resolver.enabled,
-        ...(resolver.timeout && { Timeout: resolver.timeout }),
+        model: resolver.useDefault ? '' : resolver.model,
+        enabled: resolver.enabled,
+        ...(resolver.timeout && { timeout: resolver.timeout }),
       },
       repair: {
-        Model: repair.useDefault ? '' : repair.model,
-        Enabled: repair.enabled,
-        ...(repair.timeout && { Timeout: repair.timeout }),
+        model: repair.useDefault ? '' : repair.model,
+        enabled: repair.enabled,
+        ...(repair.timeout && { timeout: repair.timeout }),
       },
     };
     const success = await update(req);

@@ -113,12 +113,12 @@ type AgentSettings struct {
 type AgentTypeSettings struct {
 	// Model overrides the default model for this agent type
 	// Empty string means use DefaultModel or CLI default
-	Model string `toml:"model,omitempty"`
+	Model string `toml:"model,omitempty" json:"model"`
 	// Enabled controls whether this agent type is active
 	// nil means enabled (default), false disables the agent type
-	Enabled *bool `toml:"enabled,omitempty"`
+	Enabled *bool `toml:"enabled,omitempty" json:"enabled,omitempty"`
 	// Timeout overrides the default timeout for this agent type (e.g., "10m", "30m", "1h")
-	Timeout string `toml:"timeout,omitempty"`
+	Timeout string `toml:"timeout,omitempty" json:"timeout"`
 }
 
 // DefaultConfig returns a config with default values

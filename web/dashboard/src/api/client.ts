@@ -678,13 +678,11 @@ export async function saveRunConfig(config: RunConfigApiRequest): Promise<RunCon
 }
 
 // Agent configuration types - matches Go backend (pkg/daemon/agent_config_handlers.go)
-// Note: AgentTypeSettings fields use Go default JSON naming (capitalized) since
-// the Go struct has no json tags
 
 export interface AgentTypeSettings {
-  Model: string;
-  Enabled?: boolean;
-  Timeout: string;
+  model: string;
+  enabled?: boolean;
+  timeout: string;
 }
 
 export interface AgentConfigResponse {
