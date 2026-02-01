@@ -23,7 +23,7 @@ interface AgentTypeFormState {
   timeout: string;
 }
 
-function settingsToFormState(settings: AgentTypeSettings, defaultModel: string): AgentTypeFormState {
+function settingsToFormState(settings: AgentTypeSettings, _defaultModel: string): AgentTypeFormState {
   return {
     model: settings.model || '',
     useDefault: !settings.model,

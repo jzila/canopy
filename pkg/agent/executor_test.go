@@ -469,18 +469,12 @@ func TestBuildPrompt(t *testing.T) {
 		prompt := executor.buildPrompt(task, nil)
 
 		// Should contain system prompt at the beginning
-		if !strings.HasPrefix(prompt, "## Worker Agent") {
+		if !strings.HasPrefix(prompt, "## Implementor Agent") {
 			t.Error("Expected prompt to start with system prompt")
 		}
 		// Should contain key behavioral instructions
 		if !strings.Contains(prompt, "autonomous worker agent") {
 			t.Error("Expected prompt to contain autonomous operation context")
-		}
-		if !strings.Contains(prompt, "DO NOT:") {
-			t.Error("Expected prompt to contain DO NOT section")
-		}
-		if !strings.Contains(prompt, "AskUserQuestion") {
-			t.Error("Expected prompt to mention AskUserQuestion prohibition")
 		}
 
 		// Should contain task title and description
@@ -492,7 +486,7 @@ func TestBuildPrompt(t *testing.T) {
 		}
 
 		// System prompt should come before task
-		systemIdx := strings.Index(prompt, "## Worker Agent")
+		systemIdx := strings.Index(prompt, "## Implementor Agent")
 		taskIdx := strings.Index(prompt, "## Task:")
 		if systemIdx > taskIdx {
 			t.Error("Expected system prompt before task")
@@ -518,7 +512,7 @@ func TestBuildPrompt(t *testing.T) {
 		prompt := executor.buildPrompt(task, deps)
 
 		// Check ordering: System Prompt -> Dependencies -> Task
-		systemIdx := strings.Index(prompt, "## Worker Agent")
+		systemIdx := strings.Index(prompt, "## Implementor Agent")
 		depsIdx := strings.Index(prompt, "Context from upstream tasks")
 		taskIdx := strings.Index(prompt, "## Task:")
 

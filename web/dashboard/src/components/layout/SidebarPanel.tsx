@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ChevronRight, ChevronLeft, ChevronDown, GripVertical, X } from 'lucide-react';
 
-const SIDEBAR_EXPANDED_KEY = 'sidebarPanelExpanded';
 const ACCORDION_STATE_KEY = 'sidebarAccordionState';
 
 interface AccordionSection {

@@ -1,0 +1,3 @@
+[[hooks]]
+event = "review.completed"
+type = "beads"
