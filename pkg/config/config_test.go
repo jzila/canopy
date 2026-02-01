@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -723,6 +724,46 @@ timeout = "15m"
 	if cfg.Agents.Repair.Timeout != "15m" {
 		t.Errorf("expected repair.timeout '15m', got %q", cfg.Agents.Repair.Timeout)
 	}
+}
+
+func TestAgentTypeSettingsJSONSnakeCase(t *testing.T) {
+	enabled := true
+	s := AgentTypeSettings{
+		Model:   "claude-opus",
+		Enabled: &enabled,
+		Timeout: "30m",
+	}
+
+	data, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("failed to marshal AgentTypeSettings: %v", err)
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("failed to unmarshal to map: %v", err)
+	}
+
+	// Verify snake_case keys are present (not PascalCase)
+	for _, key := range []string{"model", "enabled", "timeout"} {
+		if _, ok := raw[key]; !ok {
+			t.Errorf("expected snake_case key %q in JSON, got keys: %v", key, keys(raw))
+		}
+	}
+	// Verify PascalCase keys are NOT present
+	for _, key := range []string{"Model", "Enabled", "Timeout"} {
+		if _, ok := raw[key]; ok {
+			t.Errorf("unexpected PascalCase key %q in JSON output", key)
+		}
+	}
+}
+
+func keys(m map[string]json.RawMessage) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	return ks
 }
 
 func TestLoadConfigWithInvalidAgentTimeout(t *testing.T) {
